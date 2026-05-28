@@ -1,0 +1,94 @@
+# Build the TimeCues Studio landing site and deploy it to GitHub Pages.
+#
+# Trigger: pushes to main that touch any source the site is built from —
+# the Astro project (landing/**), the docs synced in by sync-docs.mjs
+# (docs/**), the data-model source (DATA.md), or this workflow file.
+# Also fires manually via the Actions UI ("Run workflow").
+#
+# Activation steps (one-time, in the repo's Settings → Pages):
+#   1. Source: "GitHub Actions"
+#   2. After the first successful run, the live URL appears at
+#      https://<owner>.github.io/<repo>/
+#
+# Private-repo note: GitHub Pages on private repos requires a paid
+# plan (Pro / Team / Enterprise). The workflow file ships either way
+# — when the migration to the public sapirca/timecues-studio repo
+# lands, this file works verbatim there with no edits, since SITE_URL
+# and BASE_PATH below are derived from the GitHub context.
+
+name: Deploy landing site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'landing/**'
+      - 'docs/**'
+      - 'DATA.md'
+      - '.github/workflows/deploy-landing.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Pages only ever has one live deployment; cancel any in-progress builds
+# from older pushes so the latest commit wins.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: landing/package-lock.json
+
+      - name: Install deps
+        working-directory: landing
+        run: npm ci
+
+      - name: Resolve live-demo URL in content (frontmatter can't read env)
+        working-directory: landing
+        env:
+          LIVE_DEMO_URL: ${{ vars.LIVE_DEMO_URL }}
+        run: |
+          url="${LIVE_DEMO_URL:-https://timecues-studio.example.com/}"
+          files=$(grep -rl '__LIVE_DEMO_URL__' src/content || true)
+          for f in $files; do sed -i "s|__LIVE_DEMO_URL__|$url|g" "$f"; done
+          echo "Resolved __LIVE_DEMO_URL__ -> $url in: ${files:-<none>}"
+
+      - name: Build (Astro + Starlight)
+        working-directory: landing
+        env:
+          # Pages serves at https://<owner>.github.io/<repo>/ — derive both
+          # halves from the GitHub context so this works in any repo
+          # without per-repo workflow edits.
+          SITE_URL: https://${{ github.repository_owner }}.github.io
+          BASE_PATH: /${{ github.event.repository.name }}/
+          # Live-demo URL (single-sourced in landing/src/consts.mjs). Kept out
+          # of the repo: set the LIVE_DEMO_URL repo variable to your running
+          # instance. Empty here → consts.mjs falls back to its placeholder.
+          LIVE_DEMO_URL: ${{ vars.LIVE_DEMO_URL }}
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

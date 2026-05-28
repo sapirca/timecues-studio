@@ -1,0 +1,12 @@
+{
+  "model": "htdemucs",
+  "audioFile": "edm-at-midnight.mp3",
+  "slug": "edm-at-midnight",
+  "shipped": true,
+  "stems": {
+    "drums": "/stems/edm-at-midnight/drums.mp3",
+    "bass": "/stems/edm-at-midnight/bass.mp3",
+    "other": "/stems/edm-at-midnight/other.mp3",
+    "vocals": "/stems/edm-at-midnight/vocals.mp3"
+  }
+}

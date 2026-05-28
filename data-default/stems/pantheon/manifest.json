@@ -1,0 +1,12 @@
+{
+  "model": "htdemucs",
+  "audioFile": "pantheon.mp3",
+  "slug": "pantheon",
+  "shipped": true,
+  "stems": {
+    "drums": "/stems/pantheon/drums.mp3",
+    "bass": "/stems/pantheon/bass.mp3",
+    "other": "/stems/pantheon/other.mp3",
+    "vocals": "/stems/pantheon/vocals.mp3"
+  }
+}

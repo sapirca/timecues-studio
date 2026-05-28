@@ -1,0 +1,369 @@
+# TimeCues Studio — single-command reproduction stack.
+#
+# Quick start:
+#   docker compose up --build   # first run; subsequent: docker compose up
+#   open http://localhost:5173
+#
+# Persistence model:
+#   ./data/         — user data (audio, annotations, algorithm caches). Mounted
+#                     at /app/data. NEVER baked into the image. Stopping or
+#                     deleting containers does NOT touch this directory.
+#                     Audio uploads land here at data/songs/<slug>/<file>.mp3.
+#   data-default/   — read-only seed dataset (CC0 audio + song-info) shipped
+#                     inside the image at /app/data-default. The web app reads
+#                     from data/ first and falls back to data-default/ so a
+#                     fresh install always has playable songs.
+#
+# Custom dataset location:
+#   By default ./data/ is mounted from the repo. To point at a folder elsewhere
+#   on disk (e.g. an external drive), set DATA_DIR in .env
+#   (e.g. DATA_DIR=/Users/me/timecues-data). Drag-drop uploads in the UI go
+#   into the same mounted directory.
+#
+# Platform support:
+#   Core services build natively for both linux/amd64 and linux/arm64 — so
+#   Apple Silicon Macs run native images without Rosetta, and Linux/Win hosts
+#   on x86_64 work too. There is no per-service `platform:` pin.
+#
+#   Demucs is heavy (CUDA wheels + ~3 GB base image on GPU, ~1 GB on CPU) and
+#   powers BOTH the stems HTTP daemon AND the allin1/Demucs batch runners.
+#   Three modes — pick at most one Demucs profile per host:
+#     • `--profile demucs-gpu` → stems daemon + batch (CUDA, NVIDIA-only, amd64)
+#     • `--profile demucs-cpu` → stems daemon + batch (multi-arch, slow)
+#     •  no profile           → no Demucs at all. "Stem this song" is hidden
+#                                in the UI; allin1 buttons are disabled.
+
+name: timecues
+
+services:
+  bpm:
+    image: timecues/bpm:latest
+    build:
+      context: .
+      dockerfile: docker/bpm.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8004"]
+    restart: unless-stopped
+
+  mir-eval:
+    image: timecues/mir-eval:latest
+    build:
+      context: .
+      dockerfile: docker/mir-eval.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    expose: ["8001"]
+    restart: unless-stopped
+
+  mir:
+    image: timecues/mir:latest
+    build:
+      context: .
+      dockerfile: docker/mir.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8007"]
+    restart: unless-stopped
+
+  ruptures:
+    image: timecues/ruptures:latest
+    build:
+      context: .
+      dockerfile: docker/ruptures.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8003"]
+    restart: unless-stopped
+
+  msaf:
+    image: timecues/msaf:latest
+    build:
+      context: .
+      dockerfile: docker/msaf.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8002"]
+    restart: unless-stopped
+
+  custom:
+    image: timecues/custom:latest
+    build:
+      context: .
+      dockerfile: docker/custom.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      # User-uploaded detector scripts (.py). Defaults to the in-repo dir so
+      # local dev sees the same files the host filesystem has. Prod overrides
+      # this to a persistent path on the VM.
+      - ${CUSTOM_SCRIPTS_DIR:-./tools/python/custom}:/app/tools/python/custom
+    expose: ["8005"]
+    restart: unless-stopped
+
+  web:
+    image: timecues/web:latest
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    environment:
+      BPM_HOST: bpm
+      MIR_HOST: mir
+      MIR_EVAL_HOST: mir-eval
+      RUPTURES_HOST: ruptures
+      MSAF_HOST: msaf
+      CUSTOM_HOST: custom
+      STEMS_HOST: stems
+      # Experimental-models sidecars. When the `experimental-models` profile
+      # is NOT running these resolve at DNS lookup time but the connect fails,
+      # which is what the vite proxy turns into a 503 — surfaced in the UI
+      # only when the user has flipped the matching experimental flag on.
+      SPAN_HOST: span
+      BEATNET_HOST: beatnet
+      LOOP_HOST: loop
+      PANNS_HOST: panns
+      PITCH_HOST: pitch
+      CUE_EXTRAS_HOST: cue-extras
+      PERCUSSIVE_HOST: percussive
+      LYRICS_HOST: lyrics
+      # Google OAuth client ID (public by design — security is enforced via
+      # Authorized JavaScript origins in Cloud Console, not by hiding the ID).
+      # Override in .env to point sign-in at your own OAuth app.
+      VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-92459674081-9lq6nitf72ptj0sg8sn05vp3g8nus4ph.apps.googleusercontent.com}
+    ports:
+      - "5173:5173"
+    volumes:
+      # Source code: live-reload during dev. The node_modules anonymous
+      # volume right after preserves the image's Linux-built deps from
+      # being shadowed by the host mount.
+      - ./web-app:/app/web-app
+      - /app/web-app/node_modules
+      # User data — overlays the image's empty /app/data. Audio uploads,
+      # annotations, BPM caches, etc. all persist here on the host.
+      - ${DATA_DIR:-./data}:/app/data
+      # Read-only .git so vite.config.ts can resolve the working tree's commit
+      # SHA at startup (powers the landing-page "build <sha>" footer for local
+      # dev). The prod image gets the SHA from VITE_COMMIT_SHA env instead and
+      # never sees this mount.
+      - ./.git:/app/.git:ro
+      # data-default/ at /app/data-default is BAKED INTO the image (no mount).
+      # Stems output dir, shared with the `stems` service — Demucs writes WAVs
+      # here and Vite serves them statically at /stems/<slug>/<source>.wav.
+      - ./web-app/public/stems:/app/web-app/public/stems
+    depends_on:
+      - bpm
+      - mir
+      - mir-eval
+      - ruptures
+      - msaf
+      - custom
+      # stems is profile-gated (demucs-cpu / demucs-gpu) — not listed here.
+      # When neither profile is active the web app hides the Stem button and
+      # disables allin1 buttons; the rest of the editor works unchanged.
+    restart: unless-stopped
+
+  # ─── Demucs services (stems daemon + allin1/Demucs batch runs) ────────────
+  # All Demucs-based workloads — the long-running stems HTTP daemon AND the
+  # one-shot batch runs of allin1 / Demucs — live in a single image built from
+  # docker/gpu-tools.Dockerfile. Two service entries pick the CPU vs CUDA
+  # build at compose time, each behind its own profile. Both advertise the
+  # network alias `stems` so the web proxy (STEMS_HOST=stems) resolves
+  # whichever flavor is active.
+  #
+  # Editor (daemon) usage:
+  #   docker compose --profile demucs-cpu up        # stems on :8006, multi-arch
+  #   docker compose --profile demucs-gpu up        # stems on :8006, CUDA-fast
+  #
+  # Batch usage (overrides the daemon command via `compose run`):
+  #   docker compose --profile demucs-cpu run --rm stems-cpu \
+  #       python tools/run_allin1.py /app/data/songs/<slug>/audio.mp3 --save
+  #   docker compose --profile demucs-gpu run --rm stems-gpu \
+  #       python tools/run_demucs_songs.py /app/data/songs
+  #
+  # On macOS use demucs-cpu (no CUDA on macOS); on Linux+NVIDIA use demucs-gpu
+  # (~30-60 s/song for allin1 vs ~3-5 min on CPU). For one-off jobs without
+  # installing CUDA, tools/allin1_colab.ipynb also runs on a free Colab T4.
+
+  stems-cpu:
+    image: timecues/stems-cpu:latest
+    profiles: ["demucs-cpu"]
+    build:
+      context: .
+      dockerfile: docker/gpu-tools.Dockerfile
+      args:
+        # Force CPU on any host (including amd64) — this is the "works
+        # everywhere" flavor. arm64 hosts get the same wheels too.
+        FLAVOR: cpu
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      - ./web-app/public/stems:/app/web-app/public/stems
+    expose: ["8006"]
+    networks:
+      default:
+        aliases: [stems]
+    # Default CMD is the long-running HTTP daemon. `compose run --rm stems-cpu
+    # python tools/run_allin1.py ...` overrides this for one-shot batch runs.
+    command: ["python", "tools/python/stems_server.py"]
+    restart: unless-stopped
+
+  stems-gpu:
+    image: timecues/stems-gpu:latest
+    profiles: ["demucs-gpu"]
+    platform: linux/amd64  # CUDA base image is amd64-only.
+    build:
+      context: .
+      dockerfile: docker/gpu-tools.Dockerfile
+      # No FLAVOR arg — `platform: linux/amd64` pins TARGETARCH=amd64, which
+      # the Dockerfile maps to the CUDA base + CUDA torch wheels.
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      - ./web-app/public/stems:/app/web-app/public/stems
+    expose: ["8006"]
+    networks:
+      default:
+        aliases: [stems]
+    command: ["python", "tools/python/stems_server.py"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+
+  # ─── Experimental MIR detectors (opt-in, hidden in prod by default) ───────
+  # Spin up with:
+  #   docker compose --profile experimental-models up --build
+  # Each new family server is a separate sibling so an install failure in one
+  # doesn't take the others down. Frontend gating lives in per-family user
+  # settings (`experimentalSpanFamily`, `experimentalCueExtras`); without the
+  # profile running the proxy in vite returns 503 and the UI surface stays
+  # hidden anyway.
+
+  span:
+    image: timecues/span:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/span.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      # Persist HuggingFace + torch.hub caches across container restarts so
+      # Silero-VAD's first detect doesn't re-download on every fresh container.
+      - timecues-model-cache:/app/.cache
+    expose: ["8009"]
+    restart: unless-stopped
+
+  beatnet:
+    image: timecues/beatnet:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/beatnet.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      - timecues-model-cache:/app/.cache
+    expose: ["8010"]
+    restart: unless-stopped
+
+  # LOOP-family detector — chroma-autocorrelation. Pure DSP, no model weights;
+  # slim image so the experimental-models profile stays affordable to spin up
+  # on macOS / Windows hosts that don't have lots of free overlay space.
+  loop:
+    image: timecues/loop:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/loop.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8012"]
+    restart: unless-stopped
+
+  # PANNs AudioSet-tagging — CNN14 pretrained, ~80 MB lazy-download. SPAN
+  # family (multi-label per-class spans). Same family as Silero/JDCNet but
+  # different sidecar for install isolation.
+  panns:
+    image: timecues/panns:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/panns.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      - timecues-model-cache:/app/.cache
+    expose: ["8013"]
+    restart: unless-stopped
+
+  # basic-pitch polyphonic note transcription (CUE family). Spotify's ONNX
+  # model is bundled in the pip package — no separate weight download.
+  pitch:
+    image: timecues/pitch:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/pitch.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8011"]
+    restart: unless-stopped
+
+  # CUE-family extras — bundles three pure-DSP detectors (librosa key,
+  # autochord chord recognition, librosa onsets) into one slim sidecar.
+  cue-extras:
+    image: timecues/cue-extras:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/cue-extras.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8014"]
+    restart: unless-stopped
+
+  # HPSS percussive-span detector (SPAN family). Pure-DSP librosa.
+  percussive:
+    image: timecues/percussive:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/percussive.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8015"]
+    restart: unless-stopped
+
+  # Whisper-base lyrics transcription (LYRICS family). ~140 MB checkpoint
+  # lazy-downloads into the shared model-cache volume on first detect.
+  lyrics:
+    image: timecues/lyrics:latest
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/lyrics.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+      - timecues-model-cache:/app/.cache
+    expose: ["8016"]
+    restart: unless-stopped
+
+volumes:
+  # Shared cache for HF / torch.hub weights downloaded by experimental
+  # detectors. Named (not bind-mounted) so model state lives in the docker
+  # volume namespace rather than polluting the host repo.
+  timecues-model-cache:

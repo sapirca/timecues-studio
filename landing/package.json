@@ -1,0 +1,18 @@
+{
+  "name": "timecues-studio-landing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run sync-docs && astro dev",
+    "build": "npm run sync-docs && astro build",
+    "preview": "astro preview",
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.30.3",
+    "astro": "^5.1.0",
+    "sharp": "^0.33.5"
+  }
+}

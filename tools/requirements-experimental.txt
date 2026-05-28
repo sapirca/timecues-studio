@@ -1,0 +1,39 @@
+# Optional pip deps for the Phase-1+ experimental MIR sidecars
+# (span / beatnet / pitch / panns / cue-extras / lyrics).
+#
+# Every server's heavy imports are guarded by try/except, so each
+# sidecar starts even without these deps installed — it just reports
+# `available=false` and the Initialize-models panel surfaces
+# "Deps missing" for that detector.
+#
+# Usage (after installing core deps from tools/python/requirements.txt):
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r tools/requirements-experimental.txt
+#
+# Heavy size note: torch (~200 MB CPU / ~2 GB CUDA) is shared with the
+# Demucs/All-In-One install — listed at the top of tools/requirements-
+# allin1.txt's instructions for the same reason. If you've already
+# installed it for stems / All-In-One, you don't need to install it again.
+
+# --- SPAN family -----------------------------------------------------------
+# (torch + torchaudio installed separately; see header above)
+# Silero-VAD: pulled at first use via torch.hub — no pip dep needed here.
+# JDCNet: pure-PyTorch port lives in tools/python/jdcnet_torch.py;
+# weights are baked into docker/span.Dockerfile and re-fetched at first
+# call on bare-metal hosts.
+panns_inference
+
+# --- CUE family ------------------------------------------------------------
+BeatNet
+# basic-pitch pins tensorflow<2.15.1, which has no Linux wheels for Python
+# 3.12+. The env marker keeps modern interpreters from trying to build the
+# unsatisfiable TF version (which would take the whole `-r` install down
+# with it). pitch_server lazy-imports basic_pitch, so the "Deps missing"
+# state is harmless when the package is absent.
+basic-pitch ; python_version < "3.12"
+# autochord lives in tools/requirements-autochord.txt — it pulls the `vamp`
+# C extension which needs the system `vamp-plugin-sdk` lib, so run.sh
+# attempts it separately (best-effort, won't block the rest of the family).
+
+# --- LYRICS family ---------------------------------------------------------
+openai-whisper
