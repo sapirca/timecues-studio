@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="32" height="32" aria-hidden="true">
+  <defs>
+    <filter id="led-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="10" fill="#0b0b14"/>
+  <g filter="url(#led-glow)">
+    <g>
+      <circle cx="12" cy="12" r="4" fill="#ef4444"/>
+      <circle cx="26" cy="12" r="4" fill="#f59e0b"/>
+      <circle cx="40" cy="12" r="4" fill="#facc15"/>
+      <circle cx="54" cy="12" r="4" fill="#84cc16"/>
+      <animate attributeName="opacity" values="1;0.55;1" dur="2.2s" repeatCount="indefinite"/>
+    </g>
+    <g>
+      <circle cx="12" cy="26" r="4" fill="#22c55e"/>
+      <circle cx="26" cy="26" r="4" fill="#06b6d4"/>
+      <circle cx="40" cy="26" r="4" fill="#3b82f6"/>
+      <circle cx="54" cy="26" r="4" fill="#8b5cf6"/>
+      <animate attributeName="opacity" values="0.55;1;0.55" dur="2.2s" repeatCount="indefinite"/>
+    </g>
+    <g>
+      <circle cx="12" cy="40" r="4" fill="#a855f7"/>
+      <circle cx="26" cy="40" r="4" fill="#d946ef"/>
+      <circle cx="40" cy="40" r="4" fill="#ec4899"/>
+      <circle cx="54" cy="40" r="4" fill="#f43f5e"/>
+      <animate attributeName="opacity" values="1;0.55;1" dur="2.2s" begin="0.4s" repeatCount="indefinite"/>
+    </g>
+    <g>
+      <circle cx="12" cy="54" r="4" fill="#fb923c"/>
+      <circle cx="26" cy="54" r="4" fill="#fbbf24"/>
+      <circle cx="40" cy="54" r="4" fill="#f59e0b"/>
+      <circle cx="54" cy="54" r="4" fill="#ef4444"/>
+      <animate attributeName="opacity" values="0.55;1;0.55" dur="2.2s" begin="0.4s" repeatCount="indefinite"/>
+    </g>
+  </g>
+</svg>

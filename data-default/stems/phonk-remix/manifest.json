@@ -1,0 +1,12 @@
+{
+  "model": "htdemucs",
+  "audioFile": "phonk-remix.mp3",
+  "slug": "phonk-remix",
+  "shipped": true,
+  "stems": {
+    "drums": "/stems/phonk-remix/drums.mp3",
+    "bass": "/stems/phonk-remix/bass.mp3",
+    "other": "/stems/phonk-remix/other.mp3",
+    "vocals": "/stems/phonk-remix/vocals.mp3"
+  }
+}

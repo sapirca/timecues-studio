@@ -1,0 +1,12 @@
+# allin1 dependencies — install AFTER torch to avoid pulling the CUDA build.
+# See README.md for the full install instructions.
+#
+# Usage:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r tools/requirements-allin1.txt
+
+--find-links https://shi-labs.com/natten/wheels/
+
+allin1
+natten
+madmom @ git+https://github.com/CPJKU/madmom.git

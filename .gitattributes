@@ -1,0 +1,38 @@
+# Paths excluded from `git archive` output. These also serve as the canonical
+# "not part of the OSS / submission distribution" list — any rsync-to-OSS or
+# submission-zip workflow should honor the same set.
+#
+# `git archive --format=zip HEAD -o timecues-studio.zip` will produce a clean
+# bundle without these paths.
+
+# Non-OSS content: paper drafts, internal research notes, planning docs,
+# dataset-release tooling that wraps private data.
+# Note: gitattributes patterns are gitignore-like but a bare trailing slash
+# does NOT mean "directory" here — use a glob to match files underneath.
+archive/**                         export-ignore
+
+# Runtime user dataset. Some files were historically committed; the OSS ZIP
+# must never contain them regardless of HEAD state. Working-tree usage and
+# private-repo cloning are unaffected — this only filters `git archive`.
+data/**                            export-ignore
+# ...but ship an empty data/ skeleton so a fresh clone's bind-mount source
+# exists with the right ownership and the tree matches the documented layout.
+# (Later, more-specific pattern wins, so only this one marker is re-included.)
+data/.gitkeep                      -export-ignore
+
+# GCP deployment surface lives under archive/gcp/ (consolidated 2026-05-26 —
+# "archive/ = everything private"); the archive/** pattern above covers it.
+# Exception: .gcloudignore MUST sit at the repo root for `gcloud builds submit`
+# (run from the repo root) to find it, so it can't move into archive/.
+# Export-ignore it in place so it never reaches the public OSS bundle.
+.gcloudignore                      export-ignore
+
+# Claude Code agent instructions — internal collaboration notes, not user docs.
+.claude/**                         export-ignore
+CLAUDE.md                          export-ignore
+**/CLAUDE.md                       export-ignore
+docs/CLAUDE_CODE_SETUP.md          export-ignore
+
+# Repo-local conveniences not useful in a tarball.
+.devcontainer/**                   export-ignore
+.github/copilot-instructions.md    export-ignore

@@ -1,0 +1,37 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  web:
+    name: vitest (web-app)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-app
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web-app/package-lock.json
+      - run: npm ci
+      - run: npm run test
+
+  python:
+    name: pytest (tools/python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Install only what the schema/server tests need. Heavy optional deps
+      # (madmom, demucs, ruptures) are gated behind importorskip in the tests
+      # themselves so they don't have to be installed in CI to stay green.
+      - run: pip install pytest numpy librosa soundfile mir_eval
+      - run: pytest tools/python/tests -v

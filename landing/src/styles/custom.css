@@ -1,0 +1,373 @@
+/* ── Brand palette ────────────────────────────────────────────────────────
+   Warm LED light on a dark panel substrate. The accent colors flow through
+   to all Starlight UI chrome — buttons, links, sidebar highlights. */
+:root {
+  --sl-color-accent-low: #422006;
+  --sl-color-accent: #f59e0b;
+  --sl-color-accent-high: #fde68a;
+  --sl-color-text-accent: #fcd34d;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #fef3c7;
+  --sl-color-accent: #d97706;
+  --sl-color-accent-high: #78350f;
+  --sl-color-text-accent: #b45309;
+}
+
+/* Hero title gets a soft LED-style glow that breathes. */
+.hero h1,
+.hero .title {
+  text-shadow:
+    0 0 24px rgba(245, 158, 11, 0.45),
+    0 0 48px rgba(245, 158, 11, 0.22);
+  animation: led-title-breathe 4s ease-in-out infinite;
+}
+
+@keyframes led-title-breathe {
+  0%, 100% {
+    text-shadow:
+      0 0 24px rgba(245, 158, 11, 0.45),
+      0 0 48px rgba(245, 158, 11, 0.22);
+  }
+  50% {
+    text-shadow:
+      0 0 32px rgba(245, 158, 11, 0.70),
+      0 0 64px rgba(245, 158, 11, 0.35);
+  }
+}
+
+/* Subtitle (hero tagline) breathes a softer neon glow, in cool cyan so it
+   reads as a layer below the amber title without competing with it. */
+.hero .tagline {
+  text-shadow:
+    0 0 14px rgba(6, 182, 212, 0.45),
+    0 0 28px rgba(6, 182, 212, 0.22);
+  animation: led-tagline-breathe 4s ease-in-out infinite;
+}
+
+@keyframes led-tagline-breathe {
+  0%, 100% {
+    text-shadow:
+      0 0 14px rgba(6, 182, 212, 0.45),
+      0 0 28px rgba(6, 182, 212, 0.22);
+  }
+  50% {
+    text-shadow:
+      0 0 22px rgba(6, 182, 212, 0.70),
+      0 0 44px rgba(6, 182, 212, 0.35);
+  }
+}
+
+/* Coming-soon cards: dim + non-interactive, but keep the LED-glow chassis. */
+.led-card--soon {
+  opacity: 0.6;
+  cursor: default;
+}
+.led-card--soon:hover,
+.led-card--soon:focus-visible {
+  transform: none;
+  box-shadow: none;
+}
+
+/* CTA inside an active card (e.g. "Try Demo →") — punches the call-to-action. */
+.led-card .cta {
+  color: #22c55e;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* ── LED card grid (splash page) ─────────────────────────────────────────── */
+.led-cards {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin: 2rem 0;
+}
+
+.led-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.2rem 1.25rem 1.1rem;
+  border: 1px solid var(--sl-color-gray-5, #2a2f3a);
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(245, 158, 11, 0.06), transparent 60%),
+    var(--sl-color-bg-nav, #0f1116);
+  color: var(--sl-color-text);
+  text-decoration: none;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 240ms ease;
+}
+
+.led-card:hover,
+.led-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(245, 158, 11, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(245, 158, 11, 0.25),
+    0 12px 32px rgba(0, 0, 0, 0.35),
+    0 0 24px rgba(245, 158, 11, 0.2);
+  text-decoration: none;
+}
+
+.led-card h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--sl-color-white);
+}
+
+.led-card p {
+  margin: 0;
+  color: var(--sl-color-gray-3, #b0b8c4);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.led-card .muted {
+  color: var(--sl-color-text-accent);
+}
+
+.led-icon {
+  width: 56px;
+  height: auto;
+  max-height: 56px;
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.25));
+}
+
+/* Strip — sequential chase, the six bulbs light up one after another. */
+.led-strip circle {
+  animation: led-chase 1.4s steps(1, end) infinite;
+  opacity: 0.25;
+}
+.led-strip circle:nth-child(1) { animation-delay: 0s; }
+.led-strip circle:nth-child(2) { animation-delay: 0.2s; }
+.led-strip circle:nth-child(3) { animation-delay: 0.4s; }
+.led-strip circle:nth-child(4) { animation-delay: 0.6s; }
+.led-strip circle:nth-child(5) { animation-delay: 0.8s; }
+.led-strip circle:nth-child(6) { animation-delay: 1.0s; }
+
+@keyframes led-chase {
+  0%, 16% { opacity: 1;    filter: drop-shadow(0 0 4px currentColor); }
+  17%, 100% { opacity: 0.25; filter: none; }
+}
+
+/* Matrix — a couple of randomly-placed bulbs flicker between dim and bright. */
+.led-matrix circle[fill="#fbbf24"],
+.led-matrix circle[fill="#ec4899"],
+.led-matrix circle[fill="#06b6d4"],
+.led-matrix circle[fill="#22c55e"],
+.led-matrix circle[fill="#a855f7"] {
+  animation: led-flicker 3.4s ease-in-out infinite;
+}
+.led-matrix circle[fill="#ec4899"]  { animation-delay: 0.4s; }
+.led-matrix circle[fill="#06b6d4"]  { animation-delay: 0.9s; }
+.led-matrix circle[fill="#22c55e"]  { animation-delay: 1.5s; }
+.led-matrix circle[fill="#a855f7"]  { animation-delay: 2.1s; }
+
+@keyframes led-flicker {
+  0%, 100% { opacity: 1; }
+  35%      { opacity: 0.35; }
+  37%      { opacity: 1; }
+  50%      { opacity: 0.55; }
+  70%      { opacity: 1; }
+}
+
+/* Halo — the centre LED breathes its glow in and out. */
+.led-halo {
+  animation: led-halo-breathe 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.4));
+}
+@keyframes led-halo-breathe {
+  0%, 100% { filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.35)); }
+  50%      { filter: drop-shadow(0 0 22px rgba(245, 158, 11, 0.85)); }
+}
+
+/* Circuit — the four terminal LEDs blink in a round-robin. */
+.led-circuit circle[fill="#22c55e"],
+.led-circuit circle[fill="#3b82f6"],
+.led-circuit circle[fill="#ef4444"],
+.led-circuit circle[fill="#a855f7"] {
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+.led-circuit circle[fill="#3b82f6"] { animation-delay: 0.4s; }
+.led-circuit circle[fill="#ef4444"] { animation-delay: 0.8s; }
+.led-circuit circle[fill="#a855f7"] { animation-delay: 1.2s; }
+.led-circuit circle[fill="#facc15"] {
+  animation: led-pulse 2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 1; }
+}
+
+/* Play button — pulsing dotted ring. */
+.led-play circle[stroke-dasharray] {
+  animation: led-play-spin 6s linear infinite;
+  transform-origin: 50% 50%;
+}
+@keyframes led-play-spin {
+  to { stroke-dashoffset: -64; }
+}
+
+/* Power-on symbol — the centre LED breathes like a status indicator. */
+.led-power circle {
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+
+/* Signal panel — three stacked status LEDs blink in sequence. */
+.signal-led-red   { animation: led-pulse 1.8s ease-in-out infinite; }
+.signal-led-green { animation: led-pulse 1.8s ease-in-out 0.6s infinite; }
+.signal-led-amber { animation: led-pulse 1.8s ease-in-out 1.2s infinite; }
+
+/* ── Feedback page — three big route cards ──────────────────────────────── */
+.feedback-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin: 1.5rem 0 2rem;
+}
+.feedback-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.25rem 1.3rem 1.15rem;
+  border: 1px solid var(--sl-color-gray-5, #2a2f3a);
+  border-radius: 12px;
+  background: var(--sl-color-bg-nav, #0f1116);
+  color: var(--sl-color-text);
+  text-decoration: none;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 240ms ease;
+  position: relative;
+}
+.feedback-card:hover,
+.feedback-card:focus-visible {
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+.feedback-card h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 1.1rem;
+  color: var(--sl-color-white);
+}
+.feedback-card p {
+  margin: 0;
+  color: var(--sl-color-gray-3, #b0b8c4);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.feedback-cta {
+  margin-top: 0.4rem;
+  font-size: 0.88rem;
+  color: var(--sl-color-text-accent);
+  font-weight: 500;
+}
+.feedback-led {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.feedback-led.red {
+  background: #ef4444;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.7);
+  animation: led-flicker 1.6s ease-in-out infinite;
+}
+.feedback-led.green {
+  background: #22c55e;
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.7);
+  animation: led-pulse 2s ease-in-out infinite;
+}
+.feedback-led.amber {
+  background: #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.7);
+  animation: led-pulse 2.4s ease-in-out infinite;
+}
+
+/* Per-route hover tint so each card lights up with its own LED color. */
+.feedback-card.bug:hover,
+.feedback-card.bug:focus-visible {
+  border-color: rgba(239, 68, 68, 0.55);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35), 0 0 24px rgba(239, 68, 68, 0.22);
+}
+.feedback-card.feature:hover,
+.feedback-card.feature:focus-visible {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35), 0 0 24px rgba(34, 197, 94, 0.22);
+}
+.feedback-card.thoughts:hover,
+.feedback-card.thoughts:focus-visible {
+  border-color: rgba(245, 158, 11, 0.55);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35), 0 0 24px rgba(245, 158, 11, 0.22);
+}
+
+/* Tutorial stub cards (used on the Tutorials page). */
+.tutorial-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin: 1.5rem 0;
+}
+.tutorial-stub {
+  border: 1px solid var(--sl-color-gray-5, #2a2f3a);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  background: var(--sl-color-bg-nav, #0f1116);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.tutorial-stub h3 {
+  margin: 0;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tutorial-stub p { margin: 0; font-size: 0.92rem; color: var(--sl-color-gray-3, #b0b8c4); }
+.tutorial-stub .stub-led {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f43f5e;
+  box-shadow: 0 0 6px rgba(244, 63, 94, 0.7);
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+.tutorial-stub .stub-led.ready {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
+}
+.tutorial-stub .stub-status {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sl-color-text-accent);
+  margin-top: 0.25rem;
+}
+
+/* Respect users who don't want motion. */
+@media (prefers-reduced-motion: reduce) {
+  .hero h1,
+  .hero .title,
+  .led-strip circle,
+  .led-matrix circle,
+  .led-halo,
+  .led-circuit circle,
+  .led-play circle[stroke-dasharray],
+  .led-power circle,
+  .signal-led-red,
+  .signal-led-green,
+  .signal-led-amber,
+  .feedback-led,
+  .tutorial-stub .stub-led {
+    animation: none !important;
+  }
+  .led-strip circle { opacity: 1; }
+}

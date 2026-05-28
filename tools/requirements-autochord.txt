@@ -1,0 +1,26 @@
+# autochord — chord recognition for the experimental CUE family.
+#
+# Split out of tools/requirements-experimental.txt because it pulls `vamp`
+# (a C extension that links against the `vamp-plugin-sdk` system lib). On
+# hosts without that lib (most macOS / clean Linux), the build fails — and
+# bundling autochord with the rest of the experimental deps means one
+# missing system lib takes the entire `pip install -r` down with it.
+#
+# run.sh installs this file separately, with a best-effort apt attempt at
+# `vamp-plugin-sdk` first. If any step fails, autochord-chords just stays
+# in "Deps missing" state in the UI; nothing else breaks.
+#
+# Install manually:
+#   sudo apt-get install -y vamp-plugin-sdk   # Debian/Ubuntu
+#   brew install vamp-plugin-sdk              # macOS
+#   pip install -r tools/requirements-autochord.txt
+
+# NOTE: install with `pip install --no-build-isolation -r ...`. `vamp`'s
+# sdist build calls numpy at build time but doesn't declare it in its
+# PEP-517 build-system.requires; with modern pip's isolated builds that
+# fails with "ModuleNotFoundError: No module named 'numpy'". The flag
+# tells pip to reuse the current env (where numpy is already installed
+# from the core requirements) for the build. autochord itself ships a
+# wheel so the flag is a no-op for it. run.sh passes the flag for us.
+vamp
+autochord

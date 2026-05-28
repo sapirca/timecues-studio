@@ -1,0 +1,15 @@
+# Astro
+.astro/
+dist/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Synced docs — regenerated from /docs and root markdown by scripts/sync-docs.mjs.
+# Single source of truth lives outside landing/.
+src/content/docs/timecues/user-guide.md
+src/content/docs/timecues/data-model.md
+src/content/docs/timecues/deployment.md
+src/content/docs/timecues/experimental.md
+src/content/docs/timecues/images/
