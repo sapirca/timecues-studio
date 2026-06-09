@@ -23,9 +23,10 @@ once the stack is up. This file is about getting the stack up.
 
 Every install path is one of these. The two opt-in dimensions are
 **Demucs** (stems + All-In-One) and **Experimental models** (the Phase-1+
-MIR detectors). Both are off by default for local docker, both are on by
-default for `run.sh` and the hosted instance — that keeps first-time
-`docker compose up` lean while local dev and prod stay capability-complete.
+MIR detectors). Both are off by default for local docker **and for the lean
+`./run.sh`**, and both are on for `./run_all.sh` and the hosted instance —
+that keeps first-time `docker compose up` and basic local dev lean, while
+`run_all.sh` and prod stay capability-complete.
 
 | Mode | Command | Core | Demucs | Experimental | Disk (first build) | Best for |
 |---|---|:---:|:---:|:---:|---|---|
@@ -35,7 +36,8 @@ default for `run.sh` and the hosted instance — that keeps first-time
 | Docker — Demucs GPU | `docker compose --profile demucs-gpu up --build` | ✔ | ✔ (fast) | ✘ | ~4 GB | Stemming a corpus on NVIDIA + Linux/WSL2 |
 | Docker — Experimental | `docker compose --profile experimental-models up --build` | ✔ | ✘ | ✔ | ~7 GB | Try the new MIR detectors without stems |
 | Docker — full | `docker compose --profile demucs-cpu --profile experimental-models up --build` | ✔ | ✔ | ✔ | ~8 GB | Matches the hosted instance locally |
-| Local dev (`./run.sh`) | `./run.sh` | ✔ | ✔ (CPU, optional pip) | ✔ (optional pip) | tiny (uses host Python) | Hot-reload editing; stems + experimental servers degrade gracefully if their pip deps are absent |
+| Local dev — lean (`./run.sh`) | `./run.sh` | ✔ | ✘ | ✘ | tiny (core deps only) | Hot-reload editing for basic annotation + eval; heavy sidecars start but read "Deps missing" |
+| Local dev — full (`./run_all.sh`) | `./run_all.sh` | ✔ | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete local dev; same as `./run.sh --all` |
 | Self-hosted (prod) | see [Self-hosting](#self-hosting-beyond-localhost) | ✔ | ✔ | ✔ | ~8 GB | Public-facing deployment with Caddy + TLS; matches the hosted instance |
 
 **Notes:**
@@ -63,6 +65,37 @@ default for `run.sh` and the hosted instance — that keeps first-time
   "Server off". The CPU build of Demucs works fine for local stemming —
   no NVIDIA hardware required for the `./run.sh` path; it's just slower
   than the GPU compose profile.
+
+## Resource requirements (RAM + disk)
+
+Per-profile sizing for the Docker stack. **Disk** is the image footprint
+(runtime model weights — PANNs, Whisper, JDCNet — add ~1–2 GB more into the
+`timecues-model-cache` volume on first init). **RAM ceiling** is the sum of
+the per-container `mem_limit`s in `docker-compose.yml` (a hard OOM cap, *not*
+typical usage). **Practical RAM** is what to actually provision.
+
+| Stack | Containers | Image disk (cumulative) | RAM ceiling (Σ `mem_limit`) | Practical RAM |
+|---|---|---|---|---|
+| **Core** (always) | `web` 2g, `core-mir` 2g, `mir-eval` 1g, `msaf` 2g | ~1 GB | 7 GB | **4–6 GB** |
+| **+ `demucs-cpu`** | `stems-cpu` 3g | +1 GB (→2 GB) | +3 GB | +2–3 GB (Demucs peaks ~3 GB while separating) |
+| **+ `demucs-gpu`** | `stems-gpu` 3g | +3 GB (→4 GB) | +3 GB | +2–3 GB RAM **+ ~2 GB GPU VRAM**; needs NVIDIA + Toolkit |
+| **+ `experimental-models`** | 9 sidecars: `span`/`beatnet`/`panns`/`lyrics` 2g each, `loop`/`pitch`/`cue-extras`/`percussive`/`pattern` 1g each | +6 GB (→7 GB) | +13 GB | +~2 GB idle → **up to ~12 GB if you warm all 9** |
+| **Full** (`demucs-cpu` + `experimental-models`) | all of the above | **~8 GB** | **23 GB** | **~8 GB idle; provision 16 GB to warm everything** |
+
+Notes:
+- `demucs-cpu` and `demucs-gpu` are **mutually exclusive** — both publish the
+  same `stems` network alias, so run at most one.
+- **Experimental detectors load their model lazily** — a running-but-not-yet-
+  initialized sidecar uses almost nothing. RAM climbs only as you *Initialize
+  models* / first-run each detector, so size by how many you'll warm, not by
+  the 13 GB ceiling.
+- **`mem_limit` is a ceiling, not a reservation.** If a container's working
+  set exceeds it (e.g. a very long track, or many concurrent requests), the
+  kernel **OOM-kills it — `exited with code 137`** — Docker does *not* grow it.
+  The limits are set as headroom above measured warm usage, so they're enough
+  for normal tracks; if you legitimately need more for a heavy workload, raise
+  that service's `mem_limit` in `docker-compose.yml` and `up` again. On Docker
+  Desktop also bump the VM's overall RAM allocation.
 
 ## Prerequisites
 
@@ -163,24 +196,35 @@ match as you like.
 brew install ffmpeg node@20              # macOS
 sudo apt install ffmpeg libsndfile1 nodejs npm   # Ubuntu
 
-# 2. Launch everything — `./run.sh` installs every model dep on first run.
+# 2a. Lean — basic annotation + evaluation. Installs only the core deps.
 ./run.sh
+
+# 2b. Full — every model family (stems, All-In-One, experimental sidecars).
+#     ~3 GB of pip wheels on first run. Same as `./run.sh --all`.
+./run_all.sh
 ```
 
-That's it for the happy path. `./run.sh` auto-installs `requirements.txt` +
-torch (CPU) + `requirements-allin1.txt` + `requirements-experimental.txt`
-into your active Python on first launch, then starts all 15 sidecars
-(ports 8001–8007 and 8009–8016) before handing off to vite. Subsequent runs
-skip the install steps via fast `python -c "import …"` probes.
+That's it for the happy path. **`./run.sh` is lean**: it installs only the
+core deps (`mir_eval` / `ruptures` / `librosa` / `sklearn` / `soundfile`)
+so basic boundary annotation + evaluation works with a small, fast install.
+All 15 sidecars (ports 8001–8007 and 8009–8016) still start, but the heavy
+ones report "Deps missing" until you install their families.
+
+**`./run_all.sh`** (≡ `./run.sh --all`) is the full profile: it additionally
+installs torch (CPU) + `requirements-allin1.txt` + `requirements-experimental.txt`
++ the Python-3.11 venv for basic-pitch/autochord, so every feature works out
+of the box. Subsequent runs skip already-satisfied installs via fast
+`python -c "import …"` probes.
 
 ### Opting out of the auto-install
 
-If you manage your own Python env (a strict venv, a corporate base image,
-a Conda recipe), set `SKIP_MODEL_INSTALL=1` to short-circuit the install
-steps:
+The lean `./run.sh` already installs only the core deps. If you also manage
+those yourself (a strict venv, a corporate base image, a Conda recipe), set
+`SKIP_MODEL_INSTALL=1` to short-circuit the heavy families even under
+`--all` / `./run_all.sh`:
 
 ```bash
-SKIP_MODEL_INSTALL=1 ./run.sh
+SKIP_MODEL_INSTALL=1 ./run_all.sh   # full server set, but skip the heavy pip installs
 ```
 
 Sidecars still start; the ones whose deps aren't importable just report
@@ -268,9 +312,11 @@ python tools/python/lyrics_server.py              # :8016  Whisper (LYRICS)
 1. Picks one Python interpreter (`$PYTHON`, defaulting to `python`, then
    `python3`) and exports its absolute path as `TIMECUES_PYTHON` so vite's
    capabilities probe inspects the same site-packages.
-2. Unless `SKIP_MODEL_INSTALL=1` is set, runs four `python -c "import …"`
-   probes and pip-installs whatever's missing: core requirements, torch
-   CPU wheels, the allin1 + madmom fork, and the experimental MIR deps.
+2. Always installs the core requirements. Then, **only under `--all` /
+   `./run_all.sh`** (and unless `SKIP_MODEL_INSTALL=1`), runs `python -c
+   "import …"` probes and pip-installs whatever's missing: torch CPU wheels,
+   the allin1 + madmom fork, and the experimental MIR deps. The lean default
+   stops after the core requirements.
 3. Prewarms heavy imports (`torch`, `demucs`, `allin1`) so the capabilities
    probe doesn't pay the cold-import cost the first time the UI loads.
 4. Kills any process squatting on ports 8001–8007 and 8009–8016, then
@@ -394,7 +440,18 @@ flavor.
 
 The Phase-1+ MIR detectors live behind a dedicated docker compose profile so
 a plain `docker compose up` keeps your local stack lean. **They never come
-up by default** — you have to opt in explicitly by passing the profile:
+up by default** — you have to opt in explicitly by passing the profile.
+
+First time only: build the two shared base images that all eight
+experimental sidecars `FROM`. Docker's layer cache reuses them on
+subsequent runs — re-run this step only when one of the base
+Dockerfiles changes.
+
+```bash
+docker compose --profile experimental-base build
+```
+
+Then bring up the sidecars:
 
 ```bash
 docker compose --profile experimental-models up --build

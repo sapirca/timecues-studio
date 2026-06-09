@@ -44,6 +44,13 @@ const docs = [
     description:
       'Opt-in detectors behind per-family feature flags. May break without notice.',
   },
+  {
+    src: 'docs/DEPLOYMENT.md',
+    out: 'deployment.md',
+    title: 'Deployment',
+    description:
+      'Put TimeCues on a public URL — a cloud VM with Docker Compose, HTTPS, Google sign-in, and a persistent disk.',
+  },
 ];
 
 // Map of original markdown link targets → Starlight-relative routes.
@@ -52,6 +59,8 @@ const linkRewrites = new Map([
   ['USER_GUIDE.md', '/timecues/user-guide/'],
   ['docs/EXPERIMENTAL_USER_GUIDE.md', '/timecues/experimental/'],
   ['EXPERIMENTAL_USER_GUIDE.md', '/timecues/experimental/'],
+  ['docs/DEPLOYMENT.md', '/timecues/deployment/'],
+  ['DEPLOYMENT.md', '/timecues/deployment/'],
   ['DATA.md', '/timecues/data-model/'],
   ['../DATA.md', '/timecues/data-model/'],
 ]);

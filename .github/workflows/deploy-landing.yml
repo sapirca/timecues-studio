@@ -55,15 +55,22 @@ jobs:
         working-directory: landing
         run: npm ci
 
-      - name: Resolve live-demo URL in content (frontmatter can't read env)
+      - name: Resolve live-demo URLs in content (frontmatter can't read env)
         working-directory: landing
         env:
           LIVE_DEMO_URL: ${{ vars.LIVE_DEMO_URL }}
+          LIVE_DEMO_URL_CF: ${{ vars.LIVE_DEMO_URL_CF }}
         run: |
-          url="${LIVE_DEMO_URL:-https://timecues-studio.example.com/}"
-          files=$(grep -rl '__LIVE_DEMO_URL__' src/content || true)
-          for f in $files; do sed -i "s|__LIVE_DEMO_URL__|$url|g" "$f"; done
-          echo "Resolved __LIVE_DEMO_URL__ -> $url in: ${files:-<none>}"
+          gcp="${LIVE_DEMO_URL:-https://timecues-studio.example.com/}"
+          cf="${LIVE_DEMO_URL_CF:-https://timecues-studio-cf.example.com/}"
+          files=$(grep -rl '__LIVE_DEMO_URL__\|__LIVE_DEMO_URL_CF__' src/content || true)
+          # Replace the more specific CF sentinel FIRST — "__LIVE_DEMO_URL__"
+          # is a prefix of "__LIVE_DEMO_URL_CF__", so the generic substitution
+          # would otherwise corrupt the CF one.
+          for f in $files; do
+            sed -i "s|__LIVE_DEMO_URL_CF__|$cf|g; s|__LIVE_DEMO_URL__|$gcp|g" "$f"
+          done
+          echo "Resolved __LIVE_DEMO_URL__ -> $gcp, __LIVE_DEMO_URL_CF__ -> $cf in: ${files:-<none>}"
 
       - name: Build (Astro + Starlight)
         working-directory: landing
@@ -73,10 +80,12 @@ jobs:
           # without per-repo workflow edits.
           SITE_URL: https://${{ github.repository_owner }}.github.io
           BASE_PATH: /${{ github.event.repository.name }}/
-          # Live-demo URL (single-sourced in landing/src/consts.mjs). Kept out
-          # of the repo: set the LIVE_DEMO_URL repo variable to your running
-          # instance. Empty here → consts.mjs falls back to its placeholder.
+          # Live-demo URLs (single-sourced in landing/src/consts.mjs). Kept out
+          # of the repo: set the LIVE_DEMO_URL (GCP server, default) and
+          # LIVE_DEMO_URL_CF (Cloudflare static mirror) repo variables to your
+          # running instances. Empty here → consts.mjs falls back to placeholders.
           LIVE_DEMO_URL: ${{ vars.LIVE_DEMO_URL }}
+          LIVE_DEMO_URL_CF: ${{ vars.LIVE_DEMO_URL_CF }}
         run: npm run build
 
       - uses: actions/upload-pages-artifact@v3

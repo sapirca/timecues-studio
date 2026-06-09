@@ -1346,11 +1346,41 @@ export function SettingsPage() {
               alignment with WhisperX / ctc-forced-aligner is the planned follow-up.
             </p>
             {!expAvail.lyricsFamily && <ExpUnavailableNote />}
+            <Toggle
+              label="Enable PATTERN-family detectors (LoCoMotif motif discovery)"
+              value={settings.experimentalPatternFamily}
+              onChange={(v) => update('experimentalPatternFamily', v)}
+              disabled={!expAvail.patternFamily}
+            />
+            <p className="text-[11px] text-slate-500">
+              <a href="https://github.com/ML-KULeuven/locomotif" target="_blank" rel="noopener noreferrer"
+                 className="text-emerald-400/80 hover:text-emerald-300 underline">LoCoMotif</a>{' '}
+              (MIT, KU Leuven) finds variable-length repeating motifs in beat-synchronous chroma via DTW-warped
+              matching. Each detected motif set surfaces as a group of <code className="font-mono text-slate-400">PatternItem</code>{' '}
+              occurrences in <code className="font-mono text-slate-400">data/algorithm-outputs/pattern/</code>.
+              No model weights — pure DSP + numba JIT (one-time ~15 s warm-up on first call after server boot).
+            </p>
+            {!expAvail.patternFamily && <ExpUnavailableNote />}
+            <Toggle
+              label="Enable Setlist workspace (algorithmic DJ-style ordering)"
+              value={settings.experimentalSetlist}
+              onChange={(v) => update('experimentalSetlist', v)}
+            />
+            <p className="text-[11px] text-slate-500">
+              Adds a top-level <span className="font-medium text-slate-400">Setlist</span>{' '}
+              workspace at <code className="font-mono text-slate-400">/setlist</code> that orders
+              your corpus into a play sequence. v0 uses cached BPM (median across the 5 detectors)
+              with a greedy nearest-neighbour pass; meter and energy scorers join next. Saved
+              setlists persist per-annotator under{' '}
+              <code className="font-mono text-slate-400">data/setlists/&lt;you&gt;/&lt;name&gt;.json</code>.
+              No new model dependencies.
+            </p>
             <ExperimentalModelsPanel
               spanFamilyEnabled={settings.experimentalSpanFamily}
               cueExtrasEnabled={settings.experimentalCueExtras}
               loopFamilyEnabled={settings.experimentalLoopFamily}
               lyricsFamilyEnabled={settings.experimentalLyricsFamily}
+              patternFamilyEnabled={settings.experimentalPatternFamily}
             />
           </Section>
         </Group>

@@ -112,6 +112,16 @@ export interface UserSettings {
   // Output is `LyricsItem[]` (word- and line-level entries). Lazy-downloads
   // a ~140 MB Whisper-base checkpoint on first use.
   experimentalLyricsFamily: boolean;
+  // Experimental: PATTERN family detectors (LoCoMotif motif discovery). Output
+  // is `PatternItem[]` — variable-length repeating motifs found via DTW-warped
+  // matching on beat-synchronous chroma. Distinct from
+  // `experimentalLoopsAndPatterns` which gates the *manual* pattern tab; this
+  // flag gates the *detector* outputs.
+  experimentalPatternFamily: boolean;
+  // Experimental: Setlist workspace — algorithmic DJ-style ordering of the
+  // corpus using cached BPM (+ meter and energy as those scorers land). New
+  // top-level workspace tab at /setlist; off by default.
+  experimentalSetlist: boolean;
 
   // Manual BOUNDARIES (sections) default — which layout the "⚡ Fill default"
   // button applies when there are no algorithm-suggested sections.
@@ -173,8 +183,30 @@ export const DEFAULT_SETTINGS: UserSettings = {
   sectionTypeVocabulary: [...DEFAULT_VOCABULARY],
   sectionVocabularyGenres: null,
 
+  // Every UI-visible algorithm ID lives here so fresh sessions
+  // start with every checkbox pre-checked across MSAF / All-In-One
+  // (ensemble + all 8 folds) / band-gradient / Ruptures (added by
+  // InspectorPageV2 init) / SPAN / LOOP / PATTERN / LYRICS / CUE-extras.
+  // basic-pitch is included even though Python 3.12+ bare-metal can't
+  // install it — it's served via the Docker pitch sidecar that
+  // ./run.sh auto-launches in that case (see run.sh Step 4a).
   defaultAlgorithms: [
-    'msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda', 'allin1',
+    // BOUNDARY / structure
+    'msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda',
+    'band-gradient',
+    'allin1',
+    'allin1-fold0', 'allin1-fold1', 'allin1-fold2', 'allin1-fold3',
+    'allin1-fold4', 'allin1-fold5', 'allin1-fold6', 'allin1-fold7',
+    // SPAN family
+    'silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive',
+    // LOOP family
+    'chroma-autocorr',
+    // CUE family extras
+    'basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets',
+    // LYRICS family
+    'whisper-base',
+    // PATTERN family
+    'locomotif',
   ],
 
   enabledBpmDetectors: [],
@@ -184,12 +216,27 @@ export const DEFAULT_SETTINGS: UserSettings = {
   autoGuessMinConsensus: 1,
   autoGuessExpandZoomThreshold: 2,
 
-  experimentalLoopsAndPatterns: false,
-  experimentalEyeAnnotation: false,
-  experimentalSpanFamily: false,
-  experimentalCueExtras: false,
-  experimentalLoopFamily: false,
-  experimentalLyricsFamily: false,
+  // Experimental flags default ON: maintainer dev runs want every family
+  // visible without going through Settings → Experimental first. OSS
+  // public deploys are still safe because each family's section in the
+  // run-options sidebar is ALSO gated by `expAvail.<family>` (= sidecar
+  // reachable) — turning on a flag without the matching sidecar running
+  // simply hides the section, no broken-state UI. Returning users who
+  // explicitly turned a flag off in Settings keep that choice because
+  // localStorage overlays this default at hydration time.
+  experimentalLoopsAndPatterns: true,
+  experimentalEyeAnnotation: true,
+  experimentalSpanFamily: true,
+  experimentalCueExtras: true,
+  experimentalLoopFamily: true,
+  experimentalLyricsFamily: true,
+  experimentalPatternFamily: true,
+  // Default flips to true when run.sh was invoked with `--with_dj`. That sets
+  // VITE_WITH_DJ=1 in the Vite env, Vite inlines it here at build/dev time,
+  // and first-time visitors see the Setlist tab already enabled. Returning
+  // users keep whatever they explicitly chose in Settings — `readStored()`
+  // overlays their localStorage on top of this default.
+  experimentalSetlist: (import.meta.env.VITE_WITH_DJ as string | undefined) === '1',
 
   manualBoundariesDefault: 'house',
   manualBoundariesCustomLayout: 'intro:16, buildup:8, drop:32, breakdown:16, buildup:8, drop:32, outro:16',

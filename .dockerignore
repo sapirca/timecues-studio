@@ -25,9 +25,11 @@ web-app/public/**/*.npy
 web-app/node_modules/
 web-app/dist/
 web-app/.vite/
-archive/landing/node_modules/
-archive/landing/dist/
-archive/landing/.astro/
+
+# Landing site — built + deployed separately to GitHub Pages (see
+# .github/workflows/deploy-landing.yml); no image builds it, so its whole
+# Astro tree (node_modules + dist + src) has no business in the build context.
+landing/
 
 # Git, caches, IDE
 .git/
@@ -38,10 +40,7 @@ archive/landing/.astro/
 **/*.pyc
 
 # Non-OSS content consolidated under archive/, plus allin1 byproducts.
-# Exception: archive/landing/ is the Astro project the landing.Dockerfile
-# builds from, so it must reach the Docker build context.
 archive/
-!archive/landing/
 demix/
 spec/
 

@@ -9,53 +9,30 @@
 # pulls in its own torch model + a particular madmom build, and a failure in
 # its install path shouldn't take the existing librosa / madmom detectors
 # on :8004 down with it.
-FROM python:3.11-slim
+#
+# Inherits Python 3.11 + CPU torch 2.1.0 + librosa + numpy<2 from
+# experimental-torch-base; build that first via
+# `docker compose --profile experimental-base build experimental-torch-base`.
+ARG BASE_REPO=timecues
+FROM ${BASE_REPO}/experimental-torch-base:latest
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HOST=0.0.0.0 \
-    HF_HOME=/app/.cache/huggingface \
-    TORCH_HOME=/app/.cache/torch
-
+# portaudio is the only system lib not covered by the base. BeatNet imports
+# pyaudio at module load time even when we only use the offline / pre-recorded
+# path (the realtime mode is part of the same class constructor); pyaudio
+# links against libportaudio2 / portaudio19-dev.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libsndfile1 \
-        libsamplerate0 \
-        build-essential \
-        git \
         portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# Pin numpy<2 (same reason as span.Dockerfile / bpm.Dockerfile — torch 2.1
-# vs numpy 2.x ABI break).
-RUN pip install --no-cache-dir "numpy<2,>=1.24.0"
-
-RUN pip install --no-cache-dir \
-        torch==2.1.0 torchaudio==2.1.0 \
-        --index-url https://download.pytorch.org/whl/cpu
-
-# librosa + soundfile for audio I/O; Cython is a build-time prereq for
-# madmom (BeatNet depends on madmom for the DBN tracking processor).
-RUN pip install --no-cache-dir \
-        "scipy>=1.10.0" \
-        "soundfile>=0.12.0" \
-        "audioread>=3.0.0" \
-        "librosa>=0.10.0" \
-        "Cython>=0.29"
+# Cython is a build-time prereq for the CPJKU madmom fork.
+RUN pip install --no-cache-dir "Cython>=0.29"
 
 # Pull madmom from the CPJKU community fork (same as bpm.Dockerfile) —
 # upstream 0.16.1 is abandoned and won't build on modern numpy / Python.
 RUN pip install --no-cache-dir "git+https://github.com/CPJKU/madmom.git"
 
-# BeatNet imports pyaudio at module load time even when we only use the
-# offline / pre-recorded path (the realtime mode is part of the same class
-# constructor). portaudio19-dev above provides the system lib pyaudio links
-# against. Install pyaudio FIRST so the BeatNet install doesn't have to
-# resolve it transitively.
+# Install pyaudio FIRST so the BeatNet install doesn't have to resolve it
+# transitively.
 RUN pip install --no-cache-dir pyaudio
 
 # BeatNet itself — installs a small torch checkpoint via pip.

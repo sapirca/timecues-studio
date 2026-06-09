@@ -36,19 +36,37 @@
 name: timecues
 
 services:
-  bpm:
-    image: timecues/bpm:latest
+  # Four MIR backend servers (bpm/mir/ruptures/custom) run as supervised
+  # child processes inside one container. They share an identical pip floor
+  # (Python 3.11 + librosa>=0.10 + numpy>=1.24), so installing them once
+  # and running them under supervisord cuts ~3x image bytes, registry
+  # uploads, and pull time vs four separate sidecars. msaf stays standalone
+  # because its pins are incompatible (Python 3.10, numpy<1.24, librosa<0.10);
+  # mir-eval stays standalone because it has no librosa / ffmpeg deps to
+  # gain from sharing the base. See docker/core-mir.Dockerfile and
+  # docker/core-mir.supervisord.conf for the program definitions.
+  core-mir:
+    image: timecues/core-mir:latest
+    # Per-container memory ceiling (defense in depth): a leak in one service is
+    # cgroup-OOM-killed and restarted in isolation instead of taking the whole
+    # host down (the failure mode that wedged the VM). Tune to observed RSS.
+    mem_limit: 2g
     build:
       context: .
-      dockerfile: docker/bpm.Dockerfile
+      dockerfile: docker/core-mir.Dockerfile
     user: "${HOST_UID:-0}:${HOST_GID:-0}"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
-    expose: ["8004"]
+      # User-uploaded detector scripts (.py). Defaults to the in-repo dir so
+      # local dev sees the same files the host filesystem has. Prod overrides
+      # this to a persistent path on the VM.
+      - ${CUSTOM_SCRIPTS_DIR:-./tools/python/custom}:/app/tools/python/custom
+    expose: ["8003", "8004", "8005", "8007"]
     restart: unless-stopped
 
   mir-eval:
     image: timecues/mir-eval:latest
+    mem_limit: 1g
     build:
       context: .
       dockerfile: docker/mir-eval.Dockerfile
@@ -56,30 +74,9 @@ services:
     expose: ["8001"]
     restart: unless-stopped
 
-  mir:
-    image: timecues/mir:latest
-    build:
-      context: .
-      dockerfile: docker/mir.Dockerfile
-    user: "${HOST_UID:-0}:${HOST_GID:-0}"
-    volumes:
-      - ${DATA_DIR:-./data}:/app/data
-    expose: ["8007"]
-    restart: unless-stopped
-
-  ruptures:
-    image: timecues/ruptures:latest
-    build:
-      context: .
-      dockerfile: docker/ruptures.Dockerfile
-    user: "${HOST_UID:-0}:${HOST_GID:-0}"
-    volumes:
-      - ${DATA_DIR:-./data}:/app/data
-    expose: ["8003"]
-    restart: unless-stopped
-
   msaf:
     image: timecues/msaf:latest
+    mem_limit: 2g
     build:
       context: .
       dockerfile: docker/msaf.Dockerfile
@@ -89,34 +86,29 @@ services:
     expose: ["8002"]
     restart: unless-stopped
 
-  custom:
-    image: timecues/custom:latest
-    build:
-      context: .
-      dockerfile: docker/custom.Dockerfile
-    user: "${HOST_UID:-0}:${HOST_GID:-0}"
-    volumes:
-      - ${DATA_DIR:-./data}:/app/data
-      # User-uploaded detector scripts (.py). Defaults to the in-repo dir so
-      # local dev sees the same files the host filesystem has. Prod overrides
-      # this to a persistent path on the VM.
-      - ${CUSTOM_SCRIPTS_DIR:-./tools/python/custom}:/app/tools/python/custom
-    expose: ["8005"]
-    restart: unless-stopped
-
   web:
     image: timecues/web:latest
+    mem_limit: 2g
+    # Local dev override: the image's default CMD runs `vite preview` (the
+    # production build — see docker/web.Dockerfile). Here we run the dev server
+    # instead so `docker compose up` keeps hot reload against the ./web-app
+    # source bind-mount below. A production compose overlay can drop this
+    # command so the deployed container uses the image's preview CMD.
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
     build:
       context: .
       dockerfile: docker/web.Dockerfile
     user: "${HOST_UID:-0}:${HOST_GID:-0}"
     environment:
-      BPM_HOST: bpm
-      MIR_HOST: mir
+      # bpm/mir/ruptures/custom share one merged container; all four env
+      # vars point at the same service. Different ports route each vite
+      # proxy to the right backend server inside the container.
+      BPM_HOST: core-mir
+      MIR_HOST: core-mir
       MIR_EVAL_HOST: mir-eval
-      RUPTURES_HOST: ruptures
+      RUPTURES_HOST: core-mir
       MSAF_HOST: msaf
-      CUSTOM_HOST: custom
+      CUSTOM_HOST: core-mir
       STEMS_HOST: stems
       # Experimental-models sidecars. When the `experimental-models` profile
       # is NOT running these resolve at DNS lookup time but the connect fails,
@@ -130,6 +122,7 @@ services:
       CUE_EXTRAS_HOST: cue-extras
       PERCUSSIVE_HOST: percussive
       LYRICS_HOST: lyrics
+      PATTERN_HOST: pattern
       # Google OAuth client ID (public by design — security is enforced via
       # Authorized JavaScript origins in Cloud Console, not by hiding the ID).
       # Override in .env to point sign-in at your own OAuth app.
@@ -155,12 +148,9 @@ services:
       # here and Vite serves them statically at /stems/<slug>/<source>.wav.
       - ./web-app/public/stems:/app/web-app/public/stems
     depends_on:
-      - bpm
-      - mir
+      - core-mir
       - mir-eval
-      - ruptures
       - msaf
-      - custom
       # stems is profile-gated (demucs-cpu / demucs-gpu) — not listed here.
       # When neither profile is active the web app hides the Stem button and
       # disables allin1 buttons; the rest of the editor works unchanged.
@@ -190,6 +180,7 @@ services:
 
   stems-cpu:
     image: timecues/stems-cpu:latest
+    mem_limit: 3g
     profiles: ["demucs-cpu"]
     build:
       context: .
@@ -213,6 +204,7 @@ services:
 
   stems-gpu:
     image: timecues/stems-gpu:latest
+    mem_limit: 3g
     profiles: ["demucs-gpu"]
     platform: linux/amd64  # CUDA base image is amd64-only.
     build:
@@ -247,8 +239,41 @@ services:
   # profile running the proxy in vite returns 503 and the UI surface stays
   # hidden anyway.
 
+  # ─── Experimental shared-base images (build-only) ─────────────────────────
+  # These two images carry the heavy install layers that the eight
+  # experimental-models sidecars share: a Python 3.11 + CPU torch + librosa
+  # stack for span/beatnet/panns/lyrics, and a Python 3.11 + librosa stack
+  # (no torch) for loop/percussive/cue-extras/pitch. Each child Dockerfile
+  # FROMs the matching base, so torch + librosa get built and stored ONCE
+  # instead of four times each.
+  #
+  # These services are never started as containers (entrypoint: ["true"]
+  # exits immediately). Build them on the host BEFORE the first
+  # `docker compose --profile experimental-models up --build`:
+  #   docker compose --profile experimental-base build
+  experimental-torch-base:
+    image: timecues/experimental-torch-base:latest
+    mem_limit: 256m  # build-only (entrypoint: true); limit is nominal.
+    profiles: ["experimental-base"]
+    build:
+      context: .
+      dockerfile: docker/experimental-torch-base.Dockerfile
+    entrypoint: ["true"]
+    restart: "no"
+
+  experimental-dsp-base:
+    image: timecues/experimental-dsp-base:latest
+    mem_limit: 256m  # build-only (entrypoint: true); limit is nominal.
+    profiles: ["experimental-base"]
+    build:
+      context: .
+      dockerfile: docker/experimental-dsp-base.Dockerfile
+    entrypoint: ["true"]
+    restart: "no"
+
   span:
     image: timecues/span:latest
+    mem_limit: 2g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -264,6 +289,7 @@ services:
 
   beatnet:
     image: timecues/beatnet:latest
+    mem_limit: 2g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -280,6 +306,7 @@ services:
   # on macOS / Windows hosts that don't have lots of free overlay space.
   loop:
     image: timecues/loop:latest
+    mem_limit: 1g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -295,6 +322,7 @@ services:
   # different sidecar for install isolation.
   panns:
     image: timecues/panns:latest
+    mem_limit: 2g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -310,6 +338,7 @@ services:
   # model is bundled in the pip package — no separate weight download.
   pitch:
     image: timecues/pitch:latest
+    mem_limit: 1g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -324,6 +353,7 @@ services:
   # autochord chord recognition, librosa onsets) into one slim sidecar.
   cue-extras:
     image: timecues/cue-extras:latest
+    mem_limit: 1g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -337,6 +367,7 @@ services:
   # HPSS percussive-span detector (SPAN family). Pure-DSP librosa.
   percussive:
     image: timecues/percussive:latest
+    mem_limit: 1g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -351,6 +382,7 @@ services:
   # lazy-downloads into the shared model-cache volume on first detect.
   lyrics:
     image: timecues/lyrics:latest
+    mem_limit: 2g
     profiles: ["experimental-models"]
     build:
       context: .
@@ -360,6 +392,22 @@ services:
       - ${DATA_DIR:-./data}:/app/data
       - timecues-model-cache:/app/.cache
     expose: ["8016"]
+    restart: unless-stopped
+
+  # LoCoMotif PATTERN family. Pure DSP — no model weights — but numba JIT
+  # warms on the first /detect call after server boot (~15 s one-time cost,
+  # subsequent calls are fast).
+  pattern:
+    image: timecues/pattern:latest
+    mem_limit: 1g
+    profiles: ["experimental-models"]
+    build:
+      context: .
+      dockerfile: docker/pattern.Dockerfile
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    expose: ["8017"]
     restart: unless-stopped
 
 volumes:

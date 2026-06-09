@@ -74,6 +74,8 @@ export const DATA_DIRS = {
   percussive:      path.join(ALGORITHM_OUTPUTS_ROOT, 'percussive'),
   // Whisper-base lyrics transcription (LYRICS family).
   lyrics:          path.join(ALGORITHM_OUTPUTS_ROOT, 'lyrics'),
+  // LoCoMotif motif discovery (PATTERN family). Per-slug subdir.
+  pattern:         path.join(ALGORITHM_OUTPUTS_ROOT, 'pattern'),
 
   // Per-song metadata (<dir>/<slug>.json)
   songInfo: path.join(DATA_ROOT, 'song-info'),
@@ -92,6 +94,12 @@ export const DATA_DIRS = {
   // alignment source for SOFA / ctc-forced-aligner when those land.
   // Experimental: gated by `experimentalLyricsFamily` user setting.
   lyricsText: path.join(DATA_ROOT, 'lyrics-text'),
+
+  // Saved Setlists (per-annotator: <dir>/<annotator>/<name>.json). Each file
+  // is an ordered list of slugs + the scoring strategy that produced it. New
+  // top-level workspace at /setlist, gated by the `experimentalSetlist`
+  // user setting.
+  setlists: path.join(DATA_ROOT, 'setlists'),
 } as const
 
 // Single-file paths (not directories). Stored under DATA_ROOT.

@@ -7,6 +7,7 @@ import { AnnotatorBadge } from '../components/AnnotatorBadge';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { loadDatasetConfig } from '../services/datasetConfig';
 import { fetchAdminStatus } from '../services/admin';
+import { IS_STATIC_DEMO, MAIN_APP_URL } from '../state/staticDemo';
 import type { AccessTier } from '../types/datasetConfig';
 
 interface CorpusSummary {
@@ -130,9 +131,27 @@ export function LandingPage() {
           <div className="text-center space-y-2">
             <h1 className="text-2xl font-medium text-slate-100">Where to start?</h1>
             <p className="text-[12px] text-slate-500">
-              {realAnnotator
-                ? `Signed in as ${realAnnotator.displayName}.`
-                : 'Try it anonymously, or sign in to work on a real corpus.'}
+              {IS_STATIC_DEMO ? (
+                <>
+                  Always-on public mirror — explore the sample songs, no install.
+                  {MAIN_APP_URL && (
+                    <>
+                      {' '}The full app (sign-in, your own corpus) lives{' '}
+                      <a
+                        href={MAIN_APP_URL}
+                        className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+                      >
+                        here
+                      </a>
+                      .
+                    </>
+                  )}
+                </>
+              ) : realAnnotator ? (
+                `Signed in as ${realAnnotator.displayName}.`
+              ) : (
+                'Try it anonymously, or sign in to work on a real corpus.'
+              )}
             </p>
           </div>
 
@@ -153,7 +172,22 @@ export function LandingPage() {
               cta="Try the demo →"
               onClick={() => navigate('/demo')}
             />
-            {summary?.isBootstrap ? (
+            {/* The second card needs the backend (sign-in / admin bootstrap),
+                so on the static mirror it's replaced by an outbound link to the
+                full app when one is configured, and otherwise omitted. */}
+            {IS_STATIC_DEMO ? (
+              MAIN_APP_URL && (
+                <EntryCard
+                  accent="cyan"
+                  led="!bg-cyan-400 !shadow-[0_0_8px_rgba(34,211,238,0.55)]"
+                  eyebrow="Full app"
+                  title="Sign in & work on a corpus"
+                  body="The complete app — Google sign-in, your own annotator namespace, detectors, and saving — runs on the main server."
+                  cta="Open the full app →"
+                  onClick={() => { window.location.href = MAIN_APP_URL; }}
+                />
+              )
+            ) : summary?.isBootstrap ? (
               <EntryCard
                 accent="emerald"
                 led="!bg-emerald-400 !shadow-[0_0_8px_rgba(52,211,153,0.55)]"

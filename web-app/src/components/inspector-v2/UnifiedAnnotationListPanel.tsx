@@ -175,14 +175,24 @@ function manualToUnified(
   name: string,
   color: string,
   sourceId: SourceId,
-  opts?: { readOnly?: boolean },
+  opts?: { readOnly?: boolean; idKey?: string },
 ): UnifiedLayer | null {
-  if (!ann || !ann.sections.length) return null;
+  // `sections` is optional on storage — a time-only annotation omits it. Use
+  // optional chaining so an empty/absent list collapses the layer instead of
+  // throwing and blanking the whole panel.
+  if (!ann || !ann.sections?.length) return null;
+  // The layer id is a *stable* key the parent page matches on (e.g.
+  // `'boundaries:Manual'` / `'boundaries:Eye'` in InspectorPageV2's
+  // delete / toggle / select handlers), so it must NOT track the
+  // human-visible `name` (which the user can rename, e.g. "Boundaries 1").
+  // Use the source-derived idKey for the id and item ids; fall back to the
+  // capitalized sourceId so existing handlers keep resolving correctly.
+  const idKey = opts?.idKey ?? name;
   // Encode the original (unsorted) index in the synthesized id so external
   // mutation handlers (delete / toggle-importance) can resolve back to the
   // right slot in the page-owned sections array, which is *not* sorted.
   return {
-    id: `boundaries:${name}`,
+    id: `boundaries:${idKey}`,
     name,
     color,
     readOnly: opts?.readOnly === true,
@@ -191,7 +201,7 @@ function manualToUnified(
       .map((s, originalIndex) => ({ s, originalIndex }))
       .sort((a, b) => a.s.time - b.s.time)
       .map(({ s, originalIndex }) => ({
-        id: `${name}:idx${originalIndex}`,
+        id: `${idKey}:idx${originalIndex}`,
         time: s.time,
         end: null,
         label: s.label || sectionLabel(s.type),
@@ -289,6 +299,17 @@ interface UnifiedAnnotationListPanelProps {
   /** Toggle critical ↔ optional for a single item. Same dispatch story as
    *  onItemDelete. */
   onItemToggleImportance?: (layerId: string, itemId: string, sectionType: AnnotationType) => void;
+  /** Delete an entire layer. Wired by the parent so the mutation goes through
+   *  the same state setters as the rich editor (and stays inside the undo
+   *  stack). Read-only layers don't reach this — the button isn't rendered. */
+  onDeleteLayer?: (layerId: string, sectionType: AnnotationType) => void;
+  /** Rename a layer inline from the card header. Only wired for editable
+   *  typed user layers (cues/spans/loops/patterns); boundary layers carry a
+   *  fixed source name and read-only layers stay non-editable. */
+  onRenameLayer?: (layerId: string, sectionType: AnnotationType, name: string) => void;
+  /** Edit a single item's label inline from its row. Same gating as
+   *  onRenameLayer — editable typed user layers only. */
+  onChangeItemLabel?: (layerId: string, itemId: string, sectionType: AnnotationType, label: string) => void;
   /** Currently-active layer id per section — drives the highlighted row
    *  in each section. The id should match a UnifiedLayer.id within that
    *  section (e.g. `'boundaries:Manual'`, `'detector-cue:foo'`, or the
@@ -330,6 +351,9 @@ export function UnifiedAnnotationListPanel({
   focusedPattern, onFocusPattern,
   onItemDelete,
   onItemToggleImportance,
+  onDeleteLayer,
+  onRenameLayer,
+  onChangeItemLabel,
   selectedLayerIdByType,
   onSelectLayer,
   experimentalLoopsAndPatterns,
@@ -339,13 +363,16 @@ export function UnifiedAnnotationListPanel({
   // ── Boundaries virtual layers ─────────────────────────────────────────────
   const boundaryLayers = useMemo<UnifiedLayer[]>(() => {
     const out: UnifiedLayer[] = [];
-    const manual = manualToUnified(manualAnnotation, 'Manual', '#a78bfa', 'manual', { readOnly: false });
+    // Display name is "Boundaries 1" (mirrors "Cues 1" / "Spans 1"), but the
+    // layer id stays `boundaries:Manual` so InspectorPageV2's mutation/select
+    // handlers keep matching it.
+    const manual = manualToUnified(manualAnnotation, 'Boundaries 1', '#a78bfa', 'manual', { readOnly: false, idKey: 'Manual' });
     if (manual) out.push(manual);
     if (experimentalEyeAnnotation) {
       // Eye stays read-only here: its panel owns internal undoable state with
       // no externally-callable section setter (Manual exposes setSectionsRef;
       // Eye does not), so sidebar mutations would desync the editor.
-      const eye = manualToUnified(eyeAnnotation, 'Eye', '#22d3ee', 'eye', { readOnly: true });
+      const eye = manualToUnified(eyeAnnotation, 'Eye', '#22d3ee', 'eye', { readOnly: true, idKey: 'Eye' });
       if (eye) out.push(eye);
     }
     const ag = autoGuessToUnified(autoGuessAnnotation, '#f59e0b');
@@ -505,6 +532,15 @@ export function UnifiedAnnotationListPanel({
                       onToggleItemImportance={onItemToggleImportance && !layer.readOnly
                         ? (item) => onItemToggleImportance(layer.id, item.id, type)
                         : undefined}
+                      onDeleteLayer={onDeleteLayer && !layer.readOnly
+                        ? () => onDeleteLayer(layer.id, type)
+                        : undefined}
+                      onRenameLayer={onRenameLayer && !layer.readOnly && type !== 'boundaries'
+                        ? (name) => onRenameLayer(layer.id, type, name)
+                        : undefined}
+                      onChangeItemLabel={onChangeItemLabel && !layer.readOnly && type !== 'boundaries'
+                        ? (item, label) => onChangeItemLabel(layer.id, item.id, type, label)
+                        : undefined}
                     />
                   );
                 })}
@@ -535,6 +571,13 @@ interface UnifiedLayerCardProps {
   onDeleteItem?: (item: UnifiedItem) => void;
   /** Per-row critical ↔ optional toggle. Same hiding rule as onDeleteItem. */
   onToggleItemImportance?: (item: UnifiedItem) => void;
+  /** Delete the whole layer. Hidden when absent (read-only layer or parent
+   *  didn't wire it). */
+  onDeleteLayer?: () => void;
+  /** Rename the layer. When absent the name renders as static text. */
+  onRenameLayer?: (name: string) => void;
+  /** Edit a row's label. When absent the label renders as static text. */
+  onChangeItemLabel?: (item: UnifiedItem, label: string) => void;
 }
 
 function UnifiedLayerCard({
@@ -546,6 +589,9 @@ function UnifiedLayerCard({
   onSeekItem,
   onDeleteItem,
   onToggleItemImportance,
+  onDeleteLayer,
+  onRenameLayer,
+  onChangeItemLabel,
 }: UnifiedLayerCardProps) {
   const [collapsed, setCollapsed] = useState(false);
   // Selecting a layer always expands it: the user clicked to *use* this
@@ -592,7 +638,7 @@ function UnifiedLayerCard({
           }}
           aria-expanded={!collapsed}
           title={collapsed ? 'Expand layer' : 'Collapse layer'}
-          className="shrink-0 w-4 h-4 flex items-center justify-center text-[11px] font-mono text-slate-200 hover:text-white rounded leading-none"
+          className="shrink-0 w-6 h-6 flex items-center justify-center text-[16px] font-mono text-slate-200 hover:text-white rounded leading-none"
         >
           {collapsed ? '▸' : '▾'}
         </button>
@@ -600,24 +646,49 @@ function UnifiedLayerCard({
           className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
           style={{ background: layer.color, boxShadow: `0 0 6px ${layer.color}aa` }}
         />
-        <span className={`flex-1 min-w-0 truncate text-[12px] font-semibold text-left ${
-          isSelected ? 'text-white' : 'text-slate-50'
-        }`}>
-          {layer.name}
-        </span>
+        {onRenameLayer ? (
+          // Nested inside the card's role=button header, so swallow click/key
+          // events that would otherwise seek/select the card while editing.
+          <input
+            value={layer.name}
+            onChange={(e) => onRenameLayer(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }}
+            spellCheck={false}
+            title="Rename layer"
+            className={`flex-1 min-w-0 bg-transparent border-0 rounded px-1 -mx-1 text-[12px] font-semibold text-left focus:outline-none focus:bg-white/[0.06] ${
+              isSelected ? 'text-white' : 'text-slate-50'
+            }`}
+          />
+        ) : (
+          <span className={`flex-1 min-w-0 truncate text-[12px] font-semibold text-left ${
+            isSelected ? 'text-white' : 'text-slate-50'
+          }`}>
+            {layer.name}
+          </span>
+        )}
         {isSelected && (
           <span className="shrink-0 text-[8.5px] uppercase tracking-wider font-semibold text-cyan-100 border border-cyan-400/40 bg-cyan-500/20 rounded px-1 py-0.5">
             active
           </span>
         )}
-        {layer.readOnly && (
-          <span className="shrink-0 text-[8.5px] uppercase tracking-wider text-slate-200 border border-white/20 rounded px-1 py-0.5">
-            view
-          </span>
-        )}
         <span className="text-[10px] font-mono text-slate-200 shrink-0">
           {layer.items.length}
         </span>
+        {onDeleteLayer && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDeleteLayer(); }}
+            title="Delete this layer (⌘Z to undo)"
+            className="shrink-0 w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-red-300 hover:bg-red-500/15 text-[12px] leading-none"
+          >
+            ×
+          </button>
+        )}
       </div>
       {collapsed ? null : layer.items.length === 0 ? (
         <div className="px-3 py-2 text-[10.5px] text-slate-300 italic">
@@ -670,9 +741,27 @@ function UnifiedLayerCard({
                       {fmtTime(item.time)}
                     </span>
                   )}
-                  <span className="flex-1 min-w-0 truncate text-[11px] text-slate-100">
-                    {item.label || <span className="text-slate-400 italic">label</span>}
-                  </span>
+                  {onChangeItemLabel ? (
+                    // Same event-swallowing as the layer-name input: the row is
+                    // a role=button that seeks on click / Enter / Space.
+                    <input
+                      value={item.label}
+                      onChange={(e) => onChangeItemLabel(item, e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      }}
+                      placeholder="label"
+                      spellCheck={false}
+                      className="flex-1 min-w-0 bg-transparent border-0 rounded px-1 -mx-1 text-[11px] text-slate-100 focus:outline-none focus:bg-white/[0.06] placeholder:text-slate-400 placeholder:italic"
+                    />
+                  ) : (
+                    <span className="flex-1 min-w-0 truncate text-[11px] text-slate-100">
+                      {item.label || <span className="text-slate-400 italic">label</span>}
+                    </span>
+                  )}
                   {item.sublabel && (
                     <span className="shrink-0 text-[9px] text-slate-200 font-mono">
                       {item.sublabel}

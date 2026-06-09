@@ -28,6 +28,7 @@ import {
 import { snapToBeat, type BarGrid } from '../../utils/barSnap';
 import { useSettings } from '../../context/SettingsContext';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { CueItemCard } from './CueItemCard';
 import { AddItemAtEndCard } from './ItemCard';
 import { LayerModePicker } from './LayerModePicker';
@@ -145,7 +146,7 @@ function CueEditorPanelInner(
       ...doc,
       layers: doc.layers.map((l) =>
         l.id === layerId
-          ? { ...l, items: l.items.map((it) => (it.id === itemId ? { ...it, ...patch } : it)) }
+          ? { ...l, items: l.items.map((it) => (it.id === itemId ? ({ ...it, ...patch } as typeof it) : it)) }
           : l,
       ),
     });
@@ -233,7 +234,7 @@ function CueEditorPanelInner(
     }
     const finalId = targetLayerId;
     const target = layers.find((l) => l.id === finalId);
-    const existing = target && target.type === 'cues' ? target.items : [];
+    const existing = (target && target.type === 'cues' ? target.items : []) as CueItem[];
     const additions: CueItem[] = [];
     const novel = (t: number) =>
       !existing.some((c) => Math.abs(c.time - t) < 0.01)
@@ -365,6 +366,7 @@ function CueEditorPanelInner(
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: getLayerStatus(doc, 'cues'),
       hasItems: totalCount > 0,
       saveStatus,

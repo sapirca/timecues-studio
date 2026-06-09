@@ -14,8 +14,18 @@
 //        track_a.layers.json
 //        track_a.manual.json     ← also .eye.json, .auto-guess.json
 //        track_a.stems/{vocals,drums,...}.wav
+//   3. Export-bundle layout — what ExportManagerModal writes (one dir per slug):
+//        <slug>/boundaries/{manual,eye,auto-guess}/[<annotator>/]<slug>.json
+//        <slug>/{cues,spans,loops,patterns}/[<annotator>/]<layer-name>.json
+//        <slug>/song-info.json
+//        <slug>/audio.<ext>
+//        <slug>/stems/{drums,bass,other,vocals}.<ext>
+//      Only `.json` boundary/layer files round-trip — the flat marker formats
+//      (.txt/.csv/.lab/.jams/.mid) are lossy and skipped. The per-type user-layer
+//      files are reassembled into one AnnotationLayersDocument at import time.
 
 import { annotatorHeaders } from '../utils/annotatorHeaders';
+import type { AnnotationLayer, AnnotationLayersDocument } from '../types/annotationLayer';
 
 // ── Slugification — must match vite.config.ts:serveUploadSong/slugify ────────
 export function slugify(stem: string): string {
@@ -54,14 +64,32 @@ function basenameNoExt(name: string): string {
 // ── Scanned model ────────────────────────────────────────────────────────────
 
 export type AnnotationKind = 'manual' | 'eye' | 'auto-guess' | 'layers';
+/** User-created layer kinds the export-bundle layout splits into one file each.
+ *  On the server they all live inside a single annotation-layers document, so
+ *  the importer reassembles them before POSTing. */
+export type UserLayer = 'cues' | 'spans' | 'loops' | 'patterns';
 export type ScannedSong = {
   slug: string;            // derived from audio basename (server slugify)
   displayName: string;     // raw basename before slugify
   audio: File | null;      // null if a song was inferred from annotations alone
   songInfo: File | null;
   annotations: Partial<Record<AnnotationKind, File>>;
+  /** Per-layer JSON files from the export-bundle layout (cues/spans/loops/
+   *  patterns), each a single AnnotationLayer. Folded into one document by the
+   *  `layers` import step alongside any whole-document `annotations.layers`. */
+  layerFiles: { type: UserLayer; name: string; file: File }[];
   stems: Partial<Record<StemName, { file: File; ext: string }>>;
   warnings: string[];
+};
+
+/** Shared classifier result — `layer` carries the user-layer type + display
+ *  name (filename basename); the real layer name lives inside the JSON. */
+type Classified = {
+  kind: 'audio' | 'song-info' | AnnotationKind | 'stem' | 'layer';
+  slug: string;
+  stemName?: StemName;
+  layerType?: UserLayer;
+  layerName?: string;
 };
 
 export type ScanResult = {
@@ -72,11 +100,7 @@ export type ScanResult = {
 // ── Path classifiers ─────────────────────────────────────────────────────────
 // Each helper returns the slug + kind if the path matches its layout pattern.
 
-function classifyServerMirror(parts: string[], file: File): {
-  kind: 'audio' | 'song-info' | AnnotationKind | 'stem';
-  slug: string;
-  stemName?: StemName;
-} | null {
+function classifyServerMirror(parts: string[], file: File): Classified | null {
   // Look for the FIRST segment that names a known top-level bucket. This
   // tolerates the user picking the parent of the data/ folder, or selecting
   // data/ itself, or selecting an even-deeper subdir.
@@ -121,11 +145,7 @@ function classifyServerMirror(parts: string[], file: File): {
   return null;
 }
 
-function classifyFlatBundle(parts: string[]): {
-  kind: 'audio' | 'song-info' | AnnotationKind | 'stem';
-  slug: string;
-  stemName?: StemName;
-} | null {
+function classifyFlatBundle(parts: string[]): Classified | null {
   const fileName = parts[parts.length - 1];
 
   // 1. Audio file: <slug>.<audio-ext>
@@ -169,6 +189,75 @@ function classifyFlatBundle(parts: string[]): {
   return null;
 }
 
+// Boundary kind sub-dirs under `<slug>/boundaries/` map straight onto the
+// annotation kind. (custom is intentionally absent — out of scope, same as
+// the server-mirror classifier.)
+const BOUNDARY_DIR_KIND: Record<string, 'manual' | 'eye' | 'auto-guess'> = {
+  manual: 'manual',
+  eye: 'eye',
+  'auto-guess': 'auto-guess',
+};
+const USER_LAYER_DIRS = new Set<UserLayer>(['cues', 'spans', 'loops', 'patterns']);
+// Type dirs the export-bundle layout places directly under `<slug>/`. grid +
+// algos are recognised as part of the layout but have no import endpoint, so
+// they fall through to "unrecognised" honestly rather than silently vanishing.
+const EXPORT_TYPE_DIRS = new Set([
+  'boundaries', 'cues', 'spans', 'loops', 'patterns', 'stems', 'grid', 'algos',
+]);
+
+/** Recognise the export-bundle layout (layout #3 above). The slug always comes
+ *  from the song-folder segment — the segment immediately before the type dir
+ *  (boundaries/cues/…), or the parent of a bare song-info.json / audio.<ext>.
+ *  Anchoring on the folder (not the filename) is what makes user-layer files
+ *  like `cues/kick-hits.json` resolve to the right song. */
+function classifyExportBundle(parts: string[]): Classified | null {
+  const fileName = parts[parts.length - 1];
+  const lower = fileName.toLowerCase();
+
+  // Find the first known type dir that has a parent segment to act as slug.
+  // This tolerates wrapper dirs above <slug>/ (e.g. an unzipped export folder).
+  let dirIdx = -1;
+  for (let i = 1; i < parts.length - 1; i += 1) {
+    if (EXPORT_TYPE_DIRS.has(parts[i])) { dirIdx = i; break; }
+  }
+
+  if (dirIdx >= 1) {
+    const slug = parts[dirIdx - 1];
+    const typeDir = parts[dirIdx];
+
+    if (typeDir === 'boundaries') {
+      // boundaries/<kind>/[<annotator>/]<file>.json
+      const kind = BOUNDARY_DIR_KIND[parts[dirIdx + 1]];
+      if (!kind) return null;
+      if (!lower.endsWith('.json')) return null; // flat marker formats are lossy
+      return { kind, slug };
+    }
+    if (USER_LAYER_DIRS.has(typeDir as UserLayer)) {
+      // <type>/[<annotator>/]<layer-name>.json — one AnnotationLayer per file.
+      if (!lower.endsWith('.json')) return null;
+      return { kind: 'layer', slug, layerType: typeDir as UserLayer, layerName: basenameNoExt(fileName) };
+    }
+    if (typeDir === 'stems') {
+      // stems/<stem>.<audio-ext>
+      const stemBase = basenameNoExt(lower);
+      if ((STEM_NAMES as readonly string[]).includes(stemBase) && isAudioName(lower)) {
+        return { kind: 'stem', slug, stemName: stemBase as StemName };
+      }
+      return null;
+    }
+    // grid / algos — layout-recognised but not importable.
+    return null;
+  }
+
+  // No type dir: only song-info.json and audio.<ext> sit directly under <slug>/.
+  if (parts.length >= 2) {
+    const parentSlug = parts[parts.length - 2];
+    if (lower === 'song-info.json') return { kind: 'song-info', slug: parentSlug };
+    if (isAudioName(lower) && basenameNoExt(lower) === 'audio') return { kind: 'audio', slug: parentSlug };
+  }
+  return null;
+}
+
 // ── Main scanner ─────────────────────────────────────────────────────────────
 
 export function scanDatasetFiles(files: File[]): ScanResult {
@@ -184,6 +273,7 @@ export function scanDatasetFiles(files: File[]): ScanResult {
         audio: null,
         songInfo: null,
         annotations: {},
+        layerFiles: [],
         stems: {},
         warnings: [],
       };
@@ -196,8 +286,14 @@ export function scanDatasetFiles(files: File[]): ScanResult {
     const rel = relPath(file);
     const parts = rel.split('/').filter(Boolean);
 
-    // Try server-mirror first (more specific), then fall back to flat bundle.
-    const cls = classifyServerMirror(parts, file) ?? classifyFlatBundle(parts);
+    // Most specific first: server-mirror (top-level buckets), then the
+    // export-bundle layout (anchored on <slug>/ + type dirs), then the greedy
+    // flat-bundle catch-all (which would otherwise grab `audio.mp3` as slug
+    // "audio" and stems as their own phantom songs).
+    const cls =
+      classifyServerMirror(parts, file) ??
+      classifyExportBundle(parts) ??
+      classifyFlatBundle(parts);
     if (!cls) {
       unrecognized.push(rel);
       continue;
@@ -224,6 +320,8 @@ export function scanDatasetFiles(files: File[]): ScanResult {
       entry.songInfo = file;
     } else if (cls.kind === 'stem' && cls.stemName) {
       entry.stems[cls.stemName] = { file, ext: audioExt(fileName) };
+    } else if (cls.kind === 'layer' && cls.layerType) {
+      entry.layerFiles.push({ type: cls.layerType, name: cls.layerName ?? basenameNoExt(fileName), file });
     } else if (cls.kind === 'manual' || cls.kind === 'eye' || cls.kind === 'auto-guess' || cls.kind === 'layers') {
       entry.annotations[cls.kind] = file;
     }
@@ -461,13 +559,12 @@ export async function runImport(
       }
     }
 
-    // 3. Annotations — manual/eye/auto-guess/layers (independent, in parallel
-    //    is fine but sequential keeps the dialog's per-step status legible).
+    // 3. Boundary annotations — manual/eye/auto-guess each POST one document
+    //    verbatim. Sequential keeps the dialog's per-step status legible.
     const annTargets: { key: StepKey; file: File | undefined; url: string }[] = [
       { key: 'manual',    file: song.annotations.manual,    url: `/api/manual-annotations/${encodeURIComponent(song.slug)}` },
       { key: 'eye',       file: song.annotations.eye,       url: `/api/eye-annotations/${encodeURIComponent(song.slug)}` },
       { key: 'autoGuess', file: song.annotations['auto-guess'], url: `/api/auto-guess-annotations/${encodeURIComponent(song.slug)}` },
-      { key: 'layers',    file: song.annotations.layers,    url: `/api/annotation-layers/${encodeURIComponent(song.slug)}` },
     ];
     for (const t of annTargets) {
       if (!include[t.key]) continue;
@@ -478,6 +575,39 @@ export async function runImport(
         steps[t.key] = { status: 'ok' };
       } catch (err) {
         steps[t.key] = { status: 'error', message: (err as Error).message };
+      }
+    }
+
+    // 3b. Annotation layers. Two source shapes collapse to one POST:
+    //   - a whole-document file (server-mirror / flat `.layers.json`) — POSTed
+    //     verbatim so its statusByType / annotated_at survive;
+    //   - the export-bundle's per-layer files (cues/spans/loops/patterns), each
+    //     a single AnnotationLayer — reassembled into one document. When both
+    //     are present (mixed sources) the per-layer files extend the document.
+    if (include.layers && (song.annotations.layers || song.layerFiles.length > 0)) {
+      try {
+        if (song.layerFiles.length === 0 && song.annotations.layers) {
+          const doc = await readFileAsJson(song.annotations.layers);
+          await postJson(`/api/annotation-layers/${encodeURIComponent(song.slug)}`, doc);
+        } else {
+          const layers: AnnotationLayer[] = [];
+          if (song.annotations.layers) {
+            const doc = (await readFileAsJson(song.annotations.layers)) as AnnotationLayersDocument;
+            if (Array.isArray(doc?.layers)) layers.push(...doc.layers);
+          }
+          for (const lf of song.layerFiles) {
+            layers.push((await readFileAsJson(lf.file)) as AnnotationLayer);
+          }
+          const document: AnnotationLayersDocument = {
+            song: song.slug,
+            annotated_at: new Date().toISOString(),
+            layers,
+          };
+          await postJson(`/api/annotation-layers/${encodeURIComponent(song.slug)}`, document);
+        }
+        steps.layers = { status: 'ok' };
+      } catch (err) {
+        steps.layers = { status: 'error', message: (err as Error).message };
       }
     }
 

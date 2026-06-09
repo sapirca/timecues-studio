@@ -166,6 +166,11 @@ const DetectorIcon = (
   </span>
 );
 
+/** A layer whose label carries the " (detector)" suffix is a script-defined
+ *  detector output rather than a user-created layer — these get pulled out of
+ *  their type group and listed under the "Custom Detectors" section. */
+const isDetectorLayer = (l: { label: string }) => /\(detector\)\s*$/.test(l.label);
+
 /** A user-created or detector-sourced layer row inside the Annotations popover.
  *  Uses Checkbox for the toggle and a right-aligned monospace item count. When
  *  `leadingIcon` is set, it's rendered before the checkbox — used by detector
@@ -557,6 +562,29 @@ export function VizControlBar({
   const visibleSpanLayers = (spanLayerOptions ?? []).filter((o) => o.visible);
   const visibleLoopLayers = (loopLayerOptions ?? []).filter((o) => o.visible);
   const visiblePatternLayers = (patternLayerOptions ?? []).filter((o) => o.visible);
+
+  // Detectors are collected out of every annotation type and listed together
+  // under the "Custom Detectors" section. Boundary detectors arrive as their
+  // own prop; the cue/span/loop/pattern ones are layers tagged "(detector)".
+  const boundaryDetectors = customAnnotationOptions ?? [];
+  const cueDetectors = (cueLayerOptions ?? []).filter(isDetectorLayer);
+  const spanDetectors = (spanLayerOptions ?? []).filter(isDetectorLayer);
+  const loopDetectors = (loopLayerOptions ?? []).filter(isDetectorLayer);
+  const patternDetectors = (patternLayerOptions ?? []).filter(isDetectorLayer);
+  const detectorCount = boundaryDetectors.length + cueDetectors.length
+    + spanDetectors.length + loopDetectors.length + patternDetectors.length;
+  // Flip every detector to `visible` — used by the All / None header controls.
+  // Each toggle is idempotent per id and routes through a functional state
+  // update upstream, so calling them in a loop is safe.
+  const setAllDetectors = (visible: boolean) => {
+    boundaryDetectors.forEach((o) => {
+      if ((!hiddenCustomAnnotations?.has(o.id)) !== visible) onToggleCustomAnnotation?.(o.id);
+    });
+    cueDetectors.forEach((o) => { if (o.visible !== visible) onToggleCueLayerVisibility?.(o.id); });
+    spanDetectors.forEach((o) => { if (o.visible !== visible) onToggleSpanLayerVisibility?.(o.id); });
+    loopDetectors.forEach((o) => { if (o.visible !== visible) onToggleLoopLayerVisibility?.(o.id); });
+    patternDetectors.forEach((o) => { if (o.visible !== visible) onTogglePatternLayerVisibility?.(o.id); });
+  };
   const annotationsActive = [showManual, eyeEnabled && showEye, showAutoGuess].filter(Boolean).length
     + visibleCustomAnnotations.length
     + visibleCueLayers.length
@@ -635,31 +663,11 @@ export function VizControlBar({
         {eyeEnabled && (
           <Checkbox label="Eye" color="#2dd4bf" checked={showEye} onChange={onToggleEye} />
         )}
-        {customAnnotationOptions && customAnnotationOptions.length > 0 && onToggleCustomAnnotation && (
-          <>
-            <SubGroupHeader>Detectors</SubGroupHeader>
-            {customAnnotationOptions.map((opt) => (
-              <div key={opt.id} className="flex items-center gap-1.5">
-                {DetectorIcon}
-                <Checkbox
-                  label={opt.label}
-                  color={opt.color}
-                  checked={!hiddenCustomAnnotations?.has(opt.id)}
-                  onChange={() => onToggleCustomAnnotation(opt.id)}
-                />
-              </div>
-            ))}
-          </>
-        )}
 
-        {/* ── Cues ────────────────────────────────────────────────
-            Future hook: a per-marker-type Auto-guess control will land
-            here once the feature ships for cues (and similarly for
-            Spans/Loops/Patterns below). Today AutoGuess is boundary-only. */}
-        {cueLayerOptions && cueLayerOptions.length > 0 && onToggleCueLayerVisibility && (() => {
-          const isDetector = (l: CueLayerOption) => /\(detector\)\s*$/.test(l.label);
-          const userLayers = cueLayerOptions.filter((l) => !isDetector(l));
-          const detectorLayers = cueLayerOptions.filter(isDetector);
+        {/* ── Cues (user layers only — detectors live under Custom Detectors) ── */}
+        {cueLayerOptions && onToggleCueLayerVisibility && (() => {
+          const userLayers = cueLayerOptions.filter((l) => !isDetectorLayer(l));
+          if (userLayers.length === 0) return null;
           return (
             <>
               <GroupHeader>Cues</GroupHeader>
@@ -673,31 +681,14 @@ export function VizControlBar({
                   onChange={() => onToggleCueLayerVisibility(opt.id)}
                 />
               ))}
-              {detectorLayers.length > 0 && (
-                <>
-                  <SubGroupHeader>Detectors</SubGroupHeader>
-                  {detectorLayers.map((opt) => (
-                    <LayerRow
-                      key={opt.id}
-                      label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
-                      color={opt.color}
-                      checked={opt.visible}
-                      count={opt.count}
-                      onChange={() => onToggleCueLayerVisibility(opt.id)}
-                      leadingIcon={DetectorIcon}
-                    />
-                  ))}
-                </>
-              )}
             </>
           );
         })()}
 
-        {/* ── Spans ─────────────────────────────────────────────── */}
-        {spanLayerOptions && spanLayerOptions.length > 0 && onToggleSpanLayerVisibility && (() => {
-          const isDetector = (l: InteriorLayerOption) => /\(detector\)\s*$/.test(l.label);
-          const userLayers = spanLayerOptions.filter((l) => !isDetector(l));
-          const detectorLayers = spanLayerOptions.filter(isDetector);
+        {/* ── Spans (user layers only) ──────────────────────────── */}
+        {spanLayerOptions && onToggleSpanLayerVisibility && (() => {
+          const userLayers = spanLayerOptions.filter((l) => !isDetectorLayer(l));
+          if (userLayers.length === 0) return null;
           return (
             <>
               <GroupHeader>Spans</GroupHeader>
@@ -711,31 +702,14 @@ export function VizControlBar({
                   onChange={() => onToggleSpanLayerVisibility(opt.id)}
                 />
               ))}
-              {detectorLayers.length > 0 && (
-                <>
-                  <SubGroupHeader>Detectors</SubGroupHeader>
-                  {detectorLayers.map((opt) => (
-                    <LayerRow
-                      key={opt.id}
-                      label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
-                      color={opt.color}
-                      checked={opt.visible}
-                      count={opt.count}
-                      onChange={() => onToggleSpanLayerVisibility(opt.id)}
-                      leadingIcon={DetectorIcon}
-                    />
-                  ))}
-                </>
-              )}
             </>
           );
         })()}
 
-        {/* ── Loops ─────────────────────────────────────────────── */}
-        {loopLayerOptions && loopLayerOptions.length > 0 && onToggleLoopLayerVisibility && (() => {
-          const isDetector = (l: InteriorLayerOption) => /\(detector\)\s*$/.test(l.label);
-          const userLayers = loopLayerOptions.filter((l) => !isDetector(l));
-          const detectorLayers = loopLayerOptions.filter(isDetector);
+        {/* ── Loops (user layers only) ──────────────────────────── */}
+        {loopLayerOptions && onToggleLoopLayerVisibility && (() => {
+          const userLayers = loopLayerOptions.filter((l) => !isDetectorLayer(l));
+          if (userLayers.length === 0) return null;
           return (
             <>
               <GroupHeader>Loops</GroupHeader>
@@ -749,31 +723,14 @@ export function VizControlBar({
                   onChange={() => onToggleLoopLayerVisibility(opt.id)}
                 />
               ))}
-              {detectorLayers.length > 0 && (
-                <>
-                  <SubGroupHeader>Detectors</SubGroupHeader>
-                  {detectorLayers.map((opt) => (
-                    <LayerRow
-                      key={opt.id}
-                      label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
-                      color={opt.color}
-                      checked={opt.visible}
-                      count={opt.count}
-                      onChange={() => onToggleLoopLayerVisibility(opt.id)}
-                      leadingIcon={DetectorIcon}
-                    />
-                  ))}
-                </>
-              )}
             </>
           );
         })()}
 
-        {/* ── Patterns ──────────────────────────────────────────── */}
-        {patternLayerOptions && patternLayerOptions.length > 0 && onTogglePatternLayerVisibility && (() => {
-          const isDetector = (l: InteriorLayerOption) => /\(detector\)\s*$/.test(l.label);
-          const userLayers = patternLayerOptions.filter((l) => !isDetector(l));
-          const detectorLayers = patternLayerOptions.filter(isDetector);
+        {/* ── Patterns (user layers only) ───────────────────────── */}
+        {patternLayerOptions && onTogglePatternLayerVisibility && (() => {
+          const userLayers = patternLayerOptions.filter((l) => !isDetectorLayer(l));
+          if (userLayers.length === 0) return null;
           return (
             <>
               <GroupHeader>Patterns</GroupHeader>
@@ -787,25 +744,127 @@ export function VizControlBar({
                   onChange={() => onTogglePatternLayerVisibility(opt.id)}
                 />
               ))}
-              {detectorLayers.length > 0 && (
-                <>
-                  <SubGroupHeader>Detectors</SubGroupHeader>
-                  {detectorLayers.map((opt) => (
-                    <LayerRow
-                      key={opt.id}
-                      label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
-                      color={opt.color}
-                      checked={opt.visible}
-                      count={opt.count}
-                      onChange={() => onTogglePatternLayerVisibility(opt.id)}
-                      leadingIcon={DetectorIcon}
-                    />
-                  ))}
-                </>
-              )}
             </>
           );
         })()}
+
+        {/* ── Custom Detectors ──────────────────────────────────────
+            Every script-defined detector overlay, grouped by the annotation
+            type it produces. Pulled out of the type groups above so the
+            human-authored layers stay uncluttered. All / None flip the whole
+            set at once. */}
+        {detectorCount > 0 && (
+          <>
+            <div className="flex items-center justify-between gap-2 pt-2 mt-1 border-t border-white/[0.12]">
+              <span className="text-[10px] uppercase tracking-wider text-slate-300 font-semibold">
+                Custom Detectors
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setAllDetectors(true)}
+                  title="Show every detector overlay"
+                  className="px-1 h-4 rounded text-[9px] font-mono leading-none bg-[#0a0b0d] text-slate-400 border border-white/[0.12] hover:text-slate-200 hover:border-white/[0.22] transition-colors"
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAllDetectors(false)}
+                  title="Hide every detector overlay"
+                  className="px-1 h-4 rounded text-[9px] font-mono leading-none bg-[#0a0b0d] text-slate-400 border border-white/[0.12] hover:text-slate-200 hover:border-white/[0.22] transition-colors"
+                >
+                  None
+                </button>
+              </div>
+            </div>
+
+            {boundaryDetectors.length > 0 && onToggleCustomAnnotation && (
+              <>
+                <SubGroupHeader>Boundaries</SubGroupHeader>
+                {boundaryDetectors.map((opt) => (
+                  <div key={opt.id} className="flex items-center gap-1.5">
+                    {DetectorIcon}
+                    <Checkbox
+                      label={opt.label}
+                      color={opt.color}
+                      checked={!hiddenCustomAnnotations?.has(opt.id)}
+                      onChange={() => onToggleCustomAnnotation(opt.id)}
+                    />
+                  </div>
+                ))}
+              </>
+            )}
+
+            {cueDetectors.length > 0 && onToggleCueLayerVisibility && (
+              <>
+                <SubGroupHeader>Cues</SubGroupHeader>
+                {cueDetectors.map((opt) => (
+                  <LayerRow
+                    key={opt.id}
+                    label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
+                    color={opt.color}
+                    checked={opt.visible}
+                    count={opt.count}
+                    onChange={() => onToggleCueLayerVisibility(opt.id)}
+                    leadingIcon={DetectorIcon}
+                  />
+                ))}
+              </>
+            )}
+
+            {spanDetectors.length > 0 && onToggleSpanLayerVisibility && (
+              <>
+                <SubGroupHeader>Spans</SubGroupHeader>
+                {spanDetectors.map((opt) => (
+                  <LayerRow
+                    key={opt.id}
+                    label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
+                    color={opt.color}
+                    checked={opt.visible}
+                    count={opt.count}
+                    onChange={() => onToggleSpanLayerVisibility(opt.id)}
+                    leadingIcon={DetectorIcon}
+                  />
+                ))}
+              </>
+            )}
+
+            {loopDetectors.length > 0 && onToggleLoopLayerVisibility && (
+              <>
+                <SubGroupHeader>Loops</SubGroupHeader>
+                {loopDetectors.map((opt) => (
+                  <LayerRow
+                    key={opt.id}
+                    label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
+                    color={opt.color}
+                    checked={opt.visible}
+                    count={opt.count}
+                    onChange={() => onToggleLoopLayerVisibility(opt.id)}
+                    leadingIcon={DetectorIcon}
+                  />
+                ))}
+              </>
+            )}
+
+            {patternDetectors.length > 0 && onTogglePatternLayerVisibility && (
+              <>
+                <SubGroupHeader>Patterns</SubGroupHeader>
+                {patternDetectors.map((opt) => (
+                  <LayerRow
+                    key={opt.id}
+                    label={opt.label.replace(/\s*\(detector\)\s*$/, '')}
+                    color={opt.color}
+                    checked={opt.visible}
+                    count={opt.count}
+                    onChange={() => onTogglePatternLayerVisibility(opt.id)}
+                    leadingIcon={DetectorIcon}
+                  />
+                ))}
+              </>
+            )}
+          </>
+        )}
       </DropdownGroup>
       </Column>
       )}
@@ -956,7 +1015,7 @@ export function VizControlBar({
             </div>
             <input
               type="range"
-              min={0.5}
+              min={0.25}
               max={10}
               step={0.25}
               value={gridLineThickness}
@@ -986,16 +1045,15 @@ export function VizControlBar({
             </p>
           ) : (() => {
             const groupOf = (id: string): GroupKey => {
-              if (id === 'auto-guess-algo') return 'auto-guess';
               if (id.startsWith('msaf-')) return 'msaf';
               if (id.startsWith('ruptures-')) return 'ruptures';
               if (id === 'allin1' || id.startsWith('allin1-')) return 'allin1';
               if (id.startsWith('custom:')) return 'custom';
               return 'other';
             };
-            type GroupKey = 'auto-guess' | 'msaf' | 'allin1' | 'ruptures' | 'custom' | 'other';
+            type GroupKey = 'msaf' | 'allin1' | 'ruptures' | 'custom' | 'other';
             const grouped: Record<GroupKey, AlgoOverlayOption[]> = {
-              'auto-guess': [], msaf: [], allin1: [], ruptures: [], custom: [], other: [],
+              msaf: [], allin1: [], ruptures: [], custom: [], other: [],
             };
             algoOptions.forEach((opt) => { grouped[groupOf(opt.id)].push(opt); });
 
@@ -1047,20 +1105,6 @@ export function VizControlBar({
                   checked={allSelected}
                   onChange={() => setSelected(algoOptions.map((o) => o.id), !allSelected)}
                 />
-                {grouped['auto-guess'].length > 0 && (
-                  <div className="pt-1">
-                    <div className="border-t border-white/[0.05] mb-1" />
-                    {grouped['auto-guess'].map((opt) => (
-                      <Checkbox
-                        key={opt.id}
-                        label={opt.label}
-                        color="#10b981"
-                        checked={selectedAlgos.has(opt.id)}
-                        onChange={() => onToggleAlgo(opt.id)}
-                      />
-                    ))}
-                  </div>
-                )}
                 {renderGroup('ruptures', 'Ruptures')}
                 {renderGroup('msaf', 'MSAF')}
                 {renderGroup('allin1', 'All-In-One')}

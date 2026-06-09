@@ -24,6 +24,9 @@ independent:
   (pure DSP, no model weights).
 - **Enable LYRICS-family detectors** — Whisper-base multilingual vocal
   transcription. Opens the LYRICS family (per-word + per-line entries).
+- **Enable PATTERN-family detectors** — LoCoMotif DTW-warped motif discovery
+  on beat-synchronous chroma. Opens the PATTERN family (variable-length
+  repeating motifs, grouped by motif id).
 
 Flipping a flag on does not by itself bring up the backend services. See
 *Running the experimental servers* below.
@@ -33,16 +36,22 @@ Flipping a flag on does not by itself bring up the backend services. See
 The SPAN-family and BeatNet detectors live in their own docker sidecars so a
 broken install in one doesn't take the others down with it.
 
-**Local dev (`./run.sh`):** the 8 experimental Python servers start
-automatically on ports 8009–8016 alongside the core stack. Heavy deps
-(torch, BeatNet, basic-pitch, panns_inference, openai-whisper, autochord)
-are NOT auto-installed — each server's imports are guarded by try/except, so
-the process starts but `available=false` flows through to the Initialize-
-models panel as `Deps missing`. Install per-family deps with `pip install`
-as listed in `run.sh`.
+**Local dev — lean (`./run.sh`):** the 9 experimental Python servers start
+automatically on ports 8009–8017 alongside the core stack, but their heavy
+deps (torch, BeatNet, basic-pitch, panns_inference, openai-whisper,
+autochord) are **NOT** installed in the lean default. Each server's imports
+are guarded by try/except, so the process starts but `available=false` flows
+through to the Initialize-models panel as `Deps missing`.
+
+**Local dev — full (`./run_all.sh`):** the same launcher with every model
+family installed (≡ `./run.sh --all`) — it pip-installs torch + the
+experimental deps (and builds a Python 3.11 venv for basic-pitch/autochord
+on Python ≥3.12), so all 9 detectors report `Ready`. ~3 GB of wheels on
+first run. To install just one family by hand instead, run the matching
+`pip install` line as listed in `run.sh`.
 
 **Full stack (all sidecars):** activate `--profile experimental-models`
-alongside `--profile demucs-cpu` so all 8 servers run out of the box. The
+alongside `--profile demucs-cpu` so all 9 servers run out of the box. The
 per-family user-settings flag still controls visibility — flipping a flag
 off hides the family's UI without stopping the server.
 
@@ -53,7 +62,7 @@ locally, run
 docker compose --profile experimental-models up --build
 ```
 
-This brings up two extra services alongside the core stack:
+This brings up nine extra services alongside the core stack:
 
 | Service | Port | What it runs |
 |---|---|---|
@@ -65,6 +74,7 @@ This brings up two extra services alongside the core stack:
 | `cue-extras` | 8014 | `tools/python/cue_extras_server.py` — librosa key, autochord, librosa onsets |
 | `percussive` | 8015 | `tools/python/percussive_server.py` — HPSS percussive spans |
 | `lyrics`  | 8016 | `tools/python/lyrics_server.py` — Whisper-base vocal transcription |
+| `pattern` | 8017 | `tools/python/pattern_server.py` — LoCoMotif motif discovery |
 
 If the profile is not running, the web app's `/api/span/*` and
 `/api/beatnet/*` calls return 503 and the corresponding family UI surfaces
@@ -254,6 +264,58 @@ the Time Signature select in the Song Info panel. Click it to apply
 BeatNet's detected meter. The chip hides itself when the current value
 already matches (or when no meter could be inferred from too few bars).
 
+## PATTERN family
+
+Output kind: **variable-length repeating motifs** discovered via DTW-warped
+matching on beat-synchronous chroma. Each detected motif is a *set* of
+similar (but not identical, and not necessarily evenly spaced) intervals.
+Each occurrence surfaces as one inspector tile labelled `Motif N · k/m`
+so the user can see "this is occurrence k of m for motif N" at a glance.
+Tiles of the same motif share a color.
+
+### Detector
+
+| ID | What it does | Weights | Sidecar |
+|---|---|---|---|
+| `locomotif` | [LoCoMotif](https://github.com/ML-KULeuven/locomotif) (MIT, KU Leuven) — applies dynamic time warping over beat-synchronous chroma to find repeating motif sets. Variable length, time-warped. | None (pure DSP + numba JIT) | `pattern` (port 8017) |
+
+### How it differs from LOOP
+
+The LOOP family (`chroma-autocorr`) finds *exact-length, evenly-spaced*
+N-bar repeats — useful for "is this loopable as an 8-bar phrase?". The
+PATTERN family is broader: it discovers any musical motif that repeats,
+even if the occurrences are different lengths and arrive at irregular
+times. A chorus-with-variations or a riff that gets stretched/compressed
+under a vocal line is exactly the kind of thing LoCoMotif catches that
+chroma-autocorr misses.
+
+### What lands on disk
+
+`data/algorithm-outputs/pattern/<slug>/locomotif.json` contains:
+
+```json
+{
+  "patterns": [
+    {
+      "start": 32.39, "end": 39.17,
+      "label": "Motif 1 · 7/9",
+      "motif_id": 1,
+      "occurrence_index": 6,
+      "occurrence_count": 9,
+      "confidence": 0.87
+    },
+    ...
+  ]
+}
+```
+
+### One-time numba JIT warm-up
+
+The first `/api/pattern/detect` call after the sidecar boots pays a one-time
+~15 s numba JIT compile cost; subsequent calls are seconds. The Initialize
+Models panel triggers this explicitly so the user can pay the warm-up cost
+before clicking Run on a song.
+
 ## Warm models before first use (dev only)
 
 The Initialize panel is the recommended way to warm models during normal
@@ -273,6 +335,55 @@ curl -XPOST http://localhost:5173/api/beatnet/initialize
 A `make warm-experimental-models` target is listed as TODO in
 `integration_plan.md` Phase 0 and will land once the wider Phase-2 docs pass
 catches up to it.
+
+## Setlist workspace
+
+A separate top-level workspace at `/setlist` that orders the corpus into a
+DJ-style play sequence. Off by default — flip on **Enable Setlist workspace
+(algorithmic DJ-style ordering)** under Settings → Experimental to expose
+the tab.
+
+### What it does
+
+Pulls the cached BPM (median across the 5 detectors) for every song in your
+corpus and runs a greedy nearest-neighbour pass over the included subset:
+seed with the lowest-BPM song, then repeatedly pick whichever remaining song
+has the smallest BPM gap to the tail of the sequence. Pairs whose BPMs
+differ by ≥ 8 score 0 and are effectively pushed to the end. Songs with no
+cached BPM trail at the very end in their original order.
+
+### Controls
+
+- **Strategy** — only `BPM ladder` ships in v0. The dropdown is the extension
+  point for `harmonic-mix` (once Phase 3 key/chord detectors land) and
+  future strategies.
+- **Weights** — sliders for BPM, Meter, and Energy. v0 honours BPM and
+  Meter; the Energy slider is disabled until that scorer ships.
+- **Corpus picker** — every song is included by default. Uncheck songs you
+  want to skip without removing them from the corpus.
+- **Generated order panel** — shows the ordered list with each pair's Δ BPM,
+  meter match (✓ / ✗), and combined score.
+
+### Saving & exporting
+
+Setlists persist per-annotator under
+`data/setlists/<your-id>/<name>.json`. The **Save** button writes the
+current order plus the strategy + weights used; the dropdown picker lists
+your saved setlists. **Export JSON** downloads the same payload locally.
+
+Server-side writes require team membership — public / demo visitors cannot
+save and will see *Save failed — are you signed in as a team member?*. The
+demo route is blocked entirely, since demo identities have no persistent
+storage.
+
+### What's next
+
+Meter scoring is wired in but currently weighted 0 by default; flip the
+slider up to bias same-meter neighbours. Energy and harmonic-mix scorers
+arrive once the underlying cached signals (energy curves are already in
+`mir_server.py`; key / chord wait on Phase 3) are plumbed through the
+strategy registry. See `future_work/README.md` for the broader DJ-set
+research track.
 
 ## When a feature graduates
 

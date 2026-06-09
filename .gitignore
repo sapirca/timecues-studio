@@ -28,6 +28,7 @@ Thumbs.db
 
 # Node
 node_modules/
+.vite/
 
 # allin1 byproducts (stems + spectrograms)
 demix/
@@ -65,9 +66,8 @@ archive/paper/*.fdb_latexmk
 archive/paper/*.synctex.gz
 
 # Docker / local secrets — never commit these (use .env.example as template).
-# GCP secrets live under archive/gcp/.gcloud.env after the 2026-05-26 move.
 .env
 .env.local
 web-app/.env.local
-archive/gcp/.gcloud.env
-archive/gcp/.gcloud.env.arm64
+# Local-only secret env files used by the export-ignored deploy tooling.
+archive/**/*.env*

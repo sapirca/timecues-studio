@@ -29,6 +29,8 @@ export interface SectionCardProps {
   // Action handlers
   onSplit: () => void;
   onTypeChange: (type: string) => void;
+  /** Edit the section label inline. When omitted, the label is read-only. */
+  onLabelChange?: (label: string) => void;
   onToggleImportance: () => void;
   onAddCandidate: () => void;
   onRemoveCandidate: (ci: number) => void;
@@ -55,7 +57,7 @@ export function SectionCard({
   highlightCurrent = false,
   activeBpm,
   onSnapStart, onSnapEnd,
-  onSplit, onTypeChange, onToggleImportance, onAddCandidate, onRemoveCandidate, onDelete,
+  onSplit, onTypeChange, onLabelChange, onToggleImportance, onAddCandidate, onRemoveCandidate, onDelete,
   onPlay, onStop, isPlaying = false,
   onInsertAfter,
 }: SectionCardProps) {
@@ -91,7 +93,9 @@ export function SectionCard({
         </select>
       </ItemCardHeader>
 
-      <ItemCardLabel value={section.label} readOnly />
+      {onLabelChange
+        ? <ItemCardLabel value={section.label} onChange={onLabelChange} />
+        : <ItemCardLabel value={section.label} readOnly />}
 
       <SnapTimeRow time={section.time} fmt={fmtTime} onSnap={onSnapStart} snapTitle="Snap start to playhead" />
 

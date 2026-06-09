@@ -5,6 +5,7 @@ import http from 'http'
 import path from 'path'
 import dnsPromises from 'node:dns/promises'
 import { spawn } from 'child_process'
+import { pathToFileURL } from 'url'
 import { DATA_DIRS, DATA_FILES, DEFAULT_DATA_DIRS, REPO_ROOT } from './dataPaths'
 
 // Resolve the deployed commit SHA for the landing-page footer. In a deployed
@@ -74,6 +75,7 @@ const PITCH_HOST = process.env.PITCH_HOST ?? '127.0.0.1'
 const CUE_EXTRAS_HOST = process.env.CUE_EXTRAS_HOST ?? '127.0.0.1'
 const PERCUSSIVE_HOST = process.env.PERCUSSIVE_HOST ?? '127.0.0.1'
 const LYRICS_HOST     = process.env.LYRICS_HOST     ?? '127.0.0.1'
+const PATTERN_HOST    = process.env.PATTERN_HOST    ?? '127.0.0.1'
 
 // ─── URL-derived path-segment validators ─────────────────────────────────────
 // Every handler that takes a slug / filename from the URL and joins it into
@@ -1686,6 +1688,115 @@ function serveLyricsText(): Plugin {
   }
 }
 
+// Serve and persist Setlists at /api/setlists.
+// Per-annotator under <DATA_DIRS.setlists>/<annotatorId>/<name>.json.
+//
+//   GET    /api/setlists              → {names: string[]} for the caller
+//   GET    /api/setlists/:name        → Setlist | null
+//   POST   /api/setlists/:name        → write (team-only)
+//   DELETE /api/setlists/:name        → delete (team-only)
+//
+// Experimental: gated client-side by `experimentalSetlist`. The server still
+// enforces team membership on writes — public/demo POSTs are rejected with 403.
+function serveSetlists(): Plugin {
+  const root = DATA_DIRS.setlists
+  if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true })
+
+  // 1 MB cap — a 200-song setlist with verbose metadata is ~40 KB; this leaves
+  // headroom without inviting abuse.
+  const MAX_SETLIST_BODY = 1 * 1024 * 1024
+
+  return {
+    name: 'setlists',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!req.url?.startsWith('/api/setlists')) return next()
+
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        res.setHeader('Content-Type', 'application/json')
+
+        const annotatorId = readAnnotatorIdFromReq(req)
+        if (!annotatorId) return send401MissingAnnotator(res)
+
+        const annotatorDir = path.join(root, annotatorId)
+
+        // Path shape: /api/setlists  or  /api/setlists/<name>
+        const suffix = req.url.slice('/api/setlists'.length)
+
+        // Index — list this annotator's setlist names.
+        if (suffix === '' || suffix === '/') {
+          if (req.method !== 'GET') {
+            res.statusCode = 405
+            res.end('{"error":"method not allowed"}')
+            return
+          }
+          if (!fs.existsSync(annotatorDir)) {
+            res.end('{"names":[]}')
+            return
+          }
+          const names = fs.readdirSync(annotatorDir)
+            .filter((f) => f.endsWith('.json'))
+            .map((f) => f.replace(/\.json$/, ''))
+            .sort()
+          res.end(JSON.stringify({ names }))
+          return
+        }
+
+        const match = suffix.match(/^\/([^/]+)$/)
+        if (!match) return next()
+        const name = decodeSegment(match[1])
+        if (!name) return send400BadSegment(res, 'name')
+        const filePath = path.join(annotatorDir, `${name}.json`)
+
+        if (req.method === 'GET') {
+          if (!fs.existsSync(filePath)) {
+            res.end('null')
+            return
+          }
+          res.end(fs.readFileSync(filePath, 'utf-8'))
+          return
+        }
+
+        // Writes require team membership.
+        if (req.method === 'POST' || req.method === 'DELETE') {
+          const { isOnTeam } = isOnTeamForReq(req)
+          if (!isOnTeam) return send403NotOnTeam(res)
+        }
+
+        if (req.method === 'POST') {
+          if (rejectIfBodyTooLarge(req, res, MAX_SETLIST_BODY)) return
+          let body = ''
+          req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(body)
+              // Stamp the save time server-side so clients can't backdate; per
+              // the no-Date-in-workflows habit we keep timestamps authoritative
+              // here.
+              data.saved_at = new Date().toISOString()
+              if (!fs.existsSync(annotatorDir)) fs.mkdirSync(annotatorDir, { recursive: true })
+              fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+              res.end('{"ok":true}')
+            } catch {
+              res.statusCode = 400
+              res.end('{"error":"invalid json"}')
+            }
+          })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+          res.end('{"ok":true}')
+          return
+        }
+
+        next()
+      })
+    },
+  }
+}
+
 // Serve and persist dataset-wide config at /api/dataset-config (single file).
 // Holds access-tier assignments and any corpus-wide defaults.
 // GET  /api/dataset-config → read current config (returns defaults if absent)
@@ -1944,6 +2055,51 @@ function serveDatasetConfig(): Plugin {
         }
 
         next()
+      })
+    },
+  }
+}
+
+// Aggregate corpus stats — public, no auth, no names.
+// Lets public users see the SIZE of the real corpus (so the 3-song demo
+// doesn't look like the whole project) without exposing any song slug,
+// audio, annotator email, or annotation.
+//
+// GET /api/corpus/stats → { songs, admins, researchers, team }
+function serveCorpusStats(): Plugin {
+  return {
+    name: 'corpus-stats',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.method !== 'GET' || req.url !== '/api/corpus/stats') return next()
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('Cache-Control', 'public, max-age=300')
+        try {
+          const songsDir = TEAM_CORPUS.songs
+          const songs = fs.existsSync(songsDir)
+            ? fs.readdirSync(songsDir).filter(name => {
+                if (name.startsWith('.')) return false
+                try { return fs.statSync(path.join(songsDir, name)).isDirectory() } catch { return false }
+              }).length
+            : 0
+          const cfg = readDatasetConfigSafe() as DatasetCfg | null
+          const people = cfg?.peopleByEmail ?? {}
+          const counts = { admin: 0, researcher: 0, team: 0 }
+          for (const entry of Object.values(people)) {
+            if (entry.tier === 'admin' || entry.tier === 'researcher' || entry.tier === 'team') {
+              counts[entry.tier]++
+            }
+          }
+          res.end(JSON.stringify({
+            songs,
+            admins: counts.admin,
+            researchers: counts.researcher,
+            team: counts.team,
+          }))
+        } catch {
+          res.statusCode = 500
+          res.end('{"error":"internal"}')
+        }
       })
     },
   }
@@ -2455,6 +2611,7 @@ const proxyPitch      = (): Plugin => makeFamilyProxy('pitch',      '/api/pitch'
 const proxyCueExtras  = (): Plugin => makeFamilyProxy('cue-extras', '/api/cue-extras', CUE_EXTRAS_HOST, 8014, 'cue-extras')
 const proxyPercussive = (): Plugin => makeFamilyProxy('percussive', '/api/percussive', PERCUSSIVE_HOST, 8015, 'percussive')
 const proxyLyrics     = (): Plugin => makeFamilyProxy('lyrics',     '/api/lyrics',     LYRICS_HOST,     8016, 'lyrics')
+const proxyPattern    = (): Plugin => makeFamilyProxy('pattern',    '/api/pattern',    PATTERN_HOST,    8017, 'pattern')
 
 // Proxy /api/custom-scripts and /api/custom-annotations → Python custom-detector
 // server on localhost:8005. Auto-starts the server the first time Vite boots.
@@ -2969,7 +3126,19 @@ function serveRunAlgorithms(): Plugin {
   // next to the matching row. Transient — overwritten by the next job; the
   // user reads the full log pane below the song title for more context.
   interface AlgoError { id: string; message: string }
-  interface RunResult { ok: boolean; error?: string }
+  interface RunResult { ok: boolean; error?: string; detail?: string }
+  // Per-family knobs for the one shared sidecar dispatch (runSidecarOne).
+  // Everything that differs between MSAF / ruptures / span / experimental /
+  // custom lives here; the transport, error mapping, and logging do not.
+  interface SidecarCfg {
+    host: string
+    port: number
+    apiPath: string
+    body?: Record<string, unknown>
+    headers?: Record<string, string>
+    downHint: string
+    isFailure?: (parsed: unknown) => string | undefined
+  }
   interface SectionResult { label: string; total: number; ok: number; failed: number; cached: number; errors?: AlgoError[] }
   interface Job { status: JobStatus; logs: string; sections: SectionResult[]; startedAt: number; finishedAt?: number; killed?: boolean; currentProc?: ReturnType<typeof spawn> }
   const recordFailure = (section: SectionResult, id: string, error: string | undefined) => {
@@ -2979,6 +3148,106 @@ function serveRunAlgorithms(): Plugin {
   }
   const jobs = new Map<string, Job>()
   let jobCounter = 0
+
+  // Build a Job whose `logs` mirrors every freshly-appended chunk to the Vite
+  // process stdout. The run report was previously only reachable by polling the
+  // job-status JSON from the browser; a maintainer watching `./run.sh` in the
+  // terminal saw nothing while 20+ detectors ran. The setter prints only the
+  // newly-added tail (every write here is a `job.logs += …` append), so each
+  // line — section headers, per-algo ✓/✗, subprocess stdout — echoes to the
+  // console exactly once. `logs` stays an enumerable string property, so
+  // JSON.stringify(job) in the status endpoint still serializes it for the UI.
+  function makeJob(): Job {
+    let buffer = ''
+    const job = { status: 'running', sections: [], startedAt: Date.now() } as unknown as Job
+    Object.defineProperty(job, 'logs', {
+      enumerable: true,
+      get() { return buffer },
+      set(next: string) {
+        if (typeof next === 'string') {
+          const delta = next.startsWith(buffer) ? next.slice(buffer.length) : next
+          if (delta) process.stdout.write(delta)
+          buffer = next
+        }
+      },
+    })
+    job.logs = ''
+    return job
+  }
+
+  // Uniform report line for every algorithm in every family: ✓ with an
+  // optional "— <detail>" summary on success, ✗ with the reason on failure.
+  // One formatter ⇒ one report look across MSAF / All-In-One / sidecars /
+  // custom, in both the browser log pane and the mirrored terminal.
+  const logResult = (job: Job, id: string, r: RunResult): void => {
+    job.logs += r.ok
+      ? `  ✓ ${id}${r.detail ? ` — ${r.detail}` : ''}\n`
+      : `  ✗ ${id} [${r.error ?? 'failed'}]\n`
+  }
+
+  // Condense a sidecar's JSON response into "<n> <field>, <t>s" (or just
+  // "<t>s" when nothing countable came back), preferring the server's own
+  // elapsedSec over the orchestrator's wall-clock. Keeps the detail uniform
+  // no matter which array a given family returns.
+  const COUNT_FIELDS = ['sections', 'segments', 'items', 'cues', 'boundaries', 'lines', 'events', 'loops']
+  const summarizeResult = (parsed: unknown, wallSecs: string): string => {
+    let secs = wallSecs
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>
+      if (typeof obj.elapsedSec === 'number') secs = obj.elapsedSec.toFixed(1)
+      for (const f of COUNT_FIELDS) {
+        if (Array.isArray(obj[f])) return `${(obj[f] as unknown[]).length} ${f}, ${secs}s`
+      }
+    }
+    return `${secs}s`
+  }
+
+  // The single HTTP dispatch shared by every warm sidecar family — msaf,
+  // ruptures, span, the experimental servers, and custom detectors. POST,
+  // map transport + logical (ok=false / fatal) failures to a RunResult, emit
+  // the uniform report line, and return the result for section accounting.
+  // One implementation is the whole point: families differ only by (host,
+  // port, path, body); they run and log identically. All-In-One is the lone
+  // exception (subprocess — see runStep) and still funnels through logResult.
+  function runSidecarOne(job: Job, id: string, cfg: SidecarCfg): Promise<RunResult> {
+    if (job.killed) return Promise.resolve({ ok: false, error: 'cancelled' })
+    const started = Date.now()
+    return new Promise((resolve) => {
+      const finish = (r: RunResult) => { logResult(job, id, r); resolve(r) }
+      const payload = cfg.body !== undefined ? JSON.stringify(cfg.body) : ''
+      const headers: Record<string, string> = { ...(cfg.headers ?? {}) }
+      if (payload) {
+        headers['Content-Type'] = 'application/json'
+        headers['Content-Length'] = String(Buffer.byteLength(payload))
+      }
+      const req = http.request(
+        { hostname: cfg.host, port: cfg.port, path: cfg.apiPath, method: 'POST', headers },
+        (resp) => {
+          let chunks = ''
+          resp.on('data', (d: Buffer) => { chunks += d.toString() })
+          resp.on('end', () => {
+            const wallSecs = ((Date.now() - started) / 1000).toFixed(1)
+            if (resp.statusCode === 200) {
+              let parsed: unknown = null
+              try { parsed = JSON.parse(chunks) } catch { /* non-JSON 200 still counts as success */ }
+              const logicalError = cfg.isFailure
+                ? cfg.isFailure(parsed)
+                : (parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).ok === false
+                    ? String((parsed as Record<string, unknown>).error ?? 'detector reported ok=false')
+                    : undefined)
+              if (logicalError) { finish({ ok: false, error: logicalError }); return }
+              finish({ ok: true, detail: summarizeResult(parsed, wallSecs) })
+            } else {
+              finish({ ok: false, error: `http ${resp.statusCode}${chunks.trim() ? `: ${chunks.slice(0, 200).trim()}` : ''}` })
+            }
+          })
+        },
+      )
+      req.on('error', (err: Error) => { finish({ ok: false, error: `${err.message} (${cfg.downHint})` }) })
+      if (payload) req.write(payload)
+      req.end()
+    })
+  }
 
   // Algorithm runs always target the team corpus — they write into
   // data/algorithm-outputs/analysis/<slug>/ on disk, and the demo corpus is
@@ -2993,9 +3262,15 @@ function serveRunAlgorithms(): Plugin {
     return null
   }
 
-  function runStep(job: Job, cmd: string, args: string[], label: string): Promise<RunResult> {
+  // Subprocess dispatch for All-In-One — the one family that is NOT a warm
+  // sidecar (its torch model is too heavy to keep resident on the dev VM, so
+  // it cold-starts per run). It still honors the SAME report contract as the
+  // HTTP sidecars: the caller prints the section header and the uniform
+  // logResult ✓/✗ line. Here we only stream the subprocess output (genuinely
+  // useful for the slow, verbose model) and time it for the line's detail.
+  function runStep(job: Job, cmd: string, args: string[]): Promise<RunResult> {
     if (job.killed) return Promise.resolve({ ok: false, error: 'cancelled' })
-    job.logs += `\n▶ ${label}\n`
+    const started = Date.now()
     return new Promise((resolve) => {
       const proc = spawn(cmd, args, { cwd: repoRoot })
       job.currentProc = proc
@@ -3012,177 +3287,78 @@ function serveRunAlgorithms(): Plugin {
       })
       proc.on('close', (code: number | null) => {
         job.currentProc = undefined
-        if (code === 0) { resolve({ ok: true }); return }
-        if (!job.killed) job.logs += `[exit ${code}]\n`
+        const detail = `${((Date.now() - started) / 1000).toFixed(1)}s`
+        if (code === 0) { resolve({ ok: true, detail }); return }
         resolve({ ok: false, error: lastErrLine || `exit ${code}` })
       })
-      proc.on('error', (err: Error) => {
-        job.logs += `error: ${err.message}\n`
-        resolve({ ok: false, error: err.message })
-      })
+      proc.on('error', (err: Error) => { resolve({ ok: false, error: err.message }) })
     })
   }
 
   // Run a single ruptures variant by POST-ing to the python server on :8003.
   // Each call writes ruptures-<suffix>.json to the analysis dir.
-  function runRupturesOne(job: Job, slug: string, suffix: string): Promise<RunResult> {
-    if (job.killed) return Promise.resolve({ ok: false, error: 'cancelled' })
-    return new Promise((resolve) => {
-      const body = JSON.stringify({ slug, suffix })
-      const req = http.request({
-        hostname: RUPTURES_HOST, port: 8003, path: '/api/ruptures/analyze', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      }, (resp) => {
-        let chunks = ''
-        resp.on('data', (d: Buffer) => { chunks += d.toString() })
-        resp.on('end', () => {
-          if (resp.statusCode === 200) {
-            job.logs += `  ✓ ${suffix}\n`
-            resolve({ ok: true })
-          } else {
-            const error = `http ${resp.statusCode}${chunks.trim() ? `: ${chunks.slice(0, 200).trim()}` : ''}`
-            job.logs += `  ✗ ${suffix} [${error}]\n`
-            resolve({ ok: false, error })
-          }
-        })
-      })
-      req.on('error', (err: Error) => {
-        const error = `${err.message} (is the ruptures server running on :8003?)`
-        job.logs += `  ✗ ${suffix} [${error}]\n`
-        resolve({ ok: false, error })
-      })
-      req.write(body)
-      req.end()
+  const runRupturesOne = (job: Job, slug: string, suffix: string): Promise<RunResult> =>
+    runSidecarOne(job, suffix, {
+      host: RUPTURES_HOST, port: 8003, apiPath: '/api/ruptures/analyze',
+      body: { slug, suffix }, downHint: 'is the ruptures server running on :8003?',
     })
-  }
 
   // Run a single SPAN-family detector by POST-ing to the python server on :8009.
   // Each call writes data/algorithm-outputs/span/<slug>/<algo>.json. Same
   // pattern as runRupturesOne / runMsafOne — bubble HTTP failures into the
   // log so the user sees WHY a sidecar didn't fire (most commonly "the
   // experimental-models profile isn't running").
-  function runSpanOne(job: Job, slug: string, algo: string): Promise<RunResult> {
-    if (job.killed) return Promise.resolve({ ok: false, error: 'cancelled' })
-    return new Promise((resolve) => {
-      const body = JSON.stringify({ slug, algo })
-      const req = http.request({
-        hostname: SPAN_HOST, port: 8009, path: '/api/span/detect', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      }, (resp) => {
-        let chunks = ''
-        resp.on('data', (d: Buffer) => { chunks += d.toString() })
-        resp.on('end', () => {
-          if (resp.statusCode === 200) {
-            // Detector may have returned ok=false inside a 200 (e.g. weights
-            // not yet wired for jdcnet-voicing). Surface that as a failure so
-            // the pill bar reflects it.
-            try {
-              const parsed = JSON.parse(chunks)
-              if (parsed && parsed.ok === false) {
-                const error = parsed.error ?? 'detector reported ok=false'
-                job.logs += `  ✗ ${algo} [${error}]\n`
-                resolve({ ok: false, error }); return
-              }
-            } catch { /* fall through to success */ }
-            job.logs += `  ✓ ${algo}\n`
-            resolve({ ok: true })
-          } else {
-            const error = `http ${resp.statusCode}${chunks.trim() ? `: ${chunks.slice(0, 200).trim()}` : ''}`
-            job.logs += `  ✗ ${algo} [${error}]\n`
-            resolve({ ok: false, error })
-          }
-        })
-      })
-      req.on('error', (err: Error) => {
-        const error = `${err.message} (is the span server running? docker compose --profile experimental-models up span)`
-        job.logs += `  ✗ ${algo} [${error}]\n`
-        resolve({ ok: false, error })
-      })
-      req.write(body)
-      req.end()
+  // ok=false inside a 200 (e.g. jdcnet-voicing weights not yet wired) is mapped
+  // to a failure by runSidecarOne's default isFailure, so the pill bar reflects
+  // it just like a transport error.
+  const runSpanOne = (job: Job, slug: string, algo: string): Promise<RunResult> =>
+    runSidecarOne(job, algo, {
+      host: SPAN_HOST, port: 8009, apiPath: '/api/span/detect',
+      body: { slug, algo },
+      downHint: 'is the span server running? docker compose --profile experimental-models up span',
     })
-  }
 
   // Generic single-algo POST against an experimental sidecar at the given
   // (host, port, path) combo. Mirrors runSpanOne but generalized so the LOOP /
   // PANNs / pitch families share the same orchestration code instead of
   // copy-pasting it four times. The body shape `{ slug, algo }` matches every
   // family server's /detect endpoint.
-  function runExperimentalOne(
+  const runExperimentalOne = (
     job: Job, slug: string, algo: string,
     host: string, port: number, apiPath: string, serviceName: string,
     family: string,
-  ): Promise<RunResult> {
-    if (job.killed) return Promise.resolve({ ok: false, error: 'cancelled' })
-    return new Promise((resolve) => {
-      const body = JSON.stringify({ slug, algo })
-      const req = http.request({
-        hostname: host, port, path: apiPath, method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      }, (resp) => {
-        let chunks = ''
-        resp.on('data', (d: Buffer) => { chunks += d.toString() })
-        resp.on('end', () => {
-          if (resp.statusCode === 200) {
-            try {
-              const parsed = JSON.parse(chunks)
-              if (parsed && parsed.ok === false) {
-                const error = parsed.error ?? 'ok=false'
-                job.logs += `  ✗ ${algo} [${error}]\n`
-                resolve({ ok: false, error }); return
-              }
-            } catch { /* fall through to success */ }
-            job.logs += `  ✓ ${algo}\n`
-            resolve({ ok: true })
-          } else {
-            const error = `http ${resp.statusCode}${chunks.trim() ? `: ${chunks.slice(0, 200).trim()}` : ''}`
-            job.logs += `  ✗ ${algo} [${error}]\n`
-            resolve({ ok: false, error })
-          }
-        })
-      })
-      req.on('error', (err: Error) => {
-        const error = `${err.message} (is the ${family} server running? docker compose --profile experimental-models up ${serviceName})`
-        job.logs += `  ✗ ${algo} [${error}]\n`
-        resolve({ ok: false, error })
-      })
-      req.write(body)
-      req.end()
+  ): Promise<RunResult> =>
+    runSidecarOne(job, algo, {
+      host, port, apiPath, body: { slug, algo },
+      downHint: `is the ${family} server running? docker compose --profile experimental-models up ${serviceName}`,
     })
-  }
 
   // Run a single MSAF algorithm by POST-ing to the python server on :8002.
   // Each call writes <algorithm>.json to the analysis dir.
-  function runMsafOne(job: Job, slug: string, algorithm: string): Promise<RunResult> {
-    if (job.killed) return Promise.resolve({ ok: false, error: 'cancelled' })
-    return new Promise((resolve) => {
-      const body = JSON.stringify({ slug, algorithm })
-      const req = http.request({
-        hostname: MSAF_HOST, port: 8002, path: '/api/msaf/analyze', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      }, (resp) => {
-        let chunks = ''
-        resp.on('data', (d: Buffer) => { chunks += d.toString() })
-        resp.on('end', () => {
-          if (resp.statusCode === 200) {
-            job.logs += `  ✓ ${algorithm}\n`
-            resolve({ ok: true })
-          } else {
-            const error = `http ${resp.statusCode}${chunks.trim() ? `: ${chunks.slice(0, 200).trim()}` : ''}`
-            job.logs += `  ✗ ${algorithm} [${error}]\n`
-            resolve({ ok: false, error })
-          }
-        })
-      })
-      req.on('error', (err: Error) => {
-        const error = `${err.message} (is the msaf server running on :8002?)`
-        job.logs += `  ✗ ${algorithm} [${error}]\n`
-        resolve({ ok: false, error })
-      })
-      req.write(body)
-      req.end()
+  const runMsafOne = (job: Job, slug: string, algorithm: string): Promise<RunResult> =>
+    runSidecarOne(job, algorithm, {
+      host: MSAF_HOST, port: 8002, apiPath: '/api/msaf/analyze',
+      body: { slug, algorithm }, downHint: 'is the msaf server running on :8002?',
     })
-  }
+
+  // Run a single custom detector by POST-ing to the custom server on :8005.
+  // Folds custom detectors into the SAME orchestrator job as the built-ins
+  // (they used to run on a separate frontend track). Params ride the query
+  // string; the annotator id is forwarded so the server's team check passes.
+  // The envelope reports trouble via `fatal` rather than `ok`, so map that.
+  const runCustomOne = (job: Job, slug: string, name: string, annotatorId?: string): Promise<RunResult> =>
+    runSidecarOne(job, name, {
+      host: CUSTOM_HOST, port: 8005,
+      apiPath: `/api/custom-scripts/run/${encodeURIComponent(name)}?slug=${encodeURIComponent(slug)}`,
+      body: {},
+      headers: annotatorId ? { 'X-Annotator-Id': annotatorId } : undefined,
+      downHint: 'is the custom server running on :8005?',
+      isFailure: (parsed) => {
+        const env = parsed as Record<string, unknown> | null
+        if (env && env.fatal) return String(env.error ?? 'detector reported a fatal error')
+        return undefined
+      },
+    })
 
   return {
     name: 'run-algorithms',
@@ -3229,12 +3405,11 @@ function serveRunAlgorithms(): Plugin {
 
         // Algorithm runs write into data/algorithm-outputs/analysis/<slug>/ and
         // can burn minutes of CPU per song — require team membership. Rate
-        // limiting + per-user concurrency cap are tracked separately.
-        {
-          const { isOnTeam, annotatorId } = isOnTeamForReq(req)
-          if (!annotatorId) return send401MissingAnnotator(res)
-          if (!isOnTeam) return send403NotOnTeam(res)
-        }
+        // limiting + per-user concurrency cap are tracked separately. The
+        // annotatorId is reused below to authorize the folded-in custom runs.
+        const { isOnTeam, annotatorId } = isOnTeamForReq(req)
+        if (!annotatorId) return send401MissingAnnotator(res)
+        if (!isOnTeam) return send403NotOnTeam(res)
 
         const audioPath = findAudio(slug)
         if (!audioPath) { res.statusCode = 404; res.end('{"error":"song not found"}'); return }
@@ -3251,10 +3426,16 @@ function serveRunAlgorithms(): Plugin {
         let algorithms: string[] = [
           'msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda', 'allin1',
         ]
+        // Custom detector names (no 'custom:' prefix) the frontend wants folded
+        // into this same job instead of running on its own track.
+        let customDetectors: string[] = []
         try {
           const parsed = JSON.parse(bodyStr)
           if (parsed.demucsModel) demucsModel = parsed.demucsModel
           if (Array.isArray(parsed.algorithms)) algorithms = parsed.algorithms
+          if (Array.isArray(parsed.customDetectors)) {
+            customDetectors = parsed.customDetectors.filter((n: unknown): n is string => typeof n === 'string')
+          }
         } catch { /* no body / invalid JSON → use defaults */ }
 
         const analysisDir = path.join(ANALYSIS_DIR, slug)
@@ -3340,6 +3521,12 @@ function serveRunAlgorithms(): Plugin {
           .filter((a) => LYRICS_IDS.includes(a))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.lyrics, slug, `${a}.json`)))
 
+        // LoCoMotif PATTERN family.
+        const PATTERN_IDS = ['locomotif']
+        const patternRequested = algorithms
+          .filter((a) => PATTERN_IDS.includes(a))
+          .filter((a) => !isFreshCache(path.join(DATA_DIRS.pattern, slug, `${a}.json`)))
+
         // Count what the user asked for per family so we can report cached
         // vs newly-run vs failed honestly (e.g. "1 cached, 4 failed" instead
         // of a uniformly green pill bar that hides server outages).
@@ -3352,12 +3539,13 @@ function serveRunAlgorithms(): Plugin {
         const spanSelectedCount = algorithms.filter((a) => SPAN_IDS.includes(a)).length
 
         const jobId = `${++jobCounter}-${Date.now()}`
-        const job: Job = { status: 'running', logs: '', sections: [], startedAt: Date.now() }
+        const job = makeJob()
         jobs.set(jobId, job)
         res.end(JSON.stringify({ jobId }))
 
         ;(async () => {
           try {
+            job.logs += `\n══ Run algorithms · ${slug} · ${algorithms.length} selected ══\n`
             if (msafSelectedCount > 0) {
               const cached = msafSelectedCount - msafRequested.length
               const section: SectionResult = {
@@ -3392,14 +3580,15 @@ function serveRunAlgorithms(): Plugin {
               }
               job.sections.push(section)
               if (allin1Requested.length > 0) {
+                job.logs += `\n▶ ${section.label}\n`
                 for (const algoId of allin1Requested) {
                   if (job.killed) break
                   const harmonixModel = algoId === 'allin1' ? 'harmonix-all'
                     : `harmonix-${algoId.replace('allin1-', '')}`
                   const result = await runStep(job, 'python',
                     ['tools/run_allin1.py', audioPath, '--save',
-                     '--model', harmonixModel, '--demucs-model', demucsModel],
-                    `All-In-One (${harmonixModel})`)
+                     '--model', harmonixModel, '--demucs-model', demucsModel])
+                  logResult(job, algoId, result)
                   if (result.ok) section.ok++
                   else recordFailure(section, algoId, result.error)
                 }
@@ -3511,6 +3700,53 @@ function serveRunAlgorithms(): Plugin {
               'LYRICS family', LYRICS_IDS, LYRICS_HOST, 8016,
               '/api/lyrics/detect', 'lyrics', lyricsRequested,
             )
+            await runFamilyBlock(
+              'PATTERN family', PATTERN_IDS, PATTERN_HOST, 8017,
+              '/api/pattern/detect', 'pattern', patternRequested,
+            )
+
+            // Custom detectors — folded into the same job so they share one
+            // report, one log, one terminal mirror with the built-ins. Cached
+            // accounting mirrors the sidecars: skip detectors whose envelope is
+            // already on disk under data/algorithm-outputs/custom/<name>/.
+            if (customDetectors.length > 0) {
+              const safeSlug = slug.replace(/\//g, '_')
+              // Custom envelopes report trouble via `fatal`, not `ok:false`, so
+              // isFreshCache would mis-read a failed run as cached. Re-run when
+              // the envelope is absent OR fatal — same rule the Custom section's
+              // "missing" filter uses, so the two never disagree.
+              const customIsFresh = (filepath: string): boolean => {
+                if (!fs.existsSync(filepath)) return false
+                try {
+                  const parsed = JSON.parse(fs.readFileSync(filepath, 'utf-8'))
+                  return !(parsed && typeof parsed === 'object' && parsed.fatal)
+                } catch {
+                  return false
+                }
+              }
+              const customRequested = customDetectors.filter(
+                (name) => !customIsFresh(path.join(DATA_DIRS.customResults, name, `${safeSlug}.json`)),
+              )
+              const cached = customDetectors.length - customRequested.length
+              const section: SectionResult = {
+                label: customRequested.length > 0
+                  ? `Custom (${customRequested.length} detector${customRequested.length === 1 ? '' : 's'})`
+                  : 'Custom',
+                total: customRequested.length, ok: 0, failed: 0, cached,
+              }
+              job.sections.push(section)
+              if (customRequested.length > 0) {
+                job.logs += `\n▶ ${section.label}\n`
+                for (const name of customRequested) {
+                  if (job.killed) break
+                  const result = await runCustomOne(job, slug, name, annotatorId)
+                  if (result.ok) section.ok++
+                  else recordFailure(section, `custom:${name}`, result.error)
+                }
+              } else {
+                job.logs += '\n▶ Custom\n  (all selected detectors already cached)\n'
+              }
+            }
 
             if (!job.killed) {
               const totalOk = job.sections.reduce((s, x) => s + x.ok, 0)
@@ -3519,6 +3755,8 @@ function serveRunAlgorithms(): Plugin {
               if (totalFailed === 0) job.status = 'done'
               else if (totalOk === 0 && totalCached === 0) job.status = 'error'
               else job.status = 'partial'
+              const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1)
+              job.logs += `\n══ done in ${elapsed}s — ${totalOk} ran, ${totalCached} cached, ${totalFailed} failed ══\n`
             }
           } catch (err) {
             if (!job.killed) { job.status = 'error'; job.logs += String(err) }
@@ -4860,8 +5098,31 @@ const PROBE_PYTHON_BIN = process.env.TIMECUES_PYTHON || 'python3'
 // (numpy ABI, missing torch, native deps) and we want "not importable" to
 // be one outcome rather than three. This catches broken installs
 // (e.g. allin1 with a numpy 2.x conflict) that find_spec would miss.
+//
+// IMPORTANT: we apply the same natten compatibility shim that
+// tools/run_allin1.py uses before testing `import allin1`. allin1 1.1.x
+// imports the pre-0.17 natten functional API, which natten 0.17+ removed
+// AND CPU-only hosts can't install at all. Without the shim this probe
+// reported allin1=false on every CPU host even when run_allin1.py would
+// have succeeded at runtime — which is exactly the "requires allin1" UI
+// state the user kept seeing despite a clean pip install.
 const PYTHON_PROBE = `
-import sys
+import os, sys, pathlib
+# tools/python is two levels up from the locked Python's invocation
+# directory (the script runs via PYTHON -c). Walk the cwd looking for
+# tools/python/natten_shim.py so the probe finds it whether vite was
+# launched from the repo root or the web-app subdir.
+_root = pathlib.Path(os.getcwd())
+for _candidate in (_root, _root.parent):
+    _shim_dir = _candidate / 'tools' / 'python'
+    if (_shim_dir / 'natten_shim.py').exists():
+        sys.path.insert(0, str(_shim_dir))
+        break
+try:
+    from natten_shim import apply_natten_shim
+    apply_natten_shim()
+except Exception:
+    pass  # shim missing → fall back to naive __import__
 def _ok(mod):
     try:
         __import__(mod)
@@ -5016,19 +5277,133 @@ function excludeStemsFromDist(): Plugin {
   }
 }
 
+// ── Optional operator-supplied server middleware ────────────────────────────
+// A deployment can drop an ESM module at web-app/server/ext.mjs exporting
+// `extraServerPlugins: Plugin[]`. It is loaded ONLY when TC_SERVER_EXT=1 and
+// the file is present, and is appended last so it can observe (but never
+// replace) the built-in routes. The module is intentionally absent from the
+// public source tree, so in a vanilla build this resolves to an empty list.
+async function loadExtraServerPlugins(): Promise<Plugin[]> {
+  if (!process.env.TC_SERVER_EXT) return []
+  const extPath = path.resolve(__dirname, 'server/ext.mjs')
+  if (!fs.existsSync(extPath)) return []
+  try {
+    const mod = await import(/* @vite-ignore */ pathToFileURL(extPath).href)
+    const plugins = (mod as { extraServerPlugins?: unknown }).extraServerPlugins
+    return Array.isArray(plugins) ? (plugins as Plugin[]) : []
+  } catch (err) {
+    console.warn('[server-ext] failed to load optional server plugins:', err)
+    return []
+  }
+}
+
+// ── LOL light-visualization integration (PRIVATE — archive-only) ────────────
+// The sibling "lol" project's light agent reads this app's annotations + cached
+// algorithm outputs through a small consolidated read-only API (/api/lol/*).
+// The ENTIRE implementation lives outside the public source tree, under
+// archive/lol/server.mjs (export-ignored — see .gitattributes — so it never
+// ships in the OSS build, and a .mjs outside tsconfig `include`, so `tsc -b`
+// never compiles it). It is loaded ONLY when VITE_WITH_LOL=1 (run.sh
+// --with_lol). With the flag off — or in any tree where archive/ was stripped —
+// this resolves to an empty list and none of those routes exist. The host
+// injects the app-specific read helpers so the archive module never
+// re-implements the corpus / identity / path logic the rest of this file owns.
+// Mirrors loadExtraServerPlugins() and the --with_dj → VITE_WITH_DJ convention.
+async function loadLolPlugin(): Promise<Plugin[]> {
+  if (process.env.VITE_WITH_LOL !== '1') return []
+  const modPath = path.join(REPO_ROOT, 'archive', 'lol', 'server.mjs')
+  if (!fs.existsSync(modPath)) {
+    console.warn('[lol] VITE_WITH_LOL=1 but archive/lol/server.mjs is absent — skipping.')
+    return []
+  }
+  try {
+    const mod = await import(/* @vite-ignore */ pathToFileURL(modPath).href)
+    const plugin = mod.createLolPlugin?.({
+      dirs: {
+        annotationLayers: DATA_DIRS.annotationLayers,
+        algoClusters: DATA_DIRS.algoClusters,
+        bpmDetections: DATA_DIRS.bpmDetections,
+        mirFeatures: DATA_DIRS.mirFeatures,
+        analysis: ANALYSIS_DIR,
+        stems: STEMS_DIR,
+      },
+      corpusForReq,
+      resolveAnnotationFile,
+      readAnnotatorIdFromReq,
+      buildManifest,
+      isOnTeamForReq,
+      decodeSegment,
+      send401MissingAnnotator,
+      send400BadSegment,
+    })
+    if (plugin) console.log('[lol] integration enabled — read-only API at /api/lol/*')
+    return plugin ? [plugin as Plugin] : []
+  } catch (err) {
+    console.warn('[lol] failed to load archive/lol/server.mjs:', err)
+    return []
+  }
+}
+
+// Register a plugin's dev `configureServer` middleware on the preview
+// (production) server too. `vite preview` serves the prebuilt static bundle
+// with no HMR / no file-watching / no module-graph retention — which is what
+// keeps the long-running prod web container from leaking memory — but it does
+// NOT run `configureServer` hooks by default, so without this every /api route
+// and sidecar proxy below would 404 in production.
+//
+// Safe because every plugin in this file touches only `server.middlewares` (a
+// connect instance that PreviewServer exposes identically; verified by grep).
+// A future plugin that reaches for a dev-only `server.*` API (ws, watcher,
+// moduleGraph, …) must opt out of this wrapper or guard internally.
+function alsoOnPreview(plugin: Plugin): Plugin {
+  const hook = plugin.configureServer
+  if (typeof hook !== 'function') return plugin // closeBundle-only plugins, react(), …
+  return {
+    ...plugin,
+    configurePreviewServer(server) {
+      ;(hook as unknown as (s: typeof server) => unknown).call(plugin, server)
+    },
+  }
+}
+
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), serveManifest(), serveAnalysis(), serveSongAudio(), serveStems(), serveManualAnnotations(), serveAutoGuessAnnotations(), serveEyeAnnotations(), serveSongInfo(), serveLyricsText(), serveDatasetConfig(), serveAlgoClusters(), serveAnnotationTimes(), serveUploadSong(), serveUploadStems(), serveSongsAdmin(), serveDatasetAdmin(), serveRunAlgorithms(), serveRunDemucs(), serveBulkAnnotations(), serveLayersBulk(), serveAnnotationLayers(), serveAnnotatorListing(), serveAnnotatorProfiles(), serveEmailDomainCheck(), serveTeamStats(), proxyMirEval(), proxyMir(), proxyRuptures(), proxyBpm(), proxySpan(), proxyBeatnet(), proxyLoop(), proxyPanns(), proxyPitch(), proxyCueExtras(), proxyPercussive(), proxyLyrics(), proxyCustomScripts(), serveSongCacheListing(), serveStorageStats(), serveCapabilities(), excludeStemsFromDist()],
-  optimizeDeps: {
-    exclude: ['wavesurfer.js'],
-  },
-  server: {
-    // Comma-separated list (e.g. "timecues.example.com,app.example.com")
-    // wired in by docker-compose.prod.yml from TIMECUES_DOMAIN. Vite blocks
-    // requests whose Host header isn't in this list — necessary when serving
-    // behind a reverse proxy on a public domain.
-    allowedHosts: process.env.VITE_ALLOWED_HOSTS
-      ? process.env.VITE_ALLOWED_HOSTS.split(',').map((s) => s.trim()).filter(Boolean)
-      : undefined,
-  },
+export default defineConfig(async () => {
+  // Comma-separated list (e.g. "timecues.example.com,app.example.com") wired in
+  // by docker-compose.prod.yml from TIMECUES_DOMAIN. Vite blocks requests whose
+  // Host header isn't in this list — necessary when serving behind a reverse
+  // proxy on a public domain. Read from process.env at runtime, so it applies
+  // to both the dev server and `vite preview` (it is NOT baked into the bundle).
+  const allowedHosts = process.env.VITE_ALLOWED_HOSTS
+    ? process.env.VITE_ALLOWED_HOSTS.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined
+
+  // Our own /api + sidecar-proxy plugins. Each is wrapped with alsoOnPreview()
+  // so the same middleware is registered on both the dev and preview servers.
+  // react() and excludeStemsFromDist() stay unwrapped (no configureServer hook).
+  const apiPlugins: Plugin[] = [
+    serveManifest(), serveAnalysis(), serveSongAudio(), serveStems(),
+    serveManualAnnotations(), serveAutoGuessAnnotations(), serveEyeAnnotations(),
+    serveSongInfo(), serveLyricsText(), serveSetlists(), serveDatasetConfig(),
+    serveCorpusStats(), serveAlgoClusters(), serveAnnotationTimes(), serveUploadSong(),
+    serveUploadStems(), serveSongsAdmin(), serveDatasetAdmin(), serveRunAlgorithms(),
+    serveRunDemucs(), serveBulkAnnotations(), serveLayersBulk(), serveAnnotationLayers(),
+    serveAnnotatorListing(), serveAnnotatorProfiles(), serveEmailDomainCheck(),
+    serveTeamStats(), proxyMirEval(), proxyMir(), proxyRuptures(), proxyBpm(),
+    proxySpan(), proxyBeatnet(), proxyLoop(), proxyPanns(), proxyPitch(),
+    proxyCueExtras(), proxyPercussive(), proxyLyrics(), proxyPattern(),
+    proxyCustomScripts(), serveSongCacheListing(), serveStorageStats(),
+    serveCapabilities(),
+    ...await loadLolPlugin(), ...await loadExtraServerPlugins(),
+  ]
+
+  return {
+    plugins: [react(), ...apiPlugins.map(alsoOnPreview), excludeStemsFromDist()],
+    optimizeDeps: {
+      exclude: ['wavesurfer.js'],
+    },
+    server: { allowedHosts },
+    // Mirror the dev server's Host-header guard onto the preview server, which
+    // is what runs in the prod container.
+    preview: { allowedHosts },
+  }
 })

@@ -40,84 +40,14 @@ from paths import ANALYSIS_DIR  # noqa: E402
 
 # ─── natten compatibility shim (for natten >= 0.17) ──────────────────────────
 # allin1 1.1.x imports natten1dav / natten1dqkrpb / natten2dav / natten2dqkrpb
-# from natten.functional, which were removed in natten 0.17+.
-# This shim re-implements them via pure PyTorch so allin1 keeps working.
+# from natten.functional, which were removed in natten 0.17+. The shared
+# shim in tools/python/natten_shim.py re-implements them in pure PyTorch
+# so allin1 keeps working AND the vite capabilities probe can verify
+# allin1 is importable on CPU-only hosts where natten itself never lands.
 
-def _apply_natten_shim():
-    try:
-        from natten.functional import natten1dav  # noqa: F401  — already present
-        return False  # no shim needed
-    except ImportError:
-        pass
+from natten_shim import apply_natten_shim  # noqa: E402 — sys.path was set above
 
-    import torch
-    import natten.functional as _nf
-
-    def natten1dqkrpb(query, key, rpb, kernel_size, dilation=1):
-        """1-D neighborhood-attention QK + relative-position-bias."""
-        B, H, L, D = query.shape
-        r = kernel_size // 2
-        offsets = torch.arange(-r, r + 1, device=query.device) * dilation
-        positions = torch.arange(L, device=query.device)
-        src_idx = (positions.unsqueeze(1) + offsets.unsqueeze(0)).clamp(0, L - 1)
-        key_nbrs = key[:, :, src_idx, :]                     # (B, H, L, K, D)
-        scores = (query.unsqueeze(3) * key_nbrs).sum(-1)     # (B, H, L, K)
-        rpb_sel = rpb[:, torch.arange(kernel_size, device=query.device)]  # (H, K)
-        return scores + rpb_sel.unsqueeze(0).unsqueeze(2)
-
-    def natten1dav(attn, value, kernel_size, dilation=1):
-        """1-D neighborhood-attention AV product."""
-        _, _, L, _ = attn.shape
-        r = kernel_size // 2
-        offsets = torch.arange(-r, r + 1, device=attn.device) * dilation
-        positions = torch.arange(L, device=attn.device)
-        src_idx = (positions.unsqueeze(1) + offsets.unsqueeze(0)).clamp(0, L - 1)
-        v_nbrs = value[:, :, src_idx, :]                     # (B, H, L, K, D)
-        return (attn.unsqueeze(-1) * v_nbrs).sum(-2)         # (B, H, L, D)
-
-    def natten2dqkrpb(query, key, rpb, kernel_size, dilation=1):
-        """2-D neighborhood-attention QK + relative-position-bias."""
-        B, H, h, w, D = query.shape
-        r = kernel_size // 2
-        K = kernel_size
-        oy = torch.arange(-r, r + 1, device=query.device) * dilation
-        ox = torch.arange(-r, r + 1, device=query.device) * dilation
-        sy = (torch.arange(h, device=query.device).unsqueeze(1) + oy.unsqueeze(0)).clamp(0, h - 1)
-        sx = (torch.arange(w, device=query.device).unsqueeze(1) + ox.unsqueeze(0)).clamp(0, w - 1)
-        lin = sy[:, None, :, None] * w + sx[None, :, None, :]   # (h, w, K, K)
-        kf = key.reshape(B, H, h * w, D)
-        kn = kf[:, :, lin.reshape(-1), :].reshape(B, H, h, w, K, K, D)
-        qe = query.unsqueeze(4).unsqueeze(5)
-        scores = (qe * kn).sum(-1)                              # (B, H, h, w, K, K)
-        ri = torch.arange(K, device=query.device)
-        rp = rpb[:, ri[:, None], ri[None, :]]                   # (H, K, K)
-        scores = scores + rp.unsqueeze(0).unsqueeze(2).unsqueeze(3)
-        return scores.reshape(B, H, h, w, K * K)
-
-    def natten2dav(attn, value, kernel_size, dilation=1):
-        """2-D neighborhood-attention AV product."""
-        B, H, h, w, _ = attn.shape
-        K = kernel_size
-        D = value.shape[-1]
-        r = K // 2
-        oy = torch.arange(-r, r + 1, device=attn.device) * dilation
-        ox = torch.arange(-r, r + 1, device=attn.device) * dilation
-        sy = (torch.arange(h, device=attn.device).unsqueeze(1) + oy.unsqueeze(0)).clamp(0, h - 1)
-        sx = (torch.arange(w, device=attn.device).unsqueeze(1) + ox.unsqueeze(0)).clamp(0, w - 1)
-        lin = sy[:, None, :, None] * w + sx[None, :, None, :]
-        vf = value.reshape(B, H, h * w, D)
-        vn = vf[:, :, lin.reshape(-1), :].reshape(B, H, h, w, K, K, D)
-        at = attn.reshape(B, H, h, w, K, K).unsqueeze(-1)
-        return (at * vn).sum(-2).sum(-2)                        # (B, H, h, w, D)
-
-    _nf.natten1dqkrpb = natten1dqkrpb
-    _nf.natten1dav = natten1dav
-    _nf.natten2dqkrpb = natten2dqkrpb
-    _nf.natten2dav = natten2dav
-    return True
-
-
-_shimmed = _apply_natten_shim()
+_shimmed = apply_natten_shim()
 
 import allin1  # noqa: E402 — must come after the shim
 

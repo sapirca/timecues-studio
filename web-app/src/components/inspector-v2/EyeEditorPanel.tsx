@@ -6,6 +6,7 @@ import { beatsPerBarFromTimeSignature, snapTimeToGrid } from '../../utils/beatGr
 import { loadEyeAnnotation, saveEyeAnnotationToServer, deleteEyeAnnotation } from '../../services/manualAnnotations';
 import type { AnnotationStage } from '../../types/annotationLayer';
 import type { AnnotationPanelController, AnnotationPanelCapabilities } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import type { PendingSelection } from './AnnotationOverlays';
 import { useSectionEditPopover } from './useSectionEditPopover';
 import { useUndoableState } from '../../hooks/useUndoableState';
@@ -525,6 +526,7 @@ function EyeEditorPanelInner(
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: stageFromEyeStatus(annotation?.eye_status),
       hasItems: (annotation?.sections.length ?? 0) > 0,
       saveStatus,
@@ -577,6 +579,7 @@ function EyeEditorPanelInner(
                   onSnapEnd={() => { if (!isLast) updateSection(i + 1, 'time', currentTime); }}
                   onSplit={() => splitSection(i)}
                   onTypeChange={(t) => updateSection(i, 'type', t)}
+                  onLabelChange={(v) => updateSection(i, 'label', v)}
                   onToggleImportance={() => updateSection(i, 'importance', s.importance === 'optional' ? 'critical' : 'optional')}
                   onAddCandidate={() => addCandidate(i, currentTime)}
                   onRemoveCandidate={(ci) => removeCandidate(i, ci)}

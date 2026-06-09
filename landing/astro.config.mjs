@@ -2,7 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { visit } from 'unist-util-visit';
-import { REPO_URL, LIVE_DEMO_URL } from './src/consts.mjs';
+import { REPO_URL, LIVE_DEMO_URL, LIVE_DEMO_URL_CF } from './src/consts.mjs';
 
 // TimeCues Studio — landing + documentation site.
 // Companion to the React annotation app (the "live demo"). The demo URL is
@@ -51,7 +51,10 @@ function rehypePrefixBase() {
 function remarkLiveDemoUrl() {
   return (tree) => {
     visit(tree, 'link', (node) => {
-      if (node.url === '__LIVE_DEMO_URL__') node.url = LIVE_DEMO_URL;
+      // Order matters: match the more specific CF sentinel before the
+      // generic one (the latter is a prefix of the former).
+      if (node.url === '__LIVE_DEMO_URL_CF__') node.url = LIVE_DEMO_URL_CF;
+      else if (node.url === '__LIVE_DEMO_URL__') node.url = LIVE_DEMO_URL;
     });
   };
 }
@@ -79,7 +82,7 @@ export default defineConfig({
           items: [
             { label: 'Welcome', link: '/' },
             { label: 'How to run', link: '/run/' },
-            { label: 'Video tutorials', link: '/tutorials/', badge: { text: 'stubs', variant: 'caution' } },
+            { label: 'Tutorials', link: '/tutorials/', badge: { text: 'guides', variant: 'success' } },
           ],
         },
         {
@@ -102,7 +105,8 @@ export default defineConfig({
         {
           label: 'Links',
           items: [
-            { label: 'Live demo', link: LIVE_DEMO_URL, attrs: { target: '_blank', rel: 'noopener' }, badge: { text: 'live', variant: 'success' } },
+            { label: 'Live demo (GCP server)', link: LIVE_DEMO_URL, attrs: { target: '_blank', rel: 'noopener' }, badge: { text: 'full app', variant: 'success' } },
+            { label: 'Live demo (Cloudflare)', link: LIVE_DEMO_URL_CF, attrs: { target: '_blank', rel: 'noopener' }, badge: { text: 'always on', variant: 'note' } },
             { label: 'Source on GitHub', link: REPO_URL, attrs: { target: '_blank', rel: 'noopener' } },
           ],
         },

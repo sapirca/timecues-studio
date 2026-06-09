@@ -1,0 +1,94 @@
+{
+  "algorithm": "foote",
+  "algoName": "Foote Self-Similarity",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 0.325,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.2149,
+      "centroid": 0.8743
+    },
+    {
+      "time": 0.325,
+      "endTime": 20.434,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7632,
+      "centroid": 0.603
+    },
+    {
+      "time": 20.434,
+      "endTime": 46.486,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9118,
+      "centroid": 0.8288
+    },
+    {
+      "time": 46.486,
+      "endTime": 83.824,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9634,
+      "centroid": 1.0
+    },
+    {
+      "time": 83.824,
+      "endTime": 105.326,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8657,
+      "centroid": 0.5126
+    },
+    {
+      "time": 105.326,
+      "endTime": 126.827,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.9863
+    },
+    {
+      "time": 126.827,
+      "endTime": 144.382,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9706,
+      "centroid": 0.9726
+    },
+    {
+      "time": 144.382,
+      "endTime": 192.401,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8647,
+      "centroid": 0.8677
+    },
+    {
+      "time": 192.401,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    0.325,
+    20.434,
+    46.486,
+    83.824,
+    105.326,
+    126.827,
+    144.382,
+    192.401,
+    192.409
+  ],
+  "computedAt": 1780118816,
+  "elapsedSec": 5.82
+}

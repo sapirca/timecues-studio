@@ -1,0 +1,45 @@
+{
+  "algorithm": "ruptures-window-linear",
+  "algoName": "Window \u00b7 linear",
+  "search": "Window",
+  "model": "linear",
+  "suffix": "window-linear",
+  "paperSection": "\u00a75.2.1",
+  "methodType": "approximate",
+  "audioFile": "edm-at-midnight.mp3",
+  "duration": 166.875,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 28.166,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.5219
+    },
+    {
+      "time": 28.166,
+      "endTime": 93.785,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8108,
+      "centroid": 0.9029
+    },
+    {
+      "time": 93.785,
+      "endTime": 166.875,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7942,
+      "centroid": 1.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    28.166,
+    93.785,
+    166.875
+  ],
+  "computedAt": 1780119054,
+  "elapsedSec": 2.95
+}

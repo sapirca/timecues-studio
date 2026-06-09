@@ -37,8 +37,9 @@ Open source, multi-arch (amd64 / arm64), with a CI pipeline and a public live de
   laid out on disk. Read if you're integrating with the data directly.
 - **[Experimental models](/timecues/experimental/)** — opt-in detectors
   behind feature flags. May break.
-- **[Deployment](/timecues/deployment/)** — self-host it on GCP. Push to
-  `main`, wait five minutes, it's live.
+- **[Deployment](/timecues/deployment/)** — put it on a public URL: a cloud
+  VM running Docker Compose, with HTTPS and Google sign-in. Read if you want
+  your own shared instance.
 
 ## Try it
 

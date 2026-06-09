@@ -6,6 +6,7 @@ import { InspectorPageV2 } from './pages/InspectorPageV2';
 import { CustomScriptsPage } from './pages/CustomScriptsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TeamPage } from './pages/TeamPage';
+import { SetlistPage } from './pages/SetlistPage';
 import { LandingPage } from './pages/LandingPage';
 import { DemoPage } from './pages/DemoPage';
 import { NewDatasetSetup } from './pages/NewDatasetSetup';
@@ -13,12 +14,13 @@ import { LoginScreen } from './components/LoginScreen';
 import { AnnotatorBadge } from './components/AnnotatorBadge';
 import { RequireAdmin } from './components/RequireAdmin';
 import { WorkspaceTabHeader, isWorkspacePath } from './components/WorkspaceTabHeader';
+import { IS_STATIC_DEMO } from './state/staticDemo';
 
 /** Routes that need an identity. Anonymous users hitting these get bounced to
  *  /login?returnTo=<path> and resume after sign-in. Landing, Demo, Login, and
  *  the bootstrap setup page (/new-dataset, which has its own Google-only
  *  sign-in) render without auth. */
-const AUTH_REQUIRED = new Set(['/prep', '/annotate', '/inspect', '/custom', '/team', '/settings']);
+const AUTH_REQUIRED = new Set(['/prep', '/annotate', '/inspect', '/custom', '/team', '/settings', '/setlist']);
 
 /** Routes that demo visitors are not allowed to reach. Playground (`/custom`)
  *  uploads + executes arbitrary Python on the server; Team (`/team`) is a
@@ -26,7 +28,7 @@ const AUTH_REQUIRED = new Set(['/prep', '/annotate', '/inspect', '/custom', '/te
  *  isDemo is true. The server enforces the same block independently — see
  *  the demo annotator gate in vite.config.ts and tools/python/custom_server.py
  *  — so a hand-crafted client that skips the UI still hits a 403. */
-const DEMO_FORBIDDEN = new Set(['/custom', '/team']);
+const DEMO_FORBIDDEN = new Set(['/custom', '/team', '/setlist']);
 
 function AppShell() {
   const { annotator, isSigningOut } = useAnnotator();
@@ -61,15 +63,18 @@ function AppShell() {
           route, so its width/padding/position is identical regardless of the
           page below. Pages no longer render their own copy. */}
       {isWorkspacePath(pathname) && (
-        <div className="sticky top-0 z-40 px-3 py-2 bg-[#0a0b0d]">
+        <div className="sticky top-0 z-40 h-[72px] flex items-center px-3 bg-[#0a0b0d]">
           <WorkspaceTabHeader />
         </div>
       )}
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/demo" element={<DemoPage />} />
-        <Route path="/new-dataset" element={<NewDatasetSetup />} />
-        <Route path="/login" element={<LoginScreen />} />
+        {/* /new-dataset and /login both need the backend (admin bootstrap,
+            sign-in). On the static Cloudflare mirror there is none, so bounce
+            them back to the demo chooser instead of dead-ending. */}
+        <Route path="/new-dataset" element={IS_STATIC_DEMO ? <Navigate to="/" replace /> : <NewDatasetSetup />} />
+        <Route path="/login" element={IS_STATIC_DEMO ? <Navigate to="/" replace /> : <LoginScreen />} />
         {/* Three inspector workspaces share a single mounted InspectorPageV2
             instance via this layout route. Switching tabs only updates the
             `feature` prop (read from pathname); nothing remounts, nothing
@@ -83,6 +88,7 @@ function AppShell() {
           <Route path="/inspect"  element={<></>} />
         </Route>
         <Route path="/custom" element={<CustomScriptsPage />} />
+        <Route path="/setlist" element={<SetlistPage />} />
         <Route path="/team" element={<RequireAdmin tier="researcher"><TeamPage /></RequireAdmin>} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

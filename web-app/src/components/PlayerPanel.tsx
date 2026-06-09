@@ -213,6 +213,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   const onScrollChangeRef = useRef(onScrollChange);
   const onPlayingChangeRef = useRef(onPlayingChange);
   const onUserSeekRef = useRef(onUserSeek);
+  // Tracks the pending requestAnimationFrame id used to coalesce WaveSurfer's
+  // sub-frame `audioprocess` events into one setCurrentTime + onTimeUpdate
+  // per displayed frame. Lives on the component (not inside the WS-init
+  // effect closure) so the seek path can also cancel it.
+  const audioProcessRafRef = useRef<number | null>(null);
   useEffect(() => { onBufferReadyRef.current = onBufferReady; }, [onBufferReady]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onTimeUpdateRef.current = onTimeUpdate; }, [onTimeUpdate]);
@@ -396,12 +401,35 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       }
     });
 
-    ws.on('audioprocess', () => {
-      const t = ws.getCurrentTime();
+    // WaveSurfer fires `audioprocess` faster than the display can repaint
+    // (one event per audio-buffer slice). Each one used to call setCurrentTime
+    // synchronously, which re-reconciled the entire inspector tree per event
+    // and visibly stuttered the playhead at high zoom. Coalesce to one
+    // setState + onTimeUpdate per animation frame.
+    let pendingProcessTime: number | null = null;
+    const flushProcessTime = () => {
+      audioProcessRafRef.current = null;
+      if (pendingProcessTime === null) return;
+      const t = pendingProcessTime;
+      pendingProcessTime = null;
       setCurrentTime(t);
       onTimeUpdateRef.current?.(t);
+    };
+    ws.on('audioprocess', () => {
+      pendingProcessTime = ws.getCurrentTime();
+      if (audioProcessRafRef.current === null) {
+        audioProcessRafRef.current = requestAnimationFrame(flushProcessTime);
+      }
     });
     ws.on('seeking', () => {
+      // Seeks are one-shot user actions — flush immediately so the playhead
+      // doesn't appear to lag the click, and cancel any pending audioprocess
+      // frame so it can't overwrite the seek target.
+      if (audioProcessRafRef.current !== null) {
+        cancelAnimationFrame(audioProcessRafRef.current);
+        audioProcessRafRef.current = null;
+      }
+      pendingProcessTime = null;
       const t = ws.getCurrentTime();
       setCurrentTime(t);
       onTimeUpdateRef.current?.(t);
@@ -463,6 +491,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
 
     return () => {
       console.log(`${tag} ✗ unmount (+${Math.round(performance.now() - t0)}ms)`);
+      if (audioProcessRafRef.current !== null) {
+        cancelAnimationFrame(audioProcessRafRef.current);
+        audioProcessRafRef.current = null;
+      }
       try {
         ws.destroy();
       } catch (err) {

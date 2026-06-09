@@ -1,0 +1,108 @@
+{
+  "algorithm": "ruptures-window-l2",
+  "algoName": "Window \u00b7 l2",
+  "search": "Window",
+  "model": "l2",
+  "suffix": "window-l2",
+  "paperSection": "\u00a75.2.1",
+  "methodType": "approximate",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 3.019,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.476,
+      "centroid": 0.6182
+    },
+    {
+      "time": 3.019,
+      "endTime": 11.355,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6467,
+      "centroid": 0.5262
+    },
+    {
+      "time": 11.355,
+      "endTime": 28.328,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.851,
+      "centroid": 0.3769
+    },
+    {
+      "time": 28.328,
+      "endTime": 36.827,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8783,
+      "centroid": 0.5048
+    },
+    {
+      "time": 36.827,
+      "endTime": 48.158,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9634,
+      "centroid": 1.0
+    },
+    {
+      "time": 48.158,
+      "endTime": 84.939,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9027,
+      "centroid": 0.7765
+    },
+    {
+      "time": 84.939,
+      "endTime": 101.912,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8529,
+      "centroid": 0.3753
+    },
+    {
+      "time": 101.912,
+      "endTime": 107.578,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.5389
+    },
+    {
+      "time": 107.578,
+      "endTime": 127.408,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.909,
+      "centroid": 0.8011
+    },
+    {
+      "time": 127.408,
+      "endTime": 192.409,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8581,
+      "centroid": 0.7102
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    3.019,
+    11.355,
+    28.328,
+    36.827,
+    48.158,
+    84.939,
+    101.912,
+    107.578,
+    127.408,
+    192.409
+  ],
+  "computedAt": 1780119136,
+  "elapsedSec": 3.55
+}

@@ -1,0 +1,81 @@
+{
+  "algorithm": "ruptures-pelt-l1",
+  "algoName": "PELT \u00b7 l1",
+  "search": "Pelt",
+  "model": "l1",
+  "suffix": "pelt-l1",
+  "paperSection": "\u00a75.1.2",
+  "methodType": "exact",
+  "audioFile": "edm-at-midnight.mp3",
+  "duration": 166.875,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 23.011,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.3803
+    },
+    {
+      "time": 23.011,
+      "endTime": 45.047,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7897,
+      "centroid": 0.7584
+    },
+    {
+      "time": 45.047,
+      "endTime": 75.511,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.933,
+      "centroid": 0.9698
+    },
+    {
+      "time": 75.511,
+      "endTime": 90.511,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.4188,
+      "centroid": 0.354
+    },
+    {
+      "time": 90.511,
+      "endTime": 120.047,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8153,
+      "centroid": 0.6456
+    },
+    {
+      "time": 120.047,
+      "endTime": 150.512,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9309,
+      "centroid": 1.0
+    },
+    {
+      "time": 150.512,
+      "endTime": 166.875,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.2698,
+      "centroid": 0.7182
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    23.011,
+    45.047,
+    75.511,
+    90.511,
+    120.047,
+    150.512,
+    166.875
+  ],
+  "computedAt": 1780119035,
+  "elapsedSec": 4.54
+}

@@ -215,7 +215,7 @@ export function convertToMirEval(sections: ExportSection[]): string {
 // caller doesn't pass an explicit duration. Zero-duration tail markers (the
 // last manual section, all auto-guess boundaries) are preserved as instants.
 
-export type JamsLayerKind = 'manual' | 'eye' | 'auto-guess';
+export type JamsLayerKind = 'manual' | 'eye' | 'auto-guess' | 'grid';
 
 export interface JamsOptions {
   /** Song slug — written to file_metadata.identifiers.slug. */
@@ -361,22 +361,42 @@ export function loopItemsToExportSections(items: LoopItem[]): ExportSection[] {
     }));
 }
 
-/** Enumerate every beat between 0 and `durationSec` for the song's active
- *  grid. Static / Dynamic / Manual modes are all routed through
+/** Grid resolution the user can pick when exporting the grid-labels sidecar.
+ *   - `bars`        — one marker per bar (downbeat). Labels "1", "2", "3", …
+ *   - `beats`       — one marker per beat. Labels "1.1", "1.2", … (default)
+ *   - `subbeats-8`  — beats + 8th-note offbeats. Labels "1.1", "1.1.5", "1.2", …
+ *   - `subbeats-16` — beats + 16th-note ticks. Labels "1.1", "1.1.25", "1.1.5", …
+ *   - `phrases`     — one marker per phrase (4 bars). Labels "P1", "P2", … */
+export type GridExportGranularity =
+  | 'bars' | 'beats' | 'subbeats-8' | 'subbeats-16' | 'phrases';
+
+/** Phrase length in bars — matches visibleGridLines' default `phraseBars`. */
+const PHRASE_BARS = 4;
+
+/** Enumerate the song's active grid between 0 and `durationSec` at the chosen
+ *  `granularity`. Static / Dynamic / Manual modes are all routed through
  *  visibleGridLines, which already resolves tempoAnchors and per-beat
- *  beatOverrides — so the caller doesn't have to branch on gridMode. Each
- *  beat becomes a zero-duration marker with a "bar.beat" label (1-indexed,
- *  matching the Rekordbox-style strings the UI shows). Returns [] when the
- *  song has no usable BPM or a non-positive duration. */
+ *  beatOverrides — so the caller doesn't have to branch on gridMode. Each grid
+ *  line becomes a zero-duration marker; the label is the 1-indexed
+ *  Rekordbox-style string the UI shows (bar / bar.beat / bar.beat.frac, or
+ *  "P<n>" for phrases). Returns [] when the song has no usable BPM or a
+ *  non-positive duration. */
 export function gridToExportSections(
   info: SongInfo,
   durationSec: number,
+  granularity: GridExportGranularity = 'beats',
 ): ExportSection[] {
   const bpm = info.bpm;
   if (!Number.isFinite(bpm) || !bpm || bpm <= 0) return [];
   if (!Number.isFinite(durationSec) || durationSec <= 0) return [];
   const beatsPerBar = beatsPerBarFromTimeSignature(info.timeSignature);
   const anchors = effectiveAnchors(info);
+  // Map the granularity onto visibleGridLines' knobs: bar-only modes set
+  // barGroupSize (which suppresses sub-beats), sub-beat modes set the division.
+  const subBeatDivision = granularity === 'subbeats-8' ? 2
+    : granularity === 'subbeats-16' ? 4 : 1;
+  const barGroupSize = granularity === 'bars' ? 1
+    : granularity === 'phrases' ? PHRASE_BARS : null;
   const lines = visibleGridLines({
     bpm,
     gridOffset: info.gridOffset ?? 0,
@@ -385,17 +405,30 @@ export function gridToExportSections(
     endTime: durationSec,
     anchors,
     beatOverrides: info.gridMode === 'manual' ? info.beatOverrides : undefined,
+    subBeatDivision,
+    barGroupSize,
   });
   const sections: ExportSection[] = [];
   for (const l of lines) {
-    if (l.isSubBeat || !Number.isInteger(l.beatIndex)) continue;
-    const barIdx = Math.floor(l.beatIndex / beatsPerBar);
-    const beatInBar = l.beatIndex - barIdx * beatsPerBar;
-    sections.push({
-      start: Math.max(0, l.t),
-      duration: 0,
-      section: `${barIdx + 1}.${beatInBar + 1}`,
-    });
+    let label: string;
+    if (granularity === 'bars') {
+      if (!l.isBar) continue;
+      label = `${l.barNumber}`;
+    } else if (granularity === 'phrases') {
+      if (!l.isBar) continue;
+      label = `P${Math.floor((l.barNumber - 1) / PHRASE_BARS) + 1}`;
+    } else {
+      // beats / sub-beats — bar.beat, with a trailing fractional component for
+      // off-grid sub-beats (e.g. "1.3.5" for the 8th after bar 1 beat 3).
+      const barIdx = Math.floor(l.beatIndex / beatsPerBar);
+      const beatInBar = l.beatIndex - barIdx * beatsPerBar;
+      const intBeat = Math.floor(beatInBar);
+      const frac = beatInBar - intBeat;
+      label = `${barIdx + 1}.${intBeat + 1}`;
+      // frac is an exact binary fraction (½ / ¼ / ¾) so its decimals are stable.
+      if (frac > 1e-6) label += `.${String(frac).slice(2)}`;
+    }
+    sections.push({ start: Math.max(0, l.t), duration: 0, section: label });
   }
   return sections;
 }

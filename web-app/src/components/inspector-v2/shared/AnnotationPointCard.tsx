@@ -14,7 +14,7 @@
  * description → footer) is identical across all kinds.
  */
 
-import { useState, useId, type CSSProperties, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { ItemImportance } from '../../../types/annotationLayer';
 import type { TempoAnchor } from '../../../types/songInfo';
 import { beatDuration } from '../../../utils/beatGrid';
@@ -331,7 +331,6 @@ export function AnnotationPointCard({
   popoverRef, positionStyle, width = 340,
   extras, belowDescription, footerExtras, footerLeftExtras, doneLabel,
 }: AnnotationPointCardProps) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const theme = KIND_THEME[kind];
   const noun = KIND_NOUN[kind];
   const datalistId = useId();
@@ -346,14 +345,82 @@ export function AnnotationPointCard({
     ? `${fmtTime(start)} → ${fmtTime(end!)}`
     : fmtTime(start);
 
+  // ─── Draggable + viewport-aware position ──────────────────────────────
+  // `positionStyle` (from useAnnotationPopover) seeds the placement, but it is
+  // clamped against an *estimated* card height, so a tall card (loops, spans)
+  // can still hang off the bottom of the page. Once the card has mounted we
+  // re-clamp against the real rendered size — pulling it up so the footer stays
+  // on-screen — and from then on let the user drag it around by the header.
+  const MARGIN = 12;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  // Identity of the seed position — changes when a new item opens (new anchor),
+  // which is our cue to re-seat the card; a re-render mid-edit must not.
+  const seedKey = `${String(positionStyle.left)}|${String(positionStyle.top)}|${String(positionStyle.transform ?? '')}`;
+  const lastSeedRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (lastSeedRef.current === seedKey) return;
+    lastSeedRef.current = seedKey;
+    const el = popoverRef.current;
+    if (typeof window === 'undefined' || !el) return;
+    const w = el.offsetWidth || width;
+    const h = el.offsetHeight || 0;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Seed left/top from the hook (numeric when click-anchored, centered otherwise).
+    const seedLeft = typeof positionStyle.left === 'number' ? positionStyle.left : (vw - w) / 2;
+    const seedTop = typeof positionStyle.top === 'number' ? positionStyle.top : (vh - h) / 2;
+    setPos({
+      left: clamp(seedLeft, MARGIN, vw - w - MARGIN),
+      top: clamp(seedTop, MARGIN, vh - h - MARGIN),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedKey]);
+
+  const onHeaderPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    // Don't hijack clicks on the close button (or any future header control).
+    if ((e.target as HTMLElement).closest('button, input, textarea, select, a')) return;
+    const el = popoverRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const grabX = e.clientX - rect.left;
+    const grabY = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    e.preventDefault();
+    const onMove = (ev: PointerEvent) => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      setPos({
+        left: clamp(ev.clientX - grabX, MARGIN, vw - w - MARGIN),
+        top: clamp(ev.clientY - grabY, MARGIN, vh - h - MARGIN),
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
+  const resolvedStyle: CSSProperties = pos
+    ? { position: 'fixed', left: pos.left, top: pos.top, width }
+    : { ...positionStyle, width };
+
   return (
     <div
       ref={popoverRef}
-      style={{ ...positionStyle, width }}
+      style={resolvedStyle}
       className="z-50 bg-[#1e242e] border border-white/[0.16] rounded-md shadow-[0_0_28px_rgba(148,163,184,0.30),0_20px_45px_-12px_rgba(0,0,0,0.75)] p-3 space-y-2"
     >
-      {/* Header */}
-      <div className="flex items-center gap-2 pb-1.5 border-b border-white/[0.04]">
+      {/* Header — doubles as the drag handle for repositioning the card. */}
+      <div
+        onPointerDown={onHeaderPointerDown}
+        className="flex items-center gap-2 pb-1.5 border-b border-white/[0.04] cursor-move select-none"
+      >
         <span
           className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
           style={{ background: layerColor, boxShadow: `0 0 6px ${layerColor}66` }}
@@ -485,19 +552,11 @@ export function AnnotationPointCard({
         <div className="flex items-center gap-1">
           {showDelete ? (
             <button
-              onClick={() => {
-                if (confirmingDelete) { onDelete?.(); onClose(); }
-                else setConfirmingDelete(true);
-              }}
-              onBlur={() => setConfirmingDelete(false)}
-              className={`px-3 py-1 rounded text-[10px] uppercase tracking-wider border transition-colors ${
-                confirmingDelete
-                  ? 'bg-red-500/40 border-red-400/60 text-red-100'
-                  : 'bg-red-500/20 border-red-400/40 text-red-200 hover:bg-red-500/30'
-              }`}
-              title={confirmingDelete ? 'Click again to confirm' : `Delete this ${noun}`}
+              onClick={() => { onDelete?.(); onClose(); }}
+              className="px-3 py-1 rounded text-[10px] uppercase tracking-wider border transition-colors bg-red-500/20 border-red-400/40 text-red-200 hover:bg-red-500/30"
+              title={`Delete this ${noun} (⌘Z to undo)`}
             >
-              {confirmingDelete ? 'Confirm delete' : 'Delete'}
+              Delete
             </button>
           ) : readOnly ? (
             <span className="text-[10px] text-slate-400 italic">Read-only — sourced from a custom detector run.</span>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { SongInfo, GridMode } from '../../types/songInfo';
-import { isAnchorMode } from '../../types/songInfo';
+import { isAnchorMode, songTitleDisplay } from '../../types/songInfo';
 
 const COMMON_TIME_SIGNATURES = ['4/4', '3/4', '6/8', '5/4', '7/8', '2/4', '12/8'];
 const BPM_MIN = 20;
@@ -135,6 +135,47 @@ export function SongInfoBar({
           <span className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-200">Song info</span>
         </div>
       )}
+
+      {/* ─── DISPLAY NAME ────────────────────────────────────────────────
+          The human-readable name shown across the app. Independent of the
+          on-disk slug/file name (which is never changed by these fields).
+          Title blank → the app falls back to the file name; Artist is only
+          used when a Title is set, rendered as "Artist — Title". */}
+      <div className="space-y-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-300">Display name</span>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] text-slate-500 uppercase tracking-wider">Title</label>
+            <input
+              type="text"
+              value={songInfo?.title ?? ''}
+              disabled={locked}
+              onChange={(e) => update('title', e.target.value.trim() === '' ? undefined : e.target.value)}
+              placeholder="(uses file name)"
+              className="w-full bg-[#0a0b0d] border border-white/[0.08] text-slate-200 text-xs rounded px-2.5 py-1 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] text-slate-500 uppercase tracking-wider">Artist <span className="normal-case tracking-normal text-slate-600">(optional)</span></label>
+            <input
+              type="text"
+              value={songInfo?.artist ?? ''}
+              disabled={locked}
+              onChange={(e) => update('artist', e.target.value.trim() === '' ? undefined : e.target.value)}
+              placeholder=""
+              className="w-full bg-[#0a0b0d] border border-white/[0.08] text-slate-200 text-xs rounded px-2.5 py-1 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            />
+          </div>
+        </div>
+        <div className="text-[10px] text-slate-500">
+          Shown as{' '}
+          {songTitleDisplay(songInfo) ? (
+            <span className="font-mono text-slate-300">{songTitleDisplay(songInfo)}</span>
+          ) : (
+            <span className="italic">the file name</span>
+          )}
+        </div>
+      </div>
 
       {/* ─── GRID MODE ───────────────────────────────────────────────────
           Pick the grid model first (Static / Dynamic / Manual). The Tempo

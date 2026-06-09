@@ -198,6 +198,25 @@ export interface LoopStructureResult {
 
 export type LoopToolId = 'chroma-autocorr';
 
+/** PATTERN-family detector result (experimental — gated by `experimentalPatternFamily`).
+ *  Stored under data/algorithm-outputs/pattern/<slug>/<algo>.json. Each detected
+ *  motif occurrence becomes one section so the inspector row can render them
+ *  individually (LoCoMotif motif occurrences are variable-length and not
+ *  evenly spaced — the contiguous-tile model of PatternItem.repeatCount would
+ *  misrepresent them). The `type` field carries `motif-<id>` so the renderer
+ *  can color same-motif tiles consistently. */
+export interface PatternStructureResult {
+  algorithm: string;
+  algoName: string;
+  audioFile: string;
+  duration: number;
+  sections: { time: number; endTime: number; type: string; label: string }[];
+  computedAt: number;
+  elapsedSec: number;
+}
+
+export type PatternToolId = 'locomotif';
+
 /** CUE-family note-onset detector result (basic-pitch). Each transcribed note
  *  collapses to a single cue at its onset time, labeled with the pitch name
  *  (e.g. `"C4"`). The note's end time is kept on the result for downstream
@@ -289,7 +308,8 @@ export type ToolResultData =
   | { toolId: 'autochord-chords'; result: CueExtrasResult }
   | { toolId: 'librosa-onsets';   result: CueExtrasResult }
   | { toolId: 'hpss-percussive';  result: SpanStructureResult }
-  | { toolId: 'whisper-base';     result: LyricsToolResult };
+  | { toolId: 'whisper-base';     result: LyricsToolResult }
+  | { toolId: 'locomotif';        result: PatternStructureResult };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -629,6 +649,55 @@ async function loadOrRunLoop(audioSlug: string): Promise<LoopStructureResult> {
     duration:   payload.duration ?? 0,
     sections:   (payload.loops ?? []).map((l) => ({
       time: l.start, endTime: l.end, type: 'loop', label: l.label,
+    })),
+    computedAt: Date.now(),
+    elapsedSec: (payload.ms ?? 0) / 1000,
+  };
+}
+
+/** Load a LoCoMotif PATTERN-family motif cache via /api/pattern. Each motif
+ *  occurrence projects to one section with `type = "motif-<id>"` so the
+ *  inspector colors occurrences of the same motif consistently. */
+async function loadOrRunPattern(audioSlug: string): Promise<PatternStructureResult> {
+  const toolId = 'locomotif';
+  const cacheUrl = `/api/pattern/detect/${encodeURIComponent(audioSlug)}/${encodeURIComponent(toolId)}`;
+  let raw: unknown = null;
+  try {
+    const cacheRes = await fetch(cacheUrl);
+    if (cacheRes.ok) raw = await cacheRes.json();
+  } catch { raw = null; }
+
+  if (!raw || typeof raw !== 'object' || !('patterns' in raw)) {
+    const post = await fetch('/api/pattern/detect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: audioSlug, algo: toolId }),
+    });
+    if (!post.ok) {
+      const err = await post.json().catch(() => ({ error: `HTTP ${post.status}` }));
+      if (post.status === 503) {
+        throw new Error('PATTERN sidecar is not running. Start it with:\n  docker compose --profile experimental-models up --build pattern');
+      }
+      throw new Error((err as { error?: string }).error ?? `PATTERN detect failed (${post.status})`);
+    }
+    raw = await post.json();
+  }
+  const payload = raw as {
+    audio_file?: string;
+    duration?: number;
+    patterns?: { start: number; end: number; label: string; motif_id: number }[];
+    ms?: number;
+    ok?: boolean;
+    error?: string;
+  };
+  if (payload.ok === false) throw new Error(payload.error ?? 'PATTERN returned ok=false');
+  return {
+    algorithm:  toolId,
+    algoName:   toolId,
+    audioFile:  payload.audio_file ?? `${audioSlug}.mp3`,
+    duration:   payload.duration ?? 0,
+    sections:   (payload.patterns ?? []).map((p) => ({
+      time: p.start, endTime: p.end, type: `motif-${p.motif_id}`, label: p.label,
     })),
     computedAt: Date.now(),
     elapsedSec: (payload.ms ?? 0) / 1000,
@@ -1097,6 +1166,12 @@ export async function runTool(
       if (!audioSlug) throw new Error('Whisper-base requires an audioSlug.');
       const result = await loadOrRunLyrics(audioSlug);
       return { toolId: 'whisper-base', result };
+    }
+
+    case 'locomotif': {
+      if (!audioSlug) throw new Error('PATTERN tools require an audioSlug.');
+      const result = await loadOrRunPattern(audioSlug);
+      return { toolId: 'locomotif', result };
     }
 
     default:

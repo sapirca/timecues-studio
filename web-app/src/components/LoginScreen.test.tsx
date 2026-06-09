@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IdentityPane } from './LoginScreen';
 import type { Annotator } from '../types/annotator';
@@ -25,7 +25,7 @@ function mockAvailability(available: boolean) {
     ok: true,
     status: 200,
     json: async () => ({ available }),
-  })) as typeof global.fetch;
+  })) as unknown as typeof global.fetch;
 }
 
 afterEach(() => {
@@ -173,3 +173,4 @@ describe('IdentityPane — unavailable-id flow', () => {
     expect((onSignIn.mock.calls[0][0] as Annotator).id).toBe('local-jane');
   });
 });
+

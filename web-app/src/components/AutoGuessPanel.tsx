@@ -22,6 +22,7 @@ import { beatsPerBarFromTimeSignature } from '../utils/beatGrid';
 import { BarBeatInput } from './inspector-v2/BarBeatInput';
 import { ConsensusClusterControls } from './inspector-v2/ConsensusClusterControls';
 import type { AnnotationPanelController, AnnotationPanelCapabilities } from './inspector-v2/shared/AnnotationPanelController';
+import { emptyCapabilities } from './inspector-v2/shared/AnnotationPanelController';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -566,6 +567,7 @@ function AutoGuessPanelInner(
     if (!onCapabilitiesChange) return;
     const stage = stageFromAutoGuessStatus(ann?.auto_guess_status);
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: stage,
       hasItems: (ann?.points.length ?? 0) > 0,
       saveStatus: saving ? 'saving' : saveMsg === 'Saved' ? 'saved' : saveMsg === 'Save failed' ? 'error' : 'idle',

@@ -71,7 +71,7 @@ const FIXED_ROW_IDS = new Set(DEFAULT_FIXED_ROW_ORDER);
 // A single resize handle on any row label drives `--viz-label-w`, widening
 // the gutter across every row uniformly. Falls back to 4.5rem when the var
 // is unset (e.g. when the cell renders inside a non-Shared-viz context).
-const STICKY_LABEL_CELL = 'w-[calc(var(--viz-label-w,4.5rem)_+_0.5rem)] shrink-0 sticky left-0 z-30 bg-gray-900 pr-2 flex items-center justify-end relative';
+const STICKY_LABEL_CELL = 'w-[calc(var(--viz-label-w,4.5rem)_+_0.5rem)] shrink-0 sticky left-0 z-30 bg-gray-900 pr-2 flex items-center justify-center relative';
 
 interface RowDragHandlers {
   draggable: boolean;
@@ -101,11 +101,10 @@ function LabelResizeHandle({ onResizeStart }: { onResizeStart?: (e: React.Pointe
   );
 }
 
-function RowLabel({ text, color = 'text-gray-600', dragHandlers, onResizeStart, wrap = false }: {
+function RowLabel({ text, color = 'text-gray-600', dragHandlers, onResizeStart }: {
   text: string; color?: string;
   dragHandlers?: RowDragHandlers;
   onResizeStart?: (e: React.PointerEvent) => void;
-  wrap?: boolean;
 }) {
   return (
     <div
@@ -116,7 +115,7 @@ function RowLabel({ text, color = 'text-gray-600', dragHandlers, onResizeStart, 
       title={dragHandlers ? 'Drag to reorder' : undefined}
     >
       <span
-        className={`text-[10px] uppercase tracking-wide text-right leading-tight min-w-0 flex-1 ${wrap ? 'break-words' : 'truncate'} ${color}`}
+        className={`text-[10px] uppercase tracking-wide text-center leading-tight min-w-0 flex-1 truncate ${color}`}
         title={text}
       >{text}</span>
       <LabelResizeHandle onResizeStart={onResizeStart} />
@@ -175,7 +174,7 @@ function LayerRowLabel({
         : (dragHandlers ? 'Drag to reorder' : layer.name)}
     >
       <span
-        className={`text-[10px] uppercase tracking-wide text-right leading-tight break-words ${
+        className={`text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1 ${
           isSelected ? 'font-bold' : ''
         }`}
         style={{
@@ -256,7 +255,6 @@ function SectionBlockRow({ sections, duration, currentTime, height = 22, onBound
           : isOptional
             ? `radial-gradient(circle, ${baseColor}55 1px, transparent 1.6px) 0 0 / 6px 6px, ${baseColor}aa`
             : baseColor;
-        const isLast = i === sections.length - 1;
         return (
           <div
             key={i}
@@ -597,7 +595,7 @@ function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, r
         title={dragHandlers ? 'Drag to reorder' : undefined}
       >
         <span
-          className="text-[10px] uppercase tracking-wide text-right leading-tight break-words"
+          className="text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1"
           style={labelColor ? { color: labelColor } : undefined}
         >
           {label}
@@ -1306,6 +1304,22 @@ export function SharedVizPanel({
   });
   const labelColWRef = useRef(labelColW);
   useEffect(() => { labelColWRef.current = labelColW; }, [labelColW]);
+
+  // ── "Display options" disclosure (layer-audio mixer + section-color palette).
+  // Collapsed by default to keep the timeline flush under the player; the
+  // open/closed choice is remembered per-browser. ──
+  const DISPLAY_OPTS_KEY = 'tc:viz-display-options-open';
+  const [displayOptionsOpen, setDisplayOptionsOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(DISPLAY_OPTS_KEY) === '1';
+  });
+  const toggleDisplayOptions = useCallback(() => {
+    setDisplayOptionsOpen((prev) => {
+      const next = !prev;
+      try { window.localStorage.setItem(DISPLAY_OPTS_KEY, next ? '1' : '0'); } catch { /* private mode */ }
+      return next;
+    });
+  }, []);
   const handleLabelColResizeStart = useCallback((e: React.PointerEvent) => {
     // Stop the parent label's HTML5-drag (row reorder) and click-to-select
     // from firing when the user grabs the grippy.
@@ -1889,73 +1903,100 @@ export function SharedVizPanel({
         </div>
       </div>
 
-      {/* ── Layer audio mixer — auralisation pip + pan/volume per layer.
-           Lives OUTSIDE the scroll container so the popover isn't clipped. ── */}
-      {onLayerAudioChange && audioMixerLayers.length > 0 && (
-        <div className="flex items-stretch gap-2 pr-2 pt-1 relative z-30">
-          <div className="w-[var(--viz-label-w,4.5rem)] shrink-0" />
-          <div className="flex-1 flex flex-wrap items-center gap-2">
-            <span
-              className="text-[9px] text-gray-500 uppercase tracking-wide"
-              title="Plays a short click pip whenever the playhead crosses a boundary in this layer. Useful for aurally checking annotation timing — try panning Manual to one ear and Auto-Guess to the other to hear the offset."
-            >
-              Layer audio:
-            </span>
-            {audioMixerLayers.map((l) => (
-              <LayerAudioControls
-                key={l.id}
-                label={l.label}
-                accentColor={l.accent}
-                testFreq={l.freq}
-                value={layerAudioConfig?.[l.id] ?? DEFAULT_LAYER_AUDIO}
-                onChange={(next) => onLayerAudioChange(l.id, next)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ── "Display options" disclosure — folds the layer-audio mixer and the
+           section-color palette behind a single toggle so the timeline sits
+           flush under the player. Both blocks live OUTSIDE the scroll container
+           so their popovers/swatches aren't clipped and don't slide off-screen
+           when the timeline is panned horizontally. ── */}
+      {(() => {
+        const showLayerAudioBlock = !!onLayerAudioChange && audioMixerLayers.length > 0;
+        const showSectionColorBlock =
+          visibleSectionTypes.length > 0
+          || hasCustomRowOrder
+          || (sectionColorOverrides != null && Object.keys(sectionColorOverrides).length > 0);
+        if (!showLayerAudioBlock && !showSectionColorBlock) return null;
+        return (
+          <div className="relative z-30">
+            <div className="flex items-stretch gap-2 pr-2 pt-1">
+              <div className="w-[var(--viz-label-w,4.5rem)] shrink-0" />
+              <div className="flex-1 flex items-center">
+                <button
+                  onClick={toggleDisplayOptions}
+                  aria-expanded={displayOptionsOpen}
+                  className="flex items-center gap-1 text-[9px] text-gray-500 hover:text-gray-300 uppercase tracking-wide transition-colors"
+                  title="Layer audio cues and section-color palette"
+                >
+                  <span className="inline-block w-2 text-center">{displayOptionsOpen ? '▾' : '▸'}</span>
+                  <span aria-hidden>⚙</span>
+                  Display options
+                </button>
+              </div>
+            </div>
 
-      {/* ── Section-color palette + reset row order. Lives OUTSIDE the scroll
-           container (like the layer-audio mixer above) so the swatches stay
-           pinned in place instead of sliding off-screen when the timeline is
-           panned horizontally. ── */}
-      {(visibleSectionTypes.length > 0 || hasCustomRowOrder || (sectionColorOverrides && Object.keys(sectionColorOverrides).length > 0)) && (
-        <div className="flex items-stretch gap-2 pr-2 pt-1">
-          <div className="w-[var(--viz-label-w,4.5rem)] shrink-0" />
-          <div className="flex-1 flex flex-wrap items-center gap-2">
-            {visibleSectionTypes.length > 0 && onSectionColorChange && (
-              <>
-                <span className="text-[9px] text-gray-500 uppercase tracking-wide">Section colors:</span>
-                {visibleSectionTypes.map((type) => {
-                  const current = sectionColorOverrides?.[type] ?? sectionBg(type);
-                  return (
-                    <label key={type} className="flex items-center gap-1 cursor-pointer" title={`Recolor "${type}" sections across all rows`}>
-                      <span className="relative w-3 h-3 rounded-full border border-gray-700 shrink-0" style={{ backgroundColor: current }}>
-                        <input
-                          type="color"
-                          value={current}
-                          onChange={(e) => onSectionColorChange(type, e.target.value)}
-                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                        />
-                      </span>
-                      <span className="text-[10px] text-gray-400">{type}</span>
-                    </label>
-                  );
-                })}
-              </>
+            {displayOptionsOpen && showLayerAudioBlock && (
+              <div className="flex items-stretch gap-2 pr-2 pt-1">
+                <div className="w-[var(--viz-label-w,4.5rem)] shrink-0" />
+                <div className="flex-1 flex flex-wrap items-center gap-2">
+                  <span
+                    className="text-[9px] text-gray-500 uppercase tracking-wide"
+                    title="Plays a short click pip whenever the playhead crosses a boundary in this layer. Useful for aurally checking annotation timing — try panning Manual to one ear and Auto-Guess to the other to hear the offset."
+                  >
+                    Layer audio:
+                  </span>
+                  {audioMixerLayers.map((l) => (
+                    <LayerAudioControls
+                      key={l.id}
+                      label={l.label}
+                      accentColor={l.accent}
+                      testFreq={l.freq}
+                      value={layerAudioConfig?.[l.id] ?? DEFAULT_LAYER_AUDIO}
+                      onChange={(next) => onLayerAudioChange!(l.id, next)}
+                    />
+                  ))}
+                </div>
+              </div>
             )}
-            {(hasCustomRowOrder || (sectionColorOverrides && Object.keys(sectionColorOverrides).length > 0)) && (
-              <button
-                onClick={() => { onResetRowOrder?.(); onResetSectionColors?.(); }}
-                className="ml-auto text-[10px] text-gray-500 hover:text-gray-300 px-2 py-0.5 rounded border border-gray-800 hover:border-gray-700 transition-colors"
-                title="Reset row order and section colors to defaults"
-              >
-                ↺ Reset
-              </button>
+
+            {displayOptionsOpen && showSectionColorBlock && (
+              <div className="flex items-stretch gap-2 pr-2 pt-1">
+                <div className="w-[var(--viz-label-w,4.5rem)] shrink-0" />
+                <div className="flex-1 flex flex-wrap items-center gap-2">
+                  {visibleSectionTypes.length > 0 && onSectionColorChange && (
+                    <>
+                      <span className="text-[9px] text-gray-500 uppercase tracking-wide">Section colors:</span>
+                      {visibleSectionTypes.map((type) => {
+                        const current = sectionColorOverrides?.[type] ?? sectionBg(type);
+                        return (
+                          <label key={type} className="flex items-center gap-1 cursor-pointer" title={`Recolor "${type}" sections across all rows`}>
+                            <span className="relative w-3 h-3 rounded-full border border-gray-700 shrink-0" style={{ backgroundColor: current }}>
+                              <input
+                                type="color"
+                                value={current}
+                                onChange={(e) => onSectionColorChange(type, e.target.value)}
+                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                              />
+                            </span>
+                            <span className="text-[10px] text-gray-400">{type}</span>
+                          </label>
+                        );
+                      })}
+                    </>
+                  )}
+                  {(hasCustomRowOrder || (sectionColorOverrides && Object.keys(sectionColorOverrides).length > 0)) && (
+                    <button
+                      onClick={() => { onResetRowOrder?.(); onResetSectionColors?.(); }}
+                      className="ml-auto text-[10px] text-gray-500 hover:text-gray-300 px-2 py-0.5 rounded border border-gray-800 hover:border-gray-700 transition-colors"
+                      title="Reset row order and section colors to defaults"
+                    >
+                      ↺ Reset
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Scrollable viz rows (same horizontal alignment via pr-2 — no
            left padding, so the sticky label gutter sits flush at the panel's
@@ -2079,7 +2120,7 @@ export function SharedVizPanel({
                       {onManualUndo && (
                         <button onClick={onManualUndo} disabled={!canManualUndo} title="Undo last change" className="text-[10px] leading-none disabled:opacity-20 text-amber-400/70 hover:text-amber-300 transition-opacity">↩</button>
                       )}
-                      <span className="text-[10px] uppercase tracking-wide text-right leading-tight break-words text-amber-400/70">Boundaries</span>
+                      <span className="text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1 text-amber-400/70">Boundaries</span>
                       <LabelResizeHandle onResizeStart={handleLabelColResizeStart} />
                     </div>
                     <SectionBlockRow
@@ -2115,7 +2156,7 @@ export function SharedVizPanel({
                 return (
                   <div key="autoGuess" {...dropProps} className={`${isDragging ? 'opacity-40' : ''} ${isDropTarget ? 'bg-violet-900/20 ring-1 ring-violet-700/40 rounded' : ''}`}>
                     <div className="flex items-stretch">
-                      <RowLabel text="Auto-guess" color="text-violet-400/70" dragHandlers={dragHandlers} onResizeStart={handleLabelColResizeStart} wrap />
+                      <RowLabel text="Auto-guess" color="text-violet-400/70" dragHandlers={dragHandlers} onResizeStart={handleLabelColResizeStart} />
                       <div className="flex-1 min-w-0 overflow-hidden flex items-stretch">
                         {autoGuessBlockSections.length > 0
                           ? <SectionBlockRow
@@ -2601,7 +2642,7 @@ export function SharedVizPanel({
                           title={dragHandlers ? 'Drag to reorder' : undefined}
                         >
                           <span
-                            className="text-[10px] uppercase tracking-wide text-right leading-tight break-words"
+                            className="text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1"
                             style={{ color: cfg.color }}
                           >
                             {cfg.label}

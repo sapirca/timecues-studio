@@ -5,10 +5,15 @@ template: splash
 hero:
   tagline: Music structure annotation, multi-annotator, with built-in algorithm comparison.
   actions:
-    - text: Try the live demo
+    - text: Live demo (GCP server)
       link: __LIVE_DEMO_URL__
       icon: rocket
       variant: primary
+      attrs: { target: '_blank', rel: 'noopener' }
+    - text: Live demo (Cloudflare)
+      link: __LIVE_DEMO_URL_CF__
+      icon: rocket
+      variant: minimal
       attrs: { target: '_blank', rel: 'noopener' }
     - text: Source on GitHub
       link: https://github.com/sapirca/timecues-studio
@@ -17,7 +22,7 @@ hero:
       attrs: { target: '_blank', rel: 'noopener' }
 ---
 
-import { LIVE_DEMO_URL } from '../../consts.mjs';
+import { LIVE_DEMO_URL, LIVE_DEMO_URL_CF } from '../../consts.mjs';
 
 <div class="led-cards">
 
@@ -30,8 +35,21 @@ import { LIVE_DEMO_URL } from '../../consts.mjs';
       <circle cx="56" cy="12" r="3" fill="#06b6d4"/>
       <circle cx="68" cy="12" r="3" fill="#8b5cf6"/>
     </svg>
-    <h3>Try the live demo</h3>
-    <p>Zero install. Sign in with Google, get your own annotator namespace, and start marking boundaries on the seed dataset. <span class="cta">Open demo →</span></p>
+    <h3>Live demo · GCP server</h3>
+    <p>The full live app on GCP. Sign in with Google, get your own annotator namespace, run detectors, and save boundaries on the seed dataset. <span class="cta">Open demo →</span></p>
+  </a>
+
+  <a class="led-card" href={LIVE_DEMO_URL_CF} target="_blank" rel="noopener">
+    <svg class="led-icon led-strip" viewBox="0 0 80 24" aria-hidden="true">
+      <circle cx="8"  cy="12" r="3" fill="#22c55e"/>
+      <circle cx="20" cy="12" r="3" fill="#22c55e"/>
+      <circle cx="32" cy="12" r="3" fill="#f59e0b"/>
+      <circle cx="44" cy="12" r="3" fill="#f59e0b"/>
+      <circle cx="56" cy="12" r="3" fill="#ef4444"/>
+      <circle cx="68" cy="12" r="3" fill="#8b5cf6"/>
+    </svg>
+    <h3>Live demo · Cloudflare</h3>
+    <p>An always-on, read-only public mirror hosted on Cloudflare — stays up even if the GCP server is down. Explore the seed dataset and compare algorithm estimates, zero install. <span class="cta">Open mirror →</span></p>
   </a>
 
   <a class="led-card" href={import.meta.env.BASE_URL + "run/"}>

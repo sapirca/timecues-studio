@@ -1,0 +1,99 @@
+{
+  "algorithm": "ruptures-pelt-default",
+  "algoName": "PELT \u00b7 default",
+  "search": "Pelt",
+  "model": "rbf",
+  "suffix": "pelt-default",
+  "paperSection": "default",
+  "methodType": "exact",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 11.912,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6012,
+      "centroid": 0.5297
+    },
+    {
+      "time": 11.912,
+      "endTime": 37.965,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8367,
+      "centroid": 0.419
+    },
+    {
+      "time": 37.965,
+      "endTime": 48.715,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9317,
+      "centroid": 1.0
+    },
+    {
+      "time": 48.715,
+      "endTime": 84.381,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8762,
+      "centroid": 0.7654
+    },
+    {
+      "time": 84.381,
+      "endTime": 103.027,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8295,
+      "centroid": 0.3647
+    },
+    {
+      "time": 103.027,
+      "endTime": 108.159,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.6069
+    },
+    {
+      "time": 108.159,
+      "endTime": 126.27,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8707,
+      "centroid": 0.7869
+    },
+    {
+      "time": 126.27,
+      "endTime": 180.071,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9223,
+      "centroid": 0.7488
+    },
+    {
+      "time": 180.071,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0709,
+      "centroid": 0.4516
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    11.912,
+    37.965,
+    48.715,
+    84.381,
+    103.027,
+    108.159,
+    126.27,
+    180.071,
+    192.409
+  ],
+  "computedAt": 1780119172,
+  "elapsedSec": 3.67
+}

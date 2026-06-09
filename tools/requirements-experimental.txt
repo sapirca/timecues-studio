@@ -1,5 +1,5 @@
 # Optional pip deps for the Phase-1+ experimental MIR sidecars
-# (span / beatnet / pitch / panns / cue-extras / lyrics).
+# (span / beatnet / pitch / panns / cue-extras / lyrics / pattern).
 #
 # Every server's heavy imports are guarded by try/except, so each
 # sidecar starts even without these deps installed — it just reports
@@ -18,9 +18,12 @@
 # --- SPAN family -----------------------------------------------------------
 # (torch + torchaudio installed separately; see header above)
 # Silero-VAD: pulled at first use via torch.hub — no pip dep needed here.
-# JDCNet: pure-PyTorch port lives in tools/python/jdcnet_torch.py;
-# weights are baked into docker/span.Dockerfile and re-fetched at first
-# call on bare-metal hosts.
+# JDCNet: pure-PyTorch port lives in tools/python/jdcnet_torch.py; reads
+# the original Keras .hdf5 checkpoint via h5py. Docker bakes the weights
+# into the span image; run.sh fetches them into .cache/jdcnet/ on
+# bare-metal. We explicitly pin h5py here so the pure-bare-metal path
+# doesn't rely on tensorflow / matplotlib pulling it transitively.
+h5py>=3.10.0
 panns_inference
 
 # --- CUE family ------------------------------------------------------------
@@ -37,3 +40,10 @@ basic-pitch ; python_version < "3.12"
 
 # --- LYRICS family ---------------------------------------------------------
 openai-whisper
+
+# --- PATTERN family --------------------------------------------------------
+# dtai-locomotif (MIT, KU Leuven) — DTW-warped variable-length motif discovery.
+# Pulls numba + matplotlib transitively; numba JIT warm-up is ~15 s on the
+# first call after server boot. pattern_server lazy-imports it so absence
+# is a graceful "Deps missing" state.
+dtai-locomotif

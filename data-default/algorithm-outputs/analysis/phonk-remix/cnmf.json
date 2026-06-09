@@ -1,0 +1,130 @@
+{
+  "algorithm": "cnmf",
+  "algoName": "CNMF (Non-negative Matrix Factorization)",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 11.146,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6271,
+      "centroid": 0.4685
+    },
+    {
+      "time": 11.146,
+      "endTime": 22.57,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9916,
+      "centroid": 0.3059
+    },
+    {
+      "time": 22.57,
+      "endTime": 23.22,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.5393,
+      "centroid": 1.0
+    },
+    {
+      "time": 23.22,
+      "endTime": 31.672,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6051,
+      "centroid": 0.949
+    },
+    {
+      "time": 31.672,
+      "endTime": 49.923,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9857,
+      "centroid": 0.6771
+    },
+    {
+      "time": 49.923,
+      "endTime": 93.623,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.6535
+    },
+    {
+      "time": 93.623,
+      "endTime": 96.223,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6717,
+      "centroid": 0.8762
+    },
+    {
+      "time": 96.223,
+      "endTime": 104.722,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.5922,
+      "centroid": 0.9046
+    },
+    {
+      "time": 104.722,
+      "endTime": 107.973,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9928,
+      "centroid": 0.6636
+    },
+    {
+      "time": 107.973,
+      "endTime": 143.174,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.6704
+    },
+    {
+      "time": 143.174,
+      "endTime": 148.05,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8144,
+      "centroid": 0.7311
+    },
+    {
+      "time": 148.05,
+      "endTime": 169.459,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.205,
+      "centroid": 0.8455
+    },
+    {
+      "time": 169.459,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    11.146,
+    22.57,
+    23.22,
+    31.672,
+    49.923,
+    93.623,
+    96.223,
+    104.722,
+    107.973,
+    143.174,
+    148.05,
+    169.459,
+    169.465
+  ],
+  "computedAt": 1780118885,
+  "elapsedSec": 5.4
+}

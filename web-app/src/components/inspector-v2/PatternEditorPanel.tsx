@@ -35,6 +35,7 @@ import {
 import { snapToBeat, type BarGrid } from '../../utils/barSnap';
 import type { PendingSelection } from './AnnotationOverlays';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { PatternItemCard } from './PatternItemCard';
 import { AddItemAtEndCard } from './ItemCard';
 import { LayerModePicker } from './LayerModePicker';
@@ -318,6 +319,7 @@ function PatternEditorPanelInner(
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: getLayerStatus(doc, 'patterns'),
       hasItems: totalCount > 0,
       saveStatus,

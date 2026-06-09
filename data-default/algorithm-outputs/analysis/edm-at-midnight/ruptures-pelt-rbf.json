@@ -1,0 +1,72 @@
+{
+  "algorithm": "ruptures-pelt-rbf",
+  "algoName": "PELT \u00b7 rbf",
+  "search": "Pelt",
+  "model": "rbf",
+  "suffix": "pelt-rbf",
+  "paperSection": "\u00a75.1.2",
+  "methodType": "exact",
+  "audioFile": "edm-at-midnight.mp3",
+  "duration": 166.875,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 23.011,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.3795
+    },
+    {
+      "time": 23.011,
+      "endTime": 75.511,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8757,
+      "centroid": 0.8793
+    },
+    {
+      "time": 75.511,
+      "endTime": 90.511,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.4188,
+      "centroid": 0.3533
+    },
+    {
+      "time": 90.511,
+      "endTime": 120.512,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8175,
+      "centroid": 0.6477
+    },
+    {
+      "time": 120.512,
+      "endTime": 150.512,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9307,
+      "centroid": 1.0
+    },
+    {
+      "time": 150.512,
+      "endTime": 166.875,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.2698,
+      "centroid": 0.7167
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    23.011,
+    75.511,
+    90.511,
+    120.512,
+    150.512,
+    166.875
+  ],
+  "computedAt": 1780119026,
+  "elapsedSec": 3.06
+}

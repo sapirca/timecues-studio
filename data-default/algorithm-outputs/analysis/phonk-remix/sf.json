@@ -1,0 +1,103 @@
+{
+  "algorithm": "sf",
+  "algoName": "Structural Features (SF)",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 11.146,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6273,
+      "centroid": 0.5514
+    },
+    {
+      "time": 11.146,
+      "endTime": 32.322,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.846,
+      "centroid": 0.6992
+    },
+    {
+      "time": 32.322,
+      "endTime": 52.57,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9871,
+      "centroid": 0.7963
+    },
+    {
+      "time": 52.57,
+      "endTime": 72.121,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9985,
+      "centroid": 0.7469
+    },
+    {
+      "time": 72.121,
+      "endTime": 91.672,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.7888
+    },
+    {
+      "time": 91.672,
+      "endTime": 106.672,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.737,
+      "centroid": 0.9808
+    },
+    {
+      "time": 106.672,
+      "endTime": 131.425,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9995,
+      "centroid": 0.7911
+    },
+    {
+      "time": 131.425,
+      "endTime": 148.747,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9347,
+      "centroid": 0.8104
+    },
+    {
+      "time": 148.747,
+      "endTime": 169.459,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.1956,
+      "centroid": 1.0
+    },
+    {
+      "time": 169.459,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    11.146,
+    32.322,
+    52.57,
+    72.121,
+    91.672,
+    106.672,
+    131.425,
+    148.747,
+    169.459,
+    169.465
+  ],
+  "computedAt": 1780118874,
+  "elapsedSec": 18.22
+}

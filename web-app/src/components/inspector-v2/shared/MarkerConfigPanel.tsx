@@ -4,19 +4,23 @@
  * the sibling MarkerActionsPanel that holds every edit button.
  *
  *   ┌──────────────────────────────────────────┐
- *   │  BOUNDARIES              ● In progress  ⋯  │  title + status + ⋯ More
- *   │  ↑▾  ↓            00:42  ▶ Record ↺        │  import/export · timer (right)
+ *   │  BOUNDARIES                        ⋯ More  │  title + ⋯ More
+ *   │  ● In progress                            │  status
  *   │  ── (⋯ More) ──                            │
- *   │  [ Manual ▾ ]   ✓ Saved   ↻ Re-run         │  source · save · re-run
+ *   │  [ Manual ▾ ]  ✓ Saved  ↻                  │  source · save · re-run
+ *   │  ▶ Rec ↺  00:42                            │  record · restart · time
+ *   │  ↑▾ ↓                                      │  import · export
  *   └──────────────────────────────────────────┘
  *
- * Only the high-signal fields show by default — the active type's title, its
- * workflow status, the Import / Export buttons and the (right-aligned)
- * recording timer. The source picker, save indicator and detector Re-run hide
- * behind a "⋯ More" toggle so the panel stays compact. The big title names the
- * active marker type and is driven by the page from `activeAnnotationType`, so
- * clicking a type chip in the All-annotations list re-labels this panel.
- * Source, Time and the import/export pair take `ReactNode` slots because their
+ * Only the high-signal fields show by default — the active type's title with
+ * the ⋯ More toggle on the first row, then its workflow status below. The
+ * source picker, save indicator and detector Re-run, the Record controls with
+ * the elapsed-time readout, and the Import / Export buttons each hide behind
+ * the "⋯ More" toggle on their own row, so the collapsed panel shows just the
+ * title and the status — no clock. The big title names the active marker type
+ * and is driven by the page from `activeAnnotationType`, so clicking a type
+ * chip in the All-annotations list re-labels this panel. Source, the timer
+ * halves and the import/export pair take `ReactNode` slots because their
  * content is built by the page from its own state. The remaining action verbs
  * (Mark In/Out, Undo/Redo, Split, Delete, + Add, Fill defaults, Add layer)
  * live in MarkerActionsPanel.
@@ -36,11 +40,16 @@ interface Props {
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
   /** Source dropdown — the page passes the existing AnnotationSourcePicker. */
   sourceSlot: ReactNode;
-  /** Recording timer — page-owned JSX. `null` hides it. Right-aligned in its
-   *  row. */
+  /** Elapsed-time readout — page-owned JSX. Sits next to the Record controls on
+   *  the "⋯ More" recording row, so the clock is hidden while collapsed. `null`
+   *  hides it. */
+  timeSlot?: ReactNode;
+  /** Record / Stop / Reset controls — page-owned JSX. Tucked into the "⋯ More"
+   *  section on their own row alongside the time readout. `null` hides it. */
   timerSlot?: ReactNode;
   /** Import / Export buttons — moved here from the actions panel so the edit
-   *  row stays compact. Sits at the left of the timer row. */
+   *  row stays compact. Tucked into the "⋯ More" section alongside the source
+   *  picker and save indicator. */
   ioSlot?: ReactNode;
   onStatusChange?: (s: AnnotationStage) => void;
   /** Re-run handler shown only when the active source is a custom detector.
@@ -54,7 +63,7 @@ interface Props {
 export function MarkerConfigPanel({
   typeTitle,
   status, hasItems, saveStatus,
-  sourceSlot, timerSlot, ioSlot,
+  sourceSlot, timeSlot, timerSlot, ioSlot,
   onStatusChange,
   onRerunDetector, rerunBusy,
 }: Props) {
@@ -73,12 +82,11 @@ export function MarkerConfigPanel({
         <h3 className="flex-1 min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100">
           {typeTitle}
         </h3>
-        <StatusPill status={status} hasItems={hasItems} onChange={onStatusChange} />
         <button
           type="button"
           onClick={() => setMoreOpen((o) => !o)}
           aria-expanded={moreOpen}
-          title={moreOpen ? 'Hide source & save details' : 'Source picker, save status, re-run…'}
+          title={moreOpen ? 'Hide record, import/export, source & save details' : 'Record, Import/Export, source picker, save status, re-run…'}
           className={`px-2 py-1 rounded text-[11px] transition-colors ${
             moreOpen
               ? 'bg-white/[0.08] text-slate-200'
@@ -88,28 +96,37 @@ export function MarkerConfigPanel({
           {moreOpen ? '⋯ Less' : '⋯ More'}
         </button>
       </div>
-      {(timerSlot || ioSlot) && (
-        <div className="flex items-center gap-2">
-          {ioSlot && <div className="flex items-center gap-1">{ioSlot}</div>}
-          {timerSlot && <div className="ml-auto flex items-center gap-2">{timerSlot}</div>}
-        </div>
-      )}
+      <div className="flex items-center gap-2">
+        <StatusPill status={status} hasItems={hasItems} onChange={onStatusChange} />
+      </div>
       {moreOpen && (
-        <div className="flex items-center gap-2 flex-wrap pt-1.5 border-t border-white/[0.04]">
-          {sourceSlot}
-          <SaveIndicator saveStatus={saveStatus} />
-          {isDetectorSource && (
-            <button
-              onClick={onRerunDetector}
-              disabled={rerunBusy}
-              title="Re-run this detector. If you've already edited its output (✓/✗) on this song, you'll be asked to confirm overwriting your edits."
-              className={`px-2.5 py-1 text-[11px] uppercase tracking-wider rounded transition-colors ${
-                rerunBusy
-                  ? 'bg-white/[0.02] text-slate-700 cursor-wait'
-                  : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-400/40'
-              }`}
-            >{rerunBusy ? '↻ Running…' : '↻ Re-run'}</button>
+        <div className="space-y-2 pt-1.5 border-t border-white/[0.04]">
+          {/* Source picker (Manual / Eye / Auto-guess / detector) · save · re-run */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {sourceSlot}
+            <SaveIndicator saveStatus={saveStatus} />
+            {isDetectorSource && (
+              <button
+                onClick={onRerunDetector}
+                disabled={rerunBusy}
+                title="Re-run this detector. If you've already edited its output (✓/✗) on this song, you'll be asked to confirm overwriting your edits."
+                className={`px-2.5 py-1 text-[11px] uppercase tracking-wider rounded transition-colors ${
+                  rerunBusy
+                    ? 'bg-white/[0.02] text-slate-700 cursor-wait'
+                    : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-400/40'
+                }`}
+              >{rerunBusy ? '↻ Running…' : '↻ Re-run'}</button>
+            )}
+          </div>
+          {/* Recording: ▶ Record · ↺ restart · elapsed time */}
+          {(timerSlot || timeSlot) && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {timerSlot && <div className="flex items-center gap-2">{timerSlot}</div>}
+              {timeSlot && <div className="flex items-center">{timeSlot}</div>}
+            </div>
           )}
+          {/* Import / Export */}
+          {ioSlot && <div className="flex items-center gap-1 flex-wrap">{ioSlot}</div>}
         </div>
       )}
     </div>

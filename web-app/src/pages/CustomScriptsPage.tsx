@@ -632,7 +632,12 @@ export function CustomScriptsPage() {
     <div className="min-h-screen bg-[#0a0b0d] text-slate-200 px-6 pb-6 pt-3">
       <div className="max-w-5xl mx-auto space-y-6">
         <InfoBanner id="custom.v1" title="Playground" accent="amber">
-          Write a Python detector, upload it, and run it on any song. Use <strong>How this works</strong> below for the API.
+          Write a Python detector that finds moments in a song — beats, drops, section
+          boundaries — and see its output on the waveform. <strong>New detector</strong> opens the
+          editor; your code goes in <code>tools/python/custom/</code> and must return a list of
+          timed cues (see <strong>How this works</strong> below for the API and a copy-paste
+          starter). Save it, pick a song from the dropdown, and hit <strong>Run</strong> to
+          execute it on that track — or <strong>Run all</strong> to sweep every song at once.
         </InfoBanner>
         <header className="pb-3 border-b border-white/[0.06]">
           <h1 className="text-lg font-medium text-slate-100">Playground</h1>

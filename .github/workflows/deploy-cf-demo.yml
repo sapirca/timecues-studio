@@ -1,0 +1,68 @@
+# Build the static, backend-less public demo and deploy it to Cloudflare Pages.
+#
+# This is the always-on mirror of the public/demo tier (the 3 CC0 sample
+# songs). It runs entirely on Cloudflare's edge with NO origin server, so it
+# stays up even when the GCP app is down. See:
+#   - web-app/scripts/assemble-cf-demo.mjs  (what gets baked into dist/)
+#   - web-app/src/state/staticDemo.ts        (the VITE_STATIC_DEMO build flag)
+#
+# One-time setup (repo Settings):
+#   Secrets → Actions:
+#     CLOUDFLARE_API_TOKEN   — token with the "Cloudflare Pages: Edit" permission
+#     CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   Variables → Actions:
+#     CF_PAGES_PROJECT       — the Pages project name (e.g. "timecues-demo")
+#     LIVE_DEMO_URL          — (optional) the GCP app URL, shown on the mirror's
+#                              landing chooser as "Open the full app"
+# Then point the landing site's LIVE_DEMO_URL_CF variable at this project's
+# URL (e.g. https://timecues-demo.pages.dev or a custom domain).
+
+name: Deploy Cloudflare demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web-app/**'
+      - 'data-default/**'
+      - '.github/workflows/deploy-cf-demo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cf-pages-demo
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web-app/package-lock.json
+
+      - name: Install deps
+        working-directory: web-app
+        run: npm ci
+
+      - name: Build static demo (VITE_STATIC_DEMO=1 + bake demo corpus)
+        working-directory: web-app
+        env:
+          # Surfaced on the mirror's landing chooser as the "full app" link.
+          VITE_MAIN_APP_URL: ${{ vars.LIVE_DEMO_URL }}
+          # Footer build stamp (matches the GCP commit-SHA pipeline).
+          VITE_COMMIT_SHA: ${{ github.sha }}
+        run: npm run build:cf-demo
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web-app/dist --project-name=${{ vars.CF_PAGES_PROJECT }} --branch=main

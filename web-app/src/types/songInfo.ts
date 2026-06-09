@@ -44,6 +44,12 @@ export interface TempoAnchor {
 
 export interface SongInfo {
   song: string;
+  /** Optional human-readable title shown in the UI. Absent → fall back to the
+   *  audio file name. The on-disk slug/file name is never affected. */
+  title?: string;
+  /** Optional artist; only used when `title` is also set, rendered as
+   *  "Artist — Title". Ignored when `title` is blank. */
+  artist?: string;
   bpm?: number;
   timeSignature: string;  // default '4/4'
   gridOffset: number;     // default 0
@@ -74,6 +80,17 @@ export const DEFAULT_GRID_MODE: GridMode = 'static';
 /** Anchors closer than this collapse into a single point. Matches the
  *  "tight millisecond threshold" used by the manual-drag insert logic. */
 export const ANCHOR_DEDUP_SEC = 0.020;  // 20 ms
+
+/** Display name derived purely from the editable title/artist fields, mirroring
+ *  the server's deriveDisplayName precedence (artist+title → "Artist — Title",
+ *  else title). Returns undefined when no title is set, signalling the caller
+ *  to fall back to the file-name-derived name. */
+export function songTitleDisplay(info: SongInfo | null | undefined): string | undefined {
+  const title = info?.title?.trim();
+  if (!title) return undefined;
+  const artist = info?.artist?.trim();
+  return artist ? `${artist} — ${title}` : title;
+}
 
 export function makeEmptySongInfo(slug: string): SongInfo {
   return {

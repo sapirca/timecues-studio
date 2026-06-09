@@ -1,15 +1,21 @@
 ---
-title: Video tutorials
-description: Screencast walkthroughs of every TimeCues workflow — annotation, comparison, auto-guess, custom detectors. Most are still stubs; videos rolling in over time.
+title: Tutorials
+description: Step-by-step written walkthroughs of every TimeCues workflow — annotation, beat-grid alignment, algorithm comparison, auto-guess, custom detectors, self-hosting — plus a complete reference for flags, settings, and Docker compose profiles. Video screencasts land over time.
 ---
 
-Short screencasts that walk through every TimeCues workflow. The list
-below is the planned curriculum — most are still stubs (red LED) and will
-flip to green as recordings land. **Every stub has a step-by-step textual
-guide further down this page** — you can follow it today, the screencast
-is just the friendly version of the same flow.
+Every TimeCues workflow has a **complete step-by-step written tutorial on
+this page** — you can follow any of them today. The cards below double as
+the planned *screencast* curriculum: each is still a stub (red LED) and
+flips to green as a recording lands, but the written guide it stands in
+for is already done. Scroll down, or jump from the page outline on the
+right.
 
-If there's one you'd like me to record first, [say so on the contact page](/contact/).
+There is also a full reference for every **flag, environment variable, and
+Docker compose profile** at the [bottom of this page](#flags-environment-variables--compose-profiles)
+— the "what do I actually type and which knobs exist" companion to the
+workflow guides.
+
+If there's a screencast you'd like recorded first, [say so on the contact page](/contact/).
 
 <div class="tutorial-grid">
 
@@ -102,12 +108,14 @@ on the [contact page](/contact/) and I'll bump it up.
 
 ---
 
-# Textual walkthroughs
+# Step-by-step tutorials
 
-The detailed step-by-step guide for every stub above. Skim the one that
-matches what you want to do — each section is self-contained and
-references the deep-dive part of the [user guide](/timecues/user-guide/)
-when the topic deserves more than a screencast can give.
+The detailed walkthrough for every card above, plus a
+[flags / settings / compose-profile reference](#flags-environment-variables--compose-profiles)
+at the end. Skim the one that matches what you want to do — each section
+is self-contained and references the deep-dive part of the
+[user guide](/timecues/user-guide/) when the topic deserves more than a
+screencast can give.
 
 > ⚠ **Set BPM and lock the grid in Dataprep before anything else.** Every
 > annotation snaps to the song's beat grid, and the Annotator Tool
@@ -139,6 +147,10 @@ grid, drop your first boundary, save.
    a label.
 7. **Auto-saves on every edit.** No save button. Refresh — the boundary
    is still there.
+
+> **What you need:** Nothing beyond `docker compose up` — or just open the
+> live demo, which needs no account and no install. No profile and no flags:
+> this is the core loop, on by default.
 
 ## Creating a new dataset
 
@@ -318,6 +330,17 @@ ground truth and see who wins, per song and across the corpus.
    the *Run all algorithms* button warms the cache for every detector ×
    every song, so the batch view loads instantly later.
 
+> **What you need:** The default `docker compose up` stack covers MSAF,
+> Ruptures, and the librosa / `mir` detectors — tick those with zero extra
+> setup. **All-In-One** stays greyed out ("Demucs profile needed") until the
+> stack is up with `--profile demucs-cpu` or `--profile demucs-gpu` (local
+> dev: `pip install -r tools/requirements-allin1.txt`). The experimental
+> detectors (BeatNet, Silero-VAD, PANNs, …) need **both** the
+> `--profile experimental-models` sidecars **and** their per-family toggle in
+> **Settings → Experimental annotation types & models** — every experimental
+> flag is **off by default**. Full map:
+> [Flags & compose profiles](#flags-environment-variables--compose-profiles).
+
 Deep dive: [Inspect Workspace](/timecues/user-guide/#inspect-workspace)
 and [Inspect All](/timecues/user-guide/#inspect-all).
 
@@ -350,8 +373,8 @@ agreement into a single candidate and asks you to confirm it.
 3. **Switch to the Annotator Tool → Boundaries → Auto-guess** tab.
 4. **Click *Generate AutoGuess*.** The server pulls every cached
    detector's output, clusters all the boundary times into groups
-   within a **cluster tolerance τ** (default 1.5 s, slider exposes
-   0.1 s – 5 s), and returns one candidate per cluster. Each candidate
+   within a **cluster tolerance τ** (default 3 s, slider exposes
+   0.5 s – 10 s), and returns one candidate per cluster. Each candidate
    carries:
    - a **timestamp** (the cluster centroid, weighted by detector
      confidence when available);
@@ -399,6 +422,14 @@ tolerance and agreement-threshold settings. Use it once on a small
 labeled subset, then apply the winning parameters to the rest of the
 corpus.
 
+> **What feeds the consensus:** Auto-guess clusters whatever detectors have
+> *cached output*, so the pool depends on what's running. The default stack's
+> detectors are always in; All-In-One joins only when a Demucs profile is up,
+> and the experimental families only when `--profile experimental-models` is
+> running **and** their flag is on (default off). More detectors → stronger
+> agreement, so warm the cache with *Run all algorithms* first. See
+> [Flags & compose profiles](#flags-environment-variables--compose-profiles).
+
 Deep dive: [Auto-Guess Internals](/timecues/user-guide/#auto-guess-internals)
 covers the full clustering algorithm, the per-detector confidence
 weighting, and the exact grid-search procedure.
@@ -425,6 +456,12 @@ for noisy-environment annotation when you can't play audio.
    reviewed independently; the Compare sub-tab shows them side by
    side. Eye usually nails the macro transitions and misses the
    smooth-but-audible ones.
+
+> **What you need:** Nothing extra — the spectrogram and SSM are computed in
+> the browser, so Eye mode works in the default stack with no profile or
+> install. The **SSM** row is **off by default**; switch it on per-song from
+> the **SIGNALS** menu, or make it default-on under **Settings → Annotation →
+> Default signals**.
 
 Deep dive: [Annotation Workspace → Eye mode](/timecues/user-guide/#annotation-workspace).
 
@@ -454,6 +491,14 @@ algorithm shows up as an overlay alongside every built-in detector.
    hash, so a tweaked script always produces a fresh run; reverting
    to a previous version transparently re-hits the cache.
 
+> **What you need:** Nothing extra — the `custom` sidecar (`:8005`) ships in
+> the default stack, so custom detectors run without any profile. Scripts are
+> read from `CUSTOM_SCRIPTS_DIR` (default `./tools/python/custom`); set it to a
+> persistent path in `.env` for production. The **Playground** tab is **hidden
+> in Demo Mode** — sign in to a claimed corpus to see it. Any Python package
+> your detector imports must be installed in the `custom` sidecar's
+> environment (rebuild its image, or `pip install` it on the `./run.sh` host).
+
 Deep dive: [Custom Detectors](/timecues/user-guide/#custom-detectors)
 documents the full Python contract, the parameter schema for the UI,
 and how cached results are stored.
@@ -482,6 +527,13 @@ you put them side by side and resolve disagreements.
    *View as* dropdown) and editing — or use the Team page's "Merge
    into Auto-guess" action to fold both annotators' boundaries into
    a shared Auto-guess layer that you can then review together.
+
+> **What you need:** Real sign-in. Demo Mode is single-user (everything lives
+> in `localStorage`), so it has no separate annotator namespaces. Google
+> sign-in works out of the box on localhost via the `VITE_GOOGLE_CLIENT_ID`
+> shipped in `docker-compose.yml`; on any other hostname set your own client
+> ID in `.env` and add the origin to its *Authorized JavaScript origins*. The
+> **Compare** sub-tab is **admin / researcher only**.
 
 Deep dive: [Sign-In & Identity](/timecues/user-guide/#sign-in--identity)
 and [Team Dashboard](/timecues/user-guide/#team-dashboard).
@@ -520,6 +572,12 @@ matches what you hear, and the song's BPM is set.
 6. **Filter which detectors appear** under
    [Settings → BPM Detection](/timecues/user-guide/#settings) — turn off
    detectors that are slow or that you don't trust on your corpus.
+
+> **What you need:** Nothing extra — the five server-side detectors all live
+> in the `bpm` sidecar (`:8004`), part of the default stack, and `client-wabd`
+> runs entirely in your browser. No profile, no model download. Every detector
+> is **enabled by default**; switch individual ones off under **Settings →
+> Research → BPM detection**.
 
 Deep dive: [Song Info Bar → BPM](/timecues/user-guide/#song-info-bar).
 
@@ -629,9 +687,14 @@ the song.
 - **Audio file has been re-encoded** and the start timestamp moved.
   Re-anchor; old `Grid Offset` values are stale.
 
+> **What you need:** Just the default stack — BPM detection (the `bpm`
+> sidecar, `:8004`) is always on, and all three Grid Modes (Static / Dynamic /
+> Manual) are core features with no flag to enable and nothing extra to
+> install.
+
 Deep dive:
-[Song Info Bar → BPM](/timecues/user-guide/#bpm-20300-step-001),
-[Grid Offset](/timecues/user-guide/#grid-offset-seconds--0-step-0001),
+[Song Info Bar → BPM](/timecues/user-guide/#bpm-the-songs-tempo),
+[Grid Offset](/timecues/user-guide/#grid-offset--where-bar-1-starts-in-seconds),
 [Grid Mode (Static / Dynamic / Manual)](/timecues/user-guide/#grid-mode-static-bpm--dynamic--manual-adjustment),
 [Manual mode is a two-layer system](/timecues/user-guide/#manual-mode-is-a-two-layer-system),
 and [Metronome Panel](/timecues/user-guide/#metronome-panel-dataset-prep).
@@ -648,12 +711,16 @@ everywhere a source picker is shown.
    aren't cached yet for this song, Algorithm Inspect / Annotator
    Tool will show a "Stems not extracted" hint and (for admins) a
    *Run Demucs* button.
-3. **Admin: click *Run Demucs*** to trigger the stems daemon (`:8006`
-   in the default docker-compose profile). Extraction takes roughly
-   1–3 minutes per song on CPU; if you have the GPU profile enabled
-   it's seconds. Progress is streamed to the browser console; a
-   failure raises a visible alert rather than silently swallowing
-   (fixed 2026-05-20).
+3. **Admin: click *Run Demucs*** to trigger the stems daemon on `:8006`.
+   The daemon is **not** in the default stack — it only exists when you
+   brought the stack up with a Demucs compose profile
+   (`--profile demucs-cpu` or `--profile demucs-gpu`; see
+   [Flags & compose profiles](#flags-environment-variables--compose-profiles)).
+   With no Demucs profile the **▶ Stem this song** button is hidden
+   entirely. Extraction takes roughly 3–5 minutes per song on the CPU
+   profile and ~30–60 s on the GPU profile. Progress is streamed to the
+   browser console; a failure raises a visible alert rather than silently
+   swallowing (fixed 2026-05-20).
 4. **Once stems exist**, switching between them in the Source picker
    is instant — the waveform redraws, the spectrogram re-renders, and
    every algorithm overlay re-evaluates against the chosen stem.
@@ -667,33 +734,181 @@ Demo Mode ships with pre-extracted stems for the three sample songs
 demo is instant and does not run Demucs.
 
 Deep dive: [Stems server](/timecues/user-guide/#dataset-prep)
-and [Storage clear scopes](/timecues/user-guide/#tri-mode-clear-dialog-clearscopedialogtsx).
+and [Storage clear scopes](/timecues/user-guide/#the-clear-storage-dialog--three-levels-of-cleanup).
 
 ## Self-hosting on your own server
 
-The Docker Compose stack runs anywhere Docker runs — a cloud VM, a
-homelab, or bare metal.
+The Docker Compose stack runs anywhere Docker (plus Compose v2) runs —
+a cloud VM, a homelab, or bare metal.
 
-1. **Clone the repo** on the host and copy `.env.example` to `.env`.
-   Fill in `VITE_GOOGLE_CLIENT_ID` if you want Google sign-in.
-2. **Bring up the stack** — `docker compose up --build` starts the web
-   app, BPM server (`:8004`), MIR server (`:8005`), and stems server
-   (`:8006`).
+1. **Clone the repo** on the host and copy `.env.example` to `.env`. The
+   defaults work for localhost as-is; the only flag you usually touch
+   here is `VITE_GOOGLE_CLIENT_ID` (point sign-in at your own OAuth
+   client) and, on a public host, `DATA_DIR` (a persistent disk, not the
+   OS root). Full list under
+   [Flags & compose profiles](#flags-environment-variables--compose-profiles).
+2. **Bring up the minimal stack** — `docker compose up --build` starts
+   the web app on `:5173` plus six lightweight analysis sidecars:
+   `mir-eval` (`:8001`), `msaf` (`:8002`), `ruptures` (`:8003`), `bpm`
+   (`:8004`), `custom` (`:8005`), and `mir` (`:8007`). Stem separation
+   and the experimental detectors are **opt-in profiles** — they do not
+   start here (see step 5).
 3. **Put an HTTPS reverse proxy in front** (Caddy, Traefik, or nginx +
    certbot) pointing at `web:5173`, so sign-in and the app work over
-   TLS on your public hostname.
+   TLS on your public hostname. Remember to add that hostname to your
+   OAuth client's *Authorized JavaScript origins*, or Google rejects the
+   sign-in iframe.
 4. **First sign-in claims admin.** Open the deployed URL, click
    *Start a new dataset*, sign in with Google. You're now the first
    admin; invite the rest of your team from the Team page.
-5. **Optional heavy profiles:** the GPU profile
-   (`COMPOSE_PROFILES=gpu-tools`) gives CUDA-accelerated Demucs /
-   allin1; the CPU profile (`cpu-tools`) is the slow-but-works-everywhere
-   fallback.
+5. **Optional heavy profiles (additive — combine freely):**
+   - `--profile demucs-cpu` — stem separation + All-In-One, works on any
+     host, ~3–5 min/song.
+   - `--profile demucs-gpu` — same features, CUDA-accelerated
+     (~30–60 s/song), needs an NVIDIA GPU and is amd64-only.
+   - `--profile experimental-models` — the eight Phase-1+ MIR detector
+     sidecars (BeatNet, Silero-VAD, Whisper, …).
+
+   e.g. `docker compose --profile demucs-cpu --profile experimental-models up -d --build`
+   matches the hosted instance.
 
 Deep dive: the full install matrix lives in
 [INSTALL.md](https://github.com/sapirca/timecues-studio/blob/main/INSTALL.md)
-— Docker on localhost, local dev without Docker, Apple Silicon, optional
-GPU / CPU / experimental-models profiles, and sign-in setup.
+— Docker on localhost, local dev without Docker, Apple Silicon, the
+optional `demucs-cpu` / `demucs-gpu` / `experimental-models` profiles, and
+sign-in setup.
+
+## Flags, environment variables & compose profiles
+
+The "what do I actually type, and which knobs exist" companion to the
+workflow guides above — every command-line flag, `.env` variable, compose
+profile, and in-app feature flag in one place. The canonical,
+always-current matrix lives in
+[INSTALL.md](https://github.com/sapirca/timecues-studio/blob/main/INSTALL.md);
+this is the quick version.
+
+### Run modes at a glance
+
+Pick a row — everything else is a knob layered on top. The two opt-in
+dimensions are **Demucs** (stems + All-In-One) and **Experimental models**
+(the extra MIR detectors); both are off by default so a first
+`docker compose up` stays lean.
+
+| Mode | Command | Demucs | Experimental | Disk (1st build) | Best for |
+|---|---|:---:|:---:|---|---|
+| Docker — minimal | `docker compose up --build` | ✘ | ✘ | ~1 GB | First evaluation; smallest footprint |
+| Docker — Demucs CPU | `docker compose --profile demucs-cpu up --build` | ✔ (slow) | ✘ | ~2 GB | Stems on any host, no GPU |
+| Docker — Demucs GPU | `docker compose --profile demucs-gpu up --build` | ✔ (fast) | ✘ | ~4 GB | Stemming a corpus on NVIDIA + Linux/WSL2 |
+| Docker — Experimental | `docker compose --profile experimental-models up --build` | ✘ | ✔ | ~7 GB | The new MIR detectors, no stems |
+| Docker — full | `docker compose --profile demucs-cpu --profile experimental-models up --build` | ✔ | ✔ | ~8 GB | Matches the hosted instance |
+| Local dev — lean | `./run.sh` | ✘ | ✘ | tiny (core deps only) | Hot-reload editing; basic annotation + eval |
+| Local dev — full | `./run_all.sh` | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete; ≡ `./run.sh --all` |
+
+### Compose profiles — the "compilation profiles"
+
+A compose **profile** decides which sidecar services get built and started.
+A plain `docker compose up` activates **none** of them; you opt in per
+`up` line. Profiles are **additive** — list as many as you want on one
+command and order doesn't matter.
+
+| Profile | Adds | Port(s) | Image cost | Requires |
+|---|---|---|---|---|
+| *(none — default)* | web + the six core analysis sidecars | 5173, 8001–8005, 8007 | ~1 GB | — |
+| `demucs-cpu` | stems daemon + All-In-One batch (multi-arch) | 8006 | ~1 GB extra | any host |
+| `demucs-gpu` | stems daemon + All-In-One batch (CUDA) | 8006 | ~3 GB extra | NVIDIA GPU + Container Toolkit; amd64 / Linux / WSL2 only |
+| `experimental-models` | eight Phase-1+ MIR detector sidecars | 8009–8016 | ~6 GB extra | — |
+
+- **Pick at most one `demucs-*` profile per host** — both expose the same
+  `stems` network alias, so the web app reaches whichever flavor is active
+  with no config change.
+- **Switching later is just a restart:** `docker compose down`, then a new
+  `up` line with a different profile set. Your audio / annotations / caches
+  under `data/` persist across every profile.
+- The default stack is enough for Manual / Eye / Auto-guess annotation,
+  MSAF, Ruptures, BPM, MIR features, and custom detectors. Demucs only adds
+  stems + All-In-One; experimental only adds the new detector families.
+
+### Service → port map
+
+Each Python sidecar speaks HTTP on its own port; the web container proxies
+`/api/*` to them. Handy when a port is already in use or you're launching a
+sidecar by hand.
+
+| Service | Port | Profile | What it runs |
+|---|---|---|---|
+| `web` | 5173 | always | React + Vite dev server; proxies `/api/*` |
+| `mir-eval` | 8001 | always | `mir_eval` precision / recall / F-measure scoring |
+| `msaf` | 8002 | always | MSAF structure-segmentation algorithms |
+| `ruptures` | 8003 | always | Change-point detection family |
+| `bpm` | 8004 | always | librosa + CPJKU-madmom BPM detectors |
+| `custom` | 8005 | always | Your uploaded custom detector scripts |
+| `mir` | 8007 | always | MIR features (librosa + optional Essentia) |
+| `stems` | 8006 | `demucs-cpu` / `demucs-gpu` | Demucs stems daemon + All-In-One batch |
+| `span` | 8009 | `experimental-models` | Silero-VAD + JDCNet voicing spans |
+| `beatnet` | 8010 | `experimental-models` | BeatNet beats / downbeats / meter |
+| `pitch` | 8011 | `experimental-models` | basic-pitch polyphonic notes |
+| `loop` | 8012 | `experimental-models` | chroma-autocorrelation loop finder |
+| `panns` | 8013 | `experimental-models` | PANNs CNN14 AudioSet tagging |
+| `cue-extras` | 8014 | `experimental-models` | librosa key / autochord / onsets |
+| `percussive` | 8015 | `experimental-models` | HPSS percussive spans |
+| `lyrics` | 8016 | `experimental-models` | Whisper-base vocal transcription |
+
+### `.env` flags
+
+Copy `.env.example` to `.env` and uncomment what you need. Every flag is
+optional — the shipped defaults boot a working localhost install.
+
+| Flag | Default | What it controls |
+|---|---|---|
+| `DATA_DIR` | `./data` | Host path where audio, annotations, and algorithm caches persist. Point it at a mounted disk for a server; an absolute path moves the whole corpus off the repo. |
+| `HOST_UID` / `HOST_GID` | `0` / `0` (root) | **Linux only.** Run containers as your host user so files written into `data/` aren't root-owned. Set to `id -u` / `id -g`. Docker Desktop (Mac/Win) handles this automatically. |
+| `VITE_GOOGLE_CLIENT_ID` | shipped demo client | Google OAuth client ID for sign-in. Override to point at your own client when serving on a domain other than localhost — and add that origin to the client's *Authorized JavaScript origins*. Public by design. |
+| `CUSTOM_SCRIPTS_DIR` | `./tools/python/custom` | Where the `custom` sidecar reads uploaded detector `.py` files from. Override to a persistent path in production. |
+| `VITE_COMMIT_SHA` | from `.git` | The build SHA shown in the landing-page footer. Resolved from the mounted `.git` in local dev; the prod build pipeline injects it explicitly. Leave unset locally. |
+| `HTTP_PROXY` / `HTTPS_PROXY` | — | Forwarded to `pip` during the image build if you're behind a corporate proxy. Build-time only. |
+
+### Local-dev (`./run.sh`) flags
+
+Only relevant on the no-Docker, hot-reload path. `./run.sh` is **lean** — it
+installs only the core deps (mir_eval / ruptures / librosa / sklearn /
+soundfile), then starts every sidecar before handing off to Vite. Use
+`./run_all.sh` (≡ `./run.sh --all`) to additionally install the heavy model
+families (torch, Demucs, All-In-One, the experimental sidecars, the py311
+venv) — ~3 GB of wheels on first run.
+
+| Flag | What it does |
+|---|---|
+| `--all` / `TIMECUES_FULL_INSTALL=1` | Switch to the full install profile (every model family). Same as running `./run_all.sh`. |
+| `--torch=cpu\|gpu\|none` | Which PyTorch build to install. Default: `none` in lean mode, `cpu` under `--all`. `--cpu` / `--gpu` / `--no-torch` are shorthands. |
+| `SKIP_MODEL_INSTALL=1` | Skip the heavy `pip install` even under `--all` (use your own venv / Conda). Core deps still install; sidecars boot but ones whose deps aren't importable report `available=false` and the UI reads **Deps missing**. |
+| `TIMECUES_PYTHON` | Absolute path to the interpreter Vite's capability probe should inspect. Set this to your venv's `python` if the UI insists Demucs is missing after a manual `pip install`. The launcher sets it for you when it does the install itself. |
+| `PYTHON` | Which interpreter the launcher uses for sidecars (defaults to `python`, then `python3`). |
+
+### In-app experimental flags
+
+Running the `experimental-models` profile only makes the sidecars
+*reachable* — each detector family stays hidden until you flip its flag in
+**Settings → Experimental annotation types & models**. The flag and the
+sidecar are linked: a family's toggle is **disabled** (with an install
+hint) until its sidecar is live, and the inspector surface **auto-hides**
+if the sidecar goes away — so you never see a detector you can't run.
+
+| Settings flag | Surfaces these detectors |
+|---|---|
+| `experimentalSpanFamily` | Silero-VAD, JDCNet, PANNs, HPSS percussive |
+| `experimentalCueExtras` | BeatNet, basic-pitch, librosa key, autochord, librosa onsets |
+| `experimentalLoopFamily` | chroma-autocorrelation loop finder |
+| `experimentalLyricsFamily` | Whisper-base transcription |
+
+Without the profile running, the matching `/api/<family>/*` calls return
+503 and the Initialize-models panel reads **Server off** — dimmed buttons,
+no broken state.
+
+Deep dive:
+[INSTALL.md](https://github.com/sapirca/timecues-studio/blob/main/INSTALL.md)
+for the canonical install matrix and per-feature pip recipes, and
+[Experimental models](/timecues/experimental/) for the per-detector
+reference (licences, weight sizes, output schemas).
 
 ## Settings — the complete tour
 
@@ -757,7 +972,7 @@ pill at those tiers.
 |---|---|
 | **Default algorithms** | Which algorithms are pre-ticked in Algorithm Inspect when a song opens. The order matters — the first ticked algorithm becomes the default reference in the diff readout. |
 | **BPM detection** | Per-detector enable toggles (`client-wabd`, `librosa-beat-track`, `librosa-tempo-static`, `librosa-tempo-dynamic`, `madmom-rnn-beats`, `madmom-tempo`). Disabled detectors don't appear in the chip row. Useful for turning off detectors you don't trust on your corpus. |
-| **Auto-guess defaults** | Default cluster tolerance τ in seconds (default 1.5), default minimum agreement count (default 3), default source-detector subset (which of the 30+ detectors feed into Auto-guess by default). |
+| **Auto-guess defaults** | Default cluster tolerance τ in seconds (default 3), default minimum agreement count (default 1), default source-detector subset (which of the 30+ detectors feed into Auto-guess by default). |
 | **Optional GPU tooling** | When the GPU profile is enabled at compose time, toggles here let you opt specific algorithms (allin1, demucs) into GPU acceleration. No effect when the profile is off. |
 
 #### 🛡 Corpus management  *(amber)*

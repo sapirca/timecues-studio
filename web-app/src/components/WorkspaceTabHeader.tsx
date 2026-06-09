@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAdmin } from '../hooks/useAdmin';
 import { useDemo } from '../context/DemoContext';
+import { useSettings } from '../context/SettingsContext';
 import { AnnotatorBadge } from './AnnotatorBadge';
 import { loadDatasetConfig } from '../services/datasetConfig';
 import { requestPausePlayback } from '../utils/playerEvents';
 
-export type WorkspaceTab = 'prep' | 'annotate' | 'inspect' | 'playground' | 'team';
+export type WorkspaceTab = 'prep' | 'annotate' | 'inspect' | 'playground' | 'team' | 'setlist';
 
 /** Path → tab mapping. Used when the header isn't given an explicit `active`
  *  prop (the App-level mount derives it from pathname so the same component
@@ -16,10 +17,11 @@ function tabForPath(pathname: string): WorkspaceTab {
   if (pathname === '/inspect') return 'inspect';
   if (pathname === '/custom') return 'playground';
   if (pathname === '/team') return 'team';
+  if (pathname === '/setlist') return 'setlist';
   return 'annotate';
 }
 
-const WORKSPACE_PATHS = new Set(['/prep', '/annotate', '/inspect', '/custom', '/team']);
+const WORKSPACE_PATHS = new Set(['/prep', '/annotate', '/inspect', '/custom', '/team', '/setlist']);
 export function isWorkspacePath(pathname: string): boolean {
   return WORKSPACE_PATHS.has(pathname);
 }
@@ -37,6 +39,7 @@ const TABS: TabDef[] = [
   { id: 'annotate',   label: 'Annotator Tool',   path: '/annotate', accent: 'cyan'    },
   { id: 'inspect',    label: 'Algorithm Inspect', path: '/inspect', accent: 'violet'  },
   { id: 'playground', label: 'Playground',       path: '/custom',   accent: 'amber'   },
+  { id: 'setlist',    label: 'Setlist',          path: '/setlist',  accent: 'rose'    },
   { id: 'team',       label: 'Team',             path: '/team',     accent: 'rose', adminOnly: false },
 ];
 
@@ -59,6 +62,7 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
   const { pathname } = useLocation();
   const { status } = useAdmin();
   const { isDemo, requestExitDemo } = useDemo();
+  const { settings } = useSettings();
   const resolvedActive: WorkspaceTab = active ?? tabForPath(pathname);
   const canSeeTeam = status?.tier === 'admin' || status?.tier === 'researcher';
 
@@ -100,11 +104,12 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
   const visibleTabs = TABS.filter((t) => {
     if (t.id === 'team') return canSeeTeam && !isDemo;
     if (t.id === 'playground') return !isDemo;
+    if (t.id === 'setlist') return settings.experimentalSetlist && !isDemo;
     return true;
   });
 
   return (
-    <div className="relative z-30 flex items-center gap-3 px-3 py-2 rounded-md border border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+    <div className="relative z-30 w-full flex items-center gap-3 px-3 py-2 rounded-md border border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
       {/* Left group: back + studio mark + demo chip. flex-1 so the centered
           nav between this and the right group sits in the true visual middle. */}
       <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -122,14 +127,14 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
             navigate('/');
           }}
           title="Back to home"
-          className="text-[11px] font-semibold tracking-[0.18em] uppercase text-slate-100 shrink-0 hover:text-violet-200 transition-colors"
+          className="text-[13px] font-semibold tracking-[0.18em] uppercase text-slate-100 shrink-0 hover:text-violet-200 transition-colors"
         >
           TimeCues <span className="text-slate-500 font-normal">/ Studio</span>
         </button>
         {corpusName && !isDemo && (
           <span
             title="Corpus name"
-            className="shrink-0 text-[10px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-400/30 truncate max-w-[200px]"
+            className="shrink-0 text-[11px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-400/30 truncate max-w-[200px]"
           >
             {corpusName}
           </span>
@@ -154,7 +159,7 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
               key={t.id}
               type="button"
               onClick={() => handleClick(t)}
-              className={`px-4 py-2 rounded text-[11px] uppercase tracking-wider font-medium transition-colors border whitespace-nowrap leading-none ${
+              className={`px-4 py-2 rounded text-[13px] uppercase tracking-wider font-medium transition-colors border whitespace-nowrap leading-none ${
                 isActive
                   ? `bg-white/[0.04] ${activeClasses}`
                   : 'border-white/[0.06] text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] hover:border-white/[0.12]'

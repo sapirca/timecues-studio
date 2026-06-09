@@ -19,20 +19,39 @@
 # Linux-built deps even when the host's web-app/ overlays it.
 FROM node:20-slim
 
-ENV NODE_ENV=development \
-    CHOKIDAR_USEPOLLING=true \
-    CI=true
+# Client-visible env baked into the bundle at build time. With `vite build`
+# (this image) — unlike the dev server — `import.meta.env.VITE_*` is frozen at
+# build time, so these must arrive as build args, not runtime env. A deploy
+# pipeline should pass VITE_COMMIT_SHA as a build arg. The default client ID is
+# the public OAuth ID (security is enforced via the OAuth app's Authorized
+# JavaScript origins, not by hiding it), so a vanilla build still has working
+# Google sign-in.
+ARG VITE_COMMIT_SHA=""
+ARG VITE_GOOGLE_CLIENT_ID=92459674081-9lq6nitf72ptj0sg8sn05vp3g8nus4ph.apps.googleusercontent.com
+ENV VITE_COMMIT_SHA=$VITE_COMMIT_SHA \
+    VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 
 WORKDIR /app/web-app
 
 # Install deps in their own layer so changes to source don't bust the cache.
+# devDependencies are kept (NODE_ENV is not set to production): `vite` is a
+# devDependency and is required at runtime to run `vite preview`.
 COPY web-app/package.json web-app/package-lock.json ./
 RUN npm ci
 
-# Bake the source so `docker run` works even without the bind mount.
-# Compose mounts ./web-app over this path for hot reload — node_modules is
-# protected by an anonymous volume declared in docker-compose.yml.
+# Bake the source, then build the production bundle. The container serves this
+# prebuilt bundle via `vite preview` (static files, no HMR / no file-watching /
+# no module-graph retention) so the long-running prod web process has bounded,
+# stable memory — this is the root-cause fix for the host-wide OOM. Local dev
+# overrides CMD back to `npm run dev` in docker-compose.yml for hot reload.
+#
+# `vite build` (transpile-only via esbuild/Rollup), NOT `npm run build` — the
+# latter runs `tsc -b` first, and type-checking is a separate CI concern that
+# must not gate the production image. The dev server this replaces never
+# type-checked either, so the emitted bundle is semantically identical; we just
+# pre-bundle and serve it statically instead of holding a live module graph.
 COPY web-app/ ./
+RUN npx vite build
 
 # Ship the read-only default dataset (CC0 audio + song-info). Lives at
 # /app/data-default and is not overlaid by any bind mount, so the web app's
@@ -41,4 +60,6 @@ COPY web-app/ ./
 COPY data-default/ /app/data-default/
 
 EXPOSE 5173
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+# Production: serve the built bundle. Stays on :5173 so caddy's
+# `reverse_proxy web:5173` is unchanged.
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]

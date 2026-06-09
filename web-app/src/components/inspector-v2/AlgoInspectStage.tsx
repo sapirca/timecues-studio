@@ -52,6 +52,7 @@ const ALGO_LABELS: Record<string, string> = {
   'librosa-onsets':            'librosa onsets',
   'hpss-percussive':           'HPSS percussive',
   'whisper-base':              'Whisper-base lyrics',
+  'locomotif':                 'LoCoMotif',
 };
 
 /** SPAN-family algo IDs. Exported so consumers (the run-options sidebar in
@@ -81,6 +82,10 @@ export type PercussiveAlgoId = typeof PERCUSSIVE_ALGO_IDS[number];
 export const LYRICS_ALGO_IDS = ['whisper-base'] as const;
 export type LyricsAlgoId = typeof LYRICS_ALGO_IDS[number];
 
+/** PATTERN-family detector IDs — gated by `experimentalPatternFamily`. */
+export const PATTERN_ALGO_IDS = ['locomotif'] as const;
+export type PatternAlgoId = typeof PATTERN_ALGO_IDS[number];
+
 const ALGO_ORDER = [
   'band-gradient',
   'ruptures-pelt-default', 'ruptures-binseg-default', 'ruptures-window-default',
@@ -93,6 +98,7 @@ const ALGO_ORDER = [
   ...CUE_EXTRAS_ALGO_IDS,
   ...PERCUSSIVE_ALGO_IDS,
   ...LYRICS_ALGO_IDS,
+  ...PATTERN_ALGO_IDS,
 ];
 
 function algoLabel(id: string): string {
@@ -135,6 +141,7 @@ export function buildAnnotationRows(toolStates: Record<string, ToolState>): Algo
     else if (r.toolId === 'librosa-key' || r.toolId === 'autochord-chords' || r.toolId === 'librosa-onsets') sections = r.result.sections;
     else if (r.toolId === 'hpss-percussive') sections = r.result.sections;
     else if (r.toolId === 'whisper-base') sections = r.result.sections;
+    else if (r.toolId === 'locomotif') sections = r.result.sections;
     if (!sections.length) return [];
     return [{ id, label: algoLabel(id), sections }];
   });

@@ -9,46 +9,16 @@
 # Bundles:
 #   - Silero-VAD via torch.hub (~2 MB, MIT, downloaded on first detect)
 #   - JDCNet voicing (skeleton — weights wiring still pending repo verification)
-FROM python:3.11-slim
+#
+# Inherits Python 3.11 + CPU torch 2.1.0 + librosa + numpy<2 from
+# experimental-torch-base; build that first via
+# `docker compose --profile experimental-base build experimental-torch-base`.
+ARG BASE_REPO=timecues
+FROM ${BASE_REPO}/experimental-torch-base:latest
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HOST=0.0.0.0 \
-    HF_HOME=/app/.cache/huggingface \
-    TORCH_HOME=/app/.cache/torch
-
-# ffmpeg/libsndfile for librosa-backed audio decode; git so torch.hub can
-# pull the silero-vad repo on first use.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libsndfile1 \
-        libsamplerate0 \
-        build-essential \
-        git \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Pin numpy<2 — torch 2.1.0 was compiled against numpy 1.x and segfaults
-# under numpy 2.x. Mirror the gpu-tools.Dockerfile pin so the two stay aligned.
-RUN pip install --no-cache-dir "numpy<2,>=1.24.0"
-
-# CPU-only torch wheels keep the image slim (~600 MB vs ~3 GB for the CUDA
-# base). Silero-VAD is CPU-friendly; if we later need GPU we can introduce
-# a span-gpu variant the same way gpu-tools/cpu-tools fork from one Dockerfile.
-RUN pip install --no-cache-dir \
-        torch==2.1.0 torchaudio==2.1.0 \
-        --index-url https://download.pytorch.org/whl/cpu
-
-RUN pip install --no-cache-dir \
-        "scipy>=1.10.0" \
-        "soundfile>=0.12.0" \
-        "audioread>=3.0.0" \
-        "librosa>=0.10.0" \
-        "h5py>=3.10.0"
+# h5py for the JDCNet checkpoint loader (Kum & Nam Keras .hdf5 read via h5py
+# inside jdcnet_torch.py — no TensorFlow runtime needed inside the sidecar).
+RUN pip install --no-cache-dir "h5py>=3.10.0"
 
 # Pre-fetch Silero-VAD weights at build time so the first detect call doesn't
 # pay a 2-5 second network round trip. The weights are ~2 MB so this barely
@@ -60,9 +30,8 @@ RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad',
 
 # JDCNet weights from the original Kum & Nam (2019) Keras checkpoint at
 # https://github.com/keums/melodyExtraction_JDC (MIT). We load them via
-# h5py in jdcnet_torch.py — no TensorFlow runtime needed inside the sidecar.
-# Bundled at build time so the model is ready on first detect; ~17 MB hdf5
-# + two 124 KB normalization stats.
+# h5py in jdcnet_torch.py. Bundled at build time so the model is ready on
+# first detect; ~17 MB hdf5 + two 124 KB normalization stats.
 RUN mkdir -p /app/weights/jdcnet \
     && curl -fSL -o "/app/weights/jdcnet/ResNet_joint_add_L(CE_G).hdf5" \
         "https://raw.githubusercontent.com/keums/melodyExtraction_JDC/master/weights/ResNet_joint_add_L(CE_G).hdf5" \
@@ -71,13 +40,13 @@ RUN mkdir -p /app/weights/jdcnet \
     && curl -fSL -o /app/weights/jdcnet/x_data_std_total_31.npy \
         https://raw.githubusercontent.com/keums/melodyExtraction_JDC/master/x_data_std_total_31.npy
 
-COPY tools/python/paths.py       /app/tools/python/paths.py
+COPY tools/python/paths.py        /app/tools/python/paths.py
 COPY tools/python/jdcnet_torch.py /app/tools/python/jdcnet_torch.py
-COPY tools/python/span_server.py /app/tools/python/span_server.py
+COPY tools/python/span_server.py  /app/tools/python/span_server.py
 
 # Read-only seed dataset so the SPAN server can detect on the shipped default
 # tracks even when the user's data/ is empty.
-COPY data-default/               /app/data-default/
+COPY data-default/                /app/data-default/
 
 EXPOSE 8009
 CMD ["python", "tools/python/span_server.py"]

@@ -1,5 +1,13 @@
 # Data Layout
 
+This page is for anyone who wants to work with TimeCues' files directly — to
+back them up, script against them, or move a corpus between installs. (If you
+just want to *use* the app, you never need to touch any of this.) The short
+story: everything you create is plain JSON and audio files on disk, grouped
+into a couple of predictable folders, and each song is keyed by its **slug**
+(its lowercased filename). The details below map out exactly where each kind
+of file lives and which ones are precious versus rebuildable.
+
 The app reads from **two parallel trees** rooted at the repo:
 
 ```

@@ -45,13 +45,30 @@ export function useLoopPlayback({ audioBuffer }: UseLoopPlaybackArgs): UseLoopPl
 
   // Lazily construct the AudioContext on first play so we don't hold an
   // active audio device for users who never trigger a loop.
-  const ensureCtx = useCallback((): AudioContext | null => {
-    if (ctxRef.current) return ctxRef.current;
+  //
+  // We pin the context's sample rate to the AudioBuffer's own rate. WaveSurfer
+  // decodes at the file's native rate (commonly 44.1 kHz); a default context
+  // runs at the hardware rate (commonly 48 kHz). Playing the buffer through a
+  // mismatched-rate context forces an in-graph resample — often cheap linear
+  // interpolation — which dulls the audio and is audibly lower quality than
+  // the main WaveSurfer player. Matching rates removes that resample so the
+  // loop preview sounds identical to the original player. If the rate changes
+  // (e.g. a different song), we close and rebuild the context.
+  const ensureCtx = useCallback((sampleRate: number): AudioContext | null => {
+    const existing = ctxRef.current;
+    if (existing && existing.sampleRate === sampleRate) return existing;
+    if (existing) { try { void existing.close(); } catch { /* already closed */ } }
     const Ctor: typeof AudioContext | undefined =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return null;
-    ctxRef.current = new Ctor();
+    try {
+      ctxRef.current = new Ctor({ sampleRate });
+    } catch {
+      // Some browsers reject an explicit sampleRate they can't honor; fall
+      // back to a default context rather than failing to play at all.
+      ctxRef.current = new Ctor();
+    }
     return ctxRef.current;
   }, []);
 
@@ -77,7 +94,7 @@ export function useLoopPlayback({ audioBuffer }: UseLoopPlaybackArgs): UseLoopPl
     opts: { snapZeroCross?: boolean } = {},
   ) => {
     if (!audioBuffer) return;
-    const ctx = ensureCtx();
+    const ctx = ensureCtx(audioBuffer.sampleRate);
     if (!ctx) return;
     // Resume in case the context was suspended by a prior interaction policy.
     if (ctx.state === 'suspended') { void ctx.resume(); }

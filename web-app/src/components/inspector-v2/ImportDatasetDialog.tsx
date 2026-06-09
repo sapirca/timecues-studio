@@ -48,7 +48,7 @@ function defaultSelection(song: ScannedSong): SongSelection {
     manual:    !!song.annotations.manual,
     eye:       !!song.annotations.eye,
     autoGuess: !!song.annotations['auto-guess'],
-    layers:    !!song.annotations.layers,
+    layers:    !!song.annotations.layers || song.layerFiles.length > 0,
     stems:     Object.keys(song.stems).length > 0,
   };
 }
@@ -358,7 +358,7 @@ function PickStage(props: {
   return (
     <div className="space-y-4">
       <p className="text-[12px] text-slate-300 leading-relaxed">
-        Pick a dataset folder to import. The scanner accepts both layouts:
+        Pick a dataset folder to import. The scanner accepts three layouts:
       </p>
       <ul className="text-[11px] text-slate-400 leading-relaxed space-y-1 pl-4 list-disc">
         <li>
@@ -368,6 +368,13 @@ function PickStage(props: {
           <code className="text-slate-300">song-info/&lt;slug&gt;.json</code>,{' '}
           <code className="text-slate-300">annotations/&#123;manual,eye,auto-guess,layers&#125;/&lt;annotator&gt;/&lt;slug&gt;.json</code>,{' '}
           <code className="text-slate-300">stems/&lt;slug&gt;/&#123;drums,bass,other,vocals&#125;.wav</code>).
+        </li>
+        <li>
+          <span className="text-emerald-300">Export bundle</span> — a ZIP from this app's <span className="text-slate-300">Export</span> button, unzipped: one folder per song with
+          {' '}<code className="text-slate-300">&lt;slug&gt;/boundaries/&#123;manual,eye,auto-guess&#125;/&lt;slug&gt;.json</code>,{' '}
+          <code className="text-slate-300">&lt;slug&gt;/&#123;cues,spans,loops,patterns&#125;/&lt;layer&gt;.json</code>,{' '}
+          <code className="text-slate-300">&lt;slug&gt;/song-info.json</code>, and <code className="text-slate-300">&lt;slug&gt;/audio.&lt;ext&gt;</code>.
+          {' '}(Only JSON round-trips — Audacity / CSV / JAMS / MIDI exports are skipped.)
         </li>
         <li>
           <span className="text-emerald-300">Flat bundle</span> — audio files with sibling sidecars: <code className="text-slate-300">track.mp3</code> + <code className="text-slate-300">track.info.json</code> + <code className="text-slate-300">track.layers.json</code>, etc.
@@ -601,7 +608,7 @@ function stepHasLocal(song: ScannedSong, step: StepKey): boolean {
     case 'manual':   return !!song.annotations.manual;
     case 'eye':      return !!song.annotations.eye;
     case 'autoGuess': return !!song.annotations['auto-guess'];
-    case 'layers':   return !!song.annotations.layers;
+    case 'layers':   return !!song.annotations.layers || song.layerFiles.length > 0;
     case 'stems':    return Object.keys(song.stems).length > 0;
   }
 }

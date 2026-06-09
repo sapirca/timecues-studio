@@ -1,0 +1,144 @@
+{
+  "algorithm": "ruptures-pelt-ar",
+  "algoName": "PELT \u00b7 ar",
+  "search": "Pelt",
+  "model": "ar",
+  "suffix": "pelt-ar",
+  "paperSection": "\u00a75.1.2",
+  "methodType": "exact",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 5.294,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.4247,
+      "centroid": 0.4264
+    },
+    {
+      "time": 5.294,
+      "endTime": 8.104,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.4958,
+      "centroid": 0.3303
+    },
+    {
+      "time": 8.104,
+      "endTime": 10.82,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.6043,
+      "centroid": 0.4469
+    },
+    {
+      "time": 10.82,
+      "endTime": 13.607,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.6498,
+      "centroid": 0.4811
+    },
+    {
+      "time": 13.607,
+      "endTime": 30.047,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6939,
+      "centroid": 0.3103
+    },
+    {
+      "time": 30.047,
+      "endTime": 37.965,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7197,
+      "centroid": 0.4237
+    },
+    {
+      "time": 37.965,
+      "endTime": 41.355,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.5859,
+      "centroid": 1.0
+    },
+    {
+      "time": 41.355,
+      "endTime": 48.715,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8557,
+      "centroid": 0.7397
+    },
+    {
+      "time": 48.715,
+      "endTime": 84.381,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7343,
+      "centroid": 0.6293
+    },
+    {
+      "time": 84.381,
+      "endTime": 102.47,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6924,
+      "centroid": 0.3002
+    },
+    {
+      "time": 102.47,
+      "endTime": 105.302,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.5432,
+      "centroid": 0.4466
+    },
+    {
+      "time": 105.302,
+      "endTime": 108.716,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.5212
+    },
+    {
+      "time": 108.716,
+      "endTime": 180.071,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7624,
+      "centroid": 0.6239
+    },
+    {
+      "time": 180.071,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0594,
+      "centroid": 0.3713
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    5.294,
+    8.104,
+    10.82,
+    13.607,
+    30.047,
+    37.965,
+    41.355,
+    48.715,
+    84.381,
+    102.47,
+    105.302,
+    108.716,
+    180.071,
+    192.409
+  ],
+  "computedAt": 1780119123,
+  "elapsedSec": 4.64
+}

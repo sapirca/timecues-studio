@@ -1,0 +1,99 @@
+{
+  "algorithm": "ruptures-dynp-l1",
+  "algoName": "Dynp \u00b7 l1",
+  "search": "Dynp",
+  "model": "l1",
+  "suffix": "dynp-l1",
+  "paperSection": "\u00a75.1.1",
+  "methodType": "exact",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 9.845,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.5846,
+      "centroid": 0.4811
+    },
+    {
+      "time": 9.845,
+      "endTime": 19.621,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.2342
+    },
+    {
+      "time": 19.621,
+      "endTime": 22.57,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.843,
+      "centroid": 0.7856
+    },
+    {
+      "time": 22.57,
+      "endTime": 32.345,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6255,
+      "centroid": 1.0
+    },
+    {
+      "time": 32.345,
+      "endTime": 94.273,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9836,
+      "centroid": 0.7106
+    },
+    {
+      "time": 94.273,
+      "endTime": 104.072,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.5519,
+      "centroid": 0.9891
+    },
+    {
+      "time": 104.072,
+      "endTime": 146.518,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9799,
+      "centroid": 0.7244
+    },
+    {
+      "time": 146.518,
+      "endTime": 163.074,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.2699,
+      "centroid": 0.9039
+    },
+    {
+      "time": 163.074,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0322,
+      "centroid": 0.8889
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    9.845,
+    19.621,
+    22.57,
+    32.345,
+    94.273,
+    104.072,
+    146.518,
+    163.074,
+    169.465
+  ],
+  "computedAt": 1780119190,
+  "elapsedSec": 3.1
+}

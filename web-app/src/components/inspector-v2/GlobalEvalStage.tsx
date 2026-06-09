@@ -13,6 +13,7 @@ import { CustomEvalControls, DEFAULT_CUSTOM_EVAL_SETTINGS, type CustomEvalSettin
 import { EvalReferenceDropdown, type EvalReferenceMode } from './EvalReferenceDropdown';
 import { GlobalEvalSpanTable } from './GlobalEvalSpanTable';
 import { GlobalEvalLoopTable } from './GlobalEvalLoopTable';
+import { GlobalEvalPatternTable } from './GlobalEvalPatternTable';
 import type { ToolResultData, AllIn1Result } from '../../tools/runTool';
 import type { AutoGuessCentroidMethod, ManualSection } from '../../types/manualAnnotation';
 
@@ -2398,6 +2399,10 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
       {settings.experimentalLoopFamily && (
         <GlobalEvalLoopTable audioFiles={audioFiles} />
+      )}
+
+      {settings.experimentalPatternFamily && (
+        <GlobalEvalPatternTable audioFiles={audioFiles} />
       )}
 
       <p className="text-[10px] text-gray-700 leading-relaxed">

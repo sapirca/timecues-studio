@@ -27,6 +27,7 @@ import { snapToBar, snapToBeat, type BarGrid } from '../../utils/barSnap';
 import type { PendingSelection } from './AnnotationOverlays';
 import { useSettings } from '../../context/SettingsContext';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { LoopItemCard } from './LoopItemCard';
 import { AddItemAtEndCard } from './ItemCard';
 import { LayerModePicker } from './LayerModePicker';
@@ -422,6 +423,7 @@ function LoopEditorPanelInner(
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: getLayerStatus(doc, 'loops'),
       hasItems: totalCount > 0,
       saveStatus,

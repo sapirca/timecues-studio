@@ -54,6 +54,7 @@ import {
   loopItemsToExportSections,
   gridToExportSections,
 } from '../../utils/exportSerializers';
+import type { ExportSection, JamsLayerKind, GridExportGranularity } from '../../utils/exportSerializers';
 import { loadSongInfo } from '../../services/songInfo';
 import type { SongInfo } from '../../types/songInfo';
 import { loadAllAnnotatorLayers, loadLayers } from '../../services/annotationLayers';
@@ -271,13 +272,17 @@ function formatBytes(bytes: number): string {
 
 // ─── Per-format serialization (any layer → string) ───────────────────────────
 
-function serializeManual(
-  ann: ManualAnnotation,
-  format: Format,
-  ctx: { slug: string; layer: ManualLayer; annotatorId: string | null; bpm?: number },
+/** The single place that maps already-flattened ExportSections to a flat
+ *  marker format. Every layer serializer + the grid-labels sidecar route
+ *  through here, so a format's quirks (column order, precision, JAMS metadata)
+ *  live in exactly one spot and can't drift between callers. JSON is excluded
+ *  because each layer emits its own native document shape — callers handle it
+ *  before reaching this. */
+function sectionsToMarkerFormat(
+  sections: ExportSection[],
+  format: Exclude<Format, 'json'>,
+  ctx: { slug: string; jamsLayer: JamsLayerKind; annotatorId: string | null; bpm?: number },
 ): string | Uint8Array {
-  if (format === 'json') return JSON.stringify(ann, null, 2);
-  const sections = manualToExportSections(ann);
   if (format === 'audacity') return convertToAudacity(sections);
   if (format === 'sonicVis') return convertToSonicVisualiser(sections);
   if (format === 'mirEval') return convertToMirEval(sections);
@@ -285,8 +290,22 @@ function serializeManual(
   if (format === 'reaper') return convertToReaper(sections);
   return convertToJams(sections, {
     slug: ctx.slug,
-    layer: JAMS_LAYER_KIND[ctx.layer],
+    layer: ctx.jamsLayer,
     annotatorId: ctx.annotatorId,
+  });
+}
+
+function serializeManual(
+  ann: ManualAnnotation,
+  format: Format,
+  ctx: { slug: string; layer: ManualLayer; annotatorId: string | null; bpm?: number },
+): string | Uint8Array {
+  if (format === 'json') return JSON.stringify(ann, null, 2);
+  return sectionsToMarkerFormat(manualToExportSections(ann), format, {
+    slug: ctx.slug,
+    jamsLayer: JAMS_LAYER_KIND[ctx.layer],
+    annotatorId: ctx.annotatorId,
+    bpm: ctx.bpm,
   });
 }
 
@@ -315,17 +334,13 @@ function serializeUserLayer(
   else if (layer.type === 'spans') sections = spanItemsToExportSections(layer.items as SpanItem[]);
   else if (layer.type === 'loops') sections = loopItemsToExportSections(layer.items as LoopItem[]);
   else return null;
-  if (format === 'audacity') return convertToAudacity(sections);
-  if (format === 'sonicVis') return convertToSonicVisualiser(sections);
-  if (format === 'mirEval') return convertToMirEval(sections);
-  if (format === 'midi') return convertToMidiMarkers(sections, { bpm: ctx.bpm });
-  if (format === 'reaper') return convertToReaper(sections);
-  return convertToJams(sections, {
+  return sectionsToMarkerFormat(sections, format, {
     slug: ctx.slug,
     // JAMS namespace is open-vocab segment_open; reusing the manual kind keeps
     // downstream tooling happy. The layer name is in the file path.
-    layer: 'manual',
+    jamsLayer: 'manual',
     annotatorId: ctx.annotatorId,
+    bpm: ctx.bpm,
   });
 }
 
@@ -346,16 +361,11 @@ function serializeAutoGuess(
   ctx: { slug: string; annotatorId: string | null; bpm?: number },
 ): string | Uint8Array {
   if (format === 'json') return JSON.stringify(ann, null, 2);
-  const sections = autoGuessAcceptedToExportSections(ann);
-  if (format === 'audacity') return convertToAudacity(sections);
-  if (format === 'sonicVis') return convertToSonicVisualiser(sections);
-  if (format === 'mirEval') return convertToMirEval(sections);
-  if (format === 'midi') return convertToMidiMarkers(sections, { bpm: ctx.bpm });
-  if (format === 'reaper') return convertToReaper(sections);
-  return convertToJams(sections, {
+  return sectionsToMarkerFormat(autoGuessAcceptedToExportSections(ann), format, {
     slug: ctx.slug,
-    layer: 'auto-guess',
+    jamsLayer: 'auto-guess',
     annotatorId: ctx.annotatorId,
+    bpm: ctx.bpm,
   });
 }
 
@@ -415,6 +425,10 @@ export function ExportManagerModal({
   // Defaults to true because annotations are timing-meaningless without the
   // grid that produced them.
   const [includeSongInfo, setIncludeSongInfo] = useState(true);
+  // Resolution of the grid-labels sidecar (one marker per bar / beat / sub-beat
+  // / phrase). 'off' suppresses the sidecar entirely; 'beats' matches the
+  // historic one-label-per-beat behaviour and is the default.
+  const [gridGranularity, setGridGranularity] = useState<GridExportGranularity | 'off'>('beats');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
@@ -673,13 +687,14 @@ export function ExportManagerModal({
       }
 
       // MIDI export wants per-song BPM (from song-info) so DAW bar-grid
-      // positions match the annotator's grid. Audacity export also needs it
-      // for the grid-labels sidecar (one label per beat across the song).
-      // Pre-fetch song-info up-front whenever the user opted into the bundle
-      // or any format needs it.
+      // positions match the annotator's grid. The grid-labels sidecar (one
+      // label per beat across the song) is now emitted for every selected
+      // format, so song-info — which carries the BPM / time-signature /
+      // tempo-anchors the grid is expanded from — is needed whenever any
+      // format is selected. Pre-fetch it up-front.
       const songInfoMap: Record<string, SongInfo> = {};
       const songInfoFailures: string[] = [];
-      if (includeSongInfo || selectedFormats.has('midi') || selectedFormats.has('audacity')) {
+      if (includeSongInfo || selectedFormats.size > 0) {
         await Promise.all(slugs.map(async (slug) => {
           try {
             songInfoMap[slug] = await loadSongInfo(slug);
@@ -791,14 +806,22 @@ export function ExportManagerModal({
         }
       }
 
-      // Audacity grid-labels sidecar — one label per beat (bar.beat) across
-      // the song. Active grid mode (static / dynamic / manual) is resolved
-      // by gridToExportSections via visibleGridLines, so anchors and per-
-      // beat overrides are honored without branching here. Duration is
-      // probed from the audio URL using HTMLAudioElement metadata; skipped
-      // silently for songs with no URL, no BPM, or a failed probe.
+      // Grid-labels sidecar — one marker per bar / beat / sub-beat / phrase
+      // (user-chosen via gridGranularity) across the song, emitted as an
+      // individual labels file once per selected format (not just Audacity).
+      // The grid is expanded once per song via gridToExportSections — active
+      // grid mode (static / dynamic / manual) is resolved through
+      // visibleGridLines, so anchors and per-beat overrides are honored without
+      // branching here — then each format serializes through the same shared
+      // path the layers use (sectionsToMarkerFormat / the cue-list JSON shape),
+      // so there's a single source of truth per format. JSON ships the expanded
+      // grid as a re-importable cue list, complementing (not replacing) the
+      // grid params in song-info.json. Duration is probed from the audio URL
+      // using HTMLAudioElement metadata; skipped silently for songs with no
+      // URL, no BPM, or a failed probe. 'off' suppresses the sidecar entirely.
       const gridFailures: string[] = [];
-      if (selectedFormats.has('audacity')) {
+      const gridFormats = [...selectedFormats];
+      if (gridGranularity !== 'off' && gridFormats.length > 0) {
         const songsById = new Map(allSongs.map((s) => [s.id, s] as const));
         if (currentSong) songsById.set(currentSong.id, currentSong);
         await Promise.all(slugs.map(async (slug) => {
@@ -808,12 +831,23 @@ export function ExportManagerModal({
           if (!entry?.url) { gridFailures.push(`${slug} (no url)`); return; }
           const duration = await probeAudioDuration(entry.url);
           if (duration == null) { gridFailures.push(`${slug} (duration probe failed)`); return; }
-          const sections = gridToExportSections(info, duration);
+          const sections = gridToExportSections(info, duration, gridGranularity);
           if (sections.length === 0) return;
-          entries.push({
-            path: `${slug}/grid/${slug}.txt`,
-            body: convertToAudacity(sections),
-          });
+          for (const fmt of gridFormats) {
+            const body = fmt === 'json'
+              ? JSON.stringify(
+                  sections.map((s) => ({ time: s.start, label: s.section })),
+                  null,
+                  2,
+                )
+              : sectionsToMarkerFormat(sections, fmt, {
+                  slug,
+                  jamsLayer: 'grid',
+                  annotatorId: null,
+                  bpm: info.bpm,
+                });
+            entries.push({ path: `${slug}/grid/${slug}.${FORMAT_EXT[fmt]}`, body });
+          }
         }));
       }
 
@@ -1180,6 +1214,29 @@ export function ExportManagerModal({
                       BPM / time signature / grid offset per song. Recommended.
                     </span>
                   </span>
+                </label>
+                <label
+                  className="flex items-start gap-2 text-[11px] text-slate-300"
+                  title="Expands the song's beat grid into an individual labels file at <slug>/grid/<slug>.<ext>, written once per selected format. Pick the resolution: bars (downbeats), beats, sub-beats (8th/16th), or phrases (every 4 bars)."
+                >
+                  <span className="flex-1">
+                    Grid labels
+                    <span className="block text-[10px] text-slate-500 leading-tight">
+                      Expanded grid markers at <code className="text-slate-400">grid/&lt;slug&gt;</code>, one file per selected format.
+                    </span>
+                  </span>
+                  <select
+                    value={gridGranularity}
+                    onChange={(e) => setGridGranularity(e.target.value as GridExportGranularity | 'off')}
+                    className="shrink-0 bg-[#0a0b0d] border border-white/10 rounded px-1.5 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer"
+                  >
+                    <option value="bars">Bars (1, 2, 3…)</option>
+                    <option value="beats">Beats (1.1, 1.2…)</option>
+                    <option value="subbeats-8">Sub-beats · 8th</option>
+                    <option value="subbeats-16">Sub-beats · 16th</option>
+                    <option value="phrases">Phrases (P1, P2…)</option>
+                    <option value="off">Off</option>
+                  </select>
                 </label>
                 <label
                   className="flex items-start gap-2 text-[11px] text-slate-300 cursor-pointer"

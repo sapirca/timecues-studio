@@ -1,0 +1,45 @@
+{
+  "algorithm": "ruptures-pelt-rbf",
+  "algoName": "PELT \u00b7 rbf",
+  "search": "Pelt",
+  "model": "rbf",
+  "suffix": "pelt-rbf",
+  "paperSection": "\u00a75.1.2",
+  "methodType": "exact",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 31.695,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8026,
+      "centroid": 0.6526
+    },
+    {
+      "time": 31.695,
+      "endTime": 147.261,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.8199
+    },
+    {
+      "time": 147.261,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.2316,
+      "centroid": 1.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    31.695,
+    147.261,
+    169.465
+  ],
+  "computedAt": 1780119197,
+  "elapsedSec": 3.35
+}

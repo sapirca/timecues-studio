@@ -12,6 +12,7 @@ import { useSettings } from '../../context/SettingsContext';
 import { loadAnnotation, saveToServer, deleteAnnotation } from '../../services/manualAnnotations';
 import type { AnnotationStage } from '../../types/annotationLayer';
 import type { AnnotationPanelController, AnnotationPanelCapabilities } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { useSectionEditPopover } from './useSectionEditPopover';
 import { useUndoableState } from '../../hooks/useUndoableState';
 import {
@@ -75,7 +76,11 @@ function normalizeSections(sections: ManualSection[], sectionTypes: readonly str
 }
 
 function normalizeAnnotation(ann: ManualAnnotation, sectionTypes: readonly string[]): ManualAnnotation {
-  return { ...ann, sections: normalizeSections(ann.sections, sectionTypes) };
+  // A stored annotation that only carries timing (e.g. `{ song, time_spent_seconds }`
+  // — time recorded but zero boundaries added) legitimately omits `sections`.
+  // Default to an empty array so every in-memory annotation has a real list and
+  // downstream `.sections.*` reads can't throw.
+  return { ...ann, sections: normalizeSections(ann.sections ?? [], sectionTypes) };
 }
 
 function buildSequenceSections(sequence: Array<{ type: string; label: string }>, duration: number): ManualSection[] {
@@ -596,6 +601,7 @@ function ManualEditorPanelInner(
     const bpmReady = !!songBpm && songBpm > 0;
     const suggestedCount = suggestedSections?.length ?? 0;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status,
       hasItems: (annotation?.sections.length ?? 0) > 0,
       saveStatus,
@@ -682,6 +688,7 @@ function ManualEditorPanelInner(
                   onSnapEnd={() => updateSection(i, 'endTime', currentTime)}
                   onSplit={() => splitSection(i)}
                   onTypeChange={(t) => updateSection(i, 'type', t)}
+                  onLabelChange={(v) => updateSection(i, 'label', v)}
                   onToggleImportance={() => updateSection(i, 'importance', s.importance === 'optional' ? 'critical' : 'optional')}
                   onAddCandidate={() => addCandidate(i, currentTime)}
                   onRemoveCandidate={(ci) => removeCandidate(i, ci)}

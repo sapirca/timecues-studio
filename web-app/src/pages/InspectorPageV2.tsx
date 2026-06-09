@@ -59,6 +59,7 @@ import { MarkerConfigPanel } from '../components/inspector-v2/shared/MarkerConfi
 import { MarkerActionsPanel } from '../components/inspector-v2/shared/MarkerActionsPanel';
 import { ImportMenu, ExportButton } from '../components/inspector-v2/shared/AnnotationToolbar';
 import { AnnotationAddPanel } from '../components/inspector-v2/shared/AnnotationAddPanel';
+import { AnnotationTypeChip } from '../components/inspector-v2/shared/AnnotationTypeChip';
 import {
   emptyCapabilities,
   type AnnotationPanelController,
@@ -78,7 +79,7 @@ import { useAnnotationShortcuts, type ShortcutDef } from '../hooks/useAnnotation
 import {
   AlgoInspectStage, buildAnnotationRows, type ToolState, type AlgorithmRow,
   SPAN_ALGO_IDS, LOOP_ALGO_IDS, PITCH_ALGO_IDS, CUE_EXTRAS_ALGO_IDS,
-  PERCUSSIVE_ALGO_IDS, LYRICS_ALGO_IDS,
+  PERCUSSIVE_ALGO_IDS, LYRICS_ALGO_IDS, PATTERN_ALGO_IDS,
 } from '../components/inspector-v2/AlgoInspectStage';
 import { EvaluationStage } from '../components/inspector-v2/EvaluationStage';
 import { ReferenceAnnotatorPicker } from '../components/inspector-v2/ReferenceAnnotatorPicker';
@@ -102,7 +103,7 @@ import { loadSongInfo, saveSongInfo, loadAllSongInfo } from '../services/songInf
 import { loadCachedBpm, runBpmDetection, type BpmDetectionResult } from '../services/bpmDetection';
 import { loadCachedBeatnet, runBeatnetDetection, type BeatnetDetectionResult } from '../services/beatnetDetection';
 import {
-  listDetectors, getDetectorResult, runDetector,
+  listDetectors, getDetectorResult,
   loadCustomAnnotation, saveCustomAnnotation,
 } from '../services/customScripts';
 import type { CustomRegistryEntry, CustomResultEnvelope, CustomBoundaryItem, CustomSpanItem, CustomLoopItem, CustomPatternItem } from '../types/customScript';
@@ -463,6 +464,8 @@ const ALGO_ORDER = [
   'hpss-percussive',
   // LYRICS family — Whisper-base (`experimentalLyricsFamily`).
   'whisper-base',
+  // PATTERN family — LoCoMotif (`experimentalPatternFamily`).
+  'locomotif',
 ] as const;
 
 const ALLIN1_FOLD_IDS = new Set([0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`));
@@ -473,6 +476,7 @@ const PITCH_TOOL_IDS = new Set(['basic-pitch']);
 const CUE_EXTRAS_TOOL_IDS = new Set(['librosa-key', 'autochord-chords', 'librosa-onsets']);
 const PERCUSSIVE_TOOL_IDS = new Set(['hpss-percussive']);
 const LYRICS_TOOL_IDS     = new Set(['whisper-base']);
+const PATTERN_TOOL_IDS    = new Set(['locomotif']);
 
 // `null`  → the cache file truly doesn't exist (or fetch failed). UI treats
 //           the tool as never-run.
@@ -489,7 +493,7 @@ async function loadAlgoJson(
   songId: string,
   toolId: string,
 ): Promise<{ result: ToolResultData; error?: string } | null> {
-  type ExperimentalKind = { kind: 'spans' } | { kind: 'loops' } | { kind: 'notes' } | { kind: 'cues' } | { kind: 'words' };
+  type ExperimentalKind = { kind: 'spans' } | { kind: 'loops' } | { kind: 'notes' } | { kind: 'cues' } | { kind: 'words' } | { kind: 'patterns' };
   async function readExperimental(
     prefix: string,
     kind: ExperimentalKind,
@@ -507,6 +511,7 @@ async function loadAlgoJson(
         notes?: { time: number; end: number; pitch: string }[];
         cues?:  { time: number; label: string }[];
         words?: { time: number; end: number; text: string }[];
+        patterns?: { start: number; end: number; label: string; motif_id: number }[];
         // Single-value globals: `key` (librosa-key), `language` (whisper-base).
         // Surfaced as toolbar pills, so they must survive the cache-load path.
         key?: string | null;
@@ -524,6 +529,9 @@ async function loadAlgoJson(
         })) :
         kind.kind === 'cues'  ? (payload.cues ?? []).map((c) => ({
           time: c.time, endTime: c.time, type: 'cue', label: c.label,
+        })) :
+        kind.kind === 'patterns' ? (payload.patterns ?? []).map((p) => ({
+          time: p.start, endTime: p.end, type: `motif-${p.motif_id}`, label: p.label,
         })) :
         /* words */ (payload.words ?? []).map((w) => ({
           time: w.time, endTime: w.end, type: 'word', label: w.text,
@@ -556,6 +564,7 @@ async function loadAlgoJson(
   if (CUE_EXTRAS_TOOL_IDS.has(toolId)) return readExperimental('cue-extras', { kind: 'cues' });
   if (PERCUSSIVE_TOOL_IDS.has(toolId)) return readExperimental('percussive', { kind: 'spans' });
   if (LYRICS_TOOL_IDS.has(toolId))     return readExperimental('lyrics',     { kind: 'words' });
+  if (PATTERN_TOOL_IDS.has(toolId))    return readExperimental('pattern',    { kind: 'patterns' });
 
   const algoSlug =
     toolId.startsWith('msaf-') ? toolId.replace('msaf-', '') :
@@ -676,6 +685,8 @@ const ALGO_LABEL_COLORS: Record<string, string> = {
   'hpss-percussive':   '#fb923c',
   // LYRICS family — rose, distinct from cue-extras teal.
   'whisper-base':      '#fb7185',
+  // PATTERN family — emerald, distinct from amber loops and rose lyrics.
+  'locomotif':         '#10b981',
   'allin1': '#f97316',
 };
 [0,1,2,3,4,5,6,7].forEach((n) => { ALGO_LABEL_COLORS[`allin1-fold${n}`] = '#f97316'; });
@@ -703,7 +714,7 @@ type AlgoRenderKind = 'boundary' | 'span' | 'point';
 const POINT_ALGO_IDS = new Set<string>(CUE_EXTRAS_ALGO_IDS);
 const SPAN_RENDER_ALGO_IDS = new Set<string>([
   ...SPAN_ALGO_IDS, ...LOOP_ALGO_IDS, ...PITCH_ALGO_IDS,
-  ...PERCUSSIVE_ALGO_IDS, ...LYRICS_ALGO_IDS,
+  ...PERCUSSIVE_ALGO_IDS, ...LYRICS_ALGO_IDS, ...PATTERN_ALGO_IDS,
 ]);
 function algoRenderKind(id: string): AlgoRenderKind {
   if (POINT_ALGO_IDS.has(id)) return 'point';
@@ -767,6 +778,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const { status: adminStatus } = useAdmin();
   // ── Catalogue ────────────────────────────────────────────────────────────
   const [audioFiles, setAudioFiles] = useState<AudioEntry[]>([]);
+  // Aggregate corpus size — for public users this lets the sidebar communicate
+  // that the visible 3-song demo is a slice of a much larger real corpus,
+  // without exposing any song slug, audio, email, or annotation.
+  const [corpusStats, setCorpusStats] = useState<{ songs: number; admins: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/corpus/stats')
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (!cancelled && j && typeof j.songs === 'number') setCorpusStats({ songs: j.songs, admins: j.admins ?? 0 }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [selectedAudio, setSelectedAudio] = useState<AudioEntry | null>(null);
   const selectedAudioRef = useRef<AudioEntry | null>(null);
   useEffect(() => { selectedAudioRef.current = selectedAudio; }, [selectedAudio]);
@@ -1058,6 +1081,28 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // the inspect-scope tabs. 'song' = opened from a per-song ⚙, rendered under
   // the song title. Same panel JSX is mounted at whichever site matches.
   const [runOptionsScope, setRunOptionsScope] = useState<'dataset' | 'song' | null>(null);
+  // Which algorithm "type" chips are expanded in the run-options panel. Reuses
+  // the annotation list's chip control, but as multi-select toggles: click a
+  // chip to open/close its family's checkbox grid, and several can be open at
+  // once (their frames stack below the chip row). Persisted across reloads.
+  const [expandedAlgoTypes, setExpandedAlgoTypes] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('tc.algoExpandedTypes');
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch { /* ignore */ }
+    return new Set(['msaf']);
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem('tc.algoExpandedTypes', JSON.stringify([...expandedAlgoTypes])); }
+    catch { /* ignore quota */ }
+  }, [expandedAlgoTypes]);
+  const toggleAlgoType = useCallback((key: string) => {
+    setExpandedAlgoTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
   const toggleAlgorithm = useCallback((id: string) => {
     setSelectedAlgorithms((prev) => {
       const next = new Set(prev);
@@ -1098,6 +1143,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // ── Song info (BPM / time-sig / grid offset — applies to all annotation types) ──
   const [songInfo, setSongInfo] = useState<SongInfo | null>(null);
   const songInfoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when a title/artist edit lands during the debounce window, so the
+  // pending save also refetches the manifest (the visible name lives there).
+  const songNameDirty = useRef(false);
 
   // ── BPM detection (every available estimator, suggested to the user) ─────
   const [bpmDetection, setBpmDetection] = useState<BpmDetectionResult | null>(null);
@@ -1439,11 +1487,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (typeof window === 'undefined') return 1;
     try {
       const n = parseFloat(window.localStorage.getItem('tc.gridLineThickness') ?? '');
-      return Number.isFinite(n) && n >= 0.5 && n <= 10 ? n : 1;
+      return Number.isFinite(n) && n >= 0.25 && n <= 10 ? n : 1;
     } catch { return 1; }
   });
   const setGridLineThickness = useCallback((v: number) => {
-    const clamped = Math.max(0.5, Math.min(10, v));
+    const clamped = Math.max(0.25, Math.min(10, v));
     setGridLineThicknessState(clamped);
     try { window.localStorage.setItem('tc.gridLineThickness', String(clamped)); } catch { /* ignore quota */ }
   }, []);
@@ -1769,7 +1817,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       setAudioBuffer(null);
       setPlayerTime(0);
       setDuration(0);
-      setVizTotalWidth(0);
     }
     setPreviewRegion(null);
     previewAnchorRef.current = null;
@@ -1812,6 +1859,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setBpmDetection(null);
     setBpmDetectionStatus('idle');
     setBpmDetectionError(undefined);
+    // Clear the client-side one-shot estimate too — otherwise its chip keeps
+    // showing the previous song's BPM until the new audio buffer decodes.
+    setClientBpm(null);
     if (songInfoSaveTimer.current) { clearTimeout(songInfoSaveTimer.current); songInfoSaveTimer.current = null; }
     setSelectedAlgoOverlays(new Set());
 
@@ -1857,7 +1907,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       // Fresh load = new baseline; clear any history from the previous song.
       cueLayersDocCtl.reset(doc);
     });
-    loadSongInfo(entry.id).then(setSongInfo);
+    loadSongInfo(entry.id).then((info) => {
+      // Guard against rapid song-switching: a slow request for the previous
+      // song must not overwrite the current song's BPM / time-signature.
+      if (selectedAudioRef.current?.id !== entry.id) return;
+      setSongInfo(info);
+    });
 
     // BPM detection — first try cache; if empty, kick off a run. The Python
     // server (tools/python/bpm_server.py) may not be running; we degrade silently.
@@ -2296,32 +2351,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }
   }, []);
 
-  const runCustomDetectors = useCallback(async (slug: string, names: string[]) => {
-    setCustomRunning((prev) => {
-      const next = new Set(prev);
-      names.forEach((n) => next.add(n));
-      return next;
-    });
-    await Promise.allSettled(names.map(async (name) => {
-      try {
-        const env = await runDetector(name, slug, { force: true });
-        if (selectedAudioRef.current?.id === slug) {
-          setCustomResults((prev) => ({ ...prev, [name]: env }));
-        }
-      } catch {
-        // surfacing per-detector failures is the Playground page's job; here we
-        // just skip so a broken script doesn't poison the batch.
-      } finally {
-        setCustomRunning((prev) => {
-          if (!prev.has(name)) return prev;
-          const next = new Set(prev);
-          next.delete(name);
-          return next;
-        });
-      }
-    }));
-  }, []);
-
   // Run the currently selected algorithms (built-ins + custom) for one song.
   // Shared by the dataset-wide batch button and the per-song "Run for this song"
   // button in AlgoInspectStage. Does not refresh toolStates — callers decide
@@ -2337,46 +2366,52 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       ? selectedAlgorithms
       : (algoIds instanceof Set ? algoIds : new Set(algoIds));
     const { builtins, custom } = splitAlgorithmSelection(sel);
-    const customRun = custom.length ? runCustomDetectors(audio.id, custom) : Promise.resolve();
-    if (builtins.length === 0) {
-      setRunJob({
-        jobId: `custom-${audio.id}`,
-        status: 'running',
-        logs: `${progressLabel} (custom only)\n`,
-        startedAt: Date.now(),
-      });
-      await customRun;
-      setRunJob((prev) => prev ? { ...prev, status: 'done' } : null);
-      return;
+    if (builtins.length === 0 && custom.length === 0) return;
+    // Custom detectors now ride the SAME job as the built-ins — one POST, one
+    // status stream, one report — instead of a parallel frontend track. Flag
+    // them running so the Custom section's per-row spinners animate while the
+    // unified job is in flight.
+    if (custom.length) {
+      setCustomRunning((prev) => { const next = new Set(prev); custom.forEach((n) => next.add(n)); return next; });
     }
     const res = await fetch(`/api/run-algorithms/${encodeURIComponent(audio.id)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ demucsModel, algorithms: builtins }),
+      headers: annotatorHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ demucsModel, algorithms: builtins, customDetectors: custom }),
     });
-    const data = await res.json();
-    if (!data.jobId) {
-      await customRun;
-      return;
+    const data = await res.json().catch(() => ({}));
+    const jobId: string | undefined = data.jobId;
+    if (jobId) {
+      setRunJob({
+        jobId,
+        status: 'running',
+        logs: `${progressLabel}\n`,
+        startedAt: Date.now(),
+      });
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const statusRes = await fetch(`/api/run-algorithms/status/${encodeURIComponent(jobId)}`);
+        const status = await statusRes.json();
+        setRunJob((prev) => prev
+          ? { ...prev, status: status.status, logs: status.logs ?? prev.logs, sections: status.sections ?? prev.sections }
+          : { jobId, status: status.status, logs: status.logs ?? '', startedAt: Date.now(), sections: status.sections });
+        if (status.status !== 'running') break;
+      }
     }
-    const jobId: string = data.jobId;
-    setRunJob({
-      jobId,
-      status: 'running',
-      logs: `${progressLabel}\n`,
-      startedAt: Date.now(),
-    });
-    while (true) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const statusRes = await fetch(`/api/run-algorithms/status/${encodeURIComponent(jobId)}`);
-      const status = await statusRes.json();
-      setRunJob((prev) => prev
-        ? { ...prev, status: status.status, logs: status.logs ?? prev.logs, sections: status.sections ?? prev.sections }
-        : { jobId, status: status.status, logs: status.logs ?? '', startedAt: Date.now(), sections: status.sections });
-      if (status.status !== 'running') break;
+    // The job wrote each custom envelope to the shared cache; reload them so the
+    // Custom section reflects fresh results, then clear the running flags.
+    if (custom.length) {
+      await Promise.allSettled(custom.map(async (name) => {
+        try {
+          const env = await getDetectorResult(name, audio.id);
+          if (env && selectedAudioRef.current?.id === audio.id) {
+            setCustomResults((prev) => ({ ...prev, [name]: env }));
+          }
+        } catch { /* leave the stale result; the Playground page surfaces detail */ }
+      }));
+      setCustomRunning((prev) => { const next = new Set(prev); custom.forEach((n) => next.delete(n)); return next; });
     }
-    await customRun;
-  }, [selectedAlgorithms, demucsModel, splitAlgorithmSelection, runCustomDetectors]);
+  }, [selectedAlgorithms, demucsModel, splitAlgorithmSelection]);
 
   // Batch: fire the same per-song run sequentially across the entire dataset.
   // Reuses /api/run-algorithms/<slug> from the inspect path; each song's job
@@ -2420,9 +2455,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // Per-section "Run missing" — runs the supplied algorithm IDs directly
   // (bypassing the persistent selection) so the user can fill in gaps without
-  // touching their ticks. Built-in IDs go to /api/run-algorithms, `custom:X`
-  // IDs go through runCustomDetectors. Caller is expected to have already
-  // filtered out cached entries.
+  // touching their ticks. Built-in and `custom:X` IDs alike flow through the
+  // single /api/run-algorithms job (the orchestrator dispatches custom to the
+  // :8005 sidecar). Caller is expected to have already filtered out cached
+  // entries.
   const handleRunMissingForSection = useCallback(async (ids: string[]) => {
     if (!selectedAudio) return;
     if (runJob?.status === 'running') return;
@@ -3120,6 +3156,74 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }),
     }));
   }, [pushManualSnapshot, setCueLayersDoc]);
+
+  // Delete an entire layer from the unified sidebar. Same dispatch as
+  // handleUnifiedItemDelete: boundaries:Manual clears all manual sections
+  // (undoable via the manual snapshot stack); user cue/span/loop/pattern layers
+  // are dropped from cueLayersDoc (its useUndoableState owns ⌘Z). Read-only
+  // layers never reach here — the panel hides the button for them.
+  const handleUnifiedLayerDelete = useCallback((
+    layerId: string,
+    sectionType: AnnotationType,
+  ) => {
+    if (sectionType === 'boundaries') {
+      if (layerId !== 'boundaries:Manual') return;
+      const current = manualAnnotationRef.current;
+      if (!current || !setSectionsRef.current) return;
+      pushManualSnapshot();
+      setSectionsRef.current([]);
+      return;
+    }
+    setCueLayersDoc((d) => d && ({ ...d, layers: d.layers.filter((l) => l.id !== layerId) }));
+    if (sectionType === 'cues')     setSelectedCueLayerId((id) => (id === layerId ? null : id));
+    if (sectionType === 'spans')    setSelectedSpanLayerId((id) => (id === layerId ? null : id));
+    if (sectionType === 'loops')    setSelectedLoopLayerId((id) => (id === layerId ? null : id));
+    if (sectionType === 'patterns') setSelectedPatternLayerId((id) => (id === layerId ? null : id));
+    setFocusedCue((f) => (f?.layerId === layerId ? null : f));
+    setFocusedSpan((f) => (f?.layerId === layerId ? null : f));
+    setFocusedLoop((f) => (f?.layerId === layerId ? null : f));
+    setFocusedPattern((f) => (f?.layerId === layerId ? null : f));
+  }, [pushManualSnapshot, setCueLayersDoc]);
+
+  // Inline rename of a typed user layer from the sidebar card header. Boundary
+  // layers carry a fixed source name and never reach here (the panel gates the
+  // editable input). Keystrokes coalesce into one undo entry per layer.
+  const handleUnifiedLayerRename = useCallback((
+    layerId: string,
+    _sectionType: AnnotationType,
+    name: string,
+  ) => {
+    setCueLayersDoc(
+      (d) => d && ({ ...d, layers: d.layers.map((l) => (l.id === layerId ? ({ ...l, name } as typeof l) : l)) }),
+      { coalesceKey: `rename:${layerId}` },
+    );
+  }, [setCueLayersDoc]);
+
+  // Inline edit of a single item's label from the sidebar row. Same gating as
+  // the rename above — typed user layers only. Coalesced per item so a burst
+  // of keystrokes is one undo entry.
+  const handleUnifiedItemLabelChange = useCallback((
+    layerId: string,
+    itemId: string,
+    _sectionType: AnnotationType,
+    label: string,
+  ) => {
+    setCueLayersDoc(
+      (d) => d && ({
+        ...d,
+        layers: d.layers.map((l) => {
+          if (l.id !== layerId) return l;
+          return {
+            ...l,
+            items: (l.items as readonly { id: string; label: string }[]).map((it) =>
+              it.id === itemId ? { ...it, label } : it,
+            ),
+          } as typeof l;
+        }),
+      }),
+      { coalesceKey: `label:${layerId}:${itemId}` },
+    );
+  }, [setCueLayersDoc]);
 
   // ── Unified sidebar: click-a-layer → switch tab + aim ADD+ at it ─────────
   // The unified list shows every annotation type's layers in one place; the
@@ -4348,15 +4452,29 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // ── Song info change handler (debounced save) ────────────────────────────
   const handleSongInfoChange = useCallback((next: SongInfo) => {
+    if (next.title !== songInfo?.title || next.artist !== songInfo?.artist) {
+      songNameDirty.current = true;
+    }
     setSongInfo(next);
     if (!selectedAudio) return;
     // Mirror to the sidebar cache so the readiness indicator updates live.
     setSongInfos((prev) => ({ ...prev, [selectedAudio.id]: next }));
     if (songInfoSaveTimer.current) clearTimeout(songInfoSaveTimer.current);
+    const slug = selectedAudio.id;
     songInfoSaveTimer.current = setTimeout(() => {
-      saveSongInfo(selectedAudio.id, next);
+      saveSongInfo(slug, next).then((ok) => {
+        if (!ok || !songNameDirty.current) return;
+        songNameDirty.current = false;
+        // The visible name (manifest entry .name) is derived server-side from
+        // title/artist, so refetch and patch the song list + active song.
+        fetchManifest().then((refreshed) => {
+          setAudioFiles(refreshed);
+          const updated = refreshed.find((f) => f.id === slug);
+          if (updated) setSelectedAudio((cur) => (cur?.id === slug ? updated : cur));
+        });
+      });
     }, 500);
-  }, [selectedAudio]);
+  }, [selectedAudio, songInfo]);
 
   // Snap gridOffset to the current playhead. Used by the SongInfoBar button
   // and by the Shift+G shortcut. Reads playerTime via ref so it can be bound
@@ -4591,36 +4709,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     [baseAutoGuessPoints, minConsensus],
   );
 
-  // Auto-guess as a read-only algo overlay (centroid-linkage, fully automated)
-  const autoGuessAlgoSections = useMemo(() => {
-    const sorted = liveAutoGuessPoints
-      .filter((p) => p.clusterSize >= minConsensus)
-      .sort((a, b) => a.time - b.time);
-    return sorted.map((p, i) => ({
-      time: p.time,
-      endTime: sorted[i + 1]?.time ?? duration,
-      label: `×${p.clusterSize}`,
-      type: 'autoGuess',
-    }));
-  }, [liveAutoGuessPoints, minConsensus, duration]);
-
+  // Auto-guess is shown via the Annotations dropdown's dedicated layer toggle,
+  // so it's intentionally absent from the algo overlay list to avoid a
+  // duplicate row on the canvas.
   const algoOverlays = useMemo(() => {
-    const overlays = annotationRows
+    return annotationRows
       .filter((r) => selectedAlgoOverlays.has(r.id))
       .map((r) => ({ id: r.id, label: r.label, labelColor: algoLabelColor(r.id), renderKind: algoRenderKind(r.id), sections: r.sections }));
-    if (selectedAlgoOverlays.has('auto-guess-algo') && autoGuessAlgoSections.length) {
-      overlays.unshift({ id: 'auto-guess-algo', label: 'Auto-guess', labelColor: '#a78bfa', renderKind: 'boundary', sections: autoGuessAlgoSections });
-    }
-    return overlays;
-  }, [annotationRows, selectedAlgoOverlays, autoGuessAlgoSections, algoLabelColor]);
+  }, [annotationRows, selectedAlgoOverlays, algoLabelColor]);
 
   const algoOptions = useMemo(() => {
-    const options = annotationRows.map((r) => ({ id: r.id, label: r.label }));
-    if (liveAutoGuessPoints.length > 0) {
-      options.unshift({ id: 'auto-guess-algo', label: 'Auto-guess' });
-    }
-    return options;
-  }, [annotationRows, liveAutoGuessPoints]);
+    return annotationRows.map((r) => ({ id: r.id, label: r.label }));
+  }, [annotationRows]);
 
   const toggleAlgoOverlay = useCallback((id: string) => {
     setSelectedAlgoOverlays((prev) => {
@@ -4659,37 +4759,51 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   useEffect(() => {
     if (!cueLayersDoc || !selectedAudio) return;
     if (cueLayersDoc === cueLayersJustLoadedRef.current) return;
+    // Guard against a stale doc mid-song-switch: `selectedAudio` updates
+    // synchronously but `cueLayersDoc` lags until loadLayers resolves, so
+    // without this the previous song's doc is written under the new slug —
+    // this leaked empty docs across songs (filename ≠ doc.song). Mirrors the
+    // same guard on the summary-sync effect below.
+    if (cueLayersDoc.song !== selectedAudio.id) return;
     const slug = selectedAudio.id;
     setLayersDocSaveStatus('saving');
     const t = setTimeout(async () => {
       const ok = await saveLayers(slug, cueLayersDoc);
       setLayersDocSaveStatus(ok ? 'saved' : 'error');
-      if (ok) {
-        // Keep the sidebar's overall-annotation indicator in sync without
-        // re-fetching the whole list. Mirrors the per-type summary the
-        // backend LIST endpoint would have returned for this song.
-        setSongLayerStatuses((prev) => {
-          const layers: SongLayerStatuses['layers'] = {};
-          for (const l of cueLayersDoc.layers) {
-            if (l.type !== 'cues' && l.type !== 'spans' && l.type !== 'loops' && l.type !== 'patterns' && l.type !== 'lyrics') continue;
-            const entry = layers[l.type] ?? { count: 0, status: 'in_progress' as const };
-            entry.count += l.items.length;
-            layers[l.type] = entry;
-          }
-          for (const t of Object.keys(layers) as Array<keyof SongLayerStatuses['layers']>) {
-            const stage = cueLayersDoc.statusByType?.[t as 'cues' | 'spans' | 'loops' | 'patterns'];
-            if (stage) layers[t]!.status = stage;
-          }
-          const hasAny = Object.keys(layers).length > 0;
-          const next = { ...prev };
-          if (hasAny) next[slug] = { slug, layers };
-          else delete next[slug];
-          return next;
-        });
-      }
       setTimeout(() => setLayersDocSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000);
     }, 600);
     return () => clearTimeout(t);
+  }, [cueLayersDoc, selectedAudio]);
+
+  // Keep the sidebar's per-song layer summary (counts + per-type status) in
+  // lockstep with the live cue-layers doc — synchronously, NOT gated on the
+  // debounced save above — so flipping a layer's status pill (or adding /
+  // removing items) updates the song-list indicator at once. Mirrors the
+  // boundary status sync effect, and derives the same shape the backend LIST
+  // endpoint returns so the current song's entry matches its siblings'.
+  // Guarded on `doc.song` so a stale doc mid-song-switch can't wipe or
+  // cross-write another song's summary before its own doc has loaded.
+  useEffect(() => {
+    if (!selectedAudio || !cueLayersDoc || cueLayersDoc.song !== selectedAudio.id) return;
+    const slug = selectedAudio.id;
+    setSongLayerStatuses((prev) => {
+      const layers: SongLayerStatuses['layers'] = {};
+      for (const l of cueLayersDoc.layers) {
+        if (l.type !== 'cues' && l.type !== 'spans' && l.type !== 'loops' && l.type !== 'patterns' && l.type !== 'lyrics') continue;
+        const entry = layers[l.type] ?? { count: 0, status: 'in_progress' as const };
+        entry.count += l.items.length;
+        layers[l.type] = entry;
+      }
+      for (const t of Object.keys(layers) as Array<keyof SongLayerStatuses['layers']>) {
+        const stage = cueLayersDoc.statusByType?.[t as 'cues' | 'spans' | 'loops' | 'patterns'];
+        if (stage) layers[t]!.status = stage;
+      }
+      const hasAny = Object.keys(layers).length > 0;
+      const next = { ...prev };
+      if (hasAny) next[slug] = { slug, layers };
+      else delete next[slug];
+      return next;
+    });
   }, [cueLayersDoc, selectedAudio]);
 
   // Sync cue-layer rowIds into rowOrder. Mirrors the customAnnotationRows
@@ -4961,426 +5075,395 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         )}
       </div>
 
-      {/* MSAF algorithms */}
+      {/* Algorithm families as annotation-style tab chips: one family's
+          checkboxes visible at a time, the rest collapsed behind their chips.
+          Reuses <AnnotationTypeChip> from the unified annotation list so the
+          two panels share one chip control (no duplicated markup). */}
       {(() => {
-        const ids = ['msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda'] as const;
-        const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
-        const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
-        return (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">MSAF</div>
-              <div className="flex items-center gap-1.5 text-[10px]">
-                <button
-                  disabled={!canRunMissing}
-                  onClick={() => handleRunMissingForSection([...missing])}
-                  title={!selectedAudio
-                    ? 'Select a song first.'
-                    : missing.length === 0
-                      ? 'Every MSAF algorithm already has a cached result for this song.'
-                      : `Run ${missing.length} MSAF algorithm${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`}
-                  className="px-1.5 py-0.5 rounded border border-violet-700/40 bg-violet-900/20 text-violet-200 hover:bg-violet-900/40 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-violet-900/20"
-                >
-                  ▶ Run missing{missing.length > 0 ? ` (${missing.length})` : ''}
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    ids.forEach((id) => next.add(id));
-                    return next;
-                  })}
-                  className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider"
-                >
-                  Select all
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    ids.forEach((id) => next.delete(id));
-                    return next;
-                  })}
-                  className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider"
-                >
-                  None
-                </button>
-              </div>
-            </div>
-            <div className={algoRowsCls}>
-              {ids.map((id) => {
-                const cached = toolStates[id]?.status === 'done';
-                const checked = selectedAlgorithms.has(id);
-                const label = id.replace('msaf-', '').toUpperCase();
-                return (
-                  <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)}
-                      className={accent.checkbox} />
-                    <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
-                    {renderStatusPill(id, cached)}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
+        type AlgoSection = {
+          key: string;
+          label: string;
+          experimental: boolean;
+          total: number;
+          cached: number;
+          render: () => ReactNode;
+        };
+        const sections: AlgoSection[] = [];
 
-      {(() => {
-        const ids = ['allin1', ...[0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`)];
-        const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
-        const canRunMissing = gpuCaps.allin1 && !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
-        return (
-          <div title={gpuCaps.allin1 ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className={`text-[10px] uppercase tracking-wider font-medium ${gpuCaps.allin1 ? 'text-slate-500' : 'text-slate-600'}`}>
-                All-In-One
-                {!gpuCaps.allin1 && (
-                  <span className="ml-2 text-amber-400/80 normal-case tracking-normal">· requires `allin1` (Demucs profile or `pip install -r tools/requirements-allin1.txt`)</span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 text-[10px]">
-                <button
-                  disabled={!canRunMissing}
-                  onClick={() => handleRunMissingForSection(missing)}
-                  title={!gpuCaps.allin1
-                    ? GPU_TOOLS_UNAVAILABLE_HINT
-                    : !selectedAudio
-                      ? 'Select a song first.'
-                      : missing.length === 0
-                        ? 'Every All-In-One model already has a cached result for this song.'
-                        : `Run ${missing.length} All-In-One model${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`}
-                  className="px-1.5 py-0.5 rounded border border-violet-700/40 bg-violet-900/20 text-violet-200 hover:bg-violet-900/40 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-violet-900/20"
-                >
-                  ▶ Run missing{missing.length > 0 ? ` (${missing.length})` : ''}
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  disabled={!gpuCaps.allin1}
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    ids.forEach((id) => next.add(id));
-                    return next;
-                  })}
-                  className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:hover:text-slate-500 disabled:cursor-not-allowed"
-                >
-                  Select all
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  disabled={!gpuCaps.allin1}
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    ids.forEach((id) => next.delete(id));
-                    return next;
-                  })}
-                  className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:hover:text-slate-500 disabled:cursor-not-allowed"
-                >
-                  None
-                </button>
-              </div>
-            </div>
-            <div className={algoRowsCls}>
-              {ids.map((id) => {
-                const cached = toolStates[id]?.status === 'done';
-                const checked = selectedAlgorithms.has(id);
-                const label = id === 'allin1' ? 'Ensemble' : `fold${id.replace('allin1-fold', '')}`;
-                return (
-                  <label
-                    key={id}
-                    className={`flex items-center gap-1.5 select-none ${gpuCaps.allin1 ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
-                    title={gpuCaps.allin1 ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}
-                  >
-                    <input type="checkbox" checked={checked} disabled={!gpuCaps.allin1} onChange={() => toggleAlgorithm(id)}
-                      className={`${accent.checkbox} disabled:cursor-not-allowed`} />
-                    <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
-                    {renderStatusPill(id, cached)}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Ruptures (CPD) — 19 variants from Truong/Oudre/Vayatis */}
-      {(() => {
-        const missing = RUPTURES_METHODS
-          .filter((m) => !rupturesResults[m.suffix])
-          .map((m) => `ruptures-${m.suffix}`);
-        const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
-        return (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">Ruptures (CPD)</div>
-              <div className="flex items-center gap-1.5 text-[10px]">
-                <button
-                  disabled={!canRunMissing}
-                  onClick={() => handleRunMissingForSection(missing)}
-                  title={!selectedAudio
-                    ? 'Select a song first.'
-                    : missing.length === 0
-                      ? 'Every Ruptures method already has a cached result for this song.'
-                      : `Run ${missing.length} Ruptures method${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`}
-                  className="px-1.5 py-0.5 rounded border border-violet-700/40 bg-violet-900/20 text-violet-200 hover:bg-violet-900/40 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-violet-900/20"
-                >
-                  ▶ Run missing{missing.length > 0 ? ` (${missing.length})` : ''}
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    RUPTURES_METHODS.forEach((m) => next.add(`ruptures-${m.suffix}`));
-                    return next;
-                  })}
-                  className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider"
-                >
-                  Select all
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    RUPTURES_METHODS.forEach((m) => next.delete(`ruptures-${m.suffix}`));
-                    return next;
-                  })}
-                  className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider"
-                >
-                  None
-                </button>
-              </div>
-            </div>
-            <div className={algoRowsCls}>
-              {RUPTURES_METHODS.map((m) => {
-                const id = `ruptures-${m.suffix}`;
-                const cached = !!rupturesResults[m.suffix];
-                const checked = selectedAlgorithms.has(id);
-                return (
-                  <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)}
-                      className={accent.checkbox} />
-                    <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{m.search}·{m.model}</span>
-                    {renderStatusPill(id, cached)}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Helper: generic "experimental family" sub-section. Same shape across
-          SPAN / LOOP / CUE-notes — only the algo IDs, label map, accent color,
-          and feature flag differ. Kept inline so closure-captured state
-          (selectedAlgorithms, toolStates, toggleAlgorithm, accent) is in scope. */}
-      {(() => {
-        const renderFamilySection = (
-          title: string,
-          accentText: string,
-          ids: readonly string[],
-          labels: Record<string, string>,
-        ) => {
-          const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
-          const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
+        // Shared "▶ Run missing · Select all · None" cluster. amber=true gives
+        // the Custom family its amber accent; every other family is violet.
+        const actionCluster = (o: {
+          missing: string[];
+          canRunMissing: boolean;
+          onRun: () => void;
+          onSelectAll: () => void;
+          onNone: () => void;
+          runTitle: string;
+          amber?: boolean;
+          selectDisabled?: boolean;
+        }) => {
+          const hov = o.amber ? 'hover:text-amber-300' : 'hover:text-violet-300';
+          const runCls = o.amber
+            ? 'border-amber-700/40 bg-amber-900/20 text-amber-200 hover:bg-amber-900/40 disabled:hover:bg-amber-900/20'
+            : 'border-violet-700/40 bg-violet-900/20 text-violet-200 hover:bg-violet-900/40 disabled:hover:bg-violet-900/20';
           return (
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <div className={`text-[10px] uppercase tracking-wider ${accentText} font-medium`}>
-                  {title} <span className="normal-case tracking-normal text-slate-500">· experimental</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-[10px]">
-                  <button
-                    disabled={!canRunMissing}
-                    onClick={() => handleRunMissingForSection([...missing])}
-                    title={!selectedAudio
-                      ? 'Select a song first.'
-                      : missing.length === 0
-                        ? `Every ${title} model already has a cached result for this song.`
-                        : `Run ${missing.length} ${title} model${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`}
-                    className="px-1.5 py-0.5 rounded border border-violet-700/40 bg-violet-900/20 text-violet-200 hover:bg-violet-900/40 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-violet-900/20"
-                  >
-                    ▶ Run missing{missing.length > 0 ? ` (${missing.length})` : ''}
-                  </button>
-                  <span className="text-slate-700">·</span>
-                  <button
-                    onClick={() => setSelectedAlgorithms((prev) => {
-                      const next = new Set(prev);
-                      ids.forEach((id) => next.add(id));
-                      return next;
-                    })}
-                    className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider"
-                  >
-                    Select all
-                  </button>
-                  <span className="text-slate-700">·</span>
-                  <button
-                    onClick={() => setSelectedAlgorithms((prev) => {
-                      const next = new Set(prev);
-                      ids.forEach((id) => next.delete(id));
-                      return next;
-                    })}
-                    className="text-slate-500 hover:text-violet-300 transition-colors uppercase tracking-wider"
-                  >
-                    None
-                  </button>
-                </div>
-              </div>
-              <div className={algoRowsCls}>
-                {ids.map((id) => {
-                  const cached = toolStates[id]?.status === 'done';
-                  const checked = selectedAlgorithms.has(id);
-                  return (
-                    <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                      <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)}
-                        className={accent.checkbox} />
-                      <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{labels[id] ?? id}</span>
-                      {renderStatusPill(id, cached)}
-                    </label>
-                  );
-                })}
-              </div>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <button
+                disabled={!o.canRunMissing}
+                onClick={o.onRun}
+                title={o.runTitle}
+                className={`px-1.5 py-0.5 rounded border ${runCls} transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed`}
+              >
+                ▶ Run missing{o.missing.length > 0 ? ` (${o.missing.length})` : ''}
+              </button>
+              <span className="text-slate-700">·</span>
+              <button
+                disabled={o.selectDisabled}
+                onClick={o.onSelectAll}
+                className={`text-slate-500 ${hov} transition-colors uppercase tracking-wider disabled:opacity-40 disabled:hover:text-slate-500 disabled:cursor-not-allowed`}
+              >
+                Select all
+              </button>
+              <span className="text-slate-700">·</span>
+              <button
+                disabled={o.selectDisabled}
+                onClick={o.onNone}
+                className={`text-slate-500 ${hov} transition-colors uppercase tracking-wider disabled:opacity-40 disabled:hover:text-slate-500 disabled:cursor-not-allowed`}
+              >
+                None
+              </button>
             </div>
           );
         };
-        return (
-          <>
-            {settings.experimentalSpanFamily && expAvail.spanFamily && renderFamilySection(
-              'SPAN',
-              'text-violet-400/80',
-              ['silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive'],
-              {
-                'silero-vad': 'Silero-VAD',
-                'jdcnet-voicing': 'JDCNet',
-                'panns-cnn14': 'PANNs CNN14',
-                'hpss-percussive': 'HPSS percussive',
-              },
-            )}
-            {settings.experimentalLoopFamily && expAvail.loopFamily && renderFamilySection(
-              'LOOP',
-              'text-amber-400/80',
-              ['chroma-autocorr'],
-              { 'chroma-autocorr': 'Chroma loops' },
-            )}
-            {settings.experimentalCueExtras && expAvail.cueExtras && renderFamilySection(
-              'CUE extras',
-              'text-pink-400/80',
-              ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'],
-              {
-                'basic-pitch': 'basic-pitch',
-                'librosa-key': 'librosa key',
-                'autochord-chords': 'autochord',
-                'librosa-onsets': 'librosa onsets',
-              },
-            )}
-            {settings.experimentalLyricsFamily && expAvail.lyricsFamily && renderFamilySection(
-              'LYRICS',
-              'text-rose-400/80',
-              ['whisper-base'],
-              { 'whisper-base': 'Whisper-base' },
-            )}
-            {settings.experimentalLyricsFamily && expAvail.lyricsFamily && selectedAudio && (
-              <LyricsTextPanel slug={selectedAudio.id} />
-            )}
-          </>
+        // Header inside a family's frame — the family name on the left (several
+        // frames can be open at once, so each is labelled), an optional note
+        // beside it (e.g. the All-In-One "requires allin1" hint), and the
+        // action cluster on the right.
+        const sectionHeader = (label: ReactNode, labelCls: string, note: ReactNode, cluster: ReactNode) => (
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="min-w-0 flex items-baseline gap-2">
+              <span className={`shrink-0 text-[10px] uppercase tracking-wider font-medium ${labelCls}`}>{label}</span>
+              {note && <span className="min-w-0 text-[10px] normal-case tracking-normal text-amber-400/80 truncate">{note}</span>}
+            </div>
+            {cluster}
+          </div>
         );
-      })()}
 
-      {/* Custom detectors flagged is_algorithm. Empty when no detectors are registered
-          or when none have is_algorithm=True — toggle the flag on the Playground page. */}
-      {(() => {
-        const algos = customDetectors.filter((d) => d.is_algorithm && d.status === 'ok');
-        if (algos.length === 0) return null;
-        // Missing = registered + flagged + no successful cached envelope + not already running.
-        // We re-run "fatal" envelopes too: a missing dep that's since been installed should
-        // get a fresh shot when the user clicks Run missing.
-        const missing = algos.filter((d) => {
-          if (customRunning.has(d.name)) return false;
-          const env = customResults[d.name];
-          return !env || !!env.fatal;
-        });
-        const canRunMissing = !!selectedAudio && missing.length > 0;
-        return (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">Custom</div>
-              <div className="flex items-center gap-1.5 text-[10px]">
-                <button
-                  disabled={!canRunMissing}
-                  onClick={() => {
-                    if (!selectedAudio || missing.length === 0) return;
-                    runCustomDetectors(selectedAudio.id, missing.map((d) => d.name));
-                  }}
-                  title={!selectedAudio
+        // ── MSAF ──────────────────────────────────────────────────────────
+        {
+          const ids = ['msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda'];
+          const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
+          const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
+          sections.push({
+            key: 'msaf', label: 'MSAF', experimental: false,
+            total: ids.length, cached: ids.length - missing.length,
+            render: () => (
+              <>
+                {sectionHeader('MSAF', 'text-cyan-300/80', null, actionCluster({
+                  missing, canRunMissing,
+                  onRun: () => handleRunMissingForSection([...missing]),
+                  onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; }),
+                  onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; }),
+                  runTitle: !selectedAudio
                     ? 'Select a song first.'
                     : missing.length === 0
-                      ? 'Every custom algorithm already has a cached result for this song.'
-                      : `Run ${missing.length} custom detector${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`}
-                  className="px-1.5 py-0.5 rounded border border-amber-700/40 bg-amber-900/20 text-amber-200 hover:bg-amber-900/40 transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-amber-900/20"
-                >
-                  ▶ Run missing{missing.length > 0 ? ` (${missing.length})` : ''}
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    algos.forEach((d) => next.add(`custom:${d.name}`));
-                    return next;
+                      ? 'Every MSAF algorithm already has a cached result for this song.'
+                      : `Run ${missing.length} MSAF algorithm${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
+                }))}
+                <div className={algoRowsCls}>
+                  {ids.map((id) => {
+                    const cached = toolStates[id]?.status === 'done';
+                    const checked = selectedAlgorithms.has(id);
+                    const label = id.replace('msaf-', '').toUpperCase();
+                    return (
+                      <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                        <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
+                        {renderStatusPill(id, cached)}
+                      </label>
+                    );
                   })}
-                  className="text-slate-500 hover:text-amber-300 transition-colors uppercase tracking-wider"
-                >
-                  Select all
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  onClick={() => setSelectedAlgorithms((prev) => {
-                    const next = new Set(prev);
-                    algos.forEach((d) => next.delete(`custom:${d.name}`));
-                    return next;
+                </div>
+              </>
+            ),
+          });
+        }
+
+        // ── All-In-One ────────────────────────────────────────────────────
+        {
+          const ids = ['allin1', ...[0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`)];
+          const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
+          const canRunMissing = gpuCaps.allin1 && !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
+          sections.push({
+            key: 'allin1', label: 'All-In-One', experimental: false,
+            total: ids.length, cached: ids.length - missing.length,
+            render: () => (
+              <div title={gpuCaps.allin1 ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}>
+                {sectionHeader(
+                  'All-In-One',
+                  gpuCaps.allin1 ? 'text-cyan-300/80' : 'text-slate-500',
+                  gpuCaps.allin1 ? null : 'requires `allin1` (Demucs profile or `pip install -r tools/requirements-allin1.txt`)',
+                  actionCluster({
+                    missing, canRunMissing,
+                    onRun: () => handleRunMissingForSection(missing),
+                    onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; }),
+                    onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; }),
+                    selectDisabled: !gpuCaps.allin1,
+                    runTitle: !gpuCaps.allin1
+                      ? GPU_TOOLS_UNAVAILABLE_HINT
+                      : !selectedAudio
+                        ? 'Select a song first.'
+                        : missing.length === 0
+                          ? 'Every All-In-One model already has a cached result for this song.'
+                          : `Run ${missing.length} All-In-One model${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
+                  }),
+                )}
+                <div className={algoRowsCls}>
+                  {ids.map((id) => {
+                    const cached = toolStates[id]?.status === 'done';
+                    const checked = selectedAlgorithms.has(id);
+                    const label = id === 'allin1' ? 'Ensemble' : `fold${id.replace('allin1-fold', '')}`;
+                    return (
+                      <label
+                        key={id}
+                        className={`flex items-center gap-1.5 select-none ${gpuCaps.allin1 ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                        title={gpuCaps.allin1 ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}
+                      >
+                        <input type="checkbox" checked={checked} disabled={!gpuCaps.allin1} onChange={() => toggleAlgorithm(id)} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
+                        <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
+                        {renderStatusPill(id, cached)}
+                      </label>
+                    );
                   })}
-                  className="text-slate-500 hover:text-amber-300 transition-colors uppercase tracking-wider"
-                >
-                  None
-                </button>
+                </div>
               </div>
-            </div>
-            <div className={algoRowsCls}>
-              {algos.map((d) => {
-                const id = `custom:${d.name}`;
-                const env = customResults[d.name];
-                const cached = !!env && !env.fatal;
-                const fatalMessage = env?.fatal
-                  ? `${env.fatal.type ?? 'error'}: ${env.fatal.message ?? ''}`.trim()
-                    + (env.fatal.suggested_install ? `\n\nTry: ${env.fatal.suggested_install}` : '')
-                  : null;
-                const checked = selectedAlgorithms.has(id);
-                const running = customRunning.has(d.name);
+            ),
+          });
+        }
+
+        // ── Ruptures (CPD) — 19 variants from Truong/Oudre/Vayatis ─────────
+        {
+          const missing = RUPTURES_METHODS
+            .filter((m) => !rupturesResults[m.suffix])
+            .map((m) => `ruptures-${m.suffix}`);
+          const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
+          sections.push({
+            key: 'ruptures', label: 'Ruptures (CPD)', experimental: false,
+            total: RUPTURES_METHODS.length, cached: RUPTURES_METHODS.length - missing.length,
+            render: () => (
+              <>
+                {sectionHeader('Ruptures (CPD)', 'text-cyan-300/80', null, actionCluster({
+                  missing, canRunMissing,
+                  onRun: () => handleRunMissingForSection(missing),
+                  onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); RUPTURES_METHODS.forEach((m) => next.add(`ruptures-${m.suffix}`)); return next; }),
+                  onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); RUPTURES_METHODS.forEach((m) => next.delete(`ruptures-${m.suffix}`)); return next; }),
+                  runTitle: !selectedAudio
+                    ? 'Select a song first.'
+                    : missing.length === 0
+                      ? 'Every Ruptures method already has a cached result for this song.'
+                      : `Run ${missing.length} Ruptures method${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
+                }))}
+                <div className={algoRowsCls}>
+                  {RUPTURES_METHODS.map((m) => {
+                    const id = `ruptures-${m.suffix}`;
+                    const cached = !!rupturesResults[m.suffix];
+                    const checked = selectedAlgorithms.has(id);
+                    return (
+                      <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                        <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{m.search}·{m.model}</span>
+                        {renderStatusPill(id, cached)}
+                      </label>
+                    );
+                  })}
+                </div>
+              </>
+            ),
+          });
+        }
+
+        // ── Experimental families (SPAN / LOOP / CUE extras / LYRICS / PATTERN).
+        // Same shape across all — only the algo IDs, label map, feature flag,
+        // and optional trailing panel differ. Each becomes its own chip.
+        const pushFamily = (
+          key: string,
+          title: string,
+          ids: readonly string[],
+          labels: Record<string, string>,
+          extra?: ReactNode,
+        ) => {
+          const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
+          const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
+          sections.push({
+            key, label: title, experimental: true,
+            total: ids.length, cached: ids.length - missing.length,
+            render: () => (
+              <>
+                {sectionHeader(
+                  title,
+                  'text-fuchsia-300/80',
+                  <span className="text-slate-500">experimental</span>,
+                  actionCluster({
+                    missing, canRunMissing,
+                    onRun: () => handleRunMissingForSection([...missing]),
+                    onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; }),
+                    onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; }),
+                    runTitle: !selectedAudio
+                      ? 'Select a song first.'
+                      : missing.length === 0
+                        ? `Every ${title} model already has a cached result for this song.`
+                        : `Run ${missing.length} ${title} model${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
+                  }),
+                )}
+                <div className={algoRowsCls}>
+                  {ids.map((id) => {
+                    const cached = toolStates[id]?.status === 'done';
+                    const checked = selectedAlgorithms.has(id);
+                    return (
+                      <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                        <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{labels[id] ?? id}</span>
+                        {renderStatusPill(id, cached)}
+                      </label>
+                    );
+                  })}
+                </div>
+                {extra}
+              </>
+            ),
+          });
+        };
+        if (settings.experimentalSpanFamily && expAvail.spanFamily) pushFamily(
+          'span', 'SPAN',
+          ['silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive'],
+          { 'silero-vad': 'Silero-VAD', 'jdcnet-voicing': 'JDCNet', 'panns-cnn14': 'PANNs CNN14', 'hpss-percussive': 'HPSS percussive' },
+        );
+        if (settings.experimentalLoopFamily && expAvail.loopFamily) pushFamily(
+          'loop', 'LOOP',
+          ['chroma-autocorr'],
+          { 'chroma-autocorr': 'Chroma loops' },
+        );
+        if (settings.experimentalCueExtras && expAvail.cueExtras) pushFamily(
+          'cue-extras', 'CUE extras',
+          ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'],
+          { 'basic-pitch': 'basic-pitch', 'librosa-key': 'librosa key', 'autochord-chords': 'autochord', 'librosa-onsets': 'librosa onsets' },
+        );
+        if (settings.experimentalLyricsFamily && expAvail.lyricsFamily) pushFamily(
+          'lyrics', 'LYRICS',
+          ['whisper-base'],
+          { 'whisper-base': 'Whisper-base' },
+          selectedAudio ? <LyricsTextPanel slug={selectedAudio.id} /> : null,
+        );
+        if (settings.experimentalPatternFamily && expAvail.patternFamily) pushFamily(
+          'pattern', 'PATTERN',
+          ['locomotif'],
+          { 'locomotif': 'LoCoMotif' },
+        );
+
+        // ── Custom detectors flagged is_algorithm. Skipped entirely when no
+        // detectors are registered, or none have is_algorithm=True. ─────────
+        {
+          const algos = customDetectors.filter((d) => d.is_algorithm && d.status === 'ok');
+          if (algos.length > 0) {
+            // Missing = flagged + no successful cached envelope + not running.
+            // We re-run "fatal" envelopes too: a missing dep that's since been
+            // installed should get a fresh shot on "Run missing".
+            const missing = algos.filter((d) => {
+              if (customRunning.has(d.name)) return false;
+              const env = customResults[d.name];
+              return !env || !!env.fatal;
+            });
+            const canRunMissing = !!selectedAudio && missing.length > 0;
+            sections.push({
+              key: 'custom', label: 'Custom', experimental: false,
+              total: algos.length,
+              cached: algos.filter((d) => { const env = customResults[d.name]; return !!env && !env.fatal; }).length,
+              render: () => (
+                <>
+                  {sectionHeader('Custom', 'text-cyan-300/80', null, actionCluster({
+                    missing: missing.map((d) => d.name), canRunMissing, amber: true,
+                    onRun: () => { if (!selectedAudio || missing.length === 0) return; handleRunMissingForSection(missing.map((d) => `custom:${d.name}`)); },
+                    onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); algos.forEach((d) => next.add(`custom:${d.name}`)); return next; }),
+                    onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); algos.forEach((d) => next.delete(`custom:${d.name}`)); return next; }),
+                    runTitle: !selectedAudio
+                      ? 'Select a song first.'
+                      : missing.length === 0
+                        ? 'Every custom algorithm already has a cached result for this song.'
+                        : `Run ${missing.length} custom detector${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
+                  }))}
+                  <div className={algoRowsCls}>
+                    {algos.map((d) => {
+                      const id = `custom:${d.name}`;
+                      const env = customResults[d.name];
+                      const cached = !!env && !env.fatal;
+                      const fatalMessage = env?.fatal
+                        ? `${env.fatal.type ?? 'error'}: ${env.fatal.message ?? ''}`.trim()
+                          + (env.fatal.suggested_install ? `\n\nTry: ${env.fatal.suggested_install}` : '')
+                        : null;
+                      const checked = selectedAlgorithms.has(id);
+                      const running = customRunning.has(d.name);
+                      return (
+                        <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none" title={d.description || d.label || d.name}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                          <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{d.label || d.name}</span>
+                          {running
+                            ? <span className="text-amber-300 text-[9px] uppercase tracking-wider inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />running</span>
+                            : fatalMessage
+                              ? <span className="text-red-400 text-[9px] uppercase tracking-wider cursor-help" title={`Failed: ${fatalMessage}`}>failed</span>
+                              : cached
+                                ? <span className="text-emerald-500/80 text-[9px] uppercase tracking-wider">cached</span>
+                                : <span className="text-slate-600 text-[9px] uppercase tracking-wider">missing</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              ),
+            });
+          }
+        }
+
+        if (sections.length === 0) return null;
+        // Every chip the user has toggled open, in panel order. Several can be
+        // expanded at once; each renders its own framed family below the chips.
+        const expanded = sections.filter((s) => expandedAlgoTypes.has(s.key));
+        return (
+          <div className="space-y-1.5">
+            <nav aria-label="Algorithm families" className={stacked ? 'grid grid-cols-2 gap-1' : 'grid grid-cols-4 gap-1'}>
+              {sections.map((s) => {
+                const open = expandedAlgoTypes.has(s.key);
                 return (
-                  <label
-                    key={id}
-                    className="flex items-center gap-1.5 cursor-pointer select-none"
-                    title={d.description || d.label || d.name}
-                  >
-                    <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)}
-                      className={accent.checkbox} />
-                    <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{d.label || d.name}</span>
-                    {running
-                      ? <span className="text-amber-300 text-[9px] uppercase tracking-wider inline-flex items-center gap-1">
-                          <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />running
-                        </span>
-                      : fatalMessage
-                        ? <span
-                            className="text-red-400 text-[9px] uppercase tracking-wider cursor-help"
-                            title={`Failed: ${fatalMessage}`}
-                          >
-                            failed
-                          </span>
-                        : cached
-                          ? <span className="text-emerald-500/80 text-[9px] uppercase tracking-wider">cached</span>
-                          : <span className="text-slate-600 text-[9px] uppercase tracking-wider">missing</span>}
-                  </label>
+                  <AnnotationTypeChip
+                    key={s.key}
+                    label={s.label}
+                    active={open}
+                    experimental={s.experimental}
+                    count={s.total}
+                    layerCount={s.cached}
+                    title={`${s.cached} of ${s.total} cached — click to ${open ? 'collapse' : 'expand'}`}
+                    onClick={() => toggleAlgoType(s.key)}
+                  />
                 );
               })}
-            </div>
+            </nav>
+            {expanded.length === 0 ? (
+              <div className="px-3 py-2 rounded border border-white/[0.12] bg-white/[0.04] text-[10.5px] text-slate-400 italic">
+                Pick one or more families above to show their algorithms.
+              </div>
+            ) : (
+              expanded.map((s) => (
+                <div
+                  key={s.key}
+                  className={`min-w-0 rounded-lg border p-2 ${
+                    s.experimental
+                      ? 'border-fuchsia-400/35 bg-fuchsia-500/[0.04] shadow-[0_0_18px_-7px_rgba(232,121,249,0.55)]'
+                      : 'border-cyan-400/35 bg-cyan-500/[0.04] shadow-[0_0_18px_-7px_rgba(34,211,238,0.55)]'
+                  }`}
+                >
+                  {s.render()}
+                </div>
+              ))
+            )}
           </div>
         );
       })()}
@@ -5442,10 +5525,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <button
             onClick={() => setSidebarCollapsed(false)}
             title="Show songs"
-            className="fixed left-0 top-16 z-30 flex items-center gap-1.5 pl-2.5 pr-3 py-2 rounded-r-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-l-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pl-3.5 transition-all shadow-lg shadow-black/40"
+            className="fixed left-0 top-[72px] z-30 flex items-center gap-1.5 pl-2.5 pr-3 py-2 rounded-r-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-l-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pl-3.5 transition-all shadow-lg shadow-black/40"
           >
             <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Songs</span>
-            <span className="text-sm leading-none font-bold">›</span>
+            <span className="text-xl leading-none font-bold">›</span>
           </button>
         )}
         {(mode === 'song' || mode === 'prep') && !sidebarCollapsed && (
@@ -5478,7 +5561,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               const { files, sawNestedFolder } = await walkDataTransferItems(e.dataTransfer.items);
               void handleUploadFiles(files, { sawNestedFolder });
             }}
-            className={`shrink-0 sticky top-16 self-start h-[calc(100vh-4rem)] border-r ${sidebarDragActive ? 'border-emerald-400/50 bg-emerald-500/[0.04]' : 'border-white/[0.10] bg-[#14171d]/80'} backdrop-blur-sm flex flex-col relative transition-colors`}
+            className={`shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-r ${sidebarDragActive ? 'border-emerald-400/50 bg-emerald-500/[0.04]' : 'border-white/[0.10] bg-[#14171d]/80'} backdrop-blur-sm flex flex-col relative transition-colors`}
           >
             <div
               onMouseDown={startSidebarResize}
@@ -5490,11 +5573,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             </div>
             <>
                 <div className="flex items-center justify-between px-3 h-9 border-b border-white/[0.05] shrink-0">
-                  <span className="text-[13px] uppercase tracking-[0.18em] text-slate-100 font-bold">Songs</span>
+                  <span className="flex items-baseline gap-2">
+                    <span className="text-[13px] uppercase tracking-[0.18em] text-slate-100 font-bold">Songs</span>
+                    {corpusStats && (
+                      <span
+                        className="text-[10px] uppercase tracking-[0.14em] text-slate-500 font-normal"
+                        title={`Full corpus: ${corpusStats.songs} songs · ${corpusStats.admins} admin${corpusStats.admins === 1 ? '' : 's'}. The demo tier ships a 3-song CC0 subset; full corpus access is granted by an admin.`}
+                      >
+                        {audioFiles.length} / {corpusStats.songs} · {corpusStats.admins} admin{corpusStats.admins === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </span>
                   <button
                     onClick={() => setSidebarCollapsed(true)}
                     title="Hide songs"
-                    className="text-slate-500 hover:text-slate-200 transition-colors text-sm leading-none px-1"
+                    className="text-slate-500 hover:text-slate-200 transition-colors text-xl leading-none px-1"
                   >
                     ‹
                   </button>
@@ -5627,6 +5720,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       };
                       for (const [type, info] of Object.entries(layerSummary.layers)) {
                         if (!info || info.count === 0) continue;
+                        // Loops & Patterns only render in the editor when
+                        // experimentalLoopsAndPatterns is on (see
+                        // UnifiedAnnotationListPanel). Counting them here when
+                        // the flag is off produced phantom "in progress" rows
+                        // for annotations the user can neither see nor edit.
+                        if ((type === 'loops' || type === 'patterns') && !settings.experimentalLoopsAndPatterns) continue;
                         tracks.push({
                           kind: type as TrackKind,
                           label: layerLabels[type] ?? type,
@@ -5720,17 +5819,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     return (
                       <Fragment key={a.id}>
                         {showDivider && (
-                          <div
-                            role="separator"
-                            aria-label="Your dataset"
-                            className="my-2 mx-3 flex items-center gap-2 select-none"
-                          >
-                            <div className="flex-1 h-px bg-gradient-to-r from-amber-400 via-fuchsia-500 to-cyan-400 shadow-[0_0_8px_rgba(217,70,239,0.45)]" />
-                            <span className="text-[9px] uppercase tracking-[0.22em] font-semibold text-slate-400">
-                              your songs
-                            </span>
-                            <div className="flex-1 h-px bg-gradient-to-r from-cyan-400 via-fuchsia-500 to-amber-400 shadow-[0_0_8px_rgba(217,70,239,0.45)]" />
-                          </div>
+                          <>
+                            <div className="mt-2 mx-3 text-center text-[10px] uppercase tracking-[0.22em] font-semibold text-slate-300 select-none">
+                              {audioFiles.length} {audioFiles.length === 1 ? 'song' : 'songs'}
+                            </div>
+                            <div
+                              role="separator"
+                              aria-label="Your dataset"
+                              className="mt-3 mb-2 mx-3 flex items-center gap-2 select-none"
+                            >
+                              <div className="flex-1 h-px bg-gradient-to-r from-amber-400 via-fuchsia-500 to-cyan-400 shadow-[0_0_6px_rgba(217,70,239,0.35)]" />
+                              <span className="text-[9px] uppercase tracking-[0.22em] font-semibold text-slate-400">
+                                your songs
+                              </span>
+                              <div className="flex-1 h-px bg-gradient-to-r from-cyan-400 via-fuchsia-500 to-amber-400 shadow-[0_0_6px_rgba(217,70,239,0.35)]" />
+                            </div>
+                          </>
                         )}
                         <div
                           role="button"
@@ -5974,46 +6078,71 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
              One-liner that tells a first-time user what each workspace is
              for. Dismissed per-workspace via localStorage (see InfoBanner). */}
         {feature === 'prep' && (
-          <InfoBanner id="prep.v2" title="Dataset Prep" accent="emerald">
-            Set <strong>BPM</strong> and align the <strong>grid</strong> for each
-            song using the edit panel <strong>below the song visualization</strong> —
-            try auto-detect, or tap along with the metronome. If every song already
-            has a BPM, move on to the <strong>Annotator Tool</strong> tab above.
-          </InfoBanner>
+          bpm ? (
+            <InfoBanner id="prep.v2" title="Dataset Prep" accent="emerald">
+              <strong>This song already has a BPM set</strong> ({Math.round(bpm)} BPM).
+              You can fine-tune it or re-align the <strong>grid</strong> in the
+              <strong> Song info</strong> panel <strong>below the song visualization</strong> —
+              adjust the BPM, nudge the offset, or switch grid mode
+              (<strong>Static / Dynamic / Manual</strong>). When you're happy with it,
+              move on to the <strong>Annotator Tool</strong> tab above.
+            </InfoBanner>
+          ) : (
+            <InfoBanner id="prep.v2" title="Dataset Prep" accent="emerald">
+              Set <strong>BPM</strong> and align the <strong>grid</strong> for this
+              song in the <strong>Song info</strong> panel
+              <strong> below the song visualization</strong>. Pick a grid mode first
+              (<strong>Static / Dynamic / Manual</strong>), then under
+              <strong> Tempo</strong> apply an <strong>auto-detected</strong> BPM chip,
+              type one in manually, or tap along with the metronome. Once every song
+              has a BPM, move on to the <strong>Annotator Tool</strong> tab above.
+            </InfoBanner>
+          )
         )}
         {feature === 'annotate' && (
-          <InfoBanner id="annotate.v4" title="Annotator Tool" accent="cyan">
-            Annotate the song with <strong>boundaries</strong> (split the song
-            into non-overlapping sections), <strong>cues</strong> (single
-            events at a point in time), <strong>spans</strong> (ranged regions
-            that may overlap), <strong>loops</strong> (repeating segments
-            with cycle length), and <strong>patterns</strong> (recurring
-            rhythmic motifs) — switch types in the tab strip just under the
-            waveform; edit list lives in the panel <strong>below the
-            visualization</strong>. Press <strong>?</strong> for the full
-            shortcut list. Toggle <strong>signal rows</strong> (e.g.
-            spectrogram, chroma) from the <strong>SIGNALS</strong> menu in
-            the audio visualization panel to surface different audio features.
-            <strong> BPM and grid must be set in Dataset Prep first</strong> —
-            boundaries snap to the grid.
-          </InfoBanner>
+          !bpm ? (
+            <InfoBanner id="annotate.v4" title="Annotator Tool" accent="cyan">
+              <strong>Set this song's BPM and grid in Dataset Prep first</strong> —
+              boundaries and cues snap to the grid, so annotating before a tempo
+              is locked won't line up. Open the <strong>Dataset Prep</strong> tab
+              above, then come back here.
+            </InfoBanner>
+          ) : (
+            <InfoBanner id="annotate.v4" title="Annotator Tool" accent="cyan">
+              Mark the song with <strong>boundaries</strong> (non-overlapping
+              sections), <strong>cues</strong> (single point events),
+              <strong> spans</strong> (ranged regions that may overlap),
+              <strong> loops</strong> (repeating segments with a cycle length),
+              and <strong>patterns</strong> (recurring rhythmic motifs). Switch
+              types in the tab strip under the waveform; the edit list is in the
+              panel <strong>below the visualization</strong>, and edits snap to
+              the grid. Toggle <strong>signal rows</strong> (spectrogram, chroma,
+              …) from the <strong>SIGNALS</strong> menu to surface different audio
+              features. Press <strong>?</strong> for all shortcuts.
+            </InfoBanner>
+          )
         )}
         {feature === 'inspect-song' && (
           <InfoBanner id="inspect-song.v2" title="Algorithm Inspect — per song" accent="violet">
-            Tick the algorithms you want in the <strong>right sidebar</strong>,
-            then hit <strong>Run</strong> — predictions stack as colored timelines
-            on the waveform, with metrics vs. your manual annotation in the panel
-            <strong> below the visualization</strong>. Switch to <strong>All songs</strong>
-            (tab just under this banner) for dataset-wide totals.
+            Tick the algorithms you want in the <strong>right sidebar</strong> and
+            hit <strong>Run</strong> — each prediction stacks as a colored timeline
+            on the waveform, scored against your <strong>manual annotation</strong>
+            (F1 / precision / recall) in the panel <strong>below the
+            visualization</strong>. No manual annotation yet? Add one in the
+            <strong> Annotator Tool</strong> first so there's a ground truth to
+            compare against. Switch to <strong>All songs</strong> (tab just under
+            this banner) for dataset-wide totals.
           </InfoBanner>
         )}
         {feature === 'inspect-all' && (
           <InfoBanner id="inspect-all.v2" title="Algorithm Inspect — all songs" accent="violet">
-            Pick algorithms via the <strong>⚙ options</strong> button at the top,
-            then click <strong>Batch run</strong> to evaluate every song at once.
-            The aggregate F1 / precision / recall table appears below, with
-            expandable per-song rows. New algorithms can be added or re-run on a
-            single song from the <strong>Per song</strong> tab above.
+            Choose algorithms via the <strong>⚙ options</strong> button at the top,
+            then <strong>Batch run</strong> to evaluate every song at once. The
+            aggregate <strong>F1 / precision / recall</strong> table appears below,
+            with expandable per-song rows to spot where an algorithm wins or fails.
+            Only songs that have a <strong>manual annotation</strong> count toward
+            the totals. To add or re-run a single algorithm, use the
+            <strong> Per song</strong> tab above.
           </InfoBanner>
         )}
 
@@ -6213,7 +6342,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {/* Song-specific viz */}
         {selectedAudio && (
           <>
-            <div className="sticky top-16 z-50 -mx-4 px-4 py-2 bg-[#0a0b0d]/95 backdrop-blur space-y-2">
+            <div className="sticky top-[72px] z-50 -mx-4 px-4 py-2 bg-[#0a0b0d]/95 backdrop-blur space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-3xl font-bold text-white leading-tight truncate tracking-tight">{selectedAudio.name}</h2>
               </div>
@@ -6548,12 +6677,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               playerIsPlaying={playerIsPlaying}
               onSeekAndPlay={handleSeekAndPlay}
               onPause={handlePause}
-              previewRegion={feature === 'prep' ? null : (isEyeMode ? null : previewRegion)}
-              onPreviewRegionChange={feature === 'prep' ? undefined : handlePreviewRegionChange}
-              onPreviewPlay={feature === 'prep' ? undefined : handlePreviewPlay}
-              onPreviewPause={feature === 'prep' ? undefined : handlePreviewPause}
-              onPreviewDismiss={feature === 'prep' ? undefined : handlePreviewDismiss}
-              onPreviewLoopToggle={feature === 'prep' ? undefined : handlePreviewLoopToggle}
+              previewRegion={isEyeMode ? null : previewRegion}
+              onPreviewRegionChange={handlePreviewRegionChange}
+              onPreviewPlay={handlePreviewPlay}
+              onPreviewPause={handlePreviewPause}
+              onPreviewDismiss={handlePreviewDismiss}
+              onPreviewLoopToggle={handlePreviewLoopToggle}
               rowOrder={rowOrder}
               onReorderRow={handleReorderRow}
               hasCustomRowOrder={hasCustomRowOrder}
@@ -6661,7 +6790,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   {feature === 'prep' ? (
                     <>
                       <CollapsibleSection
-                        title="BPM and Grid"
+                        title="Song details"
                         storageKey="tc:prep:bpmgrid:open"
                         defaultOpen={false}
                       >
@@ -7111,16 +7240,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <button
             onClick={() => setAnnotateSidebarCollapsed(false)}
             title="Show annotation tools"
-            className="fixed right-0 top-16 z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
+            className="fixed right-0 top-[72px] z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
           >
-            <span className="text-sm leading-none font-bold">‹</span>
+            <span className="text-xl leading-none font-bold">‹</span>
             <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Annotate</span>
           </button>
         )}
         {feature === 'annotate' && selectedAudio && !annotateSidebarCollapsed && (
           <aside
             style={{ width: annotateSidebarWidth }}
-            className={`shrink-0 sticky top-16 self-start h-[calc(100vh-4rem)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative`}
+            className={`shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative`}
           >
             <div
               onMouseDown={startAnnotateSidebarResize}
@@ -7140,7 +7269,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     aria-expanded={annotateMenuOpen}
                     aria-haspopup="menu"
                     title="Export all · Delete all annotations for this track"
-                    className={`px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition-colors text-sm leading-none ${annotateMenuOpen ? 'bg-white/[0.06] text-slate-200' : ''}`}
+                    className={`px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition-colors text-xl leading-none ${annotateMenuOpen ? 'bg-white/[0.06] text-slate-200' : ''}`}
                   >
                     ⋯
                   </button>
@@ -7172,7 +7301,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <button
                   onClick={() => setAnnotateSidebarCollapsed(true)}
                   title="Hide annotation tools"
-                  className="text-slate-500 hover:text-slate-200 transition-colors text-sm leading-none px-1"
+                  className="text-slate-500 hover:text-slate-200 transition-colors text-xl leading-none px-1"
                 >
                   ›
                 </button>
@@ -7235,6 +7364,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     onFocusPattern={setFocusedPattern}
                     onItemDelete={handleUnifiedItemDelete}
                     onItemToggleImportance={handleUnifiedItemToggleImportance}
+                    onDeleteLayer={handleUnifiedLayerDelete}
+                    onRenameLayer={handleUnifiedLayerRename}
+                    onChangeItemLabel={handleUnifiedItemLabelChange}
                     selectedLayerIdByType={selectedLayerIdByType}
                     onSelectLayer={handleUnifiedSelectLayer}
                     experimentalLoopsAndPatterns={settings.experimentalLoopsAndPatterns}
@@ -7333,17 +7465,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                        || activeAnnotationType === 'loops' || activeAnnotationType === 'patterns')
                       ? activeAnnotationType
                       : null;
-                const timerSlot = timerKey ? (() => {
+                // Split the timer into its readout (stays on the info panel's
+                // title row, next to ⋯ More) and the Record/Stop/Reset controls
+                // (tucked under ⋯ More) so the collapsed panel shows just time.
+                const timerParts = timerKey ? (() => {
                   const singleDocKey: TimerKey = timerKey;
                   const sessionType = annotationSessionTypeRef.current;
                   const isRunningActive = sessionType === singleDocKey;
                   const activeTime = annotationTimesTotal[singleDocKey];
                   const hasActiveTime = activeTime > 0;
-                  return (
+                  const time = (
+                    <span className={`font-mono tabular-nums text-[11px] ${isRunningActive ? 'text-emerald-400' : 'text-slate-200'}`}>
+                      {fmtAnnotationTime(activeTime)}
+                    </span>
+                  );
+                  const controls = (
                     <>
-                      <span className={`font-mono tabular-nums text-[11px] ${isRunningActive ? 'text-emerald-400' : 'text-slate-200'}`}>
-                        {fmtAnnotationTime(activeTime)}
-                      </span>
                       {isRunningActive ? (
                         <button
                           onClick={() => pauseAnnotationTimer(selectedAudio.id)}
@@ -7378,7 +7515,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       )}
                     </>
                   );
+                  return { time, controls };
                 })() : null;
+                const timeSlot = timerParts?.time ?? null;
+                const timerSlot = timerParts?.controls ?? null;
 
                 // Undo/redo: layer-typed panels (cues / spans / loops /
                 // patterns) share the page-level layers document's history;
@@ -7444,6 +7584,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                             }}
                           />
                         )}
+                        timeSlot={timeSlot}
                         timerSlot={timerSlot}
                         ioSlot={(() => {
                           // Import / Export moved here from the actions row so
@@ -7631,9 +7772,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <button
             onClick={() => setAlgoSidebarCollapsed(false)}
             title="Show algorithms panel"
-            className="fixed right-0 top-16 z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
+            className="fixed right-0 top-[72px] z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
           >
-            <span className="text-sm leading-none font-bold">‹</span>
+            <span className="text-xl leading-none font-bold">‹</span>
             <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Algorithms</span>
           </button>
         )}
@@ -7644,7 +7785,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           return (
             <aside
               style={{ width: algoSidebarWidth }}
-              className="shrink-0 sticky top-16 self-start h-[calc(100vh-4rem)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
+              className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
             >
               <div
                 onMouseDown={startAlgoSidebarResize}
@@ -7659,7 +7800,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <button
                   onClick={() => setAlgoSidebarCollapsed(true)}
                   title="Hide algorithms panel"
-                  className="text-slate-500 hover:text-slate-200 transition-colors text-sm leading-none px-1"
+                  className="text-slate-500 hover:text-slate-200 transition-colors text-xl leading-none px-1"
                 >
                   ›
                 </button>
@@ -7698,7 +7839,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       />
 
       {selectedAudio && (() => {
-        const typeLabels: Record<AnnotationType, string> = { manual: 'Boundaries', eye: 'Eye', autoGuess: 'Auto-guess', cues: 'Cues', spans: 'Spans', loops: 'Loops', patterns: 'Patterns' };
+        const typeLabels: Record<AnnotationType, string> = { boundaries: 'Boundaries', cues: 'Cues', spans: 'Spans', loops: 'Loops', patterns: 'Patterns' };
         return (
           <DeleteConfirmDialog
             open={deleteActiveOpen}
@@ -7870,7 +8011,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ...d,
             layers: d.layers.map((l) =>
               l.id === layer.id
-                ? { ...l, items: l.items.map((it) => (it.id === cue.id ? { ...it, ...patch } : it)) }
+                ? { ...l, items: l.items.map((it) => (it.id === cue.id ? ({ ...it, ...patch } as typeof it) : it)) }
                 : l,
             ),
           }));
@@ -7916,7 +8057,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ...d,
             layers: d.layers.map((l) =>
               l.id === layer.id
-                ? { ...l, items: l.items.map((it) => (it.id === span.id ? { ...it, ...patch } : it)) }
+                ? { ...l, items: l.items.map((it) => (it.id === span.id ? ({ ...it, ...patch } as typeof it) : it)) }
                 : l,
             ),
           }));
@@ -7961,7 +8102,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ...d,
             layers: d.layers.map((l) =>
               l.id === layer.id
-                ? { ...l, items: l.items.map((it) => (it.id === loop.id ? { ...it, ...patch } : it)) }
+                ? { ...l, items: l.items.map((it) => (it.id === loop.id ? ({ ...it, ...patch } as typeof it) : it)) }
                 : l,
             ),
           }));
@@ -8006,7 +8147,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ...d,
             layers: d.layers.map((l) =>
               l.id === layer.id
-                ? { ...l, items: l.items.map((it) => (it.id === pattern.id ? { ...it, ...patch } : it)) }
+                ? { ...l, items: l.items.map((it) => (it.id === pattern.id ? ({ ...it, ...patch } as typeof it) : it)) }
                 : l,
             ),
           }));

@@ -1,0 +1,99 @@
+{
+  "algorithm": "ruptures-pelt-l2",
+  "algoName": "PELT \u00b7 l2",
+  "search": "Pelt",
+  "model": "l2",
+  "suffix": "pelt-l2",
+  "paperSection": "\u00a75.1.2",
+  "methodType": "exact",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 3.019,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.5021,
+      "centroid": 0.6759
+    },
+    {
+      "time": 3.019,
+      "endTime": 10.82,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.688,
+      "centroid": 0.5058
+    },
+    {
+      "time": 10.82,
+      "endTime": 11.912,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7722,
+      "centroid": 1.0
+    },
+    {
+      "time": 11.912,
+      "endTime": 37.965,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9112,
+      "centroid": 0.4691
+    },
+    {
+      "time": 37.965,
+      "endTime": 84.381,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9686,
+      "centroid": 0.9178
+    },
+    {
+      "time": 84.381,
+      "endTime": 103.027,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9033,
+      "centroid": 0.4083
+    },
+    {
+      "time": 103.027,
+      "endTime": 106.44,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8595,
+      "centroid": 0.6383
+    },
+    {
+      "time": 106.44,
+      "endTime": 180.628,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.846
+    },
+    {
+      "time": 180.628,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.023,
+      "centroid": 0.4945
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    3.019,
+    10.82,
+    11.912,
+    37.965,
+    84.381,
+    103.027,
+    106.44,
+    180.628,
+    192.409
+  ],
+  "computedAt": 1780119112,
+  "elapsedSec": 4.0
+}

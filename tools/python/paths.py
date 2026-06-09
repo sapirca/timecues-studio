@@ -250,3 +250,6 @@ CUE_EXTRAS_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "cue-extras"
 PERCUSSIVE_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "percussive"
 # Experimental: Whisper-base vocal transcription (LYRICS family).
 LYRICS_OUTPUTS_DIR     = _ALGO_OUTPUTS_DIR / "lyrics"
+# Experimental: LoCoMotif motif discovery (PATTERN family).
+# One file per (slug, algorithm): pattern/<slug>/<algo>.json.
+PATTERN_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "pattern"

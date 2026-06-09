@@ -95,7 +95,7 @@ export interface FillDefaultsModalProps {
 }
 
 export function FillDefaultsModal({ open, onOpenChange, bpm, beatsPerBar, duration, onApply }: FillDefaultsModalProps) {
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
   const [mode, setMode] = useState<Mode>(settings.manualBoundariesDefault);
   const [equalBars, setEqualBars] = useState('16');
   const [customText, setCustomText] = useState(settings.manualBoundariesCustomLayout);
@@ -151,10 +151,36 @@ export function FillDefaultsModal({ open, onOpenChange, bpm, beatsPerBar, durati
 
   const canApply = previewSections.length > 0 && (mode !== 'custom' || customParsed.errors.length === 0);
 
+  // "Set as default" persists the current selection to user settings so it's
+  // pre-selected next time. Equal-sections layouts adapt to each song's length
+  // and aren't representable as a stored default, so they're excluded.
+  const canSaveDefault = mode === 'custom'
+    ? customParsed.errors.length === 0 && customParsed.layout.length > 0
+    : mode !== 'equal';
+  const currentIsDefault = mode === 'custom'
+    ? settings.manualBoundariesDefault === 'custom'
+      && settings.manualBoundariesCustomLayout.trim() === customText.trim()
+    : mode !== 'equal' && settings.manualBoundariesDefault === mode;
+  const setDefaultTitle = mode === 'equal'
+    ? "Equal-sections layouts adapt to each song's length, so they can't be saved as a default — pick a preset or a custom list."
+    : !canSaveDefault
+      ? 'Fix the custom layout before saving it as the default.'
+      : 'Use this structure as the default — it will be pre-selected for every song from now on.';
+
   const handleApply = () => {
     if (!canApply) return;
     onApply(previewSections);
     onOpenChange(false);
+  };
+
+  const handleSetDefault = () => {
+    if (!canSaveDefault || currentIsDefault) return;
+    if (mode === 'custom') {
+      update('manualBoundariesCustomLayout', customText);
+      update('manualBoundariesDefault', 'custom');
+    } else {
+      update('manualBoundariesDefault', mode as ManualBoundariesPresetKey);
+    }
   };
 
   return (
@@ -309,23 +335,49 @@ export function FillDefaultsModal({ open, onOpenChange, bpm, beatsPerBar, durati
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-white/[0.06]">
-            <Dialog.Close asChild>
-              <button className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 transition-colors">
-                Cancel
+          <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-white/[0.06]">
+            <div className="flex items-center min-w-0">
+              {currentIsDefault ? (
+                <span
+                  className="inline-flex items-center gap-1.5 text-[11px] text-amber-300/90 font-medium"
+                  title="This structure is your saved default — it's pre-selected whenever you open this dialog."
+                >
+                  <span aria-hidden>★</span> Default structure
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSetDefault}
+                  disabled={!canSaveDefault}
+                  title={setDefaultTitle}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                    canSaveDefault
+                      ? 'text-slate-400 hover:text-amber-200 hover:bg-white/[0.06]'
+                      : 'text-slate-600 cursor-not-allowed'
+                  }`}
+                >
+                  <span aria-hidden>☆</span> Set as default
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Dialog.Close asChild>
+                <button className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 transition-colors">
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                onClick={handleApply}
+                disabled={!canApply}
+                className={`px-4 py-1.5 rounded text-[11px] uppercase tracking-wider transition-colors ${
+                  canApply
+                    ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-400/50'
+                    : 'bg-white/[0.04] text-slate-600 border border-white/[0.06] cursor-not-allowed'
+                }`}
+              >
+                Apply
               </button>
-            </Dialog.Close>
-            <button
-              onClick={handleApply}
-              disabled={!canApply}
-              className={`px-4 py-1.5 rounded text-[11px] uppercase tracking-wider transition-colors ${
-                canApply
-                  ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-400/50'
-                  : 'bg-white/[0.04] text-slate-600 border border-white/[0.06] cursor-not-allowed'
-              }`}
-            >
-              Apply
-            </button>
+            </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

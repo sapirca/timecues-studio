@@ -7,6 +7,7 @@ import { listPitchAlgorithms } from '../services/pitchDetection';
 import { listCueExtrasAlgorithms } from '../services/cueExtrasDetection';
 import { listLoopAlgorithms } from '../services/loopDetection';
 import { listLyricsAlgorithms } from '../services/lyricsDetection';
+import { listPatternAlgorithms } from '../services/patternDetection';
 
 export interface ExperimentalAvailability {
   /** SPAN family — span ∪ panns ∪ percussive sidecars reachable. */
@@ -17,6 +18,8 @@ export interface ExperimentalAvailability {
   loopFamily: boolean;
   /** LYRICS family — lyrics sidecar reachable. */
   lyricsFamily: boolean;
+  /** PATTERN family — pattern sidecar reachable. */
+  patternFamily: boolean;
   loading: boolean;
   refresh: () => void;
 }
@@ -26,6 +29,7 @@ const FALSE: Omit<ExperimentalAvailability, 'loading' | 'refresh'> = {
   cueExtras: false,
   loopFamily: false,
   lyricsFamily: false,
+  patternFamily: false,
 };
 
 /** Probe whether each experimental detector family's sidecar(s) are part of the
@@ -41,7 +45,7 @@ export function useExperimentalAvailability(): ExperimentalAvailability {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    const [span, panns, perc, beat, pitch, cueExtras, loop, lyrics] = await Promise.all([
+    const [span, panns, perc, beat, pitch, cueExtras, loop, lyrics, pattern] = await Promise.all([
       listSpanAlgorithms(),
       listPannsAlgorithms(),
       listPercussiveAlgorithms(),
@@ -50,12 +54,14 @@ export function useExperimentalAvailability(): ExperimentalAvailability {
       listCueExtrasAlgorithms(),
       listLoopAlgorithms(),
       listLyricsAlgorithms(),
+      listPatternAlgorithms(),
     ]);
     setState({
       spanFamily: span !== null || panns !== null || perc !== null,
       cueExtras: beat !== null || pitch !== null || cueExtras !== null,
       loopFamily: loop !== null,
       lyricsFamily: lyrics !== null,
+      patternFamily: pattern !== null,
     });
     setLoading(false);
   }, []);

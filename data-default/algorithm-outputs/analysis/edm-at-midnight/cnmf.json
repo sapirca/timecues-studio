@@ -1,0 +1,103 @@
+{
+  "algorithm": "cnmf",
+  "algoName": "CNMF (Non-negative Matrix Factorization)",
+  "audioFile": "edm-at-midnight.mp3",
+  "duration": 166.875,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 1.44,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.2784
+    },
+    {
+      "time": 1.44,
+      "endTime": 40.356,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8641,
+      "centroid": 0.4786
+    },
+    {
+      "time": 40.356,
+      "endTime": 44.582,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.467,
+      "centroid": 1.0
+    },
+    {
+      "time": 44.582,
+      "endTime": 45.511,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7354,
+      "centroid": 0.8724
+    },
+    {
+      "time": 45.511,
+      "endTime": 76.44,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8516,
+      "centroid": 0.8947
+    },
+    {
+      "time": 76.44,
+      "endTime": 90.511,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.3992,
+      "centroid": 0.3456
+    },
+    {
+      "time": 90.511,
+      "endTime": 120.512,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7575,
+      "centroid": 0.6092
+    },
+    {
+      "time": 120.512,
+      "endTime": 151.441,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8496,
+      "centroid": 0.9349
+    },
+    {
+      "time": 151.441,
+      "endTime": 166.859,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.254,
+      "centroid": 0.6486
+    },
+    {
+      "time": 166.859,
+      "endTime": 166.875,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    1.44,
+    40.356,
+    44.582,
+    45.511,
+    76.44,
+    90.511,
+    120.512,
+    151.441,
+    166.859,
+    166.875
+  ],
+  "computedAt": 1780118756,
+  "elapsedSec": 5.73
+}

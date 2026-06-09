@@ -1,0 +1,99 @@
+{
+  "algorithm": "ruptures-window-rbf",
+  "algoName": "Window \u00b7 rbf",
+  "search": "Window",
+  "model": "rbf",
+  "suffix": "window-rbf",
+  "paperSection": "\u00a75.2.1",
+  "methodType": "approximate",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 3.274,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.4276,
+      "centroid": 0.4946
+    },
+    {
+      "time": 3.274,
+      "endTime": 9.845,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6488,
+      "centroid": 0.4824
+    },
+    {
+      "time": 9.845,
+      "endTime": 19.621,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.2367
+    },
+    {
+      "time": 19.621,
+      "endTime": 32.345,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6821,
+      "centroid": 0.9606
+    },
+    {
+      "time": 32.345,
+      "endTime": 94.273,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9836,
+      "centroid": 0.7185
+    },
+    {
+      "time": 94.273,
+      "endTime": 104.072,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.5519,
+      "centroid": 1.0
+    },
+    {
+      "time": 104.072,
+      "endTime": 146.518,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9799,
+      "centroid": 0.7324
+    },
+    {
+      "time": 146.518,
+      "endTime": 156.549,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.3333,
+      "centroid": 0.9629
+    },
+    {
+      "time": 156.549,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0871,
+      "centroid": 0.8678
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    3.274,
+    9.845,
+    19.621,
+    32.345,
+    94.273,
+    104.072,
+    146.518,
+    156.549,
+    169.465
+  ],
+  "computedAt": 1780119218,
+  "elapsedSec": 2.97
+}

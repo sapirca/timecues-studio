@@ -78,18 +78,18 @@ update only these:
 If you use TimeCues Studio in academic work, please cite:
 
 ```bibtex
-@inproceedings{timecues-studio,
-  title     = {TimeCues Studio: A Music Structure Annotation Workbench with
-               Algorithmic Inspection},
-  author    = {Caduri, Sapir and others},
-  booktitle = {Proceedings of the International Society for Music Information
-               Retrieval Conference (ISMIR)},
-  year      = {2026}
+@misc{timecues-studio,
+  title        = {TimeCues Studio: An Interactive Tool for Annotation, Algorithm
+                  Development, Evaluation, and Comparison in Time-Aligned Music
+                  Analysis},
+  author       = {Caduri, Sapir and Goldberg, Yoav},
+  year         = {2026},
+  howpublished = {\url{https://github.com/sapirca/timecues-studio}}
 }
 ```
 
-> Update the BibTeX entry with the final author list, venue year, and DOI
-> before publication.
+> Update the BibTeX entry with the final author list, and add venue/DOI if the
+> paper is published.
 
 ## Contributing
 
