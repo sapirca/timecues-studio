@@ -133,8 +133,8 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
         </button>
         {corpusName && !isDemo && (
           <span
-            title="Corpus name"
-            className="shrink-0 text-[11px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-400/30 truncate max-w-[200px]"
+            title={corpusName}
+            className="min-w-0 text-[11px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-400/30 truncate max-w-[200px]"
           >
             {corpusName}
           </span>

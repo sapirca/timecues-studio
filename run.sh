@@ -554,6 +554,7 @@ ROWS = [
     ("basic_pitch",        "CUE (note onsets)",           "basic_pitch",       lambda: False),
     ("autochord",          "CUE extras",                  "autochord",         lambda: False),
     ("openai-whisper",     "LYRICS (Whisper-base)",       "whisper",           lambda: False),
+    ("ctc-forced-aligner", "LYRICS (forced aligner)",     "ctc_forced_aligner", lambda: False),
     ("dtai-locomotif",     "PATTERN (LoCoMotif)",         "locomotif.locomotif", lambda: False),
 ]
 # Which rows the venv should serve (when configured). Everything else

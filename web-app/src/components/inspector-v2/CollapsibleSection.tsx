@@ -42,7 +42,7 @@ export function CollapsibleSection({
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="w-full group flex items-center gap-3 text-left px-1 py-1 rounded transition-colors hover:bg-white/[0.03]"
+        className="w-full group flex items-center gap-3 text-left px-1 py-2 rounded transition-colors hover:bg-white/[0.03]"
       >
         <span
           className={`inline-block text-2xl sm:text-3xl leading-none text-slate-500 group-hover:text-slate-300 transition-transform duration-150 ${open ? 'rotate-90' : ''}`}

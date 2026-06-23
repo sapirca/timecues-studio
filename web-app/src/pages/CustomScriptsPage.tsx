@@ -220,6 +220,10 @@ export function CustomScriptsPage() {
   const [songsError, setSongsError] = useState<string | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string>('');
   const [busy, setBusy] = useState<Record<string, 'run' | 'delete' | 'clear' | 'flag' | null>>({});
+  /** Detector scope for the top-level bulk-actions bar. '' = every detector. */
+  const [bulkScope, setBulkScope] = useState<string>('');
+  /** Non-null while a bulk Run / Clear sweep is in flight — disables the bar. */
+  const [bulkBusy, setBulkBusy] = useState<'run' | 'clear' | null>(null);
   /** Last-run envelope per `[detectorName][songSlug]`. Nesting by slug means
    *  switching the song dropdown doesn't wipe earlier runs — each song keeps
    *  its own card so users can compare without re-running. */
@@ -514,6 +518,107 @@ export function CustomScriptsPage() {
     }
   };
 
+  /** Detectors targeted by the bulk bar — one when scoped, all otherwise. */
+  const bulkTargets = useMemo(
+    () => (bulkScope ? detectors.filter((d) => d.name === bulkScope) : detectors),
+    [bulkScope, detectors],
+  );
+
+  /** Top-level clear: wipe outputs for the scoped detector(s) across either the
+   *  selected song or every song. Mirrors handleClearOutputs' semantics
+   *  (algorithm cache + this annotator's annotation files; .py source kept). */
+  const handleBulkClear = async (songScope: 'song' | 'all') => {
+    const targets = bulkTargets;
+    if (targets.length === 0) {
+      setTopMessage({ kind: 'error', text: 'No detectors to clear.' });
+      return;
+    }
+    const perSong = songScope === 'song';
+    if (perSong && !selectedSlug) {
+      setTopMessage({ kind: 'error', text: 'Select a song first.' });
+      return;
+    }
+    const selectedSong = songs.find((s) => s.id === selectedSlug);
+    const songTitle = selectedSong?.title ?? selectedSong?.name ?? selectedSlug;
+    const scopeLabel = bulkScope ? `detector "${bulkScope}"` : `all ${targets.length} detectors`;
+    const songLabel = perSong ? `the song "${songTitle}"` : 'every song';
+    if (!confirm(
+      `Clear outputs for ${scopeLabel} on ${songLabel}?\n\n` +
+      `This wipes the algorithm cache and your annotation files for that scope. ` +
+      `The .py source is kept. Other annotators' work is not touched.\n\n` +
+      `This cannot be undone.`
+    )) return;
+    setBulkBusy('clear');
+    try {
+      let totalAnn = 0;
+      for (const d of targets) {
+        cancelBatchRef.current[d.name] = true;
+        const { annotations_removed } = await deleteDetectorOutputs(d.name, perSong ? selectedSlug : undefined);
+        totalAnn += annotations_removed;
+        if (perSong) {
+          setResults((r) => {
+            if (!r[d.name]) return r;
+            const { [selectedSlug]: _drop, ...rest } = r[d.name];
+            return { ...r, [d.name]: rest };
+          });
+          setManualByRun((g) => {
+            if (!g[d.name]) return g;
+            const { [selectedSlug]: _drop, ...rest } = g[d.name];
+            return { ...g, [d.name]: rest };
+          });
+        } else {
+          setResults((r) => { const next = { ...r }; delete next[d.name]; return next; });
+          setManualByRun((g) => { const next = { ...g }; delete next[d.name]; return next; });
+          setBatchByDetector((b) => { const next = { ...b }; delete next[d.name]; return next; });
+        }
+      }
+      setTopMessage({
+        kind: 'info',
+        text: `Cleared outputs for ${scopeLabel} on ${songLabel} — ${totalAnn} annotation file${totalAnn === 1 ? '' : 's'} removed.`,
+      });
+    } catch (e) {
+      setTopMessage({ kind: 'error', text: `Bulk clear failed: ${(e as Error).message}` });
+    } finally {
+      setBulkBusy(null);
+    }
+  };
+
+  /** Top-level run: sweep the scoped runnable detector(s) over either the
+   *  selected song or every song, reusing the per-detector run paths. */
+  const handleBulkRun = async (songScope: 'song' | 'allSongs') => {
+    const targets = bulkTargets.filter((d) => d.status === 'ok');
+    if (targets.length === 0) {
+      setTopMessage({ kind: 'error', text: 'No runnable (OK) detectors in scope.' });
+      return;
+    }
+    if (songScope === 'song' && !selectedSlug) {
+      setTopMessage({ kind: 'error', text: 'Select a song first.' });
+      return;
+    }
+    if (songScope === 'allSongs' && songs.length === 0) {
+      setTopMessage({ kind: 'error', text: 'Song manifest is empty — nothing to run on.' });
+      return;
+    }
+    const scopeLabel = bulkScope ? `detector "${bulkScope}"` : `all ${targets.length} runnable detectors`;
+    if (songScope === 'allSongs' && !confirm(
+      `Run ${scopeLabel} across all ${songs.length} song${songs.length === 1 ? '' : 's'}?\n\n` +
+      `That's ${targets.length * songs.length} run${targets.length * songs.length === 1 ? '' : 's'} — this can take a while.`
+    )) return;
+    setBulkBusy('run');
+    try {
+      for (const d of targets) {
+        if (songScope === 'song') await handleRun(d.name);
+        else await handleRunAll(d.name);
+      }
+      setTopMessage({
+        kind: 'info',
+        text: `Finished running ${scopeLabel} on ${songScope === 'song' ? 'the selected song' : `all ${songs.length} songs`}.`,
+      });
+    } finally {
+      setBulkBusy(null);
+    }
+  };
+
   const openEditor = (opts: { name?: string; code?: string; errors?: CustomValidationError[]; editing?: boolean } = {}) => {
     const identity = opts.name ?? '';
     setUploadOriginalName(identity);
@@ -646,7 +751,7 @@ export function CustomScriptsPage() {
           </p>
         </header>
 
-        <div className="flex items-center justify-between gap-2 bg-[#14171d] border border-white/[0.06] rounded px-3 py-2 text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-[#14171d] border border-white/[0.06] rounded px-3 py-2 text-xs">
           <button
             onClick={() => setHelpOpen((v) => !v)}
             className="px-3 py-1.5 rounded border border-white/10 hover:border-white/20 hover:bg-white/[0.03] transition"
@@ -654,27 +759,94 @@ export function CustomScriptsPage() {
           >
             {helpOpen ? 'Hide help' : 'How this works'}
           </button>
-          <div className="flex items-center gap-2">
-            <select
-              className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-1.5 text-slate-200 min-w-[12rem]"
-              value={selectedSlug}
-              onChange={(e) => setSelectedSlug(e.target.value)}
-              title={
-                songsError
-                  ? `Manifest load failed: ${songsError}`
-                  : `Song that the Run button executes the detector on (${songs.length} available)`
-              }
-              disabled={songsLoading || songs.length === 0}
-            >
-              {songsLoading && <option value="">loading songs…</option>}
-              {!songsLoading && songsError && <option value="">manifest error: {songsError}</option>}
-              {!songsLoading && !songsError && songs.length === 0 && (
-                <option value="">no songs in manifest</option>
+
+          <select
+            className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-1.5 text-slate-200 min-w-[12rem]"
+            value={selectedSlug}
+            onChange={(e) => setSelectedSlug(e.target.value)}
+            title={
+              songsError
+                ? `Manifest load failed: ${songsError}`
+                : `Song that the "This song" Run / Clear actions (and per-row Run) act on (${songs.length} available)`
+            }
+            disabled={songsLoading || songs.length === 0}
+          >
+            {songsLoading && <option value="">loading songs…</option>}
+            {!songsLoading && songsError && <option value="">manifest error: {songsError}</option>}
+            {!songsLoading && !songsError && songs.length === 0 && (
+              <option value="">no songs in manifest</option>
+            )}
+            {songs.map((s) => (
+              <option key={s.id} value={s.id}>{s.title ?? s.name ?? s.id}</option>
+            ))}
+          </select>
+
+          {detectors.length > 0 && (
+            <>
+              <span className="text-slate-700" aria-hidden>·</span>
+              <label className="flex items-center gap-1.5 text-slate-400">
+                <span className="text-[10px] uppercase tracking-wider text-slate-500">Bulk scope</span>
+                <select
+                  className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-1 text-slate-200"
+                  value={bulkScope}
+                  onChange={(e) => setBulkScope(e.target.value)}
+                  disabled={!!bulkBusy}
+                  title="Limit the Run / Clear actions below to one detector, or apply them to every detector."
+                >
+                  <option value="">All detectors</option>
+                  {detectors.map((d) => (
+                    <option key={d.name} value={d.name}>{d.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <span className="flex items-center gap-1.5">
+                <span className="text-slate-500">Run:</span>
+                <button
+                  onClick={() => handleBulkRun('song')}
+                  disabled={!!bulkBusy || !selectedSlug}
+                  className="px-2 py-1 rounded border border-sky-700/50 bg-sky-900/30 text-sky-200 hover:bg-sky-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Run the scoped detector(s) on the selected song."
+                >
+                  This song
+                </button>
+                <button
+                  onClick={() => handleBulkRun('allSongs')}
+                  disabled={!!bulkBusy || songs.length === 0}
+                  className="px-2 py-1 rounded border border-sky-700/50 text-sky-200 hover:bg-sky-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Run the scoped detector(s) on every song in the manifest."
+                >
+                  All songs
+                </button>
+              </span>
+
+              <span className="flex items-center gap-1.5">
+                <span className="text-slate-500">Clear outputs:</span>
+                <button
+                  onClick={() => handleBulkClear('song')}
+                  disabled={!!bulkBusy || !selectedSlug}
+                  className="px-2 py-1 rounded border border-amber-700/50 text-amber-200 hover:bg-amber-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Wipe the scoped detector(s) outputs for the selected song only. Keeps the .py source. Cannot be undone."
+                >
+                  This song
+                </button>
+                <button
+                  onClick={() => handleBulkClear('all')}
+                  disabled={!!bulkBusy}
+                  className="px-2 py-1 rounded border border-rose-700/50 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Wipe the scoped detector(s) outputs for every song. Keeps the .py source. Cannot be undone."
+                >
+                  All songs
+                </button>
+              </span>
+
+              {bulkBusy && (
+                <span className="text-slate-500">{bulkBusy === 'run' ? 'Running…' : 'Clearing…'}</span>
               )}
-              {songs.map((s) => (
-                <option key={s.id} value={s.id}>{s.title ?? s.name ?? s.id}</option>
-              ))}
-            </select>
+            </>
+          )}
+
+          <div className="flex items-center gap-2 ml-auto">
             <button
               onClick={handleReload}
               className="px-3 py-1.5 rounded border border-white/10 hover:border-white/20 hover:bg-white/[0.03] transition"

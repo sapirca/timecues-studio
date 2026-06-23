@@ -14,6 +14,8 @@ import { EvalReferenceDropdown, type EvalReferenceMode } from './EvalReferenceDr
 import { GlobalEvalSpanTable } from './GlobalEvalSpanTable';
 import { GlobalEvalLoopTable } from './GlobalEvalLoopTable';
 import { GlobalEvalPatternTable } from './GlobalEvalPatternTable';
+import { GlobalEvalLyricsTable } from './GlobalEvalLyricsTable';
+import { GlobalEvalCueTable } from './GlobalEvalCueTable';
 import type { ToolResultData, AllIn1Result } from '../../tools/runTool';
 import type { AutoGuessCentroidMethod, ManualSection } from '../../types/manualAnnotation';
 
@@ -2393,6 +2395,10 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
           table because Phase 2's per-family split is incremental (eventually
           every family gets its own table; for now boundary is still the
           mixed-shape default). */}
+      {settings.experimentalCueExtras && (
+        <GlobalEvalCueTable audioFiles={audioFiles} />
+      )}
+
       {settings.experimentalSpanFamily && (
         <GlobalEvalSpanTable audioFiles={audioFiles} />
       )}
@@ -2403,6 +2409,10 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
       {settings.experimentalPatternFamily && (
         <GlobalEvalPatternTable audioFiles={audioFiles} />
+      )}
+
+      {settings.experimentalLyricsFamily && (
+        <GlobalEvalLyricsTable audioFiles={audioFiles} />
       )}
 
       <p className="text-[10px] text-gray-700 leading-relaxed">

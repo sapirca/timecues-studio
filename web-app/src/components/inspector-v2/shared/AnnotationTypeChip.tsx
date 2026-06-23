@@ -33,11 +33,11 @@ export function AnnotationTypeChip({
       className={`flex-1 basis-0 min-w-0 text-left px-1.5 py-1.5 rounded-md border-b-2 border-x border-t flex flex-col gap-0.5 transition ${
         active
           ? (experimental
-              ? 'bg-fuchsia-500/15 text-fuchsia-100 border-b-fuchsia-400 border-x-fuchsia-400/40 border-t-fuchsia-400/40 shadow-[0_0_14px_-3px_rgba(232,121,249,0.6)]'
-              : 'bg-cyan-500/15 text-cyan-100 border-b-cyan-400 border-x-cyan-400/40 border-t-cyan-400/40 shadow-[0_0_14px_-3px_rgba(34,211,238,0.6)]')
+              ? 'bg-fuchsia-500/20 text-fuchsia-50 font-semibold border-b-fuchsia-300 border-x-fuchsia-400/60 border-t-fuchsia-400/60 shadow-[0_0_16px_-2px_rgba(232,121,249,0.75)]'
+              : 'bg-cyan-500/20 text-cyan-50 font-semibold border-b-cyan-300 border-x-cyan-400/60 border-t-cyan-400/60 shadow-[0_0_16px_-2px_rgba(34,211,238,0.75)]')
           : (experimental
-              ? 'bg-fuchsia-500/[0.05] text-fuchsia-300/70 hover:text-fuchsia-200 hover:bg-fuchsia-500/10 border-b-fuchsia-400/25 border-x-fuchsia-400/15 border-t-fuchsia-400/15'
-              : 'bg-cyan-500/[0.04] text-cyan-300/70 hover:text-cyan-100 hover:bg-cyan-500/10 border-b-cyan-400/25 border-x-transparent border-t-transparent')
+              ? 'bg-slate-800/30 text-slate-400 hover:text-fuchsia-200 hover:bg-fuchsia-500/10 border-b-white/10 border-x-transparent border-t-transparent hover:border-b-fuchsia-400/40'
+              : 'bg-slate-800/30 text-slate-400 hover:text-cyan-100 hover:bg-cyan-500/10 border-b-white/10 border-x-transparent border-t-transparent hover:border-b-cyan-400/40')
       }`}
     >
       <span className="text-[10px] font-semibold uppercase tracking-wide leading-tight truncate">

@@ -9,18 +9,11 @@ import {
 
 export interface MetronomePanelProps {
   songInfo: SongInfo | null;
-  /** Update the song's BPM. Tap-tempo streams a new value here on every
-   *  accepted tap once two taps land in the rolling window. When omitted, the
-   *  Tap button stays usable as a visual estimator but never writes back
-   *  (e.g. viewers without grid write access). */
-  onBpmChange?: (bpm: number) => void;
   /** Current playhead time in seconds — drives the click scheduler. */
   playerTime: number;
   /** Whether the song is currently playing — clicks only schedule while true.
    *  The Metronome ON/OFF toggle is just a flag; it does NOT start the song. */
   playerIsPlaying: boolean;
-  /** When true, the tap-tempo button is disabled (dataset grid is locked). */
-  locked?: boolean;
   /** When true, suppress the outer card chrome + "Metronome" title — caller
    *  is wrapping this in their own container (e.g. CollapsibleSection). */
   embedded?: boolean;
@@ -106,6 +99,20 @@ function beatsInRange(songInfo: SongInfo, from: number, to: number): Array<{ t: 
   return out;
 }
 
+/** Resolve the grid the click scheduler should tick against. The metronome is
+ *  decoupled from the song's saved grid: tapping sets a local `tappedBpm` that
+ *  drives the click WITHOUT writing anything back to the dataset. When the user
+ *  has tapped a value we click a steady pulse at that BPM (anchors / per-beat
+ *  overrides are grid concerns, so they're dropped); otherwise we fall back to
+ *  the song's own grid so the panel still works out of the box. Either way we
+ *  keep the song's gridOffset + timeSignature for phase + downbeat accenting. */
+function effectiveMetroInfo(base: SongInfo | null, tappedBpm: number | null): SongInfo | null {
+  if (tappedBpm != null) {
+    return { ...(base ?? {}), bpm: tappedBpm, tempoAnchors: undefined, beatOverrides: undefined } as SongInfo;
+  }
+  return base;
+}
+
 /** Schedule a single beat click. Downbeats are louder + higher-pitched (woodblock-ish). */
 function scheduleClick(ctx: AudioContext, master: GainNode, startAt: number, isDownbeat: boolean, pitch: Pitch) {
   const sampleRate = ctx.sampleRate;
@@ -132,10 +139,8 @@ function scheduleClick(ctx: AudioContext, master: GainNode, startAt: number, isD
 
 export function MetronomePanel({
   songInfo,
-  onBpmChange,
   playerTime,
   playerIsPlaying,
-  locked = false,
   embedded = false,
   tapRef,
 }: MetronomePanelProps) {
@@ -143,8 +148,15 @@ export function MetronomePanel({
   const [clickVolume, setClickVolume] = useState<number>(() => loadVolume());
   const [clickPitch, setClickPitch] = useState<Pitch>(() => loadPitch());
 
-  const bpm = songInfo?.bpm;
-  const hasGrid = !!bpm && bpm > 0;
+  // The metronome's own tempo. `null` means "follow the song's grid BPM"; a
+  // tap sets a local override that the click plays at WITHOUT touching the
+  // dataset grid. Detect (tap) and Listen (click) are two separate features.
+  const [tappedBpm, setTappedBpm] = useState<number | null>(null);
+  const tappedBpmRef = useRef<number | null>(null);
+
+  const songBpm = songInfo?.bpm ?? null;
+  const metroBpm = tappedBpm ?? songBpm;
+  const hasGrid = !!metroBpm && metroBpm > 0;
 
   const songInfoRef = useRef(songInfo);
   const playerTimeRef = useRef(playerTime);
@@ -209,7 +221,7 @@ export function MetronomePanel({
     cursorRef.current = playerTimeRef.current;
 
     const tick = () => {
-      const info = songInfoRef.current;
+      const info = effectiveMetroInfo(songInfoRef.current, tappedBpmRef.current);
       if (!info || !info.bpm) return;
       const now = playerTimeRef.current;
       const horizon = now + LOOKAHEAD_S;
@@ -229,57 +241,169 @@ export function MetronomePanel({
   // ── Tap tempo ─────────────────────────────────────────────────────────────
   // Each tap feeds the pure reducer in ./tapTempo.ts, which maintains the
   // rolling window, debounces fast taps, and resets when the user shifts
-  // tempos. A ref mirrors the state so the side-effect (onBpmChange) sits
+  // tempos. A ref mirrors the state so the tempo write (tappedBpmRef) sits
   // outside the setState updater — keeps both calls StrictMode-safe.
   const [tapState, setTapState] = useState<TapTempoState>(emptyTapTempoState);
   const tapStateRef = useRef<TapTempoState>(emptyTapTempoState);
 
   const handleTap = useCallback(() => {
-    if (locked) return;
     const now = performance.now();
     const prev = tapStateRef.current;
     const next = applyTap(prev, now);
     tapStateRef.current = next;
     setTapState(next);
+    // Drive the metronome's local tempo only — never the dataset grid.
     if (next.currentBpm != null && next.currentBpm !== prev.currentBpm) {
-      onBpmChange?.(next.currentBpm);
+      tappedBpmRef.current = next.currentBpm;
+      setTappedBpm(next.currentBpm);
     }
-  }, [locked, onBpmChange]);
+  }, []);
 
   useEffect(() => {
     if (tapRef) tapRef.current = handleTap;
     return () => { if (tapRef) tapRef.current = null; };
   }, [tapRef, handleTap]);
 
+  // Clear both the tap buffer and the local tempo override, so the metronome
+  // falls back to the song's grid BPM.
   const handleClearTap = useCallback(() => {
     tapStateRef.current = emptyTapTempoState;
     setTapState(emptyTapTempoState);
+    tappedBpmRef.current = null;
+    setTappedBpm(null);
   }, []);
 
   const tapTimes = tapState.taps;
   const tapBpm = tapState.currentBpm;
 
-  // Status hint next to the toggle. The toggle is a passive flag; we show why
-  // the user is or isn't hearing clicks right now.
+  // Status hint for the Listen section — the toggle is a passive flag; we show
+  // why the user is or isn't hearing clicks right now.
   const clickStatus: string =
-    !hasGrid ? 'set a BPM first'
-    : !clickEnabled ? 'off'
+    !hasGrid ? 'tap a tempo first'
+    : !clickEnabled ? 'sound off'
     : !playerIsPlaying ? 'press play to hear it'
     : 'playing';
+
+  // Where the metronome's current tempo is coming from.
+  const bpmSource: string =
+    tappedBpm != null ? 'from your taps'
+    : songBpm != null ? "from the song's BPM"
+    : 'no tempo yet';
 
   const containerClass = embedded
     ? 'space-y-3'
     : 'rounded-md border border-white/[0.06] bg-[#14171d]/80 p-3 space-y-3';
 
+  const canClear = tapTimes.length > 0 || tappedBpm != null;
+
   return (
     <div className={containerClass}>
-      {/* Header: just the toggle. The click is a flag — it follows the song's
-          playhead, it does not start playback on its own. */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        {!embedded && (
-          <span className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-200">Metronome</span>
-        )}
-        <div className={`flex items-center gap-3 flex-wrap ${embedded ? 'w-full justify-end' : ''}`}>
+      {!embedded && (
+        <span className="block text-sm font-semibold uppercase tracking-[0.18em] text-slate-200">Metronome</span>
+      )}
+
+      {/* ── 1. DETECT — tap along to find the tempo. This only sets the
+              metronome's own value; it never writes back to the song's grid. ── */}
+      <section className="space-y-2">
+        <div className="flex items-baseline justify-between gap-2">
+          <span
+            className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300"
+            title="Tap along on every beat and the BPM updates live from the rolling average of your last few taps. This sets the metronome's own tempo only — it does NOT change the song's grid BPM. Once it locks onto a tempo it stays put: a single off-beat tap is ignored as a slip, and only a sustained change (two off-tempo taps in a row) re-locks onto the new tempo so you can switch songs without clearing first."
+          >
+            Detect tempo
+          </span>
+          <span className="text-[10px] text-slate-500">tap along to find the BPM</span>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          {/* Big detected value — the metronome's current tempo. Width varies
+              with the BPM digits / tap count, so it lives on the left and the
+              buttons are pinned right (justify-between) to stay put while tapping. */}
+          <div
+            className="flex min-w-0 flex-col leading-none"
+            title={tapTimes.length === 0
+              ? (tappedBpm != null
+                  ? 'The metronome is set to this tempo from your taps.'
+                  : songBpm != null
+                  ? "Following the song's BPM. Tap below to set a different metronome tempo."
+                  : 'Tap on every beat to detect a tempo.')
+              : tapTimes.length === 1
+              ? 'Tap once more to get a first BPM estimate.'
+              : tapBpm == null
+              ? 'Estimate is outside 60–240 BPM; keep tapping to refine.'
+              : `Estimated from the last ${tapTimes.length} taps.`}
+          >
+            <span className="text-3xl font-bold tabular-nums text-slate-100">
+              {metroBpm != null ? metroBpm : '—'}
+              <span className="ml-1.5 text-sm font-medium text-slate-500">BPM</span>
+            </span>
+            <span className="mt-1 text-[10px] font-mono text-slate-500">
+              {bpmSource} · {tapTimes.length} tap{tapTimes.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {/* Main actions — Tap (dominant) + Clear. */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onMouseDown={handleTap}
+              title="Tap on every beat. The metronome's tempo updates live from the second tap onward and settles once it locks on — a stray tap won't throw it off. Tap a different tempo twice in a row to re-lock. Does not change the song's grid. (T)"
+              className="px-6 py-3 rounded-md text-base font-bold uppercase tracking-[0.18em] border border-emerald-500/60 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30 active:bg-emerald-500/50 active:scale-[0.97] select-none transition-all"
+            >
+              Tap
+            </button>
+            <button
+              type="button"
+              onClick={handleClearTap}
+              disabled={!canClear}
+              title="Reset the detected tempo and clear the tap buffer. The metronome falls back to the song's BPM. Never changes the song's grid."
+              className="px-3 py-2 rounded text-[11px] font-mono border border-white/[0.08] bg-white/[0.02] text-slate-400 hover:border-white/20 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 2. LISTEN — the metronome sound. A separate feature: it plays a
+              woodblock click on every beat at the detected tempo while the song
+              is playing. The controls here only shape that sound. ── */}
+      <section className="space-y-2 pt-3 border-t border-white/[0.06]">
+        <div className="flex items-baseline justify-between gap-2">
+          <span
+            className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300"
+            title="The metronome's sound. When ON, you'll hear a click on every beat at the tempo above while the song plays. These controls only shape the click — they do not detect or change the tempo."
+          >
+            Metronome sound
+          </span>
+          <span className="text-[10px] font-mono text-slate-500" title="The metronome only sounds while the song is playing. Turn it on, then press Spacebar or the player's ▶ button.">
+            {clickStatus}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* ON/OFF toggle — a passive flag; it does not start playback. */}
+          <button
+            type="button"
+            onClick={() => {
+              // Create + resume the AudioContext inside the user gesture so
+              // Chrome's autoplay policy lets clicks through. Schedule clicks
+              // continue to come from the effect; this just unlocks audio.
+              if (!clickEnabled) ensureAudioContext();
+              setClickEnabled((v) => !v);
+            }}
+            disabled={!hasGrid}
+            title="Turn the click track on or off. When ON, you'll hear a click on every beat while the song plays at the detected tempo. It does NOT start the song; press Spacebar to play."
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold uppercase tracking-wider border-2 transition-colors ${
+              clickEnabled
+                ? 'border-emerald-500/70 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
+                : 'border-slate-600/60 bg-slate-800/40 text-slate-300 hover:bg-slate-700/60'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            <span aria-hidden="true" className="text-base leading-none">{clickEnabled ? '🔊' : '🔇'}</span>
+            {clickEnabled ? 'Sound ON' : 'Sound OFF'}
+          </button>
+
           {/* Pitch preset — picks the bandpass frequency of the woodblock click.
               Higher pitches sit above most song content and are easier to pick
               out in dense mixes. Persisted per-user in localStorage. */}
@@ -310,6 +434,7 @@ export function MetronomePanel({
               );
             })}
           </div>
+
           {/* Volume slider — controls the click master gain (0–200%). Persisted
               per-user in localStorage. Values above 100% give headroom over
               busy mixes; some systems will distort near 200%. */}
@@ -341,89 +466,8 @@ export function MetronomePanel({
               {Math.round(clickVolume * 100)}%
             </span>
           </div>
-          <span className="text-[10px] font-mono text-slate-500" title="The metronome only sounds while the song is playing. Toggle this on, then press Spacebar or the player's ▶ button.">
-            {clickStatus}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              // Create + resume the AudioContext inside the user gesture so
-              // Chrome's autoplay policy lets clicks through. Schedule clicks
-              // continue to come from the effect; this just unlocks audio.
-              if (!clickEnabled) ensureAudioContext();
-              setClickEnabled((v) => !v);
-            }}
-            disabled={!hasGrid}
-            title="Turn the click track on or off. When ON, you'll hear a click on every beat while the song plays. The click follows the BPM and grid offset from the Song Info Bar above — it does NOT start the song; press Spacebar to play."
-            className={`px-2.5 py-1 rounded text-[10px] uppercase tracking-wider border transition-colors ${
-              clickEnabled
-                ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
-                : 'border-slate-600/60 bg-slate-800/40 text-slate-300 hover:bg-slate-700/60'
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
-          >
-            {clickEnabled ? '● Metronome ON' : '○ Metronome OFF'}
-          </button>
         </div>
-      </div>
-
-      {/* Tap tempo — tap along to the song and the BPM streams straight to the
-          engine on every accepted tap (from the second tap onward). Mirrors
-          Rekordbox's TAP button: no Apply step, no idle timeout. mousedown
-          (not click) for snappy response — clicks fire on mouseup which adds
-          ~50ms of perceived lag. */}
-      <div className="space-y-1.5 pt-1 border-t border-white/[0.04]">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span
-            className="text-[10px] text-slate-500 uppercase tracking-wider"
-            title="Tap along to the song and the BPM updates live from the rolling average of your last few taps. From the second tap onward the value is written straight to the Song Info Bar — no Apply needed. If you tap a noticeably different tempo (>30% off the running average) the buffer restarts on that tap so you can switch songs without clearing first."
-          >
-            Tap tempo
-            {locked && (
-              <span className="ml-2 font-mono normal-case tracking-normal text-red-400/80">
-                · read-only (you don't have grid write permission)
-              </span>
-            )}
-          </span>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className="text-[10px] font-mono tabular-nums text-slate-400 min-w-[64px] text-right"
-              title={tapTimes.length === 0
-                ? 'Tap the button to start.'
-                : tapTimes.length === 1
-                ? 'Tap once more to get a first BPM estimate.'
-                : tapBpm == null
-                ? 'Estimate is outside 60–240 BPM; keep tapping to refine.'
-                : `Estimated from the last ${tapTimes.length} taps.`}
-            >
-              {tapBpm != null ? `${tapBpm} BPM` : '— BPM'}
-            </span>
-            <span className="text-[10px] font-mono text-slate-600 tabular-nums w-12 text-right">
-              {tapTimes.length} tap{tapTimes.length === 1 ? '' : 's'}
-            </span>
-            <button
-              type="button"
-              onMouseDown={handleTap}
-              disabled={locked}
-              title={locked
-                ? "Grid is locked — you don't have grid write permission."
-                : "Tap on every beat. The BPM updates live and is applied to the song from the second tap onward. Tap a different tempo to restart automatically. (T)"}
-              className="px-4 py-1.5 rounded text-xs font-bold uppercase tracking-[0.15em] border border-emerald-500/60 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30 active:bg-emerald-500/50 active:scale-[0.97] select-none transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Tap
-            </button>
-            <button
-              type="button"
-              onClick={handleClearTap}
-              disabled={tapTimes.length === 0}
-              title="Discard the current taps and start fresh. Doesn't change the song's BPM — only the tap buffer."
-              className="px-2 py-1 rounded text-[10px] font-mono border border-white/[0.08] bg-white/[0.02] text-slate-400 hover:border-white/20 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-      </div>
-
+      </section>
     </div>
   );
 }

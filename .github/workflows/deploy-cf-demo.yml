@@ -37,6 +37,12 @@ concurrency:
 
 jobs:
   build-and-deploy:
+    # This file is mirrored verbatim into the public timecues-studio repo by the
+    # OSS sync (it isn't export-ignored). The Cloudflare Pages deploy is owned
+    # there — that's where CLOUDFLARE_API_TOKEN is valid. Guard so the SAME file
+    # only runs in the public repo; in the private source repo the job is simply
+    # skipped (no failed run, no notification email).
+    if: github.repository == 'sapirca/timecues-studio'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

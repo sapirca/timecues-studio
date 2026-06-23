@@ -9,6 +9,12 @@ import {
 import { evaluateCustom, type AlgoEvalResult } from '../../utils/evaluation';
 import { CustomEvalControls, DEFAULT_CUSTOM_EVAL_SETTINGS, type CustomEvalSettings } from './CustomEvalControls';
 import { EvalReferenceDropdown } from './EvalReferenceDropdown';
+import { GlobalEvalSpanTable } from './GlobalEvalSpanTable';
+import { GlobalEvalLoopTable } from './GlobalEvalLoopTable';
+import { GlobalEvalPatternTable } from './GlobalEvalPatternTable';
+import { GlobalEvalLyricsTable } from './GlobalEvalLyricsTable';
+import { GlobalEvalCueTable } from './GlobalEvalCueTable';
+import { useSettings } from '../../context/SettingsContext';
 import type { ManualSection } from '../../types/manualAnnotation';
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
@@ -59,7 +65,23 @@ export interface EvaluationStageProps {
   duration: number;
   tolerance: number;
   onToleranceChange: (t: number) => void;
+  /** Drives the per-kind tabs that re-use the global eval tables in
+   *  single-song mode. When absent, only the Boundaries tab renders
+   *  (the other tabs need a slug to fetch detections + reference
+   *  annotations against). */
+  selectedAudio?: { id: string; name: string } | null;
 }
+
+type EvalTabKey = 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
+
+const TAB_LABELS: Record<EvalTabKey, string> = {
+  boundaries: 'Boundaries',
+  cues:       'Cues',
+  spans:      'Spans',
+  loops:      'Loops',
+  patterns:   'Patterns',
+  lyrics:     'Lyrics',
+};
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -71,11 +93,42 @@ export function EvaluationStage({
   duration,
   tolerance,
   onToleranceChange,
+  selectedAudio = null,
 }: EvaluationStageProps) {
   const [sortKey, setSortKey] = useState<SortKey>('f1');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [evalRef, setEvalRef] = useState<'manual' | 'eye'>('manual');
   const [customSettings, setCustomSettings] = useState<CustomEvalSettings>(DEFAULT_CUSTOM_EVAL_SETTINGS);
+  const [tab, setTab] = useState<EvalTabKey>('boundaries');
+  const { settings } = useSettings();
+
+  // Visible tabs depend on which experimental families the user opted into.
+  // Boundaries is always visible (the classic mir_eval table). The other tabs
+  // need a slug to pull predictions + reference annotations against, so we
+  // hide them if no song is selected.
+  const visibleTabs = useMemo<EvalTabKey[]>(() => {
+    const out: EvalTabKey[] = ['boundaries'];
+    if (selectedAudio) {
+      if (settings.experimentalCueExtras)     out.push('cues');
+      if (settings.experimentalSpanFamily)    out.push('spans');
+      if (settings.experimentalLoopFamily)    out.push('loops');
+      if (settings.experimentalPatternFamily) out.push('patterns');
+      if (settings.experimentalLyricsFamily)  out.push('lyrics');
+    }
+    return out;
+  }, [
+    selectedAudio,
+    settings.experimentalCueExtras,
+    settings.experimentalSpanFamily,
+    settings.experimentalLoopFamily,
+    settings.experimentalPatternFamily,
+    settings.experimentalLyricsFamily,
+  ]);
+
+  // Snap back to boundaries if the active tab disappears (flag flipped off).
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) setTab('boundaries');
+  }, [visibleTabs, tab]);
 
   // If the experimental Eye flag flips off while Eye was the eval reference,
   // fall back to manual so the (hidden) Eye option can't stay selected.
@@ -203,7 +256,7 @@ export function EvaluationStage({
 
   const rupturesCount = useMemo(() => annotationRows.filter((r) => isRupturesId(r.id)).length, [annotationRows]);
 
-  if (!annotationRows.length) {
+  if (!annotationRows.length && tab === 'boundaries') {
     return (
       <div className="py-6 text-center">
         <p className="text-sm text-gray-500">No algorithm results loaded.</p>
@@ -212,8 +265,44 @@ export function EvaluationStage({
     );
   }
 
+  const singleSongFiles = selectedAudio ? [selectedAudio] : [];
+
+  const TabBar = visibleTabs.length > 1 && (
+    <div className="flex items-center gap-1 border-b border-white/[0.06] -mb-1">
+      {visibleTabs.map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => setTab(k)}
+          className={[
+            'px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider border-b-2 -mb-px transition-colors',
+            tab === k
+              ? 'border-indigo-400 text-indigo-200'
+              : 'border-transparent text-slate-500 hover:text-slate-300',
+          ].join(' ')}
+        >
+          {TAB_LABELS[k]}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (tab !== 'boundaries') {
+    return (
+      <div className="space-y-4">
+        {TabBar}
+        {tab === 'cues'     && <GlobalEvalCueTable     audioFiles={singleSongFiles} />}
+        {tab === 'spans'    && <GlobalEvalSpanTable    audioFiles={singleSongFiles} />}
+        {tab === 'loops'    && <GlobalEvalLoopTable    audioFiles={singleSongFiles} />}
+        {tab === 'patterns' && <GlobalEvalPatternTable audioFiles={singleSongFiles} />}
+        {tab === 'lyrics'   && <GlobalEvalLyricsTable  audioFiles={singleSongFiles} />}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {TabBar}
       {/* Header + controls */}
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1">

@@ -9,6 +9,16 @@ guide in the same change set.
 > their JSON shape, or be removed entirely between releases. Do not build
 > downstream tooling on these endpoints until they graduate.
 
+> **Per-song Eval is tabbed by annotation kind.** Open any song's Eval
+> stage and the tabs across the top expose **Boundaries · Cues · Spans ·
+> Loops · Patterns · Lyrics**. Boundaries is the legacy mir_eval table;
+> each other tab fetches the relevant reference layer + the cached
+> detection of every algorithm in that family and renders kind-specific
+> metrics (IoU + frame F1 for spans, cycle-alignment F1 + accent Jaccard
+> for patterns, bar-snap + phase-pop-free for loops, WER + word-onset F1
+> for lyrics). Tabs only appear when the matching family flag is on.
+> The all-songs Eval view shows the same tables stacked.
+
 ## Where the flags live
 
 `Settings → Annotation → Experimental annotation types`. Each toggle is
@@ -144,6 +154,23 @@ and from patterns (no per-beat highlight grid).
   top-K non-overlapping candidates with their bar count and intra-cycle
   similarity score. Fast (~5–10 s for a 3 min track on CPU).
 
+### Loop-specific eval columns
+
+Beyond the inherited span-style metrics (IoU + frame F1 + edge F1), the
+LOOP eval table adds two loop-quality columns:
+
+- **Bar snap** — fraction of predicted loops whose `start` AND `end`
+  fall within ±50 ms of a bar boundary. Requires a cached BPM
+  detection — without one the cell shows `—`.
+- **Phase-pop free** — fraction of predicted loops whose duration is
+  an integer multiple of the bar length (within ±50 ms). Loops that
+  are non-integer-bar audibly pop when the playback engine wraps; this
+  metric flags them up front.
+
+The bar grid is derived from the cached `/api/bpm/detect/<slug>` result
+(first detector with `beat_times` sets the grid origin; the first
+detector with a numeric `bpm` is the fallback).
+
 ### Evaluation
 
 Per-kind span metrics now ship as part of Phase 2 of the integration plan:
@@ -234,6 +261,24 @@ Three pure-DSP detectors sharing one slim sidecar (`cue-extras` :8014):
 
 Cache at `data/algorithm-outputs/cue-extras/<slug>/<algo>.json`.
 
+### Cues eval columns
+
+The Cues tab compares every cue-emitting detector against the song's
+first `cues` annotation layer at a per-kind tolerance:
+
+| Algorithm | Tolerance | Why |
+|---|---|---|
+| BeatNet downbeats          | 100 ms | beat-onset alignment |
+| basic-pitch onsets         |  50 ms | sharp note attacks |
+| librosa-key changes        | 250 ms | mode transitions are perceptually wide |
+| autochord chord changes    | 250 ms | same |
+| librosa-onsets             |  50 ms | DSP onsets are tight by construction |
+
+Columns: precision · recall · F1 · MNBD (mean nearest-cue distance, s).
+Each algorithm's prediction set is projected to `{time, label}[]`
+before scoring via `evaluateCueLayer` so all five share the same
+boundary-style point-F1 metric.
+
 ## LYRICS family
 
 Output kind: **lyrics** — per-word and per-line entries with start/end
@@ -255,8 +300,35 @@ as their alignment target. The panel auto-saves on a 600 ms debounce; word
 - **Whisper base** — OpenAI Whisper "base" multilingual transcription.
   ~140 MB checkpoint lazy-downloaded into the shared `timecues-model-cache`
   named volume on first detect. CPU-only torch wheels keep the sidecar
-  multi-platform. Word-level timestamps are coarse (~200 ms) — refining
-  with WhisperX / ctc-forced-aligner is the planned Phase 5 follow-up.
+  multi-platform. Word-level timestamps are coarse (~200 ms) — refine
+  with the CTC forced aligner below if you have the reference text.
+
+- **CTC forced aligner** — `MahmoudAshraf97/ctc-forced-aligner` (MIT)
+  pinned to `facebook/wav2vec2-base-960h` (Apache-2.0, English-only).
+  ~360 MB checkpoint lazy-downloaded into the shared HuggingFace cache
+  on first detect. Requires the **Reference lyrics** panel to be filled
+  in for the song — without a transcript the detector returns ok=false
+  with a clear error message. Tight word-level onset/offset (~30 ms)
+  vs. Whisper's coarse ~200 ms.
+  > **Note** — the package's default `MMS_FA` model (CC-BY-NC) is **not**
+  > used; the integration stays fully permissively-licensed.
+
+### Lyrics eval columns
+
+The LYRICS eval table inherits the line-level IoU + edge-F1 columns
+from the span family (every `kind: 'line'` ref/est item gets scored
+as a span) and adds two word-level metrics on top:
+
+- **WER** — classic Levenshtein word distance between the reference's
+  normalised word sequence and the detector's, divided by the
+  reference word count. Whisper-base sees this move; ctc-forced-aligner
+  forces it to 0 by construction (the model aligns the reference text
+  itself, so the word sequence is fixed).
+- **Word onset F1** — among text-aligned word pairs (output of the
+  Wagner-Fischer DP), a true-positive requires the predicted onset
+  to land within ±50 ms of the reference onset. Whisper-base's ~200 ms
+  granularity caps this in the 0.3–0.6 range on most tracks; ctc-forced-aligner
+  routinely sits above 0.85 when the reference text is accurate.
 
 When BeatNet returns a meter and the value differs from the currently
 selected Time Signature, a violet `BeatNet: 4/4` chip appears next to
@@ -316,25 +388,51 @@ The first `/api/pattern/detect` call after the sidecar boots pays a one-time
 Models panel triggers this explicitly so the user can pay the warm-up cost
 before clicking Run on a song.
 
+### Pattern-specific eval columns
+
+The PATTERN eval table adds two columns alongside the inherited
+span-style metrics:
+
+- **Cycle F1** — point-F1 over the expanded tile-start set
+  (`start + k·cycleLen` for `k ∈ [0, repeatCount)`) at ±100 ms.
+  Catches "right cycle length, wrong repeat count" cases the inherited
+  interval IoU silently passes.
+- **Accent Jaccard** — Jaccard of `highlightedBeats` sets averaged
+  over ref/est pattern pairs that overlap (greedy by interval IoU).
+  Empty-vs-empty (neither pattern accents any sub-beat) scores 1 so
+  unaccented patterns don't drag the metric down.
+
 ## Warm models before first use (dev only)
 
 The Initialize panel is the recommended way to warm models during normal
-use. For batch dev work (multiple containers / fresh machines) you can
-trigger the same warming via curl once the sidecars are up:
+use. For batch dev work (multiple containers / fresh machines) the
+project ships `tools/warm-experimental-models.sh` — a one-shot curl
+loop over every `/api/<family>/algorithms` + `/api/<family>/initialize`
+endpoint:
 
 ```sh
-# SPAN family
+# Warm everything against the default dev base (http://localhost:5174):
+./tools/warm-experimental-models.sh
+
+# Custom host (VM, remote dev, CI):
+./tools/warm-experimental-models.sh -h http://timecues-vm:5173
+
+# Subset of families:
+./tools/warm-experimental-models.sh --only lyrics,span
+```
+
+The script skips algorithms the sidecar reports as `available=false`
+(deps missing) and prints a Ready / Failed / Skipped table at the end.
+Exit code 1 if any /initialize returned non-2xx so it slots cleanly
+into CI.
+
+For ad-hoc per-algorithm warming the underlying endpoints still work:
+
+```sh
 curl -XPOST http://localhost:5173/api/span/initialize \
      -H 'content-type: application/json' \
      -d '{"algo": "silero-vad"}'
-
-# BeatNet
-curl -XPOST http://localhost:5173/api/beatnet/initialize
 ```
-
-A `make warm-experimental-models` target is listed as TODO in
-`integration_plan.md` Phase 0 and will land once the wider Phase-2 docs pass
-catches up to it.
 
 ## Setlist workspace
 

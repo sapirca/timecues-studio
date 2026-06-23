@@ -94,6 +94,61 @@ def stems_dir(slug: str) -> Path:
     """Get stems directory for a song: songs/<slug>/stems"""
     return song_dir(slug) / "stems"
 
+# Demucs stems do NOT live under songs/<slug>/stems (that legacy per-song dir is
+# unused). Their location depends on the environment:
+#   * dev / run.sh:  web-app/public/stems/<slug>/  (stems daemon default;
+#                    Vite serves them at /stems/...).
+#   * prod docker:   data/stems/<slug>/  — the single /var/lib/timecues/data
+#                    volume holds everything; the web container re-maps
+#                    data/stems → /app/web-app/public/stems, but the
+#                    experimental sidecars only mount data, so inside a sidecar
+#                    the stems are reachable solely at data/stems.
+#   * shipped seeds: data-default/stems/<slug>/  (read-only CC0 demo tracks).
+# Search all three (user/dev trees first) so a per-stem detector run finds the
+# stem regardless of which environment it runs in.
+WEB_STEMS_DIR     = REPO_ROOT / "web-app" / "public" / "stems"
+DATA_STEMS_DIR    = DATA_DIR / "stems"
+DEFAULT_STEMS_DIR = DEFAULT_DATA_DIR / "stems"
+
+# The four Demucs stems. "mix" is the full track (the default, non-stem run) and
+# is intentionally NOT in this set — callers treat stem in (None, "mix") as the
+# full-mix path through find_audio().
+STEM_NAMES = ("vocals", "drums", "bass", "other")
+
+
+def stem_audio(slug: str, stem: str) -> Optional[Path]:
+    """Return the cached Demucs stem file for (slug, stem), or None.
+
+    Searches web-app/public/stems/<slug>/ (locally-generated) then
+    data-default/stems/<slug>/ (shipped seed). The stems daemon writes .wav;
+    the CC0 seeds ship as .mp3 — accept either. Validates both segments with
+    safe_segment() so a forgotten validator at a caller can't traverse out of
+    the stems dirs, and rejects any stem outside STEM_NAMES.
+    """
+    if safe_segment(slug) is None:
+        return None
+    if stem not in STEM_NAMES:
+        return None
+    for base in (WEB_STEMS_DIR, DATA_STEMS_DIR, DEFAULT_STEMS_DIR):
+        slug_dir = base / slug
+        if not slug_dir.is_dir():
+            continue
+        for ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a"):
+            cand = slug_dir / f"{stem}{ext}"
+            if cand.is_file():
+                return cand
+    return None
+
+
+def cache_name(algo: str, stem: Optional[str] = None) -> str:
+    """Cache-file stem for a (algo, stem) pair: bare `<algo>` for the full mix
+    (stem None/"mix"), `<algo>__<stem>` for a per-stem run. This composite id is
+    the unit of work end-to-end — same string keys the on-disk JSON, the
+    /api/<fam>/detect/<slug>/<id> read URL, and the UI overlay set."""
+    if not stem or stem == "mix":
+        return algo
+    return f"{algo}__{stem}"
+
 def song_info_dir(slug: str) -> Path:
     """Get song-info directory for a song: songs/<slug>/song-info"""
     return song_dir(slug) / "song-info"

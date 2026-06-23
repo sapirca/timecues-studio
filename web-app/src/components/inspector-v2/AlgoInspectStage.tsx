@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ToolResultData, AllIn1Result } from '../../tools/runTool';
+import type { ToolResultData } from '../../tools/runTool';
 import { useMirEvalSingle } from '../../services/mirEvalClient';
 import { evaluateCustom } from '../../utils/evaluation';
 import type { ManualSection } from '../../types/manualAnnotation';
@@ -26,8 +26,6 @@ export interface AlgorithmRow {
 
 // ─── Tool-state → row builder constants ───────────────────────────────────────
 
-const ALLIN1_FOLD_IDS = new Set([0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`));
-
 const ALGO_LABELS: Record<string, string> = {
   'msaf-olda':                 'OLDA',
   'msaf-cnmf':                 'CNMF',
@@ -52,6 +50,7 @@ const ALGO_LABELS: Record<string, string> = {
   'librosa-onsets':            'librosa onsets',
   'hpss-percussive':           'HPSS percussive',
   'whisper-base':              'Whisper-base lyrics',
+  'ctc-forced-aligner':        'CTC forced aligner (lyrics)',
   'locomotif':                 'LoCoMotif',
 };
 
@@ -79,7 +78,7 @@ export const PERCUSSIVE_ALGO_IDS = ['hpss-percussive'] as const;
 export type PercussiveAlgoId = typeof PERCUSSIVE_ALGO_IDS[number];
 
 /** LYRICS-family detector IDs — gated by `experimentalLyricsFamily`. */
-export const LYRICS_ALGO_IDS = ['whisper-base'] as const;
+export const LYRICS_ALGO_IDS = ['whisper-base', 'ctc-forced-aligner'] as const;
 export type LyricsAlgoId = typeof LYRICS_ALGO_IDS[number];
 
 /** PATTERN-family detector IDs — gated by `experimentalPatternFamily`. */
@@ -101,7 +100,13 @@ const ALGO_ORDER = [
   ...PATTERN_ALGO_IDS,
 ];
 
+// The four Demucs stems, in the order per-stem rows stack under their base row.
+const STEM_ROW_ORDER = ['vocals', 'drums', 'bass', 'other'] as const;
+
 function algoLabel(id: string): string {
+  // Composite per-stem id "<algo>__<stem>" → "<base label> · <stem>".
+  const i = id.indexOf('__');
+  if (i !== -1) return `${algoLabel(id.slice(0, i))} · ${id.slice(i + 2)}`;
   return ALGO_LABELS[id] ?? id.replace('allin1-', 'allin1 ');
 }
 
@@ -124,24 +129,26 @@ const MISS_COLOR = '#ef4444';
 // ─── Build annotation rows from toolStates ────────────────────────────────────
 
 export function buildAnnotationRows(toolStates: Record<string, ToolState>): AlgorithmRow[] {
-  return ALGO_ORDER.flatMap((id) => {
+  // Walk the canonical order, and right after each base detector emit any
+  // per-stem variants ("<base>__<stem>") that have a cached result — so a
+  // detector's stem rows group directly beneath its full-mix row.
+  const ids: string[] = [];
+  for (const base of ALGO_ORDER) {
+    ids.push(base);
+    for (const stem of STEM_ROW_ORDER) {
+      if (toolStates[`${base}__${stem}`]) ids.push(`${base}__${stem}`);
+    }
+  }
+  return ids.flatMap((id) => {
     const state = toolStates[id];
     if (!state || state.status !== 'done' || !state.result) return [];
-    const r = state.result;
-    let sections: { time: number; endTime: number; label: string; type: string }[] = [];
-    if (r.toolId === 'msaf-sf' || r.toolId === 'msaf-foote' || r.toolId === 'msaf-cnmf' || r.toolId === 'msaf-olda') sections = r.result.sections;
-    else if (r.toolId === 'allin1') sections = r.result.sections;
-    else if (ALLIN1_FOLD_IDS.has(r.toolId)) sections = (r.result as AllIn1Result).sections;
-    else if (r.toolId === 'ruptures-pelt-default' || r.toolId === 'ruptures-binseg-default' || r.toolId === 'ruptures-window-default') sections = r.result.sections;
-    else if (r.toolId === 'band-gradient') sections = r.result.sections;
-    else if (r.toolId === 'silero-vad' || r.toolId === 'jdcnet-voicing') sections = r.result.sections;
-    else if (r.toolId === 'panns-cnn14') sections = r.result.sections;
-    else if (r.toolId === 'chroma-autocorr') sections = r.result.sections;
-    else if (r.toolId === 'basic-pitch') sections = r.result.sections;
-    else if (r.toolId === 'librosa-key' || r.toolId === 'autochord-chords' || r.toolId === 'librosa-onsets') sections = r.result.sections;
-    else if (r.toolId === 'hpss-percussive') sections = r.result.sections;
-    else if (r.toolId === 'whisper-base') sections = r.result.sections;
-    else if (r.toolId === 'locomotif') sections = r.result.sections;
+    // Every id here comes from ALGO_ORDER (or a per-stem variant of one), so the
+    // result always carries `sections`. The old per-toolId dispatch existed only
+    // to narrow the discriminated union; the composite stem ids can't be
+    // narrowed that way, so read sections structurally instead.
+    const sections =
+      (state.result.result as { sections?: { time: number; endTime: number; label: string; type: string }[] })
+        .sections ?? [];
     if (!sections.length) return [];
     return [{ id, label: algoLabel(id), sections }];
   });

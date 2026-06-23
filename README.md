@@ -5,7 +5,9 @@ app lets annotators mark section boundaries on a waveform, compare them
 against algorithmic estimates (`allin1`, MSAF, ruptures, change-point
 detection), and run `mir_eval` metrics in-browser.
 
-License: [MIT](LICENSE) · Third-party notices: [NOTICE.md](NOTICE.md)
+Documentation & live demo: [TimeCues Studio site](https://sapirca.github.io/timecues-studio/)
+
+License: [MIT](LICENSE) · Third-party notices: [NOTICE.md](NOTICE.md) · Credits & acknowledgements: [CREDITS.md](CREDITS.md)
 
 ## Quick start
 
@@ -25,11 +27,13 @@ experimental detector sidecars, troubleshooting — see [INSTALL.md](INSTALL.md)
 
 | If you want to… | Read |
 |---|---|
+| Browse the docs site (guides, tutorials, live demo) | [sapirca.github.io/timecues-studio](https://sapirca.github.io/timecues-studio/) |
 | Install or self-host the app | [INSTALL.md](INSTALL.md) |
 | Learn the app's features and UI | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | Use experimental detectors | [docs/EXPERIMENTAL_USER_GUIDE.md](docs/EXPERIMENTAL_USER_GUIDE.md) |
 | Understand the on-disk data layout | [DATA.md](DATA.md) |
 | Verify third-party licenses | [NOTICE.md](NOTICE.md) |
+| Credit the upstream projects we build on | [CREDITS.md](CREDITS.md) |
 
 ## Repository layout
 
@@ -90,6 +94,17 @@ If you use TimeCues Studio in academic work, please cite:
 
 > Update the BibTeX entry with the final author list, and add venue/DOI if the
 > paper is published.
+
+## Acknowledgements
+
+TimeCues Studio builds on the open-source MIR ecosystem — `librosa`,
+`mir_eval`, `madmom`, `MSAF`, `ruptures`, `all-in-one`, `Demucs`,
+`Silero-VAD`, `BeatNet`, `JDCNet`, `PANNs`, `basic-pitch`, `LoCoMotif`,
+`Whisper`, `ctc-forced-aligner`, `wav2vec 2.0`, `wavesurfer.js`,
+`CodeMirror`, and the broader scientific-Python and web stacks.
+
+Full citation list with paper references and license details:
+[CREDITS.md](CREDITS.md).
 
 ## Contributing
 

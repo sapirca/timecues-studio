@@ -67,6 +67,7 @@ from custom_loader import (  # noqa: E402
 from custom_runner import (  # noqa: E402
     delete_results_for,
     get_cached,
+    result_path,
     run,
 )
 from paths import (  # noqa: E402
@@ -352,13 +353,32 @@ def delete_annotation(name: str, annotator: str, slug: str) -> bool:
     return True
 
 
-def delete_outputs_for(name: str, annotator: str) -> dict:
+def delete_outputs_for(name: str, annotator: str, slug: Optional[str] = None) -> dict:
     """Wipe one detector's algorithm cache + this annotator's annotation files.
 
     Leaves the .py source untouched. The algorithm cache is shared across
     annotators (it's just memoization of `run()`), so wiping it forces a
     re-run on next request — no other annotator loses authored work.
+
+    When `slug` is given, the wipe is scoped to that one song (its cached
+    envelope + this annotator's annotation file for that song). When `slug`
+    is None, every song's output for the detector is cleared.
     """
+    if slug is not None:
+        rp = result_path(name, slug)
+        if rp.is_file():
+            try:
+                rp.unlink()
+            except OSError:
+                pass
+            # Drop the detector's cache folder once its last envelope is gone.
+            try:
+                rp.parent.rmdir()
+            except OSError:
+                pass
+        removed = 1 if delete_annotation(name, annotator, slug) else 0
+        return {"annotations_removed": removed}
+
     delete_results_for(name)
 
     ann_dir = CUSTOM_ANNOTATIONS_DIR / name / annotator
@@ -787,7 +807,12 @@ class Handler(BaseHTTPRequestHandler):
             annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
             if not annotator:
                 self._send(401, {"error": "missing or invalid X-Annotator-Id header"}); return
-            info = delete_outputs_for(name, annotator)
+            # Optional ?slug=<song> scopes the wipe to a single song; absent,
+            # every song's output for the detector is cleared.
+            slug_q = parse_qs(url.query).get("slug", [None])[0]
+            if slug_q is not None and not _safe_slug(slug_q):
+                self._send(400, {"error": "invalid slug"}); return
+            info = delete_outputs_for(name, annotator, slug_q)
             self._send(200, {"ok": True, **info})
             return
 

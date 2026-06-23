@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Fragment, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Fragment, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { SharedVizPanel, DEFAULT_FIXED_ROW_ORDER, BEAT_GRID_UNIT_OPTIONS, type MirCurves, type BeatGridUnit, type VizRowId } from '../components/inspector-v2/SharedVizPanel';
 import type { LayerAudioConfig } from '../components/inspector-v2/LayerAudioControls';
@@ -462,8 +463,8 @@ const ALGO_ORDER = [
   'librosa-key', 'autochord-chords', 'librosa-onsets',
   // SPAN family addition: percussive HPSS (`experimentalSpanFamily`).
   'hpss-percussive',
-  // LYRICS family — Whisper-base (`experimentalLyricsFamily`).
-  'whisper-base',
+  // LYRICS family — Whisper-base + CTC forced aligner (`experimentalLyricsFamily`).
+  'whisper-base', 'ctc-forced-aligner',
   // PATTERN family — LoCoMotif (`experimentalPatternFamily`).
   'locomotif',
 ] as const;
@@ -475,8 +476,47 @@ const LOOP_TOOL_IDS  = new Set(['chroma-autocorr']);
 const PITCH_TOOL_IDS = new Set(['basic-pitch']);
 const CUE_EXTRAS_TOOL_IDS = new Set(['librosa-key', 'autochord-chords', 'librosa-onsets']);
 const PERCUSSIVE_TOOL_IDS = new Set(['hpss-percussive']);
-const LYRICS_TOOL_IDS     = new Set(['whisper-base']);
+const LYRICS_TOOL_IDS     = new Set(['whisper-base', 'ctc-forced-aligner']);
 const PATTERN_TOOL_IDS    = new Set(['locomotif']);
+
+// Plain-language hints shown as a small chip beside each experimental
+// detector in the sidebar — the model names (CTC, JDCNet, PANNs, HPSS…)
+// mean nothing on their own. `tag` is the short visible chip; `what` is the
+// fuller explanation surfaced on hover.
+const ALGO_HINTS: Record<string, { tag: string; what: string }> = {
+  'silero-vad':         { tag: 'voice on/off', what: 'Where voice / speech is present vs. silence, over time.' },
+  'jdcnet-voicing':     { tag: 'singing',      what: 'Where someone is actually singing (voiced melody).' },
+  'panns-cnn14':        { tag: 'sound type',   what: 'Tags the kind of sound playing (music, speech, applause…).' },
+  'hpss-percussive':    { tag: 'drums',        what: 'Isolates the percussive / drum layer from the mix.' },
+  'chroma-autocorr':    { tag: 'repeats',      what: 'Finds repeated / looped musical regions.' },
+  'basic-pitch':        { tag: 'notes',        what: 'Detects individual musical notes and when they start.' },
+  'librosa-key':        { tag: 'key',          what: "Estimates the song's musical key (e.g. C major)." },
+  'autochord-chords':   { tag: 'chords',       what: 'Recognizes the chord progression.' },
+  'librosa-onsets':     { tag: 'note hits',    what: 'Marks note / transient onset times.' },
+  'whisper-base':       { tag: 'subtitles',    what: 'Transcribes the sung lyrics with rough word timing (auto-subtitles).' },
+  'ctc-forced-aligner': { tag: 'align lyrics', what: 'Lines your pasted reference lyrics up to the audio, word by word.' },
+  'locomotif':          { tag: 'motifs',       what: 'Discovers recurring melodic / rhythmic patterns (motifs).' },
+};
+
+// Detectors that can run against an isolated Demucs stem (vocals/drums/bass/
+// other) rather than the full mix — the CUE/SPAN/LOOP/PATTERN/LYRICS families.
+// Boundary detectors (MSAF, ruptures, all-in-one) and custom scripts stay
+// mix-only. A per-stem run is dispatched under the composite id "<algo>__<stem>"
+// (mirrors cache_name() in tools/python/paths.py).
+const STEM_CAPABLE_TOOL_IDS = new Set<string>([
+  ...SPAN_TOOL_IDS, ...PANNS_TOOL_IDS, ...LOOP_TOOL_IDS, ...PITCH_TOOL_IDS,
+  ...CUE_EXTRAS_TOOL_IDS, ...PERCUSSIVE_TOOL_IDS, ...LYRICS_TOOL_IDS, ...PATTERN_TOOL_IDS,
+]);
+
+// Rewrite a selection so that stem-capable detectors target the chosen stem
+// ("<algo>__<stem>"); boundary/custom ids pass through unchanged. A no-op when
+// stem === 'mix'.
+function applyStemToSelection(sel: Set<string>, stem: string): Set<string> {
+  if (!stem || stem === 'mix') return sel;
+  const out = new Set<string>();
+  for (const id of sel) out.add(STEM_CAPABLE_TOOL_IDS.has(id) ? `${id}__${stem}` : id);
+  return out;
+}
 
 // `null`  → the cache file truly doesn't exist (or fetch failed). UI treats
 //           the tool as never-run.
@@ -557,14 +597,18 @@ async function loadAlgoJson(
     } catch { return null; }
   }
 
-  if (SPAN_TOOL_IDS.has(toolId))       return readExperimental('span',       { kind: 'spans' });
-  if (PANNS_TOOL_IDS.has(toolId))      return readExperimental('panns',      { kind: 'spans' });
-  if (LOOP_TOOL_IDS.has(toolId))       return readExperimental('loop',       { kind: 'loops' });
-  if (PITCH_TOOL_IDS.has(toolId))      return readExperimental('pitch',      { kind: 'notes' });
-  if (CUE_EXTRAS_TOOL_IDS.has(toolId)) return readExperimental('cue-extras', { kind: 'cues' });
-  if (PERCUSSIVE_TOOL_IDS.has(toolId)) return readExperimental('percussive', { kind: 'spans' });
-  if (LYRICS_TOOL_IDS.has(toolId))     return readExperimental('lyrics',     { kind: 'words' });
-  if (PATTERN_TOOL_IDS.has(toolId))    return readExperimental('pattern',    { kind: 'patterns' });
+  // A per-stem result carries the composite id "<algo>__<stem>"; the family is
+  // keyed by the base algo, but readExperimental fetches by the composite
+  // toolId (so /api/<fam>/detect/<slug>/<algo>__<stem> reads the right file).
+  const expBase = toolId.includes('__') ? toolId.slice(0, toolId.indexOf('__')) : toolId;
+  if (SPAN_TOOL_IDS.has(expBase))       return readExperimental('span',       { kind: 'spans' });
+  if (PANNS_TOOL_IDS.has(expBase))      return readExperimental('panns',      { kind: 'spans' });
+  if (LOOP_TOOL_IDS.has(expBase))       return readExperimental('loop',       { kind: 'loops' });
+  if (PITCH_TOOL_IDS.has(expBase))      return readExperimental('pitch',      { kind: 'notes' });
+  if (CUE_EXTRAS_TOOL_IDS.has(expBase)) return readExperimental('cue-extras', { kind: 'cues' });
+  if (PERCUSSIVE_TOOL_IDS.has(expBase)) return readExperimental('percussive', { kind: 'spans' });
+  if (LYRICS_TOOL_IDS.has(expBase))     return readExperimental('lyrics',     { kind: 'words' });
+  if (PATTERN_TOOL_IDS.has(expBase))    return readExperimental('pattern',    { kind: 'patterns' });
 
   const algoSlug =
     toolId.startsWith('msaf-') ? toolId.replace('msaf-', '') :
@@ -684,7 +728,8 @@ const ALGO_LABEL_COLORS: Record<string, string> = {
   // HPSS percussive (SPAN family) — orange so it doesn't blend with voicing.
   'hpss-percussive':   '#fb923c',
   // LYRICS family — rose, distinct from cue-extras teal.
-  'whisper-base':      '#fb7185',
+  'whisper-base':       '#fb7185',
+  'ctc-forced-aligner': '#f43f5e',
   // PATTERN family — emerald, distinct from amber loops and rose lyrics.
   'locomotif':         '#10b981',
   'allin1': '#f97316',
@@ -716,9 +761,18 @@ const SPAN_RENDER_ALGO_IDS = new Set<string>([
   ...SPAN_ALGO_IDS, ...LOOP_ALGO_IDS, ...PITCH_ALGO_IDS,
   ...PERCUSSIVE_ALGO_IDS, ...LYRICS_ALGO_IDS, ...PATTERN_ALGO_IDS,
 ]);
+// Strip the per-stem suffix: "silero-vad__vocals" → "silero-vad". A bare id is
+// returned unchanged. Per-stem overlays/rows must resolve color, render kind and
+// single-info status from the base detector, not the composite id.
+function baseAlgoId(id: string): string {
+  const i = id.indexOf('__');
+  return i === -1 ? id : id.slice(0, i);
+}
+
 function algoRenderKind(id: string): AlgoRenderKind {
-  if (POINT_ALGO_IDS.has(id)) return 'point';
-  if (SPAN_RENDER_ALGO_IDS.has(id)) return 'span';
+  const base = baseAlgoId(id);
+  if (POINT_ALGO_IDS.has(base)) return 'point';
+  if (SPAN_RENDER_ALGO_IDS.has(base)) return 'span';
   return 'boundary';
 }
 
@@ -814,6 +868,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // ── Demucs stem player ───────────────────────────────────────────────────
   const [selectedStemSource, setSelectedStemSource] = useState<StemSource>('mix');
   const [stemManifest, setStemManifest] = useState<StemManifest | null>(null);
+  // Which audio source the run picker computes detectors against. Independent of
+  // the player's selectedStemSource (which only swaps playback). 'mix' is the
+  // full track; a stem runs the ticked CUE/SPAN/LOOP/lyrics detectors on that
+  // isolated stem and caches them under "<algo>__<stem>".
+  const [runStemSource, setRunStemSource] = useState<StemSource>('mix');
   const [songStatuses, setSongStatuses] = useState<Record<string, AnnotationStatus>>({});
   // Per-song user-created layer summaries (cues/spans/loops/patterns) for the
   // current annotator. Combined with `songStatuses` to drive the song-list's
@@ -1009,6 +1068,98 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     };
     const onUp = () => {
       setAlgoSidebarResizing(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  // ── Run picker popover ──────────────────────────────────────────────
+  // The inspect sidebar's per-row checkboxes now toggle *visibility* of cached
+  // results. Choosing *what to compute* moved into this popover, opened from the
+  // "▶ Run…" button: it hosts the same panel in 'run' mode (selectedAlgorithms)
+  // plus a footer that runs the ticked set for the current song. Anchored via a
+  // portal so it escapes the sidebar's overflow/stacking context.
+  const [runPickerOpen, setRunPickerOpen] = useState(false);
+  const runPickerBtnRef = useRef<HTMLButtonElement | null>(null);
+  const runPickerRef = useRef<HTMLDivElement | null>(null);
+  const [runPickerPos, setRunPickerPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 360 });
+  useLayoutEffect(() => {
+    if (!runPickerOpen || !runPickerBtnRef.current) return;
+    const update = () => {
+      const rect = runPickerBtnRef.current!.getBoundingClientRect();
+      setRunPickerPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [runPickerOpen]);
+  useEffect(() => {
+    if (!runPickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (runPickerRef.current?.contains(t) || runPickerBtnRef.current?.contains(t)) return;
+      setRunPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setRunPickerOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [runPickerOpen]);
+
+  // Right-edge DataPrep sidebar — holds Song details (BPM / grid mode /
+  // time signature / alignment) + the Metronome, so the curator can tune the
+  // grid alongside the waveform without scrolling past it. Mirrors the
+  // Annotate / Algo sidebar geometry (drag-left to widen, collapses to a
+  // hover tab on the right edge). Wider default than the others because the
+  // grid params sit in a 3-up row. Persists per browser.
+  const PREP_SIDEBAR_MIN_WIDTH = 360;
+  const PREP_SIDEBAR_MAX_WIDTH = 760;
+  const PREP_SIDEBAR_DEFAULT_WIDTH = 500;
+  const [prepSidebarCollapsed, setPrepSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('tc:prep-sidebar-collapsed');
+      return stored === '1';
+    } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('tc:prep-sidebar-collapsed', prepSidebarCollapsed ? '1' : '0'); } catch {}
+  }, [prepSidebarCollapsed]);
+  const [prepSidebarWidth, setPrepSidebarWidth] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem('tc:prep-sidebar-width');
+      const n = stored ? parseInt(stored, 10) : NaN;
+      if (Number.isFinite(n) && n >= PREP_SIDEBAR_MIN_WIDTH && n <= PREP_SIDEBAR_MAX_WIDTH) return n;
+    } catch {}
+    return PREP_SIDEBAR_DEFAULT_WIDTH;
+  });
+  useEffect(() => {
+    try { localStorage.setItem('tc:prep-sidebar-width', String(prepSidebarWidth)); } catch {}
+  }, [prepSidebarWidth]);
+  const [prepSidebarResizing, setPrepSidebarResizing] = useState(false);
+  const startPrepSidebarResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setPrepSidebarResizing(true);
+    const startX = e.clientX;
+    const startW = prepSidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(PREP_SIDEBAR_MAX_WIDTH, Math.max(PREP_SIDEBAR_MIN_WIDTH, startW + (startX - ev.clientX)));
+      setPrepSidebarWidth(next);
+    };
+    const onUp = () => {
+      setPrepSidebarResizing(false);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       document.body.style.cursor = '';
@@ -1234,8 +1385,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const eyeAddPointRef = useRef<((time: number) => void) | null>(null);
   const eyeSetPointTimeRef = useRef<((idx: number, time: number) => void) | null>(null);
   // Metronome tap-tempo imperative handle — wired through to the Tap button
-  // in MetronomePanel. Used by the T shortcut in /prep. The reducer streams
-  // BPM to the engine on every accepted tap, so there is no separate Apply.
+  // in MetronomePanel. Used by the T shortcut in /prep. Tapping sets the
+  // metronome's own tempo only; it does not write back to the song's grid.
   const metronomeTapRef = useRef<(() => void) | null>(null);
   const [eyeAnnotation, setEyeAnnotation] = useState<ManualAnnotation | null>(null);
   const [autoGuessAnnotation, setAutoGuessAnnotation] = useState<AutoGuessManualAnnotation | null>(null);
@@ -1868,10 +2019,29 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // Demucs stem player: snap back to full mix for the new song; load the
     // per-song manifest if any. 404 (no stems cached) is the silent normal.
     setSelectedStemSource('mix');
+    setRunStemSource('mix');
     setStemManifest(null);
     fetchStemManifest(entry.url).then((m) => {
       if (selectedAudioRef.current?.id !== entry.id) return;
       setStemManifest(m);
+      // Pull any cached per-stem detector results into toolStates. Only the
+      // stems that actually exist are probed (no blind 404 sweep), and absent
+      // composites are silently dropped — same contract as the mix loaders.
+      if (!m) return;
+      for (const stem of ['vocals', 'drums', 'bass', 'other'] as const) {
+        if (!m.stems[stem]) continue;
+        for (const base of STEM_CAPABLE_TOOL_IDS) {
+          const composite = `${base}__${stem}`;
+          loadAlgoJson(entry.id, composite).then((loaded) => {
+            if (!loaded || selectedAudioRef.current?.id !== entry.id) return;
+            const { result, error } = loaded;
+            setToolStates((prev) => ({
+              ...prev,
+              [composite]: error ? { status: 'error', result, error } : { status: 'done', result },
+            }));
+          });
+        }
+      }
     });
 
     // Load persisted per-type annotation times for the new song
@@ -2447,11 +2617,64 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       alert('Pick at least one algorithm in Dataset Prep → ⚙ Batch algorithm options first.');
       return;
     }
-    await runAlgorithmsForOneSong(selectedAudio, `▶ ${selectedAudio.name}`);
+    // Stem-capable detectors target runStemSource; boundary/custom stay on the
+    // mix. A no-op when runStemSource === 'mix'.
+    const sel = applyStemToSelection(selectedAlgorithms, runStemSource);
+    const label = runStemSource === 'mix'
+      ? `▶ ${selectedAudio.name}`
+      : `▶ ${selectedAudio.name} · ${runStemSource}`;
+    await runAlgorithmsForOneSong(selectedAudio, label, sel);
     if (selectedAudioRef.current?.id === selectedAudio.id) {
       selectAudio(selectedAudio);
     }
-  }, [selectedAudio, runJob, selectedAlgorithms, runAlgorithmsForOneSong, selectAudio]);
+  }, [selectedAudio, runJob, selectedAlgorithms, runStemSource, runAlgorithmsForOneSong, selectAudio]);
+
+  // Default the run-picker selection to the not-yet-cached ("missing") detectors
+  // for the current song + the given stem, so the footer "Run" computes only the
+  // gaps. Cached rows start unticked (re-running them is skipped anyway — to
+  // force a recompute, delete their JSON, then tick). Mirrors each family's
+  // availability gating so we never seed an algorithm that can't run. When stem
+  // is a Demucs stem (not 'mix'), only the stem-capable families are seeded —
+  // boundary detectors and custom scripts are mix-only — and "done" is tested
+  // against the composite <id>__<stem> cache key.
+  const seedMissingForStem = useCallback((stem: StemSource) => {
+    const missing = new Set<string>();
+    const stemMode = stem !== 'mix';
+    const isDone = (id: string) => {
+      const key = stemMode && STEM_CAPABLE_TOOL_IDS.has(id) ? `${id}__${stem}` : id;
+      return toolStates[key]?.status === 'done';
+    };
+    const addIfMissing = (id: string) => { if (!isDone(id)) missing.add(id); };
+    if (!stemMode) {
+      ['msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda'].forEach(addIfMissing);
+      if (gpuCaps.allin1) ['allin1', ...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => `allin1-fold${n}`)].forEach(addIfMissing);
+      RUPTURES_METHODS.forEach((m) => { if (!rupturesResults[m.suffix]) missing.add(`ruptures-${m.suffix}`); });
+    }
+    if (settings.experimentalSpanFamily && expAvail.spanFamily) ['silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive'].forEach(addIfMissing);
+    if (settings.experimentalLoopFamily && expAvail.loopFamily) ['chroma-autocorr'].forEach(addIfMissing);
+    if (settings.experimentalCueExtras && expAvail.cueExtras) ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'].forEach(addIfMissing);
+    if (settings.experimentalLyricsFamily && expAvail.lyricsFamily) ['whisper-base', 'ctc-forced-aligner'].forEach(addIfMissing);
+    if (settings.experimentalPatternFamily && expAvail.patternFamily) ['locomotif'].forEach(addIfMissing);
+    if (!stemMode) {
+      customDetectors.filter((d) => d.is_algorithm && d.status === 'ok').forEach((d) => {
+        if (customRunning.has(d.name)) return;
+        const env = customResults[d.name];
+        if (!env || env.fatal) missing.add(`custom:${d.name}`);
+      });
+    }
+    setSelectedAlgorithms(missing);
+  }, [toolStates, gpuCaps, rupturesResults, settings, expAvail, customDetectors, customRunning, customResults]);
+
+  const openRunPickerWithMissing = useCallback(() => {
+    seedMissingForStem(runStemSource);
+    setRunPickerOpen(true);
+  }, [seedMissingForStem, runStemSource]);
+
+  // Switch the run-picker stem and re-seed the missing selection for it.
+  const handleRunStemChange = useCallback((stem: StemSource) => {
+    setRunStemSource(stem);
+    seedMissingForStem(stem);
+  }, [seedMissingForStem]);
 
   // Per-section "Run missing" — runs the supplied algorithm IDs directly
   // (bypassing the persistent selection) so the user can fill in gaps without
@@ -4012,7 +4235,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Combines tool-loaded MSAF/AllIn1/CPD/etc. with cached Ruptures variants so they
   // all flow into VizControlBar overlays + Auto-guess clustering uniformly.
   const annotationRows = useMemo<AlgorithmRow[]>(() => {
-    const regular = buildAnnotationRows(toolStates).filter((r) => !SINGLE_INFO_ONLY_IDS.has(r.id));
+    const regular = buildAnnotationRows(toolStates).filter((r) => !SINGLE_INFO_ONLY_IDS.has(baseAlgoId(r.id)));
     const ruptures: AlgorithmRow[] = RUPTURES_METHODS
       .filter((m) => rupturesResults[m.suffix])
       .map((m) => {
@@ -4071,7 +4294,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const algoLabelColor = useCallback((id: string): string => {
     if (id.startsWith('ruptures-')) return rupturesLabelColor(id.slice('ruptures-'.length));
     if (id.startsWith('custom:')) return customAlgoColors[id.slice('custom:'.length)] ?? '#fbbf24';
-    return ALGO_LABEL_COLORS[id] ?? '#94a3b8';
+    // Per-stem layers share their base detector's hue (stems are distinguished
+    // by the row label, e.g. "silero-vad · vocals").
+    return ALGO_LABEL_COLORS[baseAlgoId(id)] ?? '#94a3b8';
   }, [customAlgoColors]);
 
   const liveAutoGuessPoints = useMemo(
@@ -5019,7 +5244,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // the Algorithm-Inspect right sidebar. The sidebar passes stacked=true to
   // get one-algorithm-per-row layout (its column is narrow); the wide-panel
   // call sites stay on the multi-per-row grid.
-  const renderRunOptionsPanel = (stacked: boolean) => {
+  const renderRunOptionsPanel = (stacked: boolean, purpose: 'run' | 'visibility' = 'run') => {
+    // 'run'        → per-row checkbox = selectedAlgorithms (what to compute); the
+    //                family action cluster is "▶ Run missing · Select all · None".
+    //                Used by the Dataset-Prep batch panel, the Prep song scope, and
+    //                the inspect sidebar's Run… popover.
+    // 'visibility' → per-row checkbox = selectedAlgoOverlays (show the cached result
+    //                on the timeline); missing rows are disabled; the family cluster
+    //                is "Show all · Hide all" over cached rows. Used only by the
+    //                inspect sidebar body.
+    const isVis = purpose === 'visibility';
     const algoRowsCls = stacked ? 'flex flex-col gap-1' : 'flex flex-wrap gap-x-3 gap-y-1.5';
     // Build a lookup of per-algo failures from the most recent run job, so we
     // can render a red "failed" pill (with the error reason as a tooltip) next
@@ -5053,7 +5287,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     };
     return (
     <div className={`rounded-md border ${accent.panelBorder} bg-[#14171d]/80 p-3 space-y-3 text-xs`}>
-      {/* Demucs model */}
+      {/* Demucs model — a run parameter, so it belongs in the run picker, not
+          the visibility sidebar. */}
+      {!isVis && (
       <div
         className="flex items-center gap-2"
         title={gpuCaps.demucs ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}
@@ -5074,6 +5310,50 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <span className="text-[9px] uppercase tracking-wider text-amber-400/80 ml-1">Demucs profile needed</span>
         )}
       </div>
+      )}
+
+      {/* Per-stem layers. Each cached (detector, stem) result is its own
+          toggleable overlay so the user can stack e.g. "silero-vad · vocals"
+          and "silero-vad · other" on the waveform at once — independent of the
+          stem chosen in the player. Only shown in the visibility sidebar and
+          only when per-stem results exist. */}
+      {isVis && (() => {
+        const stemRows = annotationRows.filter((r) => r.id.includes('__'));
+        if (stemRows.length === 0) return null;
+        const allShown = stemRows.every((r) => selectedAlgoOverlays.has(r.id));
+        return (
+          <div className="rounded border border-white/[0.06] bg-white/[0.02] p-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">Stem layers</span>
+              <button
+                onClick={() => setSelectedAlgoOverlays((prev) => {
+                  const n = new Set(prev);
+                  if (allShown) stemRows.forEach((r) => n.delete(r.id));
+                  else stemRows.forEach((r) => n.add(r.id));
+                  return n;
+                })}
+                className="text-[9px] uppercase tracking-wider text-slate-500 hover:text-slate-200 transition-colors"
+              >
+                {allShown ? 'Hide all' : 'Show all'}
+              </button>
+            </div>
+            <div className="flex flex-col gap-1">
+              {stemRows.map((r) => (
+                <label key={r.id} className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={selectedAlgoOverlays.has(r.id)}
+                    onChange={() => toggleAlgoOverlay(r.id)}
+                    className={accent.checkbox}
+                  />
+                  <span className="inline-block w-2 h-2 rounded-sm shrink-0" style={{ background: algoLabelColor(r.id) }} />
+                  <span className="text-[11px] text-slate-300 truncate">{r.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Algorithm families as annotation-style tab chips: one family's
           checkboxes visible at a time, the rest collapsed behind their chips.
@@ -5101,7 +5381,39 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           runTitle: string;
           amber?: boolean;
           selectDisabled?: boolean;
+          /** Cached row ids for this family — drives Show all / Hide all in
+           *  visibility mode. The run-mode props above are ignored when isVis. */
+          visIds?: string[];
         }) => {
+          // Visibility mode: no "Run missing" — just toggle the family's cached
+          // overlays on/off. Operates on visIds (cached rows only) so missing
+          // rows, which have nothing to show, are never touched.
+          if (isVis) {
+            const visIds = o.visIds ?? [];
+            const allShown = visIds.length > 0 && visIds.every((id) => selectedAlgoOverlays.has(id));
+            const hov = o.amber ? 'hover:text-amber-300' : 'hover:text-violet-300';
+            return (
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <button
+                  disabled={visIds.length === 0 || allShown}
+                  onClick={() => setSelectedAlgoOverlays((prev) => { const n = new Set(prev); visIds.forEach((id) => n.add(id)); return n; })}
+                  title={visIds.length === 0 ? 'No cached results in this family to show yet.' : 'Show every cached result in this family on the timeline.'}
+                  className={`text-slate-500 ${hov} transition-colors uppercase tracking-wider disabled:opacity-40 disabled:hover:text-slate-500 disabled:cursor-not-allowed`}
+                >
+                  Show all
+                </button>
+                <span className="text-slate-700">·</span>
+                <button
+                  disabled={visIds.length === 0}
+                  onClick={() => setSelectedAlgoOverlays((prev) => { const n = new Set(prev); visIds.forEach((id) => n.delete(id)); return n; })}
+                  title="Hide this family's results from the timeline."
+                  className={`text-slate-500 ${hov} transition-colors uppercase tracking-wider disabled:opacity-40 disabled:hover:text-slate-500 disabled:cursor-not-allowed`}
+                >
+                  Hide all
+                </button>
+              </div>
+            );
+          }
           const hov = o.amber ? 'hover:text-amber-300' : 'hover:text-violet-300';
           const runCls = o.amber
             ? 'border-amber-700/40 bg-amber-900/20 text-amber-200 hover:bg-amber-900/40 disabled:hover:bg-amber-900/20'
@@ -5139,6 +5451,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         // frames can be open at once, so each is labelled), an optional note
         // beside it (e.g. the All-In-One "requires allin1" hint), and the
         // action cluster on the right.
+        // Small plain-language chip beside an algo name (e.g. "subtitles" next
+        // to whisper-base). Hover shows the fuller `what` line. Null for algos
+        // without a hint.
+        const algoHint = (id: string) => {
+          const h = ALGO_HINTS[id];
+          if (!h) return null;
+          return (
+            <span
+              title={h.what}
+              className="shrink-0 rounded px-1 py-px text-[10px] leading-none normal-case tracking-normal text-slate-400 bg-slate-700/40 cursor-help"
+            >
+              {h.tag}
+            </span>
+          );
+        };
+
         const sectionHeader = (label: ReactNode, labelCls: string, note: ReactNode, cluster: ReactNode) => (
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <div className="min-w-0 flex items-baseline gap-2">
@@ -5161,6 +5489,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               <>
                 {sectionHeader('MSAF', 'text-cyan-300/80', null, actionCluster({
                   missing, canRunMissing,
+                  visIds: ids.filter((id) => toolStates[id]?.status === 'done'),
                   onRun: () => handleRunMissingForSection([...missing]),
                   onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; }),
                   onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; }),
@@ -5173,11 +5502,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <div className={algoRowsCls}>
                   {ids.map((id) => {
                     const cached = toolStates[id]?.status === 'done';
-                    const checked = selectedAlgorithms.has(id);
+                    const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                     const label = id.replace('msaf-', '').toUpperCase();
                     return (
-                      <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                        <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                      <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                        <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
                         {renderStatusPill(id, cached)}
                       </label>
@@ -5209,6 +5538,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; }),
                     onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; }),
                     selectDisabled: !gpuCaps.allin1,
+                    visIds: ids.filter((id) => toolStates[id]?.status === 'done'),
                     runTitle: !gpuCaps.allin1
                       ? GPU_TOOLS_UNAVAILABLE_HINT
                       : !selectedAudio
@@ -5221,15 +5551,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <div className={algoRowsCls}>
                   {ids.map((id) => {
                     const cached = toolStates[id]?.status === 'done';
-                    const checked = selectedAlgorithms.has(id);
+                    const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
+                    // Run mode is gated by the gpu profile; visibility only by cache.
+                    const rowDisabled = isVis ? !cached : !gpuCaps.allin1;
                     const label = id === 'allin1' ? 'Ensemble' : `fold${id.replace('allin1-fold', '')}`;
                     return (
                       <label
                         key={id}
-                        className={`flex items-center gap-1.5 select-none ${gpuCaps.allin1 ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                        className={`flex items-center gap-1.5 select-none ${rowDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                         title={gpuCaps.allin1 ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}
                       >
-                        <input type="checkbox" checked={checked} disabled={!gpuCaps.allin1} onChange={() => toggleAlgorithm(id)} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
+                        <input type="checkbox" checked={checked} disabled={rowDisabled} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
                         {renderStatusPill(id, cached)}
                       </label>
@@ -5254,6 +5586,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               <>
                 {sectionHeader('Ruptures (CPD)', 'text-cyan-300/80', null, actionCluster({
                   missing, canRunMissing,
+                  visIds: RUPTURES_METHODS.filter((m) => rupturesResults[m.suffix]).map((m) => `ruptures-${m.suffix}`),
                   onRun: () => handleRunMissingForSection(missing),
                   onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); RUPTURES_METHODS.forEach((m) => next.add(`ruptures-${m.suffix}`)); return next; }),
                   onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); RUPTURES_METHODS.forEach((m) => next.delete(`ruptures-${m.suffix}`)); return next; }),
@@ -5267,10 +5600,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   {RUPTURES_METHODS.map((m) => {
                     const id = `ruptures-${m.suffix}`;
                     const cached = !!rupturesResults[m.suffix];
-                    const checked = selectedAlgorithms.has(id);
+                    const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                     return (
-                      <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                        <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                      <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                        <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{m.search}·{m.model}</span>
                         {renderStatusPill(id, cached)}
                       </label>
@@ -5291,6 +5624,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           ids: readonly string[],
           labels: Record<string, string>,
           extra?: ReactNode,
+          desc?: string,
         ) => {
           const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
           const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
@@ -5308,6 +5642,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     onRun: () => handleRunMissingForSection([...missing]),
                     onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; }),
                     onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; }),
+                    visIds: ids.filter((id) => toolStates[id]?.status === 'done'),
                     runTitle: !selectedAudio
                       ? 'Select a song first.'
                       : missing.length === 0
@@ -5315,14 +5650,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         : `Run ${missing.length} ${title} model${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
                   }),
                 )}
+                {desc && <div className="mb-1.5 text-[10px] leading-snug text-slate-500">{desc}</div>}
                 <div className={algoRowsCls}>
                   {ids.map((id) => {
                     const cached = toolStates[id]?.status === 'done';
-                    const checked = selectedAlgorithms.has(id);
+                    const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                     return (
-                      <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                        <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                      <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                        <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{labels[id] ?? id}</span>
+                        {algoHint(id)}
                         {renderStatusPill(id, cached)}
                       </label>
                     );
@@ -5337,27 +5674,36 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           'span', 'SPAN',
           ['silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive'],
           { 'silero-vad': 'Silero-VAD', 'jdcnet-voicing': 'JDCNet', 'panns-cnn14': 'PANNs CNN14', 'hpss-percussive': 'HPSS percussive' },
+          undefined,
+          'Time-region detectors: where voice, sound types, and drums occur.',
         );
         if (settings.experimentalLoopFamily && expAvail.loopFamily) pushFamily(
           'loop', 'LOOP',
           ['chroma-autocorr'],
           { 'chroma-autocorr': 'Chroma loops' },
+          undefined,
+          'Finds repeated / looped sections of the track.',
         );
         if (settings.experimentalCueExtras && expAvail.cueExtras) pushFamily(
           'cue-extras', 'CUE extras',
           ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'],
           { 'basic-pitch': 'basic-pitch', 'librosa-key': 'librosa key', 'autochord-chords': 'autochord', 'librosa-onsets': 'librosa onsets' },
+          undefined,
+          'Musical detail: notes, key, chords, and onsets.',
         );
         if (settings.experimentalLyricsFamily && expAvail.lyricsFamily) pushFamily(
           'lyrics', 'LYRICS',
-          ['whisper-base'],
-          { 'whisper-base': 'Whisper-base' },
+          ['whisper-base', 'ctc-forced-aligner'],
+          { 'whisper-base': 'Whisper-base', 'ctc-forced-aligner': 'CTC forced aligner' },
           selectedAudio ? <LyricsTextPanel slug={selectedAudio.id} /> : null,
+          'Lyrics: transcription (Whisper) and word-level alignment of your pasted lyrics (CTC).',
         );
         if (settings.experimentalPatternFamily && expAvail.patternFamily) pushFamily(
           'pattern', 'PATTERN',
           ['locomotif'],
           { 'locomotif': 'LoCoMotif' },
+          undefined,
+          'Discovers recurring melodic / rhythmic patterns (motifs).',
         );
 
         // ── Custom detectors flagged is_algorithm. Skipped entirely when no
@@ -5382,6 +5728,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <>
                   {sectionHeader('Custom', 'text-cyan-300/80', null, actionCluster({
                     missing: missing.map((d) => d.name), canRunMissing, amber: true,
+                    visIds: algos.filter((d) => { const e = customResults[d.name]; return !!e && !e.fatal; }).map((d) => `custom:${d.name}`),
                     onRun: () => { if (!selectedAudio || missing.length === 0) return; handleRunMissingForSection(missing.map((d) => `custom:${d.name}`)); },
                     onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); algos.forEach((d) => next.add(`custom:${d.name}`)); return next; }),
                     onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); algos.forEach((d) => next.delete(`custom:${d.name}`)); return next; }),
@@ -5400,11 +5747,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         ? `${env.fatal.type ?? 'error'}: ${env.fatal.message ?? ''}`.trim()
                           + (env.fatal.suggested_install ? `\n\nTry: ${env.fatal.suggested_install}` : '')
                         : null;
-                      const checked = selectedAlgorithms.has(id);
+                      const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                       const running = customRunning.has(d.name);
                       return (
-                        <label key={id} className="flex items-center gap-1.5 cursor-pointer select-none" title={d.description || d.label || d.name}>
-                          <input type="checkbox" checked={checked} onChange={() => toggleAlgorithm(id)} className={accent.checkbox} />
+                        <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`} title={d.description || d.label || d.name}>
+                          <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                           <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{d.label || d.name}</span>
                           {running
                             ? <span className="text-amber-300 text-[9px] uppercase tracking-wider inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />running</span>
@@ -6079,21 +6426,20 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
              for. Dismissed per-workspace via localStorage (see InfoBanner). */}
         {feature === 'prep' && (
           bpm ? (
-            <InfoBanner id="prep.v2" title="Dataset Prep" accent="emerald">
+            <InfoBanner id="prep.v4" title="Dataset Prep" accent="emerald">
               <strong>This song already has a BPM set</strong> ({Math.round(bpm)} BPM).
               You can fine-tune it or re-align the <strong>grid</strong> in the
-              <strong> Song info</strong> panel <strong>below the song visualization</strong> —
+              <strong> Song setup sidebar on the right</strong> —
               adjust the BPM, nudge the offset, or switch grid mode
               (<strong>Static / Dynamic / Manual</strong>). When you're happy with it,
               move on to the <strong>Annotator Tool</strong> tab above.
             </InfoBanner>
           ) : (
-            <InfoBanner id="prep.v2" title="Dataset Prep" accent="emerald">
+            <InfoBanner id="prep.v4" title="Dataset Prep" accent="emerald">
               Set <strong>BPM</strong> and align the <strong>grid</strong> for this
-              song in the <strong>Song info</strong> panel
-              <strong> below the song visualization</strong>. Pick a grid mode first
-              (<strong>Static / Dynamic / Manual</strong>), then under
-              <strong> Tempo</strong> apply an <strong>auto-detected</strong> BPM chip,
+              song in the <strong>Song setup sidebar on the right</strong>. Under
+              <strong> Tempo</strong>, pick a mode (<strong>Static / Dynamic / Manual</strong>),
+              then apply an <strong>auto-detected</strong> BPM chip,
               type one in manually, or tap along with the metronome. Once every song
               has a BPM, move on to the <strong>Annotator Tool</strong> tab above.
             </InfoBanner>
@@ -6344,7 +6690,33 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <>
             <div className="sticky top-[72px] z-50 -mx-4 px-4 py-2 bg-[#0a0b0d]/95 backdrop-blur space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-3xl font-bold text-white leading-tight truncate tracking-tight">{selectedAudio.name}</h2>
+                {/* Material-style title block: the song title reads big and
+                    bold; the artist drops to a smaller, greyed subtitle line
+                    beneath it. Prefer the explicit songInfo title/artist;
+                    otherwise split the "Artist — Title" file-name convention. */}
+                <div className="min-w-0">
+                  {(() => {
+                    const explicitTitle = songInfo?.title?.trim();
+                    let title = explicitTitle || (selectedAudio.name ?? '');
+                    let artist = explicitTitle ? (songInfo?.artist?.trim() || undefined) : undefined;
+                    if (!explicitTitle) {
+                      const name = selectedAudio.name ?? '';
+                      const idx = name.indexOf(' — ');
+                      if (idx > 0) {
+                        artist = name.slice(0, idx).trim() || undefined;
+                        title = name.slice(idx + 3).trim();
+                      }
+                    }
+                    return (
+                      <>
+                        <h2 className="text-3xl font-bold text-white leading-tight truncate tracking-tight">{title}</h2>
+                        {artist && (
+                          <p className="text-base sm:text-lg font-medium text-slate-400 leading-tight truncate">{artist}</p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
               <div className="flex flex-wrap items-start gap-2">
                 <div className="flex-1 min-w-0">
@@ -6392,7 +6764,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   algoOptions={algoOptions}
                   selectedAlgos={selectedAlgoOverlays}
                   onToggleAlgo={toggleAlgoOverlay}
-                  showAlgos={isInspect(feature)}
+                  // Overlay visibility now lives in the inspect sidebar's per-row
+                  // checkboxes; the viz-bar Algos dropdown is retired.
+                  showAlgos={false}
                   singleInfoDetections={isInspect(feature) ? singleInfoDetections : undefined}
                   customAnnotationOptions={customAnnotationRows.map((r) => ({ id: r.detectorName, label: r.label, color: r.color }))}
                   hiddenCustomAnnotations={hiddenCustomAnnotations}
@@ -6787,97 +7161,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       <span>Eye mode — audio disabled · Manual and Auto-guess annotations hidden</span>
                     </div>
                   )}
-                  {feature === 'prep' ? (
-                    <>
-                      <CollapsibleSection
-                        title="Song details"
-                        storageKey="tc:prep:bpmgrid:open"
-                        defaultOpen={false}
-                      >
-                        <SongInfoBar
-                          songInfo={songInfo ?? makeEmptySongInfo(selectedAudio.id)}
-                          onChange={handleSongInfoChange}
-                          suggestedBpms={suggestedBpms}
-                          // BeatNet (experimental CUE-family) is the only
-                          // detector today that infers meter; surface it as
-                          // a click-to-apply chip next to the Time Signature
-                          // select. Null when the user hasn't enabled the
-                          // experimentalCueExtras flag or BeatNet wasn't
-                          // confident enough to commit to one.
-                          suggestedTimeSignature={
-                            settings.experimentalCueExtras
-                              ? beatnetDetection?.result?.meter ?? null
-                              : null
-                          }
-                          bpmDetectionStatus={bpmDetectionStatus}
-                          bpmDetectionError={bpmDetectionError}
-                          // Re-run + manual edits are admin-only — non-admin
-                          // annotators consume the BPM the team leader set.
-                          // Demo users are also allowed to edit / align (their
-                          // changes live in localStorage; see services/songInfo.ts).
-                          onRerunBpmDetection={adminStatus?.isAdmin ? handleRerunBpmDetection : undefined}
-                          onAlignGridToPlayhead={(adminStatus?.isAdmin || isDemo) ? handleAlignGridToPlayhead : undefined}
-                          playerTime={playerTime}
-                          locked={!adminStatus?.isAdmin && !isDemo}
-                          embedded
-                          gridMode={effectiveGridMode(songInfo)}
-                          anchorListSlot={
-                            isAnchorMode(effectiveGridMode(songInfo)) ? (
-                              <AnchorListEditor
-                                anchors={songInfo?.tempoAnchors ?? []}
-                                duration={duration}
-                                playerTime={playerTime}
-                                mode={effectiveGridMode(songInfo) as 'dynamic' | 'manual'}
-                                manualBase={songInfo?.manualBaseGridMode}
-                                beatOverrides={effectiveGridMode(songInfo) === 'manual' ? songInfo?.beatOverrides : undefined}
-                                gridOffset={songInfo?.gridOffset ?? 0}
-                                locked={!adminStatus?.isAdmin && !isDemo}
-                                globalBpm={songInfo?.bpm}
-                                onChange={(nextAnchors) => {
-                                  if (!songInfo) return;
-                                  handleSongInfoChange({
-                                    ...songInfo,
-                                    tempoAnchors: nextAnchors,
-                                    updated_at: new Date().toISOString(),
-                                  });
-                                }}
-                                onSeek={(t) => seekRef.current?.(t)}
-                                onClearPinnedBeat={handleClearBeatOverride}
-                              />
-                            ) : undefined
-                          }
-                          extraControls={
-                            <GridModeControls
-                              songInfo={songInfo ?? makeEmptySongInfo(selectedAudio.id)}
-                              onChange={handleSongInfoChange}
-                              locked={!adminStatus?.isAdmin && !isDemo}
-                              onEnterDynamic={handleEnterDynamic}
-                              onRederive={handleRederiveDynamic}
-                            />
-                          }
-                        />
-                      </CollapsibleSection>
-                      <CollapsibleSection
-                        title="Metronome"
-                        storageKey="tc:prep:metronome:open"
-                        defaultOpen={false}
-                      >
-                        <MetronomePanel
-                          songInfo={songInfo}
-                          onBpmChange={(adminStatus?.isAdmin || isDemo) ? (nextBpm) => {
-                            if (!selectedAudio) return;
-                            const base = songInfo ?? makeEmptySongInfo(selectedAudio.id);
-                            handleSongInfoChange({ ...base, bpm: nextBpm, updated_at: new Date().toISOString() });
-                          } : undefined}
-                          playerTime={playerTime}
-                          playerIsPlaying={playerIsPlaying}
-                          locked={!adminStatus?.isAdmin && !isDemo}
-                          embedded
-                          tapRef={metronomeTapRef}
-                        />
-                      </CollapsibleSection>
-                    </>
-                  ) : null}
+                  {/* DataPrep Song details + Metronome live in the right-edge
+                      prep sidebar (see the `feature === 'prep'` aside near the
+                      Annotate / Algo sidebars), keeping the grid controls
+                      beside the waveform instead of stacked below it. */}
                   {feature !== 'prep' && (
                   <div className="mt-3">
                   <div className="flex items-baseline gap-2 mb-2 px-0.5">
@@ -7218,6 +7505,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   duration={duration}
                   tolerance={mirTolerance}
                   onToleranceChange={setMirTolerance}
+                  selectedAudio={selectedAudio ? { id: selectedAudio.id, name: selectedAudio.name } : null}
                 />
               )}
 
@@ -7806,29 +8094,219 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+                {/* Trigger for the run picker. The sidebar body below now shows
+                    *visibility* toggles, so computing is a deliberate step:
+                    open the picker, choose what to run, confirm. */}
                 <button
-                  onClick={handleRunForCurrentSong}
-                  disabled={runDisabled}
-                  title={
-                    noneSelected
-                      ? 'Tick at least one algorithm below to enable the run'
-                      : 'Runs the ticked algorithms on this song only. Algorithms with cached results are skipped — only the missing ones are computed. To force a re-run, delete the cached JSON for that algorithm first.'
-                  }
+                  ref={runPickerBtnRef}
+                  onClick={() => (runPickerOpen ? setRunPickerOpen(false) : openRunPickerWithMissing())}
+                  disabled={isRunning}
+                  aria-expanded={runPickerOpen}
+                  title={isRunning
+                    ? 'A run is already in progress for this song.'
+                    : 'Choose which algorithms to compute for this song, then run them. Opens with the not-yet-cached ones pre-selected; cached results are skipped.'}
                   className={`w-full px-3 py-2 rounded text-[11px] uppercase tracking-wider border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                     isRunning
                       ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-100'
                       : 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 hover:border-violet-500/60 hover:text-violet-100'
                   }`}
                 >
-                  {isRunning
-                    ? '⏳ Running…'
-                    : `▶ Run ${selectedAlgorithms.size || ''} algorithm${selectedAlgorithms.size === 1 ? '' : 's'} for this song`}
+                  {isRunning ? '⏳ Running…' : '▶ Run…'}
                 </button>
-                {renderRunOptionsPanel(true)}
+                {renderRunOptionsPanel(true, 'visibility')}
               </div>
+              {runPickerOpen && createPortal(
+                <div
+                  ref={runPickerRef}
+                  role="dialog"
+                  aria-label="Run algorithms"
+                  className="fixed z-[1000] rounded-lg border border-violet-500/30 bg-[#14171d] shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
+                  style={{ top: runPickerPos.top, left: runPickerPos.left, width: runPickerPos.width, maxHeight: `calc(100vh - ${runPickerPos.top}px - 12px)` }}
+                >
+                  <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.06] shrink-0">
+                    <span className="text-[10px] uppercase tracking-[0.18em] text-violet-300/90 font-semibold">Run algorithms · choose what to compute</span>
+                    <button
+                      onClick={() => setRunPickerOpen(false)}
+                      title="Close"
+                      className="text-slate-500 hover:text-slate-200 transition-colors text-lg leading-none px-1"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-3">
+                    {availableStemSources.length > 1 && (
+                      <div className="mb-3 pb-3 border-b border-white/[0.06]">
+                        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1.5">
+                          Run on
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {availableStemSources.map((s) => {
+                            const active = runStemSource === s;
+                            return (
+                              <button
+                                key={s}
+                                onClick={() => handleRunStemChange(s)}
+                                className={`px-2 py-1 rounded text-[10px] capitalize border transition-colors ${
+                                  active
+                                    ? 'border-violet-500/60 bg-violet-500/20 text-violet-100'
+                                    : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200 hover:border-white/20'
+                                }`}
+                              >
+                                {s === 'mix' ? 'Full mix' : s}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {runStemSource !== 'mix' && (
+                          <p className="mt-1.5 text-[10px] leading-snug text-slate-500">
+                            CUE / SPAN / LOOP / lyrics detectors run on the <span className="text-slate-300">{runStemSource}</span> stem
+                            (cached separately). Boundary detectors always use the full mix.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {renderRunOptionsPanel(true, 'run')}
+                  </div>
+                  <div className="shrink-0 border-t border-white/[0.06] p-2.5">
+                    <button
+                      onClick={() => { handleRunForCurrentSong(); setRunPickerOpen(false); }}
+                      disabled={runDisabled}
+                      title={noneSelected
+                        ? 'Tick at least one algorithm above to enable the run'
+                        : 'Runs the ticked algorithms on this song only. Cached results are skipped — only the missing ones are computed. To force a re-run, delete the cached JSON for that algorithm first.'}
+                      className="w-full px-3 py-2 rounded text-[11px] uppercase tracking-wider border transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 hover:border-violet-500/60 hover:text-violet-100"
+                    >
+                      {`▶ Run ${selectedAlgorithms.size || ''} algorithm${selectedAlgorithms.size === 1 ? '' : 's'} for this song`}
+                    </button>
+                  </div>
+                </div>,
+                document.body,
+              )}
             </aside>
           );
         })()}
+
+        {/* ── DataPrep sidebar (Song details + Metronome) ───────────────────
+            Mirrors the Annotate / Algo asides: the grid / tempo controls live
+            here beside the waveform instead of stacked below it. */}
+        {feature === 'prep' && activeStage === 'annotation' && selectedAudio && prepSidebarCollapsed && (
+          <button
+            onClick={() => setPrepSidebarCollapsed(false)}
+            title="Show song setup panel"
+            className="fixed right-0 top-[72px] z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
+          >
+            <span className="text-xl leading-none font-bold">‹</span>
+            <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Song setup</span>
+          </button>
+        )}
+        {feature === 'prep' && activeStage === 'annotation' && selectedAudio && !prepSidebarCollapsed && (
+          <aside
+            style={{ width: prepSidebarWidth }}
+            className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
+          >
+            <div
+              onMouseDown={startPrepSidebarResize}
+              onDoubleClick={() => setPrepSidebarWidth(PREP_SIDEBAR_DEFAULT_WIDTH)}
+              title="Drag to resize · double-click to reset"
+              className={`absolute top-0 left-0 h-full w-1.5 -ml-0.5 cursor-col-resize z-20 group ${prepSidebarResizing ? 'bg-violet-500/40' : 'hover:bg-violet-500/30'} transition-colors`}
+            >
+              <div className={`absolute top-0 left-0 h-full w-px ${prepSidebarResizing ? 'bg-violet-400' : 'bg-transparent group-hover:bg-violet-400/60'}`} />
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.05] shrink-0">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-slate-400 font-semibold">Song setup</span>
+              <button
+                onClick={() => setPrepSidebarCollapsed(true)}
+                title="Hide song setup panel"
+                className="text-slate-500 hover:text-slate-200 transition-colors text-xl leading-none px-1"
+              >
+                ›
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+              <CollapsibleSection
+                title="Song details"
+                storageKey="tc:prep:bpmgrid:open"
+                defaultOpen
+              >
+                <SongInfoBar
+                  songInfo={songInfo ?? makeEmptySongInfo(selectedAudio.id)}
+                  onChange={handleSongInfoChange}
+                  suggestedBpms={suggestedBpms}
+                  // BeatNet (experimental CUE-family) is the only
+                  // detector today that infers meter; surface it as
+                  // a click-to-apply chip next to the Time Signature
+                  // select. Null when the user hasn't enabled the
+                  // experimentalCueExtras flag or BeatNet wasn't
+                  // confident enough to commit to one.
+                  suggestedTimeSignature={
+                    settings.experimentalCueExtras
+                      ? beatnetDetection?.result?.meter ?? null
+                      : null
+                  }
+                  bpmDetectionStatus={bpmDetectionStatus}
+                  bpmDetectionError={bpmDetectionError}
+                  // Re-run + manual edits are admin-only — non-admin
+                  // annotators consume the BPM the team leader set.
+                  // Demo users are also allowed to edit / align (their
+                  // changes live in localStorage; see services/songInfo.ts).
+                  onRerunBpmDetection={adminStatus?.isAdmin ? handleRerunBpmDetection : undefined}
+                  onAlignGridToPlayhead={(adminStatus?.isAdmin || isDemo) ? handleAlignGridToPlayhead : undefined}
+                  playerTime={playerTime}
+                  locked={!adminStatus?.isAdmin && !isDemo}
+                  embedded
+                  gridMode={effectiveGridMode(songInfo)}
+                  anchorListSlot={
+                    isAnchorMode(effectiveGridMode(songInfo)) ? (
+                      <AnchorListEditor
+                        anchors={songInfo?.tempoAnchors ?? []}
+                        duration={duration}
+                        playerTime={playerTime}
+                        mode={effectiveGridMode(songInfo) as 'dynamic' | 'manual'}
+                        manualBase={songInfo?.manualBaseGridMode}
+                        beatOverrides={effectiveGridMode(songInfo) === 'manual' ? songInfo?.beatOverrides : undefined}
+                        gridOffset={songInfo?.gridOffset ?? 0}
+                        locked={!adminStatus?.isAdmin && !isDemo}
+                        globalBpm={songInfo?.bpm}
+                        onChange={(nextAnchors) => {
+                          if (!songInfo) return;
+                          handleSongInfoChange({
+                            ...songInfo,
+                            tempoAnchors: nextAnchors,
+                            updated_at: new Date().toISOString(),
+                          });
+                        }}
+                        onSeek={(t) => seekRef.current?.(t)}
+                        onClearPinnedBeat={handleClearBeatOverride}
+                      />
+                    ) : undefined
+                  }
+                  extraControls={
+                    <GridModeControls
+                      songInfo={songInfo ?? makeEmptySongInfo(selectedAudio.id)}
+                      onChange={handleSongInfoChange}
+                      locked={!adminStatus?.isAdmin && !isDemo}
+                      onEnterDynamic={handleEnterDynamic}
+                      onRederive={handleRederiveDynamic}
+                    />
+                  }
+                />
+              </CollapsibleSection>
+              <CollapsibleSection
+                title="Metronome"
+                storageKey="tc:prep:metronome:open"
+                defaultOpen={false}
+              >
+                <MetronomePanel
+                  songInfo={songInfo}
+                  playerTime={playerTime}
+                  playerIsPlaying={playerIsPlaying}
+                  embedded
+                  tapRef={metronomeTapRef}
+                />
+              </CollapsibleSection>
+            </div>
+          </aside>
+        )}
       </div>
 
       <ShortcutsHelpPanel

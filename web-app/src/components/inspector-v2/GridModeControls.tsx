@@ -23,22 +23,23 @@ export interface GridModeControlsProps {
   onRederive?: (thresholdBpm: number) => void;
 }
 
-// Pill styles per mode — same language as the annotation type-tab rail: a
-// translucent color fill with a solid bright border + soft glow when active,
-// and a faded fill with a low-opacity solid border when idle. A check glyph
-// marks the active pill so the radio-style "pick one" intent stays clear.
+// Tab styles per mode — same language as the annotation type-tab rail in the
+// Annotate / Algo sidebars: a bottom-accent tab that splits the row evenly, a
+// translucent color fill + bright underline + soft glow when active, faded
+// fill with a dim underline when idle. A check glyph marks the active tab so
+// the radio-style "pick one" intent stays clear.
 const MODE_STYLES: Record<GridMode, { pillActive: string; pillIdle: string }> = {
   static: {
-    pillActive: 'bg-slate-400/15 text-slate-100 border-slate-300 shadow-[0_0_14px_-3px_rgba(148,163,184,0.6)]',
-    pillIdle:   'bg-slate-400/[0.04] text-slate-400 border-slate-500/30 hover:text-slate-100 hover:bg-slate-400/10 hover:border-slate-400/60',
+    pillActive: 'bg-slate-400/15 text-slate-100 border-b-slate-300 border-x-slate-400/40 border-t-slate-400/40 shadow-[0_0_14px_-3px_rgba(148,163,184,0.6)]',
+    pillIdle:   'bg-slate-400/[0.04] text-slate-400 hover:text-slate-100 hover:bg-slate-400/10 border-b-slate-400/25 border-x-transparent border-t-transparent',
   },
   dynamic: {
-    pillActive: 'bg-cyan-500/15 text-cyan-100 border-cyan-400 shadow-[0_0_14px_-3px_rgba(34,211,238,0.6)]',
-    pillIdle:   'bg-cyan-500/[0.04] text-cyan-300/70 border-cyan-400/30 hover:text-cyan-100 hover:bg-cyan-500/10 hover:border-cyan-400/60',
+    pillActive: 'bg-cyan-500/15 text-cyan-100 border-b-cyan-400 border-x-cyan-400/40 border-t-cyan-400/40 shadow-[0_0_14px_-3px_rgba(34,211,238,0.6)]',
+    pillIdle:   'bg-cyan-500/[0.04] text-cyan-300/70 hover:text-cyan-100 hover:bg-cyan-500/10 border-b-cyan-400/25 border-x-transparent border-t-transparent',
   },
   manual: {
-    pillActive: 'bg-emerald-500/15 text-emerald-100 border-emerald-400 shadow-[0_0_14px_-3px_rgba(52,211,153,0.6)]',
-    pillIdle:   'bg-emerald-500/[0.04] text-emerald-300/70 border-emerald-400/30 hover:text-emerald-100 hover:bg-emerald-500/10 hover:border-emerald-400/60',
+    pillActive: 'bg-emerald-500/15 text-emerald-100 border-b-emerald-400 border-x-emerald-400/40 border-t-emerald-400/40 shadow-[0_0_14px_-3px_rgba(52,211,153,0.6)]',
+    pillIdle:   'bg-emerald-500/[0.04] text-emerald-300/70 hover:text-emerald-100 hover:bg-emerald-500/10 border-b-emerald-400/25 border-x-transparent border-t-transparent',
   },
 };
 
@@ -134,21 +135,21 @@ export function GridModeControls({
         onClick={() => setMode(value)}
         aria-pressed={isActive}
         title={isActive ? `${label} is the active mode (rendered in all workspaces)` : `Switch to ${label}`}
-        className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-mono font-semibold border-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+        className={`flex-1 basis-0 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-md border-b-2 border-x border-t text-sm font-mono font-semibold uppercase tracking-wide transition disabled:opacity-50 disabled:cursor-not-allowed ${
           isActive ? style.pillActive : style.pillIdle
         }`}
       >
-        <span className={`inline-block w-3 text-center ${isActive ? '' : 'opacity-0'}`} aria-hidden="true">✓</span>
-        <span>{label}</span>
+        <span className={`inline-block w-3 text-center shrink-0 ${isActive ? '' : 'opacity-0'}`} aria-hidden="true">✓</span>
+        <span className="truncate">{label}</span>
       </button>
     );
   };
 
   return (
-    <div className="pt-2 mt-1 border-t border-white/[0.08] space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider">Grid Mode</span>
-        <span className="text-xs font-mono text-slate-300">
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-xs text-slate-400 uppercase tracking-wider">Tempo mode</span>
+        <span className="text-sm font-mono text-slate-300">
           Active: <span className="text-slate-100 font-semibold">{MODE_LABEL[mode]}</span>
           {mode === 'manual' && manualBase && (
             <span className={manualBase === 'dynamic' ? 'text-cyan-300/90' : 'text-slate-400'}>
@@ -164,14 +165,14 @@ export function GridModeControls({
           )}
         </span>
       </div>
-      <p className="text-[11px] text-slate-400 leading-snug">
-        Pick one — the active mode is what the Annotation Tool and Algorithm Inspect will render. Switching modes does not delete the others' data, but only the active mode's grid is drawn downstream.
-      </p>
-      <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Grid mode">
-        {renderOption('static',  'Static BPM')}
+      <nav className="flex gap-1" role="radiogroup" aria-label="Grid mode">
+        {renderOption('static',  'Static')}
         {renderOption('dynamic', 'Dynamic')}
-        {renderOption('manual',  'Manual adjustment')}
-      </div>
+        {renderOption('manual',  'Manual')}
+      </nav>
+      <p className="text-xs text-slate-500 leading-snug">
+        Only the active mode's grid is drawn downstream (Annotation Tool + Algorithm Inspect). Switching never deletes the others' data.
+      </p>
       {mode === 'manual' && !locked && manualBase !== undefined && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-emerald-500/30 bg-emerald-500/[0.05]">
           <span className="text-xs font-mono text-emerald-300 font-semibold">
@@ -185,7 +186,7 @@ export function GridModeControls({
           <button
             type="button"
             onClick={() => setShowBasePickerManual(true)}
-            className="ml-auto px-3 py-1.5 rounded-md text-xs font-mono font-semibold uppercase tracking-wider border-2 border-emerald-400/60 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30 hover:border-emerald-300/80 transition-all"
+            className="ml-auto px-4 py-2 rounded-md text-sm font-mono font-semibold uppercase tracking-wider border-2 border-emerald-400/60 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30 hover:border-emerald-300/80 transition-all"
             title="Switch which underlying tempo grid your pinned beats sit on top of."
           >
             Change base…
@@ -212,7 +213,7 @@ export function GridModeControls({
             <button
               type="button"
               onClick={() => onRederive(dynamicThreshold)}
-              className="ml-auto px-3 py-1.5 rounded-md text-xs font-mono font-semibold uppercase tracking-wider border-2 border-cyan-400/60 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 hover:border-cyan-300/80 transition-all"
+              className="ml-auto px-4 py-2 rounded-md text-sm font-mono font-semibold uppercase tracking-wider border-2 border-cyan-400/60 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 hover:border-cyan-300/80 transition-all"
               title="Replace current anchors with a fresh Dynamic-mode baseline at this threshold."
             >
               ↻ Re-derive
@@ -229,7 +230,7 @@ export function GridModeControls({
             <button
               type="button"
               onClick={() => setShowResetConfirm(true)}
-              className="px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider border-2 border-red-500/50 bg-red-500/[0.08] text-red-300 hover:bg-red-500/20 hover:border-red-400/70 hover:text-red-200 transition-all"
+              className="px-4 py-2 rounded-md text-sm font-semibold uppercase tracking-wider border-2 border-red-500/50 bg-red-500/[0.08] text-red-300 hover:bg-red-500/20 hover:border-red-400/70 hover:text-red-200 transition-all"
               title="Purges all anchors and pinned beat overrides, then reverts to Static BPM. Cannot be undone."
             >
               Reset Grid / Clear All Adjustments

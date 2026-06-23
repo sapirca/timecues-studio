@@ -39,6 +39,8 @@ interface AlgoAggregate {
   onsetF1: number;
   offsetF1: number;
   coverage: number;
+  cycleAlignmentF1: number;
+  accentJaccard: number;
 }
 
 const PATTERN_ALGO_IDS = ['locomotif'] as const;
@@ -149,6 +151,8 @@ export function GlobalEvalPatternTable({
         onsetF1:  scored.reduce((s, r) => s + r.onsetF1,  0) / n,
         offsetF1: scored.reduce((s, r) => s + r.offsetF1, 0) / n,
         coverage: scored.reduce((s, r) => s + r.coverage, 0) / n,
+        cycleAlignmentF1: scored.reduce((s, r) => s + r.cycleAlignmentF1, 0) / n,
+        accentJaccard:    scored.reduce((s, r) => s + r.accentJaccard,    0) / n,
       };
     });
   }, [rows]);
@@ -185,7 +189,9 @@ export function GlobalEvalPatternTable({
             <th className="py-1.5 pr-3">Frame F1</th>
             <th className="py-1.5 pr-3">Onset F1</th>
             <th className="py-1.5 pr-3">Offset F1</th>
-            <th className="py-1.5">Coverage</th>
+            <th className="py-1.5 pr-3">Coverage</th>
+            <th className="py-1.5 pr-3" title="Point F1 over expanded tile-starts (start + k·cycleLen) at ±100 ms">Cycle F1</th>
+            <th className="py-1.5" title="Jaccard of highlightedBeats sets averaged over IoU-paired patterns">Accent Jaccard</th>
           </tr>
         </thead>
         <tbody>
@@ -200,7 +206,9 @@ export function GlobalEvalPatternTable({
               <td className="py-1.5 pr-3 text-slate-200">{a.songsScored > 0 ? a.frameF1.toFixed(2)  : '—'}</td>
               <td className="py-1.5 pr-3 text-slate-200">{a.songsScored > 0 ? a.onsetF1.toFixed(2)  : '—'}</td>
               <td className="py-1.5 pr-3 text-slate-200">{a.songsScored > 0 ? a.offsetF1.toFixed(2) : '—'}</td>
-              <td className="py-1.5 text-slate-200">{a.songsScored > 0 ? a.coverage.toFixed(2) : '—'}</td>
+              <td className="py-1.5 pr-3 text-slate-200">{a.songsScored > 0 ? a.coverage.toFixed(2) : '—'}</td>
+              <td className="py-1.5 pr-3 text-slate-200">{a.songsScored > 0 ? a.cycleAlignmentF1.toFixed(2) : '—'}</td>
+              <td className="py-1.5 text-slate-200">{a.songsScored > 0 ? a.accentJaccard.toFixed(2) : '—'}</td>
             </tr>
           ))}
         </tbody>

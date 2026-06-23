@@ -70,9 +70,16 @@ export async function deleteDetector(name: string): Promise<boolean> {
  * Wipe one detector's algorithm cache + the current annotator's annotation
  * files. The .py source is preserved. Other annotators' annotations are
  * untouched.
+ *
+ * Pass `slug` to scope the wipe to a single song; omit it to clear every
+ * song's output for the detector.
  */
-export async function deleteDetectorOutputs(name: string): Promise<{ annotations_removed: number }> {
-  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}/outputs`, {
+export async function deleteDetectorOutputs(
+  name: string,
+  slug?: string,
+): Promise<{ annotations_removed: number }> {
+  const query = slug ? `?slug=${encodeURIComponent(slug)}` : '';
+  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}/outputs${query}`, {
     method: 'DELETE',
     headers: annotatorHeaders(),
   });

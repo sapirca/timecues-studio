@@ -63,14 +63,27 @@ from pathlib import Path
 # tf-keras installed and flip this env var BEFORE the first `import
 # tensorflow` so tf.keras resolves to the legacy package. Must be set
 # before the `import autochord` below, which transitively imports TF.
-os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+#
+# Only set it when tf_keras is actually importable: the Docker image pins
+# tensorflow<2.16 (native Keras 2, no separate tf_keras), and forcing
+# TF_USE_LEGACY_KERAS=1 there makes TF demand a tf_keras package that isn't
+# installed — which silently breaks `import autochord`. Gate on availability
+# so the env var helps the TF≥2.16 (bare-metal) case without sabotaging the
+# pinned-TF Docker case.
+try:
+    import tf_keras  # noqa: F401
+    os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+except ImportError:
+    pass
 
 warnings.filterwarnings("ignore")
 
 PORT = 8014
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from paths import find_audio, CUE_EXTRAS_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
+from paths import (  # noqa: E402
+    find_audio, stem_audio, cache_name, CUE_EXTRAS_OUTPUTS_DIR as CACHE_DIR,
+)
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -296,22 +309,30 @@ ALGORITHMS = {
 }
 
 
-def detect_one(slug: str, algo: str, force: bool = False) -> dict:
+def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> dict:
     if algo not in ALGORITHMS:
         raise ValueError(f"unknown algorithm: {algo}")
     cache_dir = CACHE_DIR / slug
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / f"{algo}.json"
+    # Per-stem runs cache under "<algo>__<stem>.json"; the full mix keeps the
+    # bare "<algo>.json" name so existing caches stay valid.
+    cache_path = cache_dir / f"{cache_name(algo, stem)}.json"
     if cache_path.exists() and not force:
         return json.loads(cache_path.read_text())
-    audio_path = find_audio(slug)
-    if audio_path is None:
-        raise FileNotFoundError(f"audio not found for slug: {slug}")
+    if stem and stem != "mix":
+        audio_path = stem_audio(slug, stem)
+        if audio_path is None:
+            raise FileNotFoundError(f"no cached '{stem}' stem for slug: {slug}")
+    else:
+        audio_path = find_audio(slug)
+        if audio_path is None:
+            raise FileNotFoundError(f"audio not found for slug: {slug}")
     result = ALGORITHMS[algo]["detect"](audio_path)
     payload: dict = {
         "slug":        slug,
         "audio_file":  audio_path.name,
         "algorithm":   algo,
+        "stem":        stem or "mix",
         "duration":    result.get("duration", 0.0),
         "cues":        result.get("cues", []),
         "ok":          result.get("ok", False),
@@ -396,12 +417,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cue-extras/detect":
             slug = str(body.get("slug", "")).strip()
             algo = str(body.get("algo", "")).strip()
+            stem = str(body.get("stem", "mix")).strip() or "mix"
             force = bool(body.get("force", False))
             if not slug or not algo:
                 self._send(400, {"error": "slug and algo are required"})
                 return
             try:
-                self._send(200, detect_one(slug, algo, force=force))
+                self._send(200, detect_one(slug, algo, stem=stem, force=force))
             except FileNotFoundError as e:
                 self._send(404, {"error": str(e)})
             except ValueError as e:

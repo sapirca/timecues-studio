@@ -49,7 +49,8 @@ export async function loadCachedLyrics(slug: string, algo: string): Promise<Lyri
 }
 
 export async function runLyricsDetection(
-  slug: string, algo: string, opts: { force?: boolean; language?: string } = {},
+  slug: string, algo: string,
+  opts: { force?: boolean; language?: string; text?: string } = {},
 ): Promise<LyricsDetectionResult | null> {
   try {
     const res = await fetch('/api/lyrics/detect', {

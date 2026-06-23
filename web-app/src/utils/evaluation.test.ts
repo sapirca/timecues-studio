@@ -4,9 +4,14 @@ import {
   evaluateSpans,
   evaluateLoops,
   evaluateLyrics,
+  evaluatePatterns,
   effectiveLayerMode,
 } from './evaluation';
-import type { SpanItem, LoopItem, LyricsItem } from '../types/annotationLayer';
+import type { SpanItem, LoopItem, LyricsItem, PatternItem } from '../types/annotationLayer';
+
+function pattern(id: string, start: number, end: number, repeatCount: number, highlightedBeats: number[] = []): PatternItem {
+  return { id, start, end, label: id, repeatCount, highlightedBeats };
+}
 
 // ─── Interval IoU ────────────────────────────────────────────────────────────
 
@@ -141,5 +146,118 @@ describe('evaluateLoops + evaluateLyrics stubs', () => {
     const r = evaluateLyrics(ref, est, 10);
     // 30 ms shift is inside the 50 ms tolerance → onsetF1 = 1.
     expect(r.onsetF1).toBe(1);
+    // No word-kind items, so WER is 0 and word onset F1 is the empty-set 1.
+    expect(r.wer).toBe(0);
+    expect(r.wordOnsetF1).toBe(1);
+    expect(r.refWordCount).toBe(0);
+  });
+
+  it('evaluateLyrics word path: perfect text + inside tolerance → tp=N', () => {
+    const ref: LyricsItem[] = [
+      { id: 'r1', time: 0.0, text: 'hello', kind: 'word' },
+      { id: 'r2', time: 0.5, text: 'world', kind: 'word' },
+    ];
+    const est: LyricsItem[] = [
+      { id: 'p1', time: 0.02, text: 'Hello', kind: 'word' },     // case-insensitive
+      { id: 'p2', time: 0.54, text: 'world!', kind: 'word' },    // punctuation stripped
+    ];
+    const r = evaluateLyrics(ref, est, 10);
+    expect(r.wer).toBe(0);
+    expect(r.matchedWords).toBe(2);
+    expect(r.wordOnsetF1).toBe(1);
+  });
+
+  it('evaluateLyrics word path: substitution counts in WER, not in onset F1', () => {
+    const ref: LyricsItem[] = [
+      { id: 'r1', time: 0.0, text: 'one', kind: 'word' },
+      { id: 'r2', time: 1.0, text: 'two', kind: 'word' },
+    ];
+    const est: LyricsItem[] = [
+      { id: 'p1', time: 0.0, text: 'one', kind: 'word' },
+      { id: 'p2', time: 1.0, text: 'TWICE', kind: 'word' }, // sub
+    ];
+    const r = evaluateLyrics(ref, est, 10);
+    expect(r.wer).toBeCloseTo(0.5, 5);
+    expect(r.matchedWords).toBe(1);
+    // 1 tp / 2 est, 1 tp / 2 ref → F1 = 0.5
+    expect(r.wordOnsetF1).toBeCloseTo(0.5, 5);
+  });
+
+  it('evaluateLyrics word path: word matches text but onset > 50 ms → not tp', () => {
+    const ref: LyricsItem[] = [{ id: 'r1', time: 0.0, text: 'late', kind: 'word' }];
+    const est: LyricsItem[] = [{ id: 'p1', time: 0.2, text: 'late', kind: 'word' }];
+    const r = evaluateLyrics(ref, est, 10);
+    expect(r.wer).toBe(0);             // text matches
+    expect(r.matchedWords).toBe(1);    // text-aligned
+    expect(r.wordOnsetF1).toBe(0);     // but onset too far off
+  });
+});
+
+describe('evaluateLoops bar-grid metrics', () => {
+  // 120 BPM, 4/4 → bar length = 60/120 * 4 = 2.0 sec
+  const barGrid = { bpm: 120, beatsPerBar: 4 };
+
+  it('barSnapFraction = 1 when every predicted loop is bar-aligned', () => {
+    const ref: LoopItem[] = [{ id: 'r1', start: 0, end: 2, label: 'a' }];
+    const est: LoopItem[] = [
+      { id: 'p1', start: 0, end: 2, label: 'a' },   // starts and ends on grid
+      { id: 'p2', start: 4, end: 8, label: 'b' },   // 2-bar loop, also aligned
+    ];
+    const r = evaluateLoops(ref, est, 10, { barGrid });
+    expect(r.barSnapFraction).toBe(1);
+    expect(r.phasePopFreeFraction).toBe(1);
+  });
+
+  it('phasePopFreeFraction penalises non-integer-bar durations', () => {
+    const ref: LoopItem[] = [{ id: 'r1', start: 0, end: 2, label: 'a' }];
+    const est: LoopItem[] = [
+      { id: 'p1', start: 0, end: 2,   label: 'a' },   // 1-bar — phase-pop free
+      { id: 'p2', start: 0, end: 2.3, label: 'b' },   // 1.15-bar — pop
+    ];
+    const r = evaluateLoops(ref, est, 10, { barGrid });
+    expect(r.phasePopFreeFraction).toBe(0.5);
+  });
+
+  it('NaN when no bar grid is provided — table shows "—"', () => {
+    const ref: LoopItem[] = [{ id: 'r1', start: 0, end: 2, label: 'a' }];
+    const est: LoopItem[] = [{ id: 'p1', start: 0, end: 2, label: 'a' }];
+    const r = evaluateLoops(ref, est, 10);
+    expect(Number.isNaN(r.barSnapFraction)).toBe(true);
+    expect(Number.isNaN(r.phasePopFreeFraction)).toBe(true);
+  });
+});
+
+describe('evaluatePatterns', () => {
+  it('cycle F1 expands repeats: ref start=0 end=1 repeat=4 → 4 tile starts', () => {
+    const ref: PatternItem[] = [pattern('r1', 0, 1, 4)];
+    const est: PatternItem[] = [pattern('p1', 0, 1, 4)];
+    const r = evaluatePatterns(ref, est, 10);
+    expect(r.refCycleCount).toBe(4);
+    expect(r.estCycleCount).toBe(4);
+    expect(r.cycleAlignmentF1).toBe(1);
+  });
+
+  it('cycle F1 penalises missing repeats', () => {
+    const ref: PatternItem[] = [pattern('r1', 0, 1, 4)];   // 4 tiles at 0,1,2,3
+    const est: PatternItem[] = [pattern('p1', 0, 1, 2)];   // 2 tiles at 0,1
+    const r = evaluatePatterns(ref, est, 10);
+    // tp=2, fp=0, fn=2 → P=1, R=0.5, F1=2/3
+    expect(r.cycleAlignmentF1).toBeCloseTo(2 / 3, 5);
+  });
+
+  it('accent Jaccard scores highlightedBeats agreement on paired patterns', () => {
+    const ref: PatternItem[] = [pattern('r1', 0, 4, 1, [0, 2, 4])];
+    const est: PatternItem[] = [pattern('p1', 0, 4, 1, [0, 2, 6])];
+    const r = evaluatePatterns(ref, est, 10);
+    // |{0,2}| / |{0,2,4,6}| = 2/4 = 0.5
+    expect(r.accentJaccard).toBe(0.5);
+    expect(r.matchedAccentPairs).toBe(1);
+  });
+
+  it('accent Jaccard returns 1 when both pair sets are empty (no accents)', () => {
+    const ref: PatternItem[] = [pattern('r1', 0, 4, 1, [])];
+    const est: PatternItem[] = [pattern('p1', 0, 4, 1, [])];
+    const r = evaluatePatterns(ref, est, 10);
+    expect(r.accentJaccard).toBe(1);
   });
 });

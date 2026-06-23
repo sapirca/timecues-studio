@@ -269,7 +269,7 @@ export interface LyricsToolResult {
   elapsedSec: number;
 }
 
-export type LyricsToolId = 'whisper-base';
+export type LyricsToolId = 'whisper-base' | 'ctc-forced-aligner';
 
 // Re-export for use in InspectorPage
 export type { BandGradientResult };
@@ -308,7 +308,8 @@ export type ToolResultData =
   | { toolId: 'autochord-chords'; result: CueExtrasResult }
   | { toolId: 'librosa-onsets';   result: CueExtrasResult }
   | { toolId: 'hpss-percussive';  result: SpanStructureResult }
-  | { toolId: 'whisper-base';     result: LyricsToolResult }
+  | { toolId: 'whisper-base';         result: LyricsToolResult }
+  | { toolId: 'ctc-forced-aligner';   result: LyricsToolResult }
   | { toolId: 'locomotif';        result: PatternStructureResult };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -834,11 +835,15 @@ async function loadOrRunPercussive(audioSlug: string): Promise<SpanStructureResu
   };
 }
 
-/** Whisper-base lyrics loader. Projects per-word entries into per-word cues
- *  for the boundary inspector; full payload (lines, language) is preserved
- *  on `LyricsToolResult` for downstream consumers that need the structure. */
-async function loadOrRunLyrics(audioSlug: string): Promise<LyricsToolResult> {
-  const toolId = 'whisper-base';
+/** Lyrics-family loader. Projects per-word entries into per-word cues for the
+ *  boundary inspector; full payload (lines, language) is preserved on
+ *  `LyricsToolResult` for downstream consumers that need the structure.
+ *
+ *  For `ctc-forced-aligner`, the loader also pulls the per-song reference text
+ *  from `/api/lyrics-text/<slug>` and posts it along with the detect request.
+ *  Without a transcript on disk the sidecar returns ok=false with a clear
+ *  error message asking the annotator to fill the Lyrics text panel first. */
+async function loadOrRunLyrics(audioSlug: string, toolId: LyricsToolId): Promise<LyricsToolResult> {
   const cacheUrl = `/api/lyrics/detect/${encodeURIComponent(audioSlug)}/${encodeURIComponent(toolId)}`;
   let raw: unknown = null;
   try {
@@ -847,10 +852,17 @@ async function loadOrRunLyrics(audioSlug: string): Promise<LyricsToolResult> {
   } catch { raw = null; }
 
   if (!raw || typeof raw !== 'object' || !('words' in raw)) {
+    const body: Record<string, unknown> = { slug: audioSlug, algo: toolId };
+    if (toolId === 'ctc-forced-aligner') {
+      try {
+        const txtRes = await fetch(`/api/lyrics-text/${encodeURIComponent(audioSlug)}`);
+        if (txtRes.ok) body.text = await txtRes.text();
+      } catch { /* sidecar returns a clear error when text is missing */ }
+    }
     const post = await fetch('/api/lyrics/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug: audioSlug, algo: toolId }),
+      body: JSON.stringify(body),
     });
     if (!post.ok) {
       const err = await post.json().catch(() => ({ error: `HTTP ${post.status}` }));
@@ -1164,8 +1176,14 @@ export async function runTool(
 
     case 'whisper-base': {
       if (!audioSlug) throw new Error('Whisper-base requires an audioSlug.');
-      const result = await loadOrRunLyrics(audioSlug);
+      const result = await loadOrRunLyrics(audioSlug, 'whisper-base');
       return { toolId: 'whisper-base', result };
+    }
+
+    case 'ctc-forced-aligner': {
+      if (!audioSlug) throw new Error('CTC forced aligner requires an audioSlug.');
+      const result = await loadOrRunLyrics(audioSlug, 'ctc-forced-aligner');
+      return { toolId: 'ctc-forced-aligner', result };
     }
 
     case 'locomotif': {

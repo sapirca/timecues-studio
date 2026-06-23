@@ -55,7 +55,7 @@ docker compose up --build
 1. **Open `http://localhost:5173`** — you land on the main page with two entry cards: **Enter Demo**, plus *one* of **Start a new dataset** (when the corpus has no admin yet) or **Enter `<corpus>`** (once an admin has claimed it). A single deploy hosts a single corpus, so these two states are mutually exclusive.
 2. **Click *Enter `<corpus>`*** and sign in (Google or *Username or email*). On a fresh deploy click *Start a new dataset* instead — that flow asks for a corpus name and lets you sign in with Google or *Username or email*, then drops you straight into Dataprep.
 3. **Land in Dataprep first.** Both sign-in flows put you on the **Dataprep** tab on purpose — that is where you upload audio and lock the grid before anything else works. If the manifest is empty, drop an MP3 into the upload zone (or copy files into `songs/<slug>/<slug>.mp3` on disk), then pick a song in the left sidebar.
-4. **Set BPM** — open the **Song details ▸** disclosure below the waveform, click an `Auto-detected` chip, or type a value. Without BPM the Annotator Tool refuses to open and Inspect's evaluation is gated.
+4. **Set BPM** — open the **Song setup** sidebar on the right (the **Song details ▸** section), click an `Auto-detected` chip, or type a value. Without BPM the Annotator Tool refuses to open and Inspect's evaluation is gated.
 5. **Lock the grid** — press `G` (or click *Set bar start*) at the first audible kick to align bar 1. Switch on the **Metronome** panel and nudge with the ±1 ms / 10 ms / beat / bar buttons until the click sits on the kick.
 6. **Switch to the *Annotator Tool* tab** in the workspace header and start marking sections with `M`. Confirm the song row's grid-readiness glyph in the sidebar is **emerald ♩** before you begin — amber ♩ means the grid is not locked yet, red ♩ means BPM is still missing.
 
@@ -157,18 +157,22 @@ that keeps first-time `docker compose up` and basic local dev lean, while
    `--profile experimental-models` stack on the same `up` line. Order
    doesn't matter, and the same profile can be passed multiple times
    without side effects.
-2. **Two gates per detector family** — even when an experimental sidecar
-   is running, its inspector-sidebar surface stays hidden until you also
-   flip the matching per-family flag in **Settings → Experimental
-   annotation types & models**. The flag and the sidecar are linked: a
-   family's toggle is **disabled** (with an install hint) until its sidecar
-   is reachable, and the inspector surface **auto-hides** if the sidecar
-   isn't running — even when the flag was left on — so you never see a
-   detector you can't actually run. Family flags:
+2. **Two gates per detector family** — even when a family's results are
+   available, its inspector-sidebar surface stays hidden until you flip the
+   matching per-family flag in **Settings → Experimental annotation types &
+   models**. A family counts as *available* when its sidecar is reachable
+   **or** it already has cached results on disk: the toggle is **enabled** in
+   either case, and **disabled** (with an install hint) only when there's
+   neither. Because the read path is served in-process, previously-computed
+   results stay **view-only** after you stop the `experimental-models` stack
+   to reclaim disk — the surface keeps showing cached predictions; only
+   *re-running* a detector needs its sidecar back up. The surface fully hides
+   only when there's no reachable sidecar **and** no cached data. Family flags:
    - `experimentalSpanFamily` → Silero-VAD, JDCNet, PANNs, HPSS percussive
    - `experimentalCueExtras` → BeatNet, basic-pitch, librosa key, autochord, librosa onsets
    - `experimentalLoopFamily` → chroma-autocorrelation
-   - `experimentalLyricsFamily` → Whisper-base
+   - `experimentalLyricsFamily` → Whisper-base, CTC forced aligner (the
+     latter aligns the reference lyrics you paste in the Lyrics text panel)
    - `experimentalLoopsAndPatterns` → the *annotation* paradigm (LoopEditorPanel, PatternEditorPanel)
    - `experimentalEyeAnnotation` → the Eye second-observer pass
 
@@ -304,9 +308,9 @@ Once you're inside any workspace the top bar shows a **tab strip** — one click
 
 Each workspace shows a **one-line info banner** at the top — a quick reminder of what the page is for and where the relevant controls live:
 
-- **Dataset Prep** — set BPM and align the grid using the edit panel *below the song visualization*; once every song has a BPM, move on to the **Annotator Tool** tab above.
+- **Dataset Prep** — set BPM and align the grid in the **Song setup** sidebar on the right edge of the workspace; once every song has a BPM, move on to the **Annotator Tool** tab above.
 - **Annotator Tool** — annotate the song with **boundaries** (non-overlapping sections), **cues** (single events at a point in time), **spans** (ranged regions that may overlap), **loops** (repeating segments with a cycle length), and **patterns** (recurring rhythmic motifs) — switch types by clicking a type chip in the Annotate sidebar (the tabs in the horizontal row above the *All annotations* list); the edit list sits *below the visualization*. Press **?** for the full shortcut drawer. Toggle **signal rows** (e.g. spectrogram, chroma) from the **SIGNALS** menu in the audio visualization panel to surface different audio features. BPM and grid must be set in Dataset Prep first, since boundaries snap to the grid.
-- **Algorithm Inspect — per song** — tick algorithms in the *right sidebar*, hit **Run**, and predictions stack as colored timelines on the waveform, each drawn to match its output type: boundary detectors as contiguous section blocks, onset / cue detectors as individual tick marks, and span / loop / note / lyric detectors as translucent colored bands. Metrics vs. your manual annotation appear in the panel below. Detectors that produce a single value for the whole track — the **Key** (librosa key) and the lyrics **Language** (Whisper) — are not timelines; they show as always-visible read-only pills in the toolbar's **Detected** group instead. Use the **All songs** sub-tab for dataset-wide totals.
+- **Algorithm Inspect — per song** — the *right sidebar* lists every detector grouped by family, each with a **cached / missing / failed** status. The sidebar splits viewing from computing: a row's **checkbox toggles that result's visibility** on the waveform (cached rows only — a missing row is greyed until you compute it), and each family has **Show all / Hide all** for its cached results. To compute, click **▶ Run…** at the top: a picker opens **pre-selected to the not-yet-cached ("missing") detectors** — adjust the ticks if you want, then confirm (cached results are skipped anyway). When stems have been separated for the song (▶ Stem this song in Dataset Prep), the picker also shows a **Run on** selector — **Full mix** (default) or any cached stem (**Vocals / Drums / Bass / Other**). Choosing a stem runs the ticked CUE / SPAN / LOOP / Pattern / lyrics detectors against that isolated stem instead of the mix (boundary detectors always use the full mix); results cache separately and appear as their own rows labelled **"detector · stem"** (e.g. *librosa onsets · drums*, *Whisper-base · vocals*) directly beneath the full-mix row. Visible predictions stack as colored timelines, each drawn to match its output type: boundary detectors as contiguous section blocks, onset / cue detectors as individual tick marks, and span / loop / note / lyric detectors as translucent colored bands. Metrics vs. your manual annotation appear in the panel below. Detectors that produce a single value for the whole track — the **Key** (librosa key) and the lyrics **Language** (Whisper) — are not timelines; they show as always-visible read-only pills in the toolbar's **Detected** group instead. Use the **All songs** sub-tab for dataset-wide totals.
 - **Algorithm Inspect — all songs** — pick algorithms via the **⚙ options** button at the top, then **Batch run** to evaluate every song at once; the aggregate F1 / precision / recall table appears below with expandable per-song rows.
 
 Click the **×** on the right of any banner to dismiss it; the choice is remembered per browser, so dismissed banners stay hidden on future visits.
@@ -471,20 +475,20 @@ The Song Info Bar is the panel where you tell TimeCues two things about a song: 
 It's organised top-to-bottom in the order you'd naturally work through a new song:
 
 1. **Display name** — the title (and optional artist) shown across the app. Changing it does *not* rename the file on disk.
-2. **Grid mode** — a choice of three ways to lay the beat grid down (Static BPM / Dynamic / Manual). Decide this first; the controls below adapt to your choice.
-3. **Tempo** — answers "what's the song's tempo?": the auto-detected suggestion chips, the BPM field, and the time signature.
-4. **Grid alignment** — answers "where does bar 1 start?": the grid-offset field, the *Set bar start* button, and the nudge row.
+2. **Tempo** — answers "what's the song's tempo?": the **Tempo mode** tabs (Static BPM / Dynamic / Manual — pick how the beat grid is laid down; decide this first, the rest adapts), the auto-detected suggestion chips, and the BPM + time-signature fields side by side.
+3. **Grid alignment** — answers "where does bar 1 start?": the grid-offset field, the *Set bar start* button, and the nudge row.
 
-In **Dataprep** this whole panel starts folded away behind a **Song details ▸** disclosure to keep the canvas uncluttered; click the title to reveal the inputs. Whether you've opened it is remembered in your browser under the key `tc:prep:bpmgrid:open`. In the two anchor-based grid modes (Dynamic / Manual) the Grid Alignment subsection is replaced by an inline list of tempo anchors — see [Grid Mode](#grid-mode-static-bpm--dynamic--manual-adjustment).
+In **Dataprep** this panel lives in the **Song setup** sidebar docked to the right edge of the workspace (collapsible to a hover tab, and drag-the-left-edge to resize), inside a **Song details ▸** disclosure that starts open. Each of the three subsections inside (Display name / Tempo / Grid alignment) is itself independently collapsible behind a matching ▸ chevron, so you can fold away whatever you're not using. Whether each is open is remembered in your browser (keys `tc:prep:displayname:open`, `tc:prep:tempo:open`, `tc:prep:align:open`). In the two anchor-based grid modes (Dynamic / Manual) the Grid Alignment subsection is replaced by an inline list of tempo anchors — see [Grid Mode](#grid-mode-static-bpm--dynamic--manual-adjustment).
 
 ### Display name (Title + Artist)
 
 The human-readable name shown everywhere a song appears — the sidebar, the song picker, and workspace headers. **It is independent of the file on disk**: the audio file and its folder keep their lowercase-underscore slug (e.g. `midnight_drive`) no matter what you type here.
 
 - **Title** — the visible name. Leave it blank to fall back to the file name.
-- **Artist** *(optional)* — only used when a Title is set; the two render together as **Artist — Title**. An Artist with no Title is ignored.
-- A small preview under the fields shows exactly what will be displayed.
-- **Admin-only**, like BPM and grid: annotators and researchers see these fields read-only. Edits save automatically and the song list updates within ~1 second.
+- **Artist** *(optional)* — only used when a Title is set; the two render together as **Artist — Title** in lists and pickers. In the big workspace header above the waveform they stack instead — the **title** large and bold, the **artist** as a smaller greyed subtitle beneath it (Material-style hierarchy). An Artist with no Title is ignored.
+- The whole **Display name** block collapses behind a ▸ chevron (Title and Artist sit on their own stacked rows when expanded); it stays folded by default since most songs keep the file-name default.
+- **Edits commit on Save, not as you type.** Type into Title / Artist, then press **Save** (small button aligned to the right of the *Display name* title, or hit Enter in either field) to apply — until you do, an `unsaved` flag shows and the displayed name is unchanged, so a half-typed title never replaces it. **Clear** (next to Save) resets both fields back to the file-name default.
+- **Admin-only**, like BPM and grid: annotators and researchers see these fields read-only. After a Save the song list updates within ~1 second.
 - *Demo Mode:* title edits are kept in your browser only and do not change the name shown in the song list (the demo corpus is read-only).
 
 ### BPM (the song's tempo)
@@ -499,7 +503,7 @@ BPM (beats per minute) is the song's tempo, and it drives the whole beat grid. Y
 
 ### Auto-detected chip row — tempo suggestions you can click
 
-Rather than make you tap out the tempo by hand, TimeCues runs several beat-detection algorithms over the audio and shows each one's guess as a small chip below the BPM field. Click a chip to adopt that value as the song's BPM. The **↻ Re-run** button recomputes the suggestions from scratch, ignoring any cached result.
+Rather than make you tap out the tempo by hand, TimeCues runs several beat-detection algorithms over the audio and shows each one's guess as a chip. The chips fold behind an **Auto-detected ▸** disclosure inside *Tempo* (the header shows a "· N suggestions" count when collapsed); expand it to see one chip per detector — each chip shows the **BPM value** large, with the detector's name (and confidence strength, when reported) revealed on **hover**. Click a chip to adopt that value as the song's BPM. The **↻ Re-run** button recomputes the suggestions from scratch, ignoring any cached result.
 
 The first chip to appear is usually **`client-wabd`**, a detector that runs right inside your browser (powered by the `web-audio-beat-detector` library) the instant the audio finishes loading — so it shows up before the heavier server-side detectors finish. The rest come from a small Python service (`bpm_server.py`, running on port 8004):
 
@@ -534,15 +538,15 @@ For non-admin viewers (researcher / team / public) all four inputs are read-only
 
 ### Grid Mode (Static BPM · Dynamic · Manual adjustment)
 
-At the top of the Song Info Bar, three pills pick how the grid is laid out across the song:
+Inside the **Tempo** subsection, a **Tempo mode** row of three tabs (same style as the annotation-type tabs in the Annotator / Algorithm Inspect sidebars) picks how the grid is laid out across the song:
 
 - **Static BPM** *(default)* — one global tempo + grid offset, the legacy behavior. Every beat is spaced by `60 / bpm` seconds.
 - **Dynamic** — picks up windowed tempo estimates from `librosa.feature.rhythm.tempo(..., aggregate=None)` (served from the same BPM server at `/api/bpm/tempo-curve`) and lays down a sparse `TempoAnchor[]` baseline wherever the rolling-median BPM drifts past the **threshold slider** (default 5 BPM, range 1–20). Each anchor is `{ timestamp, bpm }` — between anchors, tempo is constant. A tighter threshold = more anchors and more responsive grid; a looser threshold = fewer anchors and a smoother grid. Click **↻ Re-derive** to replace the current baseline at the slider's value.
-- **Manual adjustment** — pins individual beats on top of a base grid you pick when entering the mode. The first time you click *Manual adjustment*, a modal asks **"Pick base grid"**: choose **Static BPM** (anchors are ignored — pinned beats ride a single-tempo grid) or **Dynamic** (anchors are applied — pinned beats ride the piecewise tempo curve). Press **Esc** or click the **✕** to abort — the mode reverts to whichever grid you were on before clicking the Manual pill. You can switch the base at any time via the **Change base…** button that appears under the mode pills while Manual is active; the modal also reopens itself if you ever flip back to Manual and the song has no remembered base. Pinned beats survive a base switch — only their drift relative to the underlying grid changes. Anchors that are present but inactive (Manual + Static base) stay on disk untouched and become active again as soon as you flip the base back to Dynamic.
+- **Manual adjustment** — pins individual beats on top of a base grid you pick when entering the mode. The first time you click *Manual adjustment*, a modal asks **"Pick base grid"**: choose **Static BPM** (anchors are ignored — pinned beats ride a single-tempo grid) or **Dynamic** (anchors are applied — pinned beats ride the piecewise tempo curve). Press **Esc** or click the **✕** to abort — the mode reverts to whichever grid you were on before clicking the Manual tab. You can switch the base at any time via the **Change base…** button that appears under the mode tabs while Manual is active; the modal also reopens itself if you ever flip back to Manual and the song has no remembered base. Pinned beats survive a base switch — only their drift relative to the underlying grid changes. Anchors that are present but inactive (Manual + Static base) stay on disk untouched and become active again as soon as you flip the base back to Dynamic.
 
-The three pills are **mutually exclusive radio buttons**: only one is active at a time and the active pill is filled with its color-tier solid + a ✓ check (vs. dashed-border, faded idle pills). An "Active: <mode>" readout next to the **Grid Mode** label always shows which one is currently the verdict.
+The three tabs are **mutually exclusive radio buttons**: only one is active at a time and the active tab is filled with its color-tier solid + a bright underline + a ✓ check (vs. faded, dim-underline idle tabs). An "Active: <mode>" readout next to the **Grid Mode** label always shows which one is currently the verdict.
 
-**The active mode is the final verdict everywhere.** Whichever pill is selected in Dataset Prep is what the Annotation Tool and Algorithm Inspect will render — Static suppresses the anchors and falls back to the global BPM, while Dynamic / Manual render the piecewise grid. Switching modes does **not** delete the other modes' data (the global `bpm` + `gridOffset` and the `tempoAnchors` array all coexist on disk in `data/song-info/<slug>.json`), but only the active mode's grid is drawn downstream. Bar numbering stays continuous in anchor modes — there's never a "bar 1" twice. The metronome panel and snap-to-grid action follow the active mode: the local segment's tempo in Dynamic / Manual, or the global BPM in Static.
+**The active mode is the final verdict everywhere.** Whichever tab is selected in Dataset Prep is what the Annotation Tool and Algorithm Inspect will render — Static suppresses the anchors and falls back to the global BPM, while Dynamic / Manual render the piecewise grid. Switching modes does **not** delete the other modes' data (the global `bpm` + `gridOffset` and the `tempoAnchors` array all coexist on disk in `data/song-info/<slug>.json`), but only the active mode's grid is drawn downstream. Bar numbering stays continuous in anchor modes — there's never a "bar 1" twice. The snap-to-grid action follows the active mode: the local segment's tempo in Dynamic / Manual, or the global BPM in Static. The metronome panel follows the active mode too **unless** you've tapped a custom metronome tempo, in which case it clicks a steady pulse at that tapped value instead.
 
 **The Song details panel swaps controls to match the mode.** In **Static** mode, the panel shows the BPM input, Grid Offset input, *Set bar start* button, and Auto-detected static chips — the global-tempo controls. In **Dynamic**, in **Manual + Dynamic base**, those static-only controls hide (per-anchor BPM replaces the global value, per-anchor timestamp replaces the global offset, and the static auto-detected chips don't apply); the panel instead shows an editable **Anchors** list with one row per anchor. In **Manual + Static base** the panel shows the same global-tempo controls as Static and the anchor list is replaced with a flat **Pinned beats** list (anchors on disk are inactive in this mode). Time Signature stays visible regardless. Each anchor row carries:
 
@@ -607,16 +611,23 @@ The pinned-beat count appears in amber alongside the anchor count in the Grid Mo
 
 The Metronome plays a click on every beat as the song runs, so you can *hear* whether the beat grid lines up with the music instead of judging it by eye. It's the tool you reach for while aligning the grid: if the click drifts away from the kick drum, the grid is off and needs nudging.
 
-It lives just below the Song Info Bar in the Dataprep (`/prep`) workspace, folded away behind a **Metronome ▸** disclosure that starts closed (open it to reveal the controls; whether it's open is remembered in your browser under `tc:prep:metronome:open`). It has four controls — a pitch preset, a volume slider, an ON/OFF toggle, and a **Tap tempo** row — and each one shows a tooltip on hover. The Tap button writes a new tempo into the song, so like the other grid controls it's read-only for non-admin viewers. The buttons that *nudge* the grid into alignment live one panel up, in the Song Info Bar next to the Grid Offset field, so open both panels at once when you want to hear the click while you nudge.
+It lives below the Song details panel in the **Song setup** sidebar of the Dataprep (`/prep`) workspace, folded away behind a **Metronome ▸** disclosure that starts closed (open it to reveal the controls; whether it's open is remembered in your browser under `tc:prep:metronome:open`). Each control shows a tooltip on hover.
+
+The panel is split into **two separate features**, each with its own labelled section:
+
+- **Detect tempo** — a tap-along BPM finder (**Tap** + **Clear** buttons and a big BPM readout). It sets the *metronome's own* tempo and **never** changes the song's grid BPM, so it's available to everyone, including non-admin viewers.
+- **Metronome sound** — the click track itself (ON/OFF toggle, pitch preset, volume slider). It plays a woodblock click on every beat at whatever tempo is shown above.
+
+The buttons that *nudge* the grid into alignment live one section up, in the Song details panel next to the Grid Offset field, so open both at once when you want to hear the click while you nudge.
 
 ### How to use it
 
-1. Make sure a **BPM** is set in the Song Info Bar above (the toggle stays disabled until then).
-2. Click **○ Metronome OFF** to flip it to **● Metronome ON**. This is just a flag — it does **not** start the song.
+1. The big **BPM** readout shows the metronome's current tempo. By default it follows the song's BPM from the Song Info Bar (labelled *from the song's BPM*); **Tap** along to set a different one (labelled *from your taps*).
+2. Under **Metronome sound**, click **○ Metronome OFF** to flip it to **● Metronome ON**. This is just a flag — it does **not** start the song.
 3. Press **Spacebar** (or the player's ▶ button) to play the song. You'll hear a woodblock click on every beat, with a louder accent on beat 1 of each bar.
-4. If the click drifts from the kick, scroll up to the **Nudge grid offset** row in the Song Info Bar and shift the grid until they line up.
+4. If the click drifts from the kick (and you haven't tapped a custom tempo), open the **Song details** section above and use the **Nudge** row to shift the grid until they line up.
 
-The status label next to the toggle tells you why you are or aren't hearing clicks right now: `off` · `set a BPM first` · `press play to hear it` · `playing`.
+The status label in the **Metronome sound** header tells you why you are or aren't hearing clicks right now: `sound off` · `tap a tempo first` · `press play to hear it` · `playing`.
 
 ### Pitch preset
 
@@ -633,24 +644,25 @@ This controls only the click's loudness, separately from the song's own playback
 
 ### Metronome toggle
 
-- **● Metronome ON / ○ Metronome OFF** — passive flag. The click follows the BPM and grid offset from the Song Info Bar above, so any edit there is instantly audible while the song plays. Hardcoded woodblock sound, one click per beat, downbeat (beat 1 of each bar) accented.
+- **● Metronome ON / ○ Metronome OFF** — passive flag. The click plays at the tempo shown in the **Detect tempo** readout above (your tapped value, or the song's BPM + grid offset when you haven't tapped one), so any edit there is instantly audible while the song plays. Hardcoded woodblock sound, one click per beat, downbeat (beat 1 of each bar) accented.
 
-### Tap tempo
+### Detect tempo (tap)
 
-A Rekordbox-style tap-along BPM estimator. Use this when you can hear the beat but the auto-detected BPM is wrong or missing.
+A Rekordbox-style tap-along BPM finder. Use this when you can hear the beat but the auto-detected BPM is wrong or missing, and you want to set the metronome to it.
+
+> ℹ️ Tapping sets the **metronome's own tempo only** — it does **not** write back to the song's grid BPM. It's a local, non-destructive control, so it works for every viewer (no admin permission needed).
 
 1. Press play (or just listen along in your head).
-2. Click the **Tap** button on every beat — or press **T**. The reading next to the button shows the live BPM and the tap count.
-3. From the **second tap onward**, every accepted tap writes the rolling-average BPM straight into the Song Info Bar — there is no separate Apply step.
-4. **Clear** discards the current taps without changing the song's BPM. Useful if you want to re-tap at the same tempo without overwriting it; the engine keeps whatever value the last tap session settled on.
+2. Click the **Tap** button on every beat — or press **T**. The big readout shows the live BPM and the tap count; the line under it shows where the tempo is coming from (*from your taps* vs *from the song's BPM*).
+3. From the **second tap onward**, every accepted tap updates the metronome tempo — there is no separate Apply step.
+4. **Clear** resets the detected tempo and empties the tap buffer; the metronome falls back to following the song's BPM. It never changes the song's grid.
 
 How the estimate is computed:
 
 - BPM = `round(60 000 / avg(inter-tap interval in ms))` over the last **up to 5 taps**, so newer taps refine the reading and a single mistap is rolled out of the window within a bar or two.
 - Taps closer together than **240 ms** (≈ >250 BPM) are ignored as accidental double-clicks — the BPM readout doesn't jump.
 - No idle timeout: the buffer is preserved across breaks. Instead, if your next tap is **more than 30% off the running average interval**, the reducer treats it as the first tap of a new tempo and the buffer restarts on that tap (so switching tracks doesn't need an explicit reset).
-- BPM values are constrained to the **60–240** DJ range. A tap that would push the rounded value outside that band is recorded into the rolling window but does not overwrite the engine BPM, so a single mis-counted beat won't clobber the song.
-- Read-only for non-admin viewers (the Tap button itself is disabled).
+- BPM values are constrained to the **60–240** DJ range. A tap that would push the rounded value outside that band is recorded into the rolling window but does not overwrite the metronome tempo, so a single mis-counted beat won't throw the click off.
 
 ---
 
@@ -752,7 +764,7 @@ The left-edge label column is **resizable**: hover the right edge of any row lab
 
 ## The Viz Control Bar
 
-The Viz Control Bar is the strip of buttons that sits over the canvas and decides what the canvas shows: which annotation layers and audio signals are drawn, how far you're zoomed in, whether the beat grid is on, and so on. Think of it as the canvas's "view" menu. Every button is a big icon with its name spelled out underneath in capitals, so they all line up as one neat row. From left to right: **Annotations** and **Signals** (each opens a checklist popover), **Zoom** (− / ×N / +), **Grid** (an on/off toggle plus a grid-spacing selector), **Snap**, **Misc** (a popover for a couple of less-used options), and **Algos** (a picker that only appears in Algorithm Inspect). Click anywhere outside an open popover to close it.
+The Viz Control Bar is the strip of buttons that sits over the canvas and decides what the canvas shows: which annotation layers and audio signals are drawn, how far you're zoomed in, whether the beat grid is on, and so on. Think of it as the canvas's "view" menu. Every button is a big icon with its name spelled out underneath in capitals, so they all line up as one neat row. From left to right: **Annotations** and **Signals** (each opens a checklist popover), **Zoom** (− / ×N / +), **Grid** (an on/off toggle plus a grid-spacing selector), **Snap**, and **Misc** (a popover for a couple of less-used options). Click anywhere outside an open popover to close it. (In Algorithm Inspect, which detector results are drawn on the canvas is controlled from that workspace's right **Algorithms** sidebar — each row's checkbox toggles its overlay — not from a Viz Control Bar picker.)
 
 ### 1. Annotations dropdown
 
@@ -863,23 +875,13 @@ All heights line up so the bar reads as one row of equal columns.
 
 Which grid units appear in the dropdown is remembered between visits, saved in your browser under `timecues.inspector.beatGridUnitOptions.v2` (the `v2` reflects a past rewrite of the unit names to be beat-relative). The currently-selected unit itself is *not* persisted — it returns to the default (`Beat`) when you reload the page.
 
-### 4. Algos dropdown (Inspect mode only)
+### 4. Algorithm overlays — controlled from the Algorithms sidebar
 
-A multi-select over the algorithm registry, grouped:
+There is no Algos picker in the Viz Control Bar. In Algorithm Inspect, which detector results are drawn on the canvas is controlled from the workspace's right **Algorithms** sidebar: each detector row, grouped by family (Ruptures, MSAF, All-In-One, the experimental SPAN / LOOP / CUE-extras / LYRICS / PATTERN families, and your `is_algorithm=True` custom detectors), carries a checkbox that toggles **that result's overlay** on the waveform. The checkbox is only enabled once the result is **cached** — a missing row stays greyed until you compute it. Each family header also offers **Show all / Hide all** over its cached results.
 
-- **Ruptures** (19 CPD variants — Dynp / Pelt / Window / BinSeg / BottomUp × cost grid)
-- **MSAF** (4 — `sf`, `foote`, `cnmf`, `olda`; optional `scluster`, `vmo` if installed)
-- **All-In-One** (ensemble + folds 0–7; disabled if neither `demucs-cpu` nor `demucs-gpu` profile is running)
-- **Custom** (all your `is_algorithm=True` custom detectors, kept in their own group so they don't get lost among the built-ins)
-- **Other** (BPM-track, band-gradient, LLM-vision)
+Auto-guess is **not** an algorithm overlay — its live consensus row is toggled from the **Annotations** dropdown's **Auto-guess** control (with the ≥2 / ≥3 / ≥4 min-consensus chips).
 
-A top **Select all** checkbox and per-group **Select all <family>** checkboxes are provided.
-
-Auto-guess is **not** listed here — its live consensus row is toggled from the **Annotations** dropdown's **Auto-guess** control (with the ≥2 / ≥3 / ≥4 min-consensus chips), so it isn't duplicated as an algorithm overlay.
-
-The dropdown is always shown in Inspect mode. If no algorithms have been run for the current song yet, opening it surfaces a hint to run algorithms from the sidebar to populate the list.
-
-Selecting an algorithm calls `runTool` (`src/tools/runTool.ts`), which first looks in `data/algorithm-outputs/analysis/<slug>/<algoId>.json`; on a miss it falls through to the Python service.
+Loading an overlay reads `data/algorithm-outputs/analysis/<slug>/<algoId>.json`; results are populated when a song is opened, and computing a missing one is done from the sidebar's **▶ Run…** picker (`runTool`, `src/tools/runTool.ts`).
 
 ### 5. Palette
 
@@ -1245,21 +1247,20 @@ Band-gradient · LLM-vision · CPD (Ruptures) · MSAF · All-In-One ensemble · 
 
 **Run controls** depend on the active scope tab:
 
-- *Per song* tab → the right-edge **Algorithms sidebar** is the only place to pick algorithms and run them on the current song. The middle column shows no run controls — they would duplicate the sidebar.
+- *Per song* tab → the right-edge **Algorithms sidebar** is where you both **view** cached results (per-row visibility checkboxes) and **run** new ones (via the **▶ Run…** picker). The middle column shows no run controls — they would duplicate the sidebar.
 - *All songs* tab → **▶ Batch run across N songs** sits at the top of the workspace with **⚙ Batch algorithm options** next to it (checkbox grid for MSAF, All-In-One, Ruptures CPD plus the **Demucs model** dropdown used by All-In-One). Runs sequentially across every song; progress and logs stream below the song title. The algorithm selection is shared with the per-song sidebar — set it once and reuse it.
 
-**Algorithms sidebar** (per-song workspace only). The right edge of the *Per song* workspace carries a collapsible **Algorithms** panel. Families (MSAF · All-In-One · Ruptures CPD · experimental SPAN/LOOP/CUE-extras/LYRICS · custom detectors) are laid out as a row of **toggle chips** — the same chips the annotation list uses. Each chip shows the family name and a compact `cached / total` count; click a chip to expand or collapse that family's checkbox grid. Several can be open at once — their frames stack below the chip row — so you can show only the families you're working with instead of scrolling the whole list. Which chips are open persists per browser. Inside each open family, every row carries a status pill:
+**Algorithms sidebar** (per-song workspace only). The right edge of the *Per song* workspace carries a collapsible **Algorithms** panel. Families (MSAF · All-In-One · Ruptures CPD · experimental SPAN/LOOP/CUE-extras/LYRICS · custom detectors) are laid out as a row of **toggle chips** — the same chips the annotation list uses. Each chip shows the family name and a compact `cached / total` count; click a chip to expand or collapse that family's rows. Several can be open at once — their frames stack below the chip row — so you can show only the families you're working with instead of scrolling the whole list. Which chips are open persists per browser. Inside each open family, every row has a checkbox that **toggles whether that detector's result is drawn on the waveform** — enabled only once the result is **cached**, so a missing row stays greyed until you compute it — followed by a status pill:
 
 - Green **cached** — the JSON already exists for the current song.
 - Slate **missing** — has not been computed yet (or was filtered out, e.g. an All-In-One model with no Demucs profile available).
 - Red **failed** — the last run attempted this algorithm but it returned a non-200, a Python exception, or its sidecar isn't reachable. Hover the pill to see the error reason (HTTP status + body, `exit N`, or the connection error including which Docker profile to start). The full traceback streams into the run log panel below the song title. Failed pills clear on the next successful run and disappear if you reload the page.
 
-The header above each family carries three controls:
+The header above each open family carries **Show all / Hide all**, which draw or hide every *cached* result in that family on the waveform at once (missing rows, having nothing to show, are untouched).
 
-- **▶ Run missing (N)** — runs only the algorithms in that family that don't have a cached result yet for the current song. Counts update as runs complete. Disabled when every algorithm in the family is already cached, when no song is selected, or while another job is running. Available for every family (MSAF, All-In-One, Ruptures, experimental SPAN/LOOP/CUE-extras/LYRICS, custom).
-- **Select all** / **None** — bulk-tick or untick that family. Selection is shared with Dataset Prep's batch runner — there's one set of ticks, not two.
+To compute results, click **▶ Run…** at the top of the sidebar. The picker opens **pre-ticked to exactly the not-yet-cached ("missing") algorithms** for the current song (skipping any family that can't run, e.g. All-In-One with no Demucs profile), so the default action is "fill in the gaps". It lists the same families with checkboxes that select what to **run** — this run selection is shared with Dataset Prep's batch runner, so there's one set of ticks, not two. Inside the picker each family also offers **▶ Run missing (N)** (run only that family's not-yet-cached algorithms) and **Select all / None**, plus the **Demucs model** dropdown used by All-In-One. The footer **▶ Run N algorithms for this song** runs whatever is currently ticked. Algorithms whose JSON is already cached are **skipped** in any run path; only the missing ones are computed — to force a re-run (e.g. with a different Demucs model), delete the cached JSON for that algorithm first. While a job is in flight the sidebar's button flips to **⏳ Running…** and the canvas + status pills auto-refresh as each algorithm completes; a freshly computed result can then be toggled on from its row.
 
-The top of the sidebar carries **▶ Run N algorithms for this song**, which runs whatever is *currently ticked* across all families — use it when you've cherry-picked specific algorithms instead of "fill in the gaps". Algorithms whose JSON is already cached are **skipped** in any run path; only the missing ones are computed. To force a re-run (e.g. with a different Demucs model), delete the cached JSON for that algorithm first. The button stays disabled until at least one algorithm is ticked, flips to **⏳ Running…** while the job is in flight, and the canvas + status pills auto-refresh as each algorithm completes. Drag the sidebar's left edge to resize (320–640 px, double-click to reset to 420 px); collapse with the **›** chevron and the panel becomes a hover tab on the right edge. Width + collapsed state persist per browser.
+Drag the sidebar's left edge to resize (320–640 px, double-click to reset to 420 px); collapse with the **›** chevron and the panel becomes a hover tab on the right edge. Width + collapsed state persist per browser.
 
 **Status pills** in the run log panel report what *actually* happened per algorithm family (MSAF / All-In-One / Ruptures CPD / experimental sidecars / Custom — custom detectors run in the *same* job as the built-ins, so they share one report, one log, and one set of pills), not just whether the job process exited cleanly:
 - **✓ green** — every requested algorithm in that family produced fresh output.
@@ -1332,7 +1333,7 @@ Dataprep (the emerald tab, at `/prep`) is where songs *enter* the corpus and get
 - Both `BPM and Grid` and `Metronome` panels are collapsed by default (see [Song Info Bar](#song-info-bar) and [Metronome Panel](#metronome-panel-dataset-prep)) so the canvas dominates on first open.
 - The `G` shortcut means **Align grid to playhead (set bar 1)**, not *Toggle Manual layer*. `Shift+G` also aligns the grid.
 - Storage stats are shown more prominently in the sidebar.
-- **Grid Mode pills** (Static BPM · Dynamic · Manual adjustment) sit in the *BPM and Grid* panel — see [Grid Mode](#grid-mode-static-bpm--dynamic--manual-adjustment) above for the contract. The grid mode is persisted per-song to `data/song-info/<slug>.json` as `gridMode` + `tempoAnchors` + (Manual only) `beatOverrides` — the override map is keyed by the cumulative integer beat index from the song origin and stores the pinned absolute timestamp in seconds.
+- **Grid Mode tabs** (Static · Dynamic · Manual) sit in the *BPM and Grid* panel — see [Grid Mode](#grid-mode-static-bpm--dynamic--manual-adjustment) above for the contract. The grid mode is persisted per-song to `data/song-info/<slug>.json` as `gridMode` + `tempoAnchors` + (Manual only) `beatOverrides` — the override map is keyed by the cumulative integer beat index from the song origin and stores the pinned absolute timestamp in seconds.
 - The sidebar gains three Dataset-Prep-only controls:
   - **⤒ Import dataset** at the top of the sidebar (admin-only) — opens the Import Dataset dialog (see [Importing a dataset](#importing-a-dataset) below)
   - **⤓ Full annotation export** at the top of the sidebar (next to `+ Upload songs`) — opens the Export Manager with multi-song scope plus audio / algo cache / stems toggles
@@ -1639,14 +1640,19 @@ The UI surfaces `fatal.message` and, when relevant, a *Missing Python module* pa
 
 ### 6. The Custom Detectors UI (`CustomScriptsPage.tsx`)
 
-**Toolbar**
+**Toolbar** — one combined strip. The page controls and the bulk Run / Clear actions share a single bar (and a single **Song ▾** picker), so there's no duplicate single-song row.
 
-| Button | Action |
+| Control | Action |
 |--------|--------|
 | **How this works** | Toggles the inline Markdown help panel |
-| **Song ▾** | Selects the test song for *Run* |
+| **Song ▾** | Selects the song the *This song* actions (and each per-row **Run**) act on |
+| **Bulk scope ▾** | `All detectors` (default) or a single detector — narrows the Run / Clear buttons. *(only shown once at least one detector exists)* |
+| **Run · This song** / **Run · All songs** | Runs every runnable (`OK`) detector in scope on the selected song, or batches each over every song (reusing the per-detector *Run* / *Run all* paths). The all-songs sweep confirms first, since it can be `detectors × songs` runs. |
+| **Clear outputs · This song** / **Clear outputs · All songs** | Wipes outputs for the in-scope detector(s) on just the selected song, or on every song. Same semantics as the per-row **Clear outputs** (algorithm cache + **your** annotation files; the `.py` source and other annotators' work are kept). A `confirm()` dialog spells out the exact scope. |
 | **Reload** | `POST /api/custom-scripts/reload` — re-scans `tools/python/custom/` |
 | **New detector** | Opens the editor with the starter template |
+
+> ⚠️ **The bulk Clear is destructive and crosses every detector by default.** With Bulk scope = `All detectors`, **Clear outputs · All songs** removes your annotation edits for *every* detector on *every* song. Narrow the scope dropdown first if you only mean one detector. There is no undo.
 
 **Per-detector row**
 
@@ -2261,7 +2267,7 @@ This is the full list of keyboard shortcuts (you can also pop up a quick referen
 | **Grid** *(Dataset Prep only)* | `[` | Jump to previous tempo anchor |
 |  | `]` | Jump to next tempo anchor |
 |  | `Delete` / `Backspace` | Delete the tempo anchor nearest the playhead, within a 3 s window. |
-| **Metronome** *(Dataset Prep only)* | `T` | Tap tempo — each press records one tap into the rolling window and, from the second tap onward, streams the rounded BPM (60–240) straight to the song. `event.repeat` is suppressed, so holding the key down does not flood the buffer. |
+| **Metronome** *(Dataset Prep only)* | `T` | Tap tempo — each press records one tap into the rolling window and, from the second tap onward, sets the metronome's own tempo (rounded BPM, 60–240). Does **not** change the song's grid. `event.repeat` is suppressed, so holding the key down does not flood the buffer. |
 | **Help** | `?` | Open / close keyboard shortcuts drawer |
 
 ---

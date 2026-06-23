@@ -100,7 +100,8 @@ const PERCUSSIVE_SIZE_BY_ID: Record<string, string> = {
 };
 
 const LYRICS_SIZE_BY_ID: Record<string, string> = {
-  'whisper-base':     '~140 MB',
+  'whisper-base':       '~140 MB',
+  'ctc-forced-aligner': '~360 MB',
 };
 
 const PATTERN_SIZE_BY_ID: Record<string, string> = {

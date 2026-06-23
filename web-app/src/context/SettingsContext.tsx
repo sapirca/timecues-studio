@@ -204,7 +204,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
     // CUE family extras
     'basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets',
     // LYRICS family
-    'whisper-base',
+    'whisper-base', 'ctc-forced-aligner',
     // PATTERN family
     'locomotif',
   ],

@@ -40,6 +40,14 @@ basic-pitch ; python_version < "3.12"
 
 # --- LYRICS family ---------------------------------------------------------
 openai-whisper
+# ctc-forced-aligner (MIT, MahmoudAshraf97/ctc-forced-aligner) — word-level
+# CTC forced alignment of a reference transcript. We pin it to
+# facebook/wav2vec2-base-960h (Apache-2.0, English-only) so the integration
+# stays fully permissively-licensed; the package's DEFAULT MMS_FA model
+# is CC-BY-NC and is NOT used by lyrics_server.py.
+# Pulls transformers + torchaudio (transformers shared with whisper, torchaudio
+# shared with span/beatnet).
+ctc-forced-aligner
 
 # --- PATTERN family --------------------------------------------------------
 # dtai-locomotif (MIT, KU Leuven) — DTW-warped variable-length motif discovery.

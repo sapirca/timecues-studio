@@ -16,7 +16,12 @@ FROM ${BASE_REPO}/experimental-torch-base:latest
 ENV XDG_CACHE_HOME=/app/.cache
 
 # openai-whisper pulls in tiktoken + ffmpeg-python + numba — all CPU-friendly.
-RUN pip install --no-cache-dir openai-whisper
+# ctc-forced-aligner pulls in transformers (already in the base via whisper
+# transitively) — pinned at runtime to `facebook/wav2vec2-base-960h`
+# (Apache-2.0) so the default CC-BY-NC MMS_FA model is never downloaded.
+# Both detectors share this same sidecar — no separate image to keep build
+# space tight.
+RUN pip install --no-cache-dir openai-whisper ctc-forced-aligner
 
 COPY tools/python/paths.py         /app/tools/python/paths.py
 COPY tools/python/lyrics_server.py /app/tools/python/lyrics_server.py

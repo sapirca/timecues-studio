@@ -1014,6 +1014,93 @@ function serveAnalysis(): Plugin {
   }
 }
 
+// ─── Experimental detector cache — read path decoupled from the sidecars ──────
+// The experimental MIR families (span, cue-extras, lyrics, …) each write their
+// results to data/algorithm-outputs/<family>/<slug>/<algo>.json (or, for the
+// flat-layout families like beatnet, <family>/<slug>.json). Normally a GET
+// /api/<family>/detect/... is PROXIED to the sidecar container, so stopping the
+// container to reclaim disk hides the already-computed results entirely.
+//
+// This middleware serves the READ path in-process (exactly like serveAnalysis),
+// so cached results stay viewable even with every experimental container down.
+// It is registered BEFORE the family proxies and only handles GET; POST (a
+// re-run, the COMPUTE path) and a cache MISS fall through to the proxy, which
+// answers from the live container or 503s when it's offline. Net effect: with
+// the experimental stack down you can still view every cached result; only
+// re-running needs the container back up.
+// Composite detector id ↔ (algo, stem). The unit of work is the composite id:
+// the bare algo for the full mix, "<algo>__<stem>" for a per-stem run (stem ∈
+// vocals/drums/bass/other). This mirrors cache_name() in tools/python/paths.py
+// — the same string keys the on-disk JSON, the /api/<fam>/detect/<slug>/<id>
+// URL, and the UI overlay set. Splitting on the FIRST "__" keeps algo ids that
+// themselves contain a single underscore (none today) unambiguous.
+function splitStemId(id: string): { algo: string; stem: string } {
+  const i = id.indexOf('__')
+  return i === -1 ? { algo: id, stem: 'mix' } : { algo: id.slice(0, i), stem: id.slice(i + 2) }
+}
+
+const EXPERIMENTAL_FAMILY_DIRS: Record<string, string> = {
+  'span':       DATA_DIRS.span,
+  'cue-extras': DATA_DIRS.cueExtras,
+  'lyrics':     DATA_DIRS.lyrics,
+  'panns':      DATA_DIRS.panns,
+  'beatnet':    DATA_DIRS.beatnet,
+  'pitch':      DATA_DIRS.pitch,
+  'loop':       DATA_DIRS.loop,
+  'percussive': DATA_DIRS.percussive,
+  'pattern':    DATA_DIRS.pattern,
+}
+
+function serveExperimentalCache(): Plugin {
+  return {
+    name: 'experimental-detector-cache',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.method !== 'GET' || !req.url) return next()
+        const m = req.url.match(/^\/api\/([a-z-]+)\/(detect|cached)\b/)
+        if (!m) return next()
+        const fam = m[1]
+        const baseDir = EXPERIMENTAL_FAMILY_DIRS[fam]
+        if (!baseDir) return next()   // not an experimental family → other handlers / proxy
+
+        // GET /api/<fam>/cached → which slugs have cached results on disk. Powers
+        // the UI's "show this family because data exists" gate without the server.
+        if (m[2] === 'cached') {
+          const set = new Set<string>()
+          try {
+            for (const e of fs.readdirSync(baseDir, { withFileTypes: true })) {
+              if (e.isDirectory()) set.add(e.name)                                   // <fam>/<slug>/...
+              else if (e.isFile() && e.name.endsWith('.json')) set.add(e.name.slice(0, -5)) // <fam>/<slug>.json
+            }
+          } catch { /* dir absent → empty */ }
+          const slugs = [...set].sort()
+          res.setHeader('Content-Type', 'application/json')
+          res.setHeader('Cache-Control', 'no-store')
+          res.end(JSON.stringify({ family: fam, slugs, count: slugs.length }))
+          return
+        }
+
+        // GET /api/<fam>/detect/<rest> → <baseDir>/<rest>.json. <rest> is
+        // "<slug>/<algo>" (subdir families) or "<slug>" (flat, e.g. beatnet).
+        const rest = req.url.slice(`/api/${fam}/detect/`.length).split('?')[0]
+        if (!rest) return next()
+        let subPath: string
+        try { subPath = decodeURIComponent(rest) } catch { res.statusCode = 400; res.end(); return }
+        if (subPath.includes('\0')) { res.statusCode = 400; res.end(); return }
+        // Realpath containment — same defense as serveAnalysis.
+        let baseReal: string
+        try { baseReal = fs.realpathSync(baseDir) } catch { return next() }  // family dir absent → proxy
+        const resolved = path.resolve(baseDir, subPath + '.json')
+        if (!resolved.startsWith(baseReal + path.sep)) { res.statusCode = 400; res.end(); return }
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return next()  // miss → proxy (compute / 503)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('Cache-Control', 'no-store')
+        fs.createReadStream(resolved).pipe(res)
+      })
+    },
+  }
+}
+
 // Upload a song to data/songs/<slug>/. Manifest is derived from disk so the
 // next GET /analysis/manifest.json automatically reflects the new entry.
 // POST /api/upload-song?name=<filename>  body: raw audio bytes
@@ -3311,12 +3398,14 @@ function serveRunAlgorithms(): Plugin {
   // ok=false inside a 200 (e.g. jdcnet-voicing weights not yet wired) is mapped
   // to a failure by runSidecarOne's default isFailure, so the pill bar reflects
   // it just like a transport error.
-  const runSpanOne = (job: Job, slug: string, algo: string): Promise<RunResult> =>
-    runSidecarOne(job, algo, {
+  const runSpanOne = (job: Job, slug: string, id: string): Promise<RunResult> => {
+    const { algo, stem } = splitStemId(id)
+    return runSidecarOne(job, id, {
       host: SPAN_HOST, port: 8009, apiPath: '/api/span/detect',
-      body: { slug, algo },
+      body: { slug, algo, stem },
       downHint: 'is the span server running? docker compose --profile experimental-models up span',
     })
+  }
 
   // Generic single-algo POST against an experimental sidecar at the given
   // (host, port, path) combo. Mirrors runSpanOne but generalized so the LOOP /
@@ -3324,14 +3413,16 @@ function serveRunAlgorithms(): Plugin {
   // copy-pasting it four times. The body shape `{ slug, algo }` matches every
   // family server's /detect endpoint.
   const runExperimentalOne = (
-    job: Job, slug: string, algo: string,
+    job: Job, slug: string, id: string,
     host: string, port: number, apiPath: string, serviceName: string,
-    family: string,
-  ): Promise<RunResult> =>
-    runSidecarOne(job, algo, {
-      host, port, apiPath, body: { slug, algo },
+    family: string, extraBody?: Record<string, unknown>,
+  ): Promise<RunResult> => {
+    const { algo, stem } = splitStemId(id)
+    return runSidecarOne(job, id, {
+      host, port, apiPath, body: { slug, algo, stem, ...extraBody },
       downHint: `is the ${family} server running? docker compose --profile experimental-models up ${serviceName}`,
     })
+  }
 
   // Run a single MSAF algorithm by POST-ing to the python server on :8002.
   // Each call writes <algorithm>.json to the analysis dir.
@@ -3482,49 +3573,51 @@ function serveRunAlgorithms(): Plugin {
         const SPAN_IDS = ['silero-vad', 'jdcnet-voicing']
         const spanDir = path.join(DATA_DIRS.span, slug)
         const spanRequested = algorithms
-          .filter((a) => SPAN_IDS.includes(a))
+          .filter((a) => SPAN_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(spanDir, `${a}.json`)))
 
         // PANNs (separate sidecar, same SPAN output kind).
         const PANNS_IDS = ['panns-cnn14']
         const pannsRequested = algorithms
-          .filter((a) => PANNS_IDS.includes(a))
+          .filter((a) => PANNS_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.panns, slug, `${a}.json`)))
 
         // LOOP family (chroma-autocorr).
         const LOOP_IDS = ['chroma-autocorr']
         const loopRequested = algorithms
-          .filter((a) => LOOP_IDS.includes(a))
+          .filter((a) => LOOP_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.loop, slug, `${a}.json`)))
 
         // CUE-family note-onset detector (basic-pitch).
         const PITCH_IDS = ['basic-pitch']
         const pitchRequested = algorithms
-          .filter((a) => PITCH_IDS.includes(a))
+          .filter((a) => PITCH_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.pitch, slug, `${a}.json`)))
 
         // CUE-extras trio (librosa key / autochord / librosa onsets).
         const CUE_EXTRAS_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets']
         const cueExtrasRequested = algorithms
-          .filter((a) => CUE_EXTRAS_IDS.includes(a))
+          .filter((a) => CUE_EXTRAS_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.cueExtras, slug, `${a}.json`)))
 
         // HPSS percussive (SPAN family, separate sidecar).
         const PERCUSSIVE_IDS = ['hpss-percussive']
         const percussiveRequested = algorithms
-          .filter((a) => PERCUSSIVE_IDS.includes(a))
+          .filter((a) => PERCUSSIVE_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.percussive, slug, `${a}.json`)))
 
-        // Whisper lyrics.
-        const LYRICS_IDS = ['whisper-base']
+        // Whisper transcription + CTC forced alignment. ctc-forced-aligner
+        // needs the per-song reference text (read below and passed as `text`);
+        // whisper-base ignores it.
+        const LYRICS_IDS = ['whisper-base', 'ctc-forced-aligner']
         const lyricsRequested = algorithms
-          .filter((a) => LYRICS_IDS.includes(a))
+          .filter((a) => LYRICS_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.lyrics, slug, `${a}.json`)))
 
         // LoCoMotif PATTERN family.
         const PATTERN_IDS = ['locomotif']
         const patternRequested = algorithms
-          .filter((a) => PATTERN_IDS.includes(a))
+          .filter((a) => PATTERN_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.pattern, slug, `${a}.json`)))
 
         // Count what the user asked for per family so we can report cached
@@ -3536,7 +3629,7 @@ function serveRunAlgorithms(): Plugin {
           .filter((a) => a === 'allin1' || a.startsWith('allin1-fold')).length
         const rupturesSelectedCount = algorithms
           .filter((a) => a.startsWith('ruptures-')).length
-        const spanSelectedCount = algorithms.filter((a) => SPAN_IDS.includes(a)).length
+        const spanSelectedCount = algorithms.filter((a) => SPAN_IDS.includes(splitStemId(a).algo)).length
 
         const jobId = `${++jobCounter}-${Date.now()}`
         const job = makeJob()
@@ -3650,8 +3743,9 @@ function serveRunAlgorithms(): Plugin {
             const runFamilyBlock = async (
               label: string, ids: string[], host: string, port: number,
               apiPath: string, serviceName: string, requested: string[],
+              extraBody?: Record<string, unknown>,
             ) => {
-              const selectedCount = algorithms.filter((a) => ids.includes(a)).length
+              const selectedCount = algorithms.filter((a) => ids.includes(splitStemId(a).algo)).length
               if (selectedCount === 0) return
               const cached = selectedCount - requested.length
               const section: SectionResult = {
@@ -3669,7 +3763,7 @@ function serveRunAlgorithms(): Plugin {
               for (const algo of requested) {
                 if (job.killed) break
                 const result = await runExperimentalOne(
-                  job, slug, algo, host, port, apiPath, serviceName, label,
+                  job, slug, algo, host, port, apiPath, serviceName, label, extraBody,
                 )
                 if (result.ok) section.ok++
                 else recordFailure(section, algo, result.error)
@@ -3696,9 +3790,19 @@ function serveRunAlgorithms(): Plugin {
               'HPSS percussive (SPAN)', PERCUSSIVE_IDS, PERCUSSIVE_HOST, 8015,
               '/api/percussive/detect', 'percussive', percussiveRequested,
             )
+            // ctc-forced-aligner aligns against the per-song reference text
+            // (saved by the Lyrics text panel). Read it once and forward as
+            // `text`; whisper-base ignores it. Without a transcript the
+            // sidecar returns its own "no reference lyrics text" error.
+            let lyricsRefText = ''
+            try {
+              const refPath = path.join(DATA_DIRS.lyricsText, `${slug}.txt`)
+              if (fs.existsSync(refPath)) lyricsRefText = fs.readFileSync(refPath, 'utf-8')
+            } catch { /* leave empty — sidecar reports the missing-text error */ }
             await runFamilyBlock(
               'LYRICS family', LYRICS_IDS, LYRICS_HOST, 8016,
               '/api/lyrics/detect', 'lyrics', lyricsRequested,
+              lyricsRefText.trim() ? { text: lyricsRefText } : undefined,
             )
             await runFamilyBlock(
               'PATTERN family', PATTERN_IDS, PATTERN_HOST, 8017,
@@ -5389,6 +5493,9 @@ export default defineConfig(async () => {
     serveRunDemucs(), serveBulkAnnotations(), serveLayersBulk(), serveAnnotationLayers(),
     serveAnnotatorListing(), serveAnnotatorProfiles(), serveEmailDomainCheck(),
     serveTeamStats(), proxyMirEval(), proxyMir(), proxyRuptures(), proxyBpm(),
+    // In-process cache reader — MUST precede the experimental family proxies so
+    // cached GETs are served from disk even when the sidecar containers are down.
+    serveExperimentalCache(),
     proxySpan(), proxyBeatnet(), proxyLoop(), proxyPanns(), proxyPitch(),
     proxyCueExtras(), proxyPercussive(), proxyLyrics(), proxyPattern(),
     proxyCustomScripts(), serveSongCacheListing(), serveStorageStats(),

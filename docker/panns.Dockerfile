@@ -20,6 +20,14 @@ ENV PANNS_CHECKPOINT_DIR=/app/.cache/panns_data
 # image stays slim — at the cost of a 30-60 s first-detect wait).
 RUN pip install --no-cache-dir panns_inference
 
+# panns_inference reads class_labels_indices.csv at IMPORT time
+# (panns_inference/config.py), so `import panns_inference` raises
+# FileNotFoundError unless the AudioSet label map already exists at
+# ~/panns_data/. Bake it in at build (~14 KB, 527 classes) so the import —
+# and the boot-time health probe — succeed. The ~80 MB CNN14 checkpoint
+# still lazy-downloads next to it on first detect.
+RUN python -c "import urllib.request, os; os.makedirs('/root/panns_data', exist_ok=True); urllib.request.urlretrieve('https://raw.githubusercontent.com/qiuqiangkong/audioset_tagging_cnn/master/metadata/class_labels_indices.csv', '/root/panns_data/class_labels_indices.csv')"
+
 COPY tools/python/paths.py        /app/tools/python/paths.py
 COPY tools/python/panns_server.py /app/tools/python/panns_server.py
 COPY data-default/                /app/data-default/
