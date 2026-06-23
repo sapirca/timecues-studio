@@ -476,7 +476,7 @@ export function ExportManagerModal({
           const entry = songsById.get(slug);
           if (!entry?.url) { next.set(slug, null); return; }
           try {
-            const res = await fetch(entry.url, { method: 'HEAD' });
+            const res = await fetch(entry.url, { method: 'HEAD', headers: annotatorHeaders() });
             const len = res.headers.get('content-length');
             next.set(slug, len ? Number.parseInt(len, 10) : null);
           } catch {
@@ -874,7 +874,7 @@ export function ExportManagerModal({
               }
               if (!entry.url) return;
               try {
-                const res = await fetch(entry.url);
+                const res = await fetch(entry.url, { headers: annotatorHeaders() });
                 if (!res.ok) { cacheFailures.push(`${slug} ${entry.url}`); return; }
                 const blob = await res.blob();
                 entries.push({ path: `${slug}/algos/${entry.name}`, body: blob });
@@ -888,7 +888,7 @@ export function ExportManagerModal({
             await Promise.all(listing.stems.map(async (entry) => {
               if (!entry.url) return;
               try {
-                const res = await fetch(entry.url);
+                const res = await fetch(entry.url, { headers: annotatorHeaders() });
                 if (!res.ok) { stemFailures.push(`${slug} ${entry.url}`); return; }
                 const blob = await res.blob();
                 entries.push({ path: `${slug}/stems/${entry.name}`, body: blob });
@@ -912,7 +912,7 @@ export function ExportManagerModal({
           const entry = songsById.get(slug);
           if (!entry?.url) { audioFailures.push(`${slug} (no url)`); return null; }
           try {
-            const res = await fetch(entry.url);
+            const res = await fetch(entry.url, { headers: annotatorHeaders() });
             if (!res.ok) { audioFailures.push(`${slug} (HTTP ${res.status})`); return null; }
             const blob = await res.blob();
             const audioExt = (entry.file?.match(/\.[a-z0-9]+$/i)?.[0]

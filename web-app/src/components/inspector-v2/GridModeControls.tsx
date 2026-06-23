@@ -135,11 +135,11 @@ export function GridModeControls({
         onClick={() => setMode(value)}
         aria-pressed={isActive}
         title={isActive ? `${label} is the active mode (rendered in all workspaces)` : `Switch to ${label}`}
-        className={`flex-1 basis-0 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-md border-b-2 border-x border-t text-sm font-mono font-semibold uppercase tracking-wide transition disabled:opacity-50 disabled:cursor-not-allowed ${
+        className={`flex-1 basis-0 min-w-0 inline-flex items-center justify-center gap-1 px-1.5 py-1.5 rounded-md border-b-2 border-x border-t text-[10px] font-mono font-semibold uppercase tracking-wide transition disabled:opacity-50 disabled:cursor-not-allowed ${
           isActive ? style.pillActive : style.pillIdle
         }`}
       >
-        <span className={`inline-block w-3 text-center shrink-0 ${isActive ? '' : 'opacity-0'}`} aria-hidden="true">✓</span>
+        <span className={`inline-block w-2.5 text-center shrink-0 ${isActive ? '' : 'opacity-0'}`} aria-hidden="true">✓</span>
         <span className="truncate">{label}</span>
       </button>
     );
