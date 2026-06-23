@@ -918,6 +918,7 @@ def _build_context(audio_path: Path, slug: str) -> DetectionContext:
         tension_curve=np.asarray(tension, dtype=np.float32),
         bpm=bpm_value,
         beat_times_ms=beat_times_ms,
+        slug=slug,
         grid_offset_ms=grid_offset_ms,
         time_signature=time_signature,
         beats_per_bar=_parse_beats_per_bar(time_signature),

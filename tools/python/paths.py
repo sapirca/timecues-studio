@@ -308,3 +308,12 @@ LYRICS_OUTPUTS_DIR     = _ALGO_OUTPUTS_DIR / "lyrics"
 # Experimental: LoCoMotif motif discovery (PATTERN family).
 # One file per (slug, algorithm): pattern/<slug>/<algo>.json.
 PATTERN_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "pattern"
+
+# Curated end-products: the five distilled outputs the project ships, each
+# built by an orchestrating generator (tools/python/generators/) that
+# combines the raw caches above (allin1, panns, lyrics, pattern, …) and
+# stems into one clean, importable layer. Distinct from the raw caches so a
+# generator never clobbers the algorithm output it consumes.
+#   curated/<family>/<slug>.json   family in
+#   {phrases, instruments, cues, drum-pattern, lyrics}
+CURATED_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "curated"

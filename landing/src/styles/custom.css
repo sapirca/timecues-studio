@@ -352,6 +352,42 @@
   margin-top: 0.25rem;
 }
 
+/* Each tutorial card links to its written walkthrough lower on the page. */
+a.tutorial-card {
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+a.tutorial-card:hover {
+  border-color: var(--sl-color-text-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+a.tutorial-card:focus-visible {
+  outline: none;
+  border-color: var(--sl-color-text-accent);
+  box-shadow: 0 0 0 2px var(--sl-color-text-accent);
+}
+.tutorial-stub .card-cta {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sl-color-text-accent);
+  margin-top: auto;
+  padding-top: 0.35rem;
+}
+
+/* Tutorial figures: caption is the italic line directly under each image. */
+.sl-markdown-content img + em {
+  display: block;
+  margin-top: -0.6rem;
+  margin-bottom: 1.2rem;
+  font-size: 0.85rem;
+  color: var(--sl-color-gray-3, #b0b8c4);
+  text-align: center;
+}
+
 /* Respect users who don't want motion. */
 @media (prefers-reduced-motion: reduce) {
   .hero h1,
@@ -370,4 +406,20 @@
     animation: none !important;
   }
   .led-strip circle { opacity: 1; }
+}
+
+/* Frame doc screenshots. The User guide captures are the app's own dark UI,
+   which otherwise blends into the dark Starlight page with no visible edge.
+   A thin theme-aware border + soft shadow gives each shot a clear boundary
+   (reads as a faint light frame on dark, a faint dark frame on light) without
+   baking a frame into the 64 PNGs. Scoped to in-content images only. */
+.sl-markdown-content img {
+  display: block;
+  border: 1px solid var(--sl-color-gray-4, #3a4150);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  background: var(--sl-color-gray-7, #11151c);
+  margin-block: 1.2rem;
+  max-width: 100%;
+  height: auto;
 }

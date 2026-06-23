@@ -3,12 +3,11 @@ title: Tutorials
 description: Step-by-step written walkthroughs of every TimeCues workflow — annotation, beat-grid alignment, algorithm comparison, auto-guess, custom detectors, self-hosting — plus a complete reference for flags, settings, and Docker compose profiles. Video screencasts land over time.
 ---
 
-Every TimeCues workflow has a **complete step-by-step written tutorial on
-this page** — you can follow any of them today. The cards below double as
-the planned *screencast* curriculum: each is still a stub (red LED) and
-flips to green as a recording lands, but the written guide it stands in
-for is already done. Scroll down, or jump from the page outline on the
-right.
+Every TimeCues workflow has a **complete step-by-step written walkthrough
+on this page** — each one illustrated with screenshots of the actual UI,
+and ready to follow today. **Click any card below to jump straight to its
+tutorial**, or use the page outline on the right. Video screencasts will
+land over time.
 
 There is also a full reference for every **flag, environment variable, and
 Docker compose profile** at the [bottom of this page](#flags-environment-variables--compose-profiles)
@@ -19,83 +18,83 @@ If there's a screencast you'd like recorded first, [say so on the contact page](
 
 <div class="tutorial-grid">
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Getting started in 3 minutes</h3>
+  <a class="tutorial-stub tutorial-card" href="#getting-started-in-3-minutes">
+    <h3><span class="stub-led ready"></span> Getting started in 3 minutes</h3>
     <p>Open a song, scrub the waveform, drop your first boundary, save. The shortest possible loop through the app.</p>
-    <div class="stub-status">Stub · Up next</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Creating a new dataset</h3>
+  <a class="tutorial-stub tutorial-card" href="#creating-a-new-dataset">
+    <h3><span class="stub-led ready"></span> Creating a new dataset</h3>
     <p>From a fresh deploy to your first reviewed corpus — claiming the workspace, uploading audio, picking an access tier, inviting your team, and switching between datasets.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Aligning the beat grid</h3>
+  <a class="tutorial-stub tutorial-card" href="#aligning-the-beat-grid">
+    <h3><span class="stub-led ready"></span> Aligning the beat grid</h3>
     <p>Bar-start anchor, Grid Offset, Static BPM vs Dynamic vs Manual modes, what to do with songs that drift, and how to read the red / amber / emerald grid-readiness glyph.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Annotating boundaries with the keyboard</h3>
+  <a class="tutorial-stub tutorial-card" href="#annotating-boundaries-with-the-keyboard">
+    <h3><span class="stub-led ready"></span> Annotating boundaries with the keyboard</h3>
     <p>The full keyboard-driven flow — M to add, snap-to-grid, the violet-halo tick when you snap, undo/redo, and how to think about the layer cards in the sidebar.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Comparing algorithms</h3>
+  <a class="tutorial-stub tutorial-card" href="#comparing-algorithms">
+    <h3><span class="stub-led ready"></span> Comparing algorithms</h3>
     <p>Toggle algorithm overlays, read the per-song F-measure and HitRate, and switch reference layers to see how scores shift.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> The Auto-guess workflow</h3>
+  <a class="tutorial-stub tutorial-card" href="#the-auto-guess-workflow--consensus--clustering">
+    <h3><span class="stub-led ready"></span> The Auto-guess workflow</h3>
     <p>Generate an AutoGuess from the four clustered algorithms, then tick through point-by-point with ✓ / ✗ / @ to harvest a clean manual layer in a fraction of the time.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Eye annotations from the spectrogram</h3>
+  <a class="tutorial-stub tutorial-card" href="#eye-annotations-from-the-spectrogram">
+    <h3><span class="stub-led ready"></span> Eye annotations from the spectrogram</h3>
     <p>Doing a quick by-eye pass on the spectrogram alone, when audio playback isn't an option, and how Eye annotations compare to Manual.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Writing a custom detector</h3>
+  <a class="tutorial-stub tutorial-card" href="#writing-a-custom-detector">
+    <h3><span class="stub-led ready"></span> Writing a custom detector</h3>
     <p>Drop a Python file in <code>tools/python/custom/</code>, reload, and have your algorithm show up as an overlay with full evaluation. No build step.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Multi-annotator: comparing two people's work</h3>
+  <a class="tutorial-stub tutorial-card" href="#multi-annotator-comparing-two-peoples-work">
+    <h3><span class="stub-led ready"></span> Multi-annotator: comparing two people's work</h3>
     <p>Signing in, the per-annotator namespace, side-by-side comparison view, and resolving disagreements between annotators.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> BPM auto-detection chips</h3>
+  <a class="tutorial-stub tutorial-card" href="#bpm-auto-detection-chips">
+    <h3><span class="stub-led ready"></span> BPM auto-detection chips</h3>
     <p>The five detectors (librosa + CPJKU-madmom), what the clickable chips do, and how to pick the right candidate when they disagree.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Stem separation with Demucs</h3>
+  <a class="tutorial-stub tutorial-card" href="#stem-separation-with-demucs">
+    <h3><span class="stub-led ready"></span> Stem separation with Demucs</h3>
     <p>Triggering the stems daemon, what the wait time looks like, and using the resulting vocal / drum / bass / other tracks in inspection.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Self-hosting on your own server</h3>
+  <a class="tutorial-stub tutorial-card" href="#self-hosting-on-your-own-server">
+    <h3><span class="stub-led ready"></span> Self-hosting on your own server</h3>
     <p>Bring up the Docker stack on any VM or homelab, put a TLS reverse proxy in front, and claim the first admin.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
-  <div class="tutorial-stub">
-    <h3><span class="stub-led"></span> Settings — the complete tour</h3>
+  <a class="tutorial-stub tutorial-card" href="#settings--the-complete-tour">
+    <h3><span class="stub-led ready"></span> Settings — the complete tour</h3>
     <p>Every panel, every toggle, every dropdown — the role banner, the five categories (User info / Annotation / Research / Corpus management / Danger Zone), what's admin-only, and where to flip each one.</p>
-    <div class="stub-status">Stub</div>
-  </div>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
 
 </div>
 
@@ -125,6 +124,12 @@ screencast can give.
 
 ## Getting started in 3 minutes
 
+![The TimeCues main page](timecues/images/main-page.png)
+*The main page — “Enter Demo” to look around with no account, or “Start a new dataset” / “Enter your corpus” to work on real audio.*
+
+![The Annotator Tool](timecues/images/annotate-overview.png)
+*The Annotator Tool — press space to play and M at each transition to drop a boundary on the nearest beat.*
+
 The shortest possible loop through the app — open a song, lock the
 grid, drop your first boundary, save.
 
@@ -153,6 +158,15 @@ grid, drop your first boundary, save.
 > this is the core loop, on by default.
 
 ## Creating a new dataset
+
+![The main page entry cards](timecues/images/main-page.png)
+*“Start a new dataset” claims the corpus on disk and makes your account its first admin.*
+
+![Song sidebar header actions](timecues/images/sidebar-header-actions.png)
+*Upload songs, import an existing dataset, or export — all from the sidebar header.*
+
+![The Import dataset dialog](timecues/images/import-dataset-dialog.png)
+*The Import dataset dialog — bring an existing folder of songs into the corpus.*
 
 From a fresh deploy to your first reviewed corpus. This is the
 "day-zero" path — the first thing you do on a TimeCues install where
@@ -262,6 +276,15 @@ covers the four-tier access model.
 
 ## Annotating boundaries with the keyboard
 
+![The Annotator Tool](timecues/images/annotate-overview.png)
+*The Annotator Tool — control bar, player, stacked signal rows, and the structure-sections editor.*
+
+![The annotation edit toolbar](timecues/images/annotate-toolbar.png)
+*The edit toolbar — undo/redo, split, auto-guess, list/grid view, and clear.*
+
+![The keyboard shortcuts drawer](timecues/images/shortcuts-drawer.png)
+*Press ? anywhere for the full keyboard map — playback, zoom, and annotation bindings.*
+
 The full keyboard-driven flow. Faster than the mouse once you commit to it.
 
 1. **Lock BPM and grid in Dataprep first** — section transitions snap
@@ -293,6 +316,18 @@ Deep dive: [Annotation Workspace](/timecues/user-guide/#annotation-workspace)
 and [Keyboard Shortcuts](/timecues/user-guide/#keyboard-shortcuts).
 
 ## Comparing algorithms
+
+![Algorithm Inspect overview](timecues/images/inspect-overview.png)
+*Algorithm Inspect — each detector's predictions stacked as colored timelines over the waveform.*
+
+![The Algorithms sidebar](timecues/images/algorithms-sidebar.png)
+*Tick detectors in the right sidebar; every tick fires a run (cached by file hash, so repeats are instant).*
+
+![Inspect sub-tabs and engine picker](timecues/images/inspect-subtabs.png)
+*Pick the evaluation engine (mir_eval or Custom) and drag the tolerance slider τ.*
+
+![The All-songs leaderboard](timecues/images/inspect-all-songs.png)
+*The All songs sub-tab — a dataset-wide leaderboard you can re-sort by F1, precision, recall, MNBD, or CSR.*
 
 The whole point of TimeCues — line every detector up against your
 ground truth and see who wins, per song and across the corpus.
@@ -345,6 +380,12 @@ Deep dive: [Inspect Workspace](/timecues/user-guide/#inspect-workspace)
 and [Inspect All](/timecues/user-guide/#inspect-all).
 
 ## The Auto-guess workflow — consensus & clustering
+
+![The Boundaries layer-type chips](timecues/images/layer-type-chips.png)
+*Auto-guess lives alongside Manual and Eye under the Boundaries layer type.*
+
+![Auto-guess defaults in Settings](timecues/images/settings-auto-guess-defaults.png)
+*Auto-guess defaults — cluster tolerance τ, minimum agreement count, and the source-detector subset that feeds the consensus.*
 
 Auto-guess is the fastest path from "I just dropped a song in" to
 "I have clean ground truth boundaries." It runs 30+ detectors in
@@ -436,6 +477,12 @@ weighting, and the exact grid-search procedure.
 
 ## Eye annotations from the spectrogram
 
+![The SIGNALS dropdown](timecues/images/signals-dropdown.png)
+*Enable the spectrogram (and the SSM row) from the SIGNALS menu — your only signal once audio is muted.*
+
+![Eye-mode annotation](timecues/images/annotate-overview.png)
+*Drop boundaries by eye at every visible transition; in Eye mode the audio is automatically muted.*
+
 What does the *eye* — not the ear — recover from a waveform and
 spectrogram alone? Useful for studying visual cues vs. audio cues, and
 for noisy-environment annotation when you can't play audio.
@@ -466,6 +513,15 @@ for noisy-environment annotation when you can't play audio.
 Deep dive: [Annotation Workspace → Eye mode](/timecues/user-guide/#annotation-workspace).
 
 ## Writing a custom detector
+
+![The Playground page](timecues/images/playground-page.png)
+*The Playground — write, save, run, and inspect custom Python detectors against the corpus.*
+
+![The detector code editor](timecues/images/playground-editor.png)
+*Edit the detector source and manifest, then run it inline without a build step.*
+
+![A custom detector row](timecues/images/playground-row.png)
+*Each detector row — status, name, kind/version, and Edit / Run / Run all / Clear outputs / Delete.*
 
 Drop a Python file in `tools/python/custom/`, reload, and your
 algorithm shows up as an overlay alongside every built-in detector.
@@ -505,6 +561,15 @@ and how cached results are stored.
 
 ## Multi-annotator: comparing two people's work
 
+![The annotator identity dropdown](timecues/images/annotator-badge-dropdown.png)
+*Each sign-in is a distinct annotator id, so two people's manual layers never clobber each other.*
+
+![The Team dashboard](timecues/images/team-overview.png)
+*The Team dashboard — per-annotator boundary, eye, and auto-guess progress at a glance.*
+
+![Inter-annotator agreement](timecues/images/team-agreement.png)
+*Inter-annotator agreement — where two people's boundaries pair up within τ, and where they disagree.*
+
 The per-annotator namespace is what keeps two people's manual
 annotations from clobbering each other; the Compare sub-tab is where
 you put them side by side and resolve disagreements.
@@ -539,6 +604,12 @@ Deep dive: [Sign-In & Identity](/timecues/user-guide/#sign-in--identity)
 and [Team Dashboard](/timecues/user-guide/#team-dashboard).
 
 ## BPM auto-detection chips
+
+![The AUTO-DETECTED chip row](timecues/images/auto-detected-chips.png)
+*The AUTO-DETECTED row — click a chip to adopt that detector's BPM; Re-run forces a fresh pass.*
+
+![BPM detection settings](timecues/images/settings-bpm-detection.png)
+*Choose which detectors appear in the chip row under Settings → Research → BPM detection.*
 
 Five detectors race in parallel; you click the chip whose number
 matches what you hear, and the song's BPM is set.
@@ -582,6 +653,15 @@ matches what you hear, and the song's BPM is set.
 Deep dive: [Song Info Bar → BPM](/timecues/user-guide/#song-info-bar).
 
 ## Aligning the beat grid
+
+![Grid alignment controls](timecues/images/grid-alignment.png)
+*Grid alignment — Set bar start (G), Nudge, and the Grid offset (s) field for fine-tuning.*
+
+![The Tempo mode tabs](timecues/images/grid-mode-tabs.png)
+*Tempo mode — Static, Dynamic, or Manual; only the active mode's grid is drawn downstream.*
+
+![The Metronome panel](timecues/images/metronome-panel.png)
+*Verify the grid with the metronome — the click should land on the kick, not before or after.*
 
 BPM tells the app the tempo, but not *where* bar 1 starts. Without an
 anchor every snap lands on the closest grid line — which may be one
@@ -701,6 +781,12 @@ and [Metronome Panel](/timecues/user-guide/#metronome-panel-dataset-prep).
 
 ## Stem separation with Demucs
 
+![The Source picker stems row](timecues/images/source-stems-row.png)
+*Pick a stem — Vocals, Drums, Bass, or Other — from the Source picker in the top viz bar.*
+
+![Optional GPU tooling settings](timecues/images/settings-gpu-tooling.png)
+*Optional GPU tooling — the allin1 and Demucs install and acceleration status, set at compose time.*
+
 Four stem tracks (vocals / drums / bass / other) extracted by
 [Demucs](https://github.com/facebookresearch/demucs), available
 everywhere a source picker is shown.
@@ -737,6 +823,9 @@ Deep dive: [Stems server](/timecues/user-guide/#dataset-prep)
 and [Storage clear scopes](/timecues/user-guide/#the-clear-storage-dialog--three-levels-of-cleanup).
 
 ## Self-hosting on your own server
+
+![Admin & access settings](timecues/images/settings-admin-access.png)
+*Once the stack is up, the first sign-in claims admin — then manage the team from Settings → Corpus management → Admin & access.*
 
 The Docker Compose stack runs anywhere Docker (plus Compose v2) runs —
 a cloud VM, a homelab, or bare metal.
@@ -912,6 +1001,9 @@ reference (licences, weight sizes, output schemas).
 
 ## Settings — the complete tour
 
+![The Settings page overview](timecues/images/settings-overview.png)
+*The Settings page — the role banner plus the five collapsible, color-coded categories.*
+
 Every personal preference and corpus-wide knob is on the Settings
 page. The page is **self-saving** — there's no Save button; a
 transient *Saved* pill flashes after every write. Personal preferences
@@ -941,12 +1033,21 @@ default — click any other section's chevron-and-title to open it.
 
 #### 👤 User info  *(cyan)*
 
+![User info settings](timecues/images/settings-theme.png)
+*User info — your Annotator profile plus the dark / light / system theme switch.*
+
 | Panel | Tier | What's inside |
 |---|---|---|
 | **Annotator profile** | all | Display name, email (auto-filled from Google sign-in), free-text role and affiliation, read-only id + auth method. Requires clicking *Save profile* (the only setting on the page that's not auto-saving). |
 | **Theme** | all | Color scheme radio — `dark` / `light` / `system`. Default `dark`. `system` follows your OS `prefers-color-scheme`. |
 
 #### ✎ Annotation  *(indigo)*
+
+![Default signals settings](timecues/images/settings-default-signals.png)
+*Annotation — the master overlay toggle, the twelve signal-row defaults, and the 3-Band palette.*
+
+![Vocabularies and taxonomies settings](timecues/images/settings-vocabularies-taxonomies.png)
+*Vocabularies & taxonomies — section, cue, and span labels, each with inline (admin) dataset-default controls.*
 
 Everything that customizes how *you personally* see the workspace
 and the annotation editors. Strictly browser-local — nothing here
@@ -964,6 +1065,9 @@ syncs to the corpus.
 
 #### 🔬 Research  *(violet)*
 
+![Research settings](timecues/images/settings-default-algorithms.png)
+*Research — which detectors are pre-ticked in Algorithm Inspect, plus BPM-detection and Auto-guess defaults.*
+
 Algorithm and detector defaults. **Visible to all tiers but
 read-only for Team / Public** — each row carries an *Admin only*
 pill at those tiers.
@@ -976,6 +1080,12 @@ pill at those tiers.
 | **Optional GPU tooling** | When the GPU profile is enabled at compose time, toggles here let you opt specific algorithms (allin1, demucs) into GPU acceleration. No effect when the profile is off. |
 
 #### 🛡 Corpus management  *(amber)*
+
+![Admin & access settings](timecues/images/settings-admin-access.png)
+*Admin & access — the corpus display name and the per-email four-tier People list.*
+
+![Storage stats settings](timecues/images/settings-storage-stats.png)
+*Storage stats — on-disk usage by data bucket, plus export and per-category cache clears.*
 
 **Admin-only.** Every panel here writes through to the server (i.e.
 to `data/dataset-config.json`) and affects every annotator.
@@ -992,6 +1102,12 @@ to `data/dataset-config.json`) and affects every annotator.
 > applies to in **Annotation → Vocabularies & taxonomies**.
 
 #### ⚠ Danger Zone  *(rose)*
+
+![Personal danger zone](timecues/images/settings-personal.png)
+*Danger Zone — Reset to defaults, a personal reset that only affects this browser.*
+
+![Corpus-wide danger zone](timecues/images/settings-corpus-wide.png)
+*Danger Zone — corpus-wide destructive actions (clear caches, factory-reset), admin only.*
 
 Destructive actions, split in two:
 

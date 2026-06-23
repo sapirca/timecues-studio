@@ -82,6 +82,10 @@ class DetectionContext:
         ``librosa`` feature extractor's tempo when SongInfo has none.
     beat_times_ms
         Beat instants in milliseconds (sorted ascending).
+    slug
+        The song slug being analyzed. Lets a detector locate the song's
+        other cached artifacts on disk (e.g. first-party generators that
+        combine raw algorithm caches). Empty string when unknown.
     grid_offset_ms
         Time of bar 1 / beat 1 in milliseconds (from SongInfo.gridOffset).
     time_signature
@@ -108,6 +112,7 @@ class DetectionContext:
     tension_curve: np.ndarray
     bpm: float
     beat_times_ms: list[int]
+    slug: str = ""
     grid_offset_ms: int = 0
     time_signature: str = "4/4"
     beats_per_bar: int = 4

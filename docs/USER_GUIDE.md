@@ -250,6 +250,8 @@ alias details, batch-run commands, and the switching-modes recipe.
 
 ## The Main Page
 
+![The main landing page — the Enter Demo card and the Enter <corpus> / Start a new dataset card](images/main-page.png)
+
 `/` is the main page — a quiet landing screen with **two** entry cards: **Enter Demo**, plus exactly one of **Start a new dataset** or **Enter `<corpus>`**. A single deploy hosts a single corpus, so the second slot reflects whether anyone has claimed it yet:
 
 | Slot | Card | Shown when | What it does | Login required? |
@@ -294,6 +296,8 @@ Implementation entry points:
 
 ## The Five Workspaces
 
+![Workspace tab strip — Dataprep, Annotator Tool, Algorithm Inspect, Playground, Team, with the corpus-name chip beside the wordmark](images/workspace-tabs.png)
+
 Once you're inside any workspace the top bar shows a **tab strip** — one click to switch between them. The same audio canvas is reused across the first three with mode-specific chrome (emerald = Dataprep, cyan = Annotator Tool, violet = Algorithm Inspect, amber = Playground, rose = Team).
 
 | # | Route | Tab label | Purpose |
@@ -322,6 +326,12 @@ In **Annotator Tool**, clicking a song that has no BPM yet opens a **"BPM not se
 ---
 
 ## Sign-In & Identity
+
+![The sign-in screen — Google one-click OAuth and the single Username-or-email field](images/login-screen.png)
+
+![The Annotator badge in the top-right of every page — initials, display name, and dropdown caret](images/topbar-badge.png)
+
+![The identity dropdown — display name, id, Admin chip, and sign-out](images/annotator-badge-dropdown.png)
 
 Login is **lazy**: only the main page (`/`), the Demo (`/demo`), the new-dataset claim flow (`/new-dataset`), and the login screen itself render without an identity. Every workspace (`/prep`, `/annotate`, `/inspect`, `/custom`, `/team`) and the settings page (`/settings`) require sign-in — anonymous visitors who hit those URLs directly are bounced to `/login?returnTo=<path>` and resume there after signing in. The destination is whitelisted to in-app paths, so a crafted `returnTo` cannot bounce you off-site.
 
@@ -385,6 +395,8 @@ In annotation views, each annotator only sees their **own** manual/eye/auto-gues
 
 ## The Song Sidebar (everywhere)
 
+![The Song Sidebar fixed to the left edge — header actions, the "your songs" list, and the storage footer](images/song-sidebar.png)
+
 The Song Sidebar is the narrow panel fixed to the left edge of the window. It stays put as you move between the four main screens (Annotator Tool, Algorithm Inspect, Dataprep, and Playground), giving you one consistent place to see the list of songs and choose the one you're working on.
 
 Two of its settings are remembered in your browser between visits (so the sidebar looks the same next time you open the app):
@@ -392,6 +404,8 @@ Two of its settings are remembered in your browser between visits (so the sideba
 - How wide you've dragged it is saved under `tc:song-sidebar-width`. You can resize it anywhere from **180 px** (narrow) to **560 px** (wide); it opens at **256 px** the first time.
 
 ### Header actions
+
+![Sidebar header buttons — Upload songs, Import dataset, and Full annotation export](images/sidebar-header-actions.png)
 
 The buttons across the top of the sidebar:
 
@@ -435,6 +449,8 @@ Each entry shows:
 
 ### The "Clear storage" dialog — three levels of cleanup
 
+![The Clear all caches confirmation — type CLEAR_ALL_CACHES to confirm; deletes regenerable caches only](images/clear-storage-dialog.png)
+
 The ⌫ Clear scope button opens a dialog that frees up disk space for one song. It offers three levels of deletion — from "just throw away the heaviest re-computable files" up to "erase this song completely" — so you can reclaim space without losing work you care about. At the top the dialog shows a full size breakdown (Stems, Analysis, MSAF raw, BPM, Algo clusters, then Annotations and Audio) so you can see exactly how much each level would remove before you commit.
 
 Whichever level you pick, you have to **type the level's name in capital letters** to confirm (the button stays dead until you do), and there is **no undo**. The dialog opens on the safest level (STEM) by default.
@@ -457,6 +473,8 @@ The three levels, safest first:
 
 ### Dataset-wide actions (sidebar footer)
 
+![Sidebar footer — per-bucket storage sizes plus Clear all caches and Delete all songs](images/sidebar-footer.png)
+
 The whole **Disk · N songs** footer block (per-category byte breakdown +
 **Clear all caches** button) is now scoped to Dataset Prep and Algorithm
 Inspect only — the Annotator sidebar drops it entirely so the workspace
@@ -470,6 +488,8 @@ stays focused on authoring annotations, not storage hygiene.
 
 ## Song Info Bar
 
+![The Song setup sidebar (Dataset Prep) — Song details, Tempo mode, BPM, time signature, grid alignment, and Metronome](images/song-setup-panel.png)
+
 The Song Info Bar is the panel where you tell TimeCues two things about a song: what to call it, and how its beat grid is laid out (its tempo and where bar 1 starts). Getting the grid right here is the prerequisite for everything else — because annotations snap to the beat, a song with no tempo or a misplaced downbeat can't be annotated usefully. It appears in every workspace, but only admins can edit it; everyone else sees the same values read-only.
 
 It's organised top-to-bottom in the order you'd naturally work through a new song:
@@ -482,6 +502,8 @@ In **Dataprep** this panel lives in the **Song setup** sidebar docked to the rig
 
 ### Display name (Title + Artist)
 
+![The Display name editor inside Song details](images/song-setup-display-name.png)
+
 The human-readable name shown everywhere a song appears — the sidebar, the song picker, and workspace headers. **It is independent of the file on disk**: the audio file and its folder keep their lowercase-underscore slug (e.g. `midnight_drive`) no matter what you type here.
 
 - **Title** — the visible name. Leave it blank to fall back to the file name.
@@ -493,6 +515,8 @@ The human-readable name shown everywhere a song appears — the sidebar, the son
 
 ### BPM (the song's tempo)
 
+![The BPM and Time signature fields with the auto-detected suggestion chips](images/song-setup-tempo.png)
+
 BPM (beats per minute) is the song's tempo, and it drives the whole beat grid. You can set it anywhere from **20 to 300**, in fine increments of **0.01** so you can dial in a tempo precisely. There are two ways to fill it: type a number directly, or click one of the auto-detected suggestion chips in the row below.
 
 - It's a numeric field. When no tempo is set yet the field is simply blank (no placeholder number to mistake for a real value).
@@ -502,6 +526,8 @@ BPM (beats per minute) is the song's tempo, and it drives the whole beat grid. Y
   - `⚠ BPM required to start annotating` (amber) — empty BPM
 
 ### Auto-detected chip row — tempo suggestions you can click
+
+![The AUTO-DETECTED row — clickable tempo suggestions from each BPM detector, with Re-run](images/auto-detected-chips.png)
 
 Rather than make you tap out the tempo by hand, TimeCues runs several beat-detection algorithms over the audio and shows each one's guess as a chip. The chips fold behind an **Auto-detected ▸** disclosure inside *Tempo* (the header shows a "· N suggestions" count when collapsed); expand it to see one chip per detector — each chip shows the **BPM value** large, with the detector's name (and confidence strength, when reported) revealed on **hover**. Click a chip to adopt that value as the song's BPM. The **↻ Re-run** button recomputes the suggestions from scratch, ignoring any cached result.
 
@@ -524,6 +550,8 @@ The time signature tells the grid how many beats make up a bar, which sets where
 
 ### Grid Offset — where bar 1 starts (in seconds)
 
+![Grid alignment — Set bar start, Nudge, and the Grid offset (s) field](images/grid-alignment.png)
+
 The grid offset slides the entire beat grid earlier or later in time so that downbeat 1 lands exactly on the song's first audible kick. It's measured in seconds, can't go below 0, and adjusts in steps of **0.001 s** (one millisecond) for tight alignment. It's the first control in the **Grid alignment** subsection, and there are four ways to set it:
 - Type a value into the Grid Offset input
 - Click **Set bar start (G)** (top-right of the Grid alignment subsection) to capture the current playhead — the button shows `→ M:SS.sss` previewing what will be captured
@@ -537,6 +565,8 @@ The grid offset slides the entire beat grid earlier or later in time so that dow
 For non-admin viewers (researcher / team / public) all four inputs are read-only — only admins edit the dataset's grid parameters.
 
 ### Grid Mode (Static BPM · Dynamic · Manual adjustment)
+
+![The Tempo mode tabs — Static, Dynamic, and Manual; only the active mode's grid is drawn downstream](images/grid-mode-tabs.png)
 
 Inside the **Tempo** subsection, a **Tempo mode** row of three tabs (same style as the annotation-type tabs in the Annotator / Algorithm Inspect sidebars) picks how the grid is laid out across the song:
 
@@ -575,6 +605,8 @@ The badge appears in every workspace (Dataset Prep, Annotate, and Algorithm Insp
 
 ### Manual mode is a two-layer system
 
+![Manual grid mode — anchor-based adjustment with reset controls](images/grid-mode-manual.png)
+
 Manual mode rides on top of a base grid you pick at first entry (**Static BPM** or **Dynamic** — see the Manual adjustment bullet above). Pinned beats are the *micro* layer; the base grid you chose is the *macro* layer. Use the surface that matches the *scale* of the problem you're fixing — they don't get in each other's way.
 
 | Surface | Used for | Visual | Affects |
@@ -608,6 +640,8 @@ The pinned-beat count appears in amber alongside the anchor count in the Grid Mo
 ---
 
 ## Metronome Panel (Dataset Prep)
+
+![The Metronome panel — pitch preset, volume, toggle, and tap-to-detect tempo](images/metronome-panel.png)
 
 The Metronome plays a click on every beat as the song runs, so you can *hear* whether the beat grid lines up with the music instead of judging it by eye. It's the tool you reach for while aligning the grid: if the click drifts away from the kick drum, the grid is off and needs nudging.
 
@@ -673,6 +707,8 @@ The visualization canvas is the big stack of synchronized timelines in the centr
 ![Shared visualization canvas — player + 3-Band, EQ, spectrogram, MFCC, chroma, tempogram, SSM, and sparkline rows stacked top-to-bottom](images/viz-canvas-full.jpg)
 
 ### Player — transport controls
+
+![The transport — play/seek controls, time readout, source picker, and playback-rate slider](images/player-transport.png)
 
 The player is the transport bar above the canvas: the play button, the skip and jump buttons, the seek bar, the time readouts, the playback-speed slider, and (when stems exist) the picker that swaps between the full mix and individual instruments. It's how you move through and listen to the audio while you work.
 
@@ -764,9 +800,13 @@ The left-edge label column is **resizable**: hover the right edge of any row lab
 
 ## The Viz Control Bar
 
+![The viz control bar — Annotations, Signals, Zoom, Grid, Snap, and Misc clusters](images/viz-control-bar.png)
+
 The Viz Control Bar is the strip of buttons that sits over the canvas and decides what the canvas shows: which annotation layers and audio signals are drawn, how far you're zoomed in, whether the beat grid is on, and so on. Think of it as the canvas's "view" menu. Every button is a big icon with its name spelled out underneath in capitals, so they all line up as one neat row. From left to right: **Annotations** and **Signals** (each opens a checklist popover), **Zoom** (− / ×N / +), **Grid** (an on/off toggle plus a grid-spacing selector), **Snap**, and **Misc** (a popover for a couple of less-used options). Click anywhere outside an open popover to close it. (In Algorithm Inspect, which detector results are drawn on the canvas is controlled from that workspace's right **Algorithms** sidebar — each row's checkbox toggles its overlay — not from a Viz Control Bar picker.)
 
 ### 1. Annotations dropdown
+
+![The Annotations dropdown — overlay-all toggle plus per-layer visibility for Boundaries, Spans, Patterns](images/annotations-dropdown.png)
 
 A badge in the header shows the count of active annotation layers. The
 popover lists the **human-authored** layers first, organised by **marker
@@ -877,6 +917,8 @@ Which grid units appear in the dropdown is remembered between visits, saved in y
 
 ### 4. Algorithm overlays — controlled from the Algorithms sidebar
 
+![The Run picker (▶ Run…) — choose detector families and which missing detectors to compute](images/inspect-run-picker.png)
+
 There is no Algos picker in the Viz Control Bar. In Algorithm Inspect, which detector results are drawn on the canvas is controlled from the workspace's right **Algorithms** sidebar: each detector row, grouped by family (Ruptures, MSAF, All-In-One, the experimental SPAN / LOOP / CUE-extras / LYRICS / PATTERN families, and your `is_algorithm=True` custom detectors), carries a checkbox that toggles **that result's overlay** on the waveform. The checkbox is only enabled once the result is **cached** — a missing row stays greyed until you compute it. Each family header also offers **Show all / Hide all** over its cached results.
 
 Auto-guess is **not** an algorithm overlay — its live consensus row is toggled from the **Annotations** dropdown's **Auto-guess** control (with the ≥2 / ≥3 / ≥4 min-consensus chips).
@@ -890,6 +932,10 @@ Color swatches for each section type. Click a swatch to change the active palett
 ---
 
 ## Annotation Workspace
+
+![The Annotator Tool — title, control bar, player, stacked signal rows, and the structure-sections editor](images/annotate-overview.png)
+
+![The Annotate sidebar — layer-type chips, edit toolbar, and the All annotations list](images/annotate-sidebar.png)
 
 The Annotation Workspace (the **Annotator Tool** tab) is where you mark up one song by hand — labelling where its sections begin and end, and dropping the various kinds of markers (cues, spans, loops, patterns) onto the timeline. The song's tools are arranged in three areas you use together: the song list on the left, the audio canvas in the centre with the editor cards directly beneath it, and the annotation controls on the right. This section walks through that right-hand panel, which is where all the marking-up actually happens.
 
@@ -926,6 +972,8 @@ A per-tab **stopwatch** runs whenever that tab is focused; the cumulative durati
 
 ### Marker info & actions panels
 
+![The edit toolbar — undo/redo, split, auto-guess, list/grid view, and clear](images/annotate-toolbar.png)
+
 The per-marker controls are split across **two** panels. The **Marker info** panel sits at the top of the Annotate sidebar; the **Marker actions** panel renders *inside* the All-annotations list, at the top of the content column for the currently-focused type (so the edit buttons live next to the markers they act on, and move as you switch types).
 
 **Marker info panel** (top of the sidebar). The first row shows the active type's **title** (re-labelled when you click a different type chip) and the **⋯ More** toggle; directly below it sits the workflow **Status** pill. A **⋯ More** toggle reveals — each on its own row — the **Source** picker with the inline **Save** indicator and the detector **↻ Re-run** button, then the **▶ Record** / **■ Stop** / **↺ Reset** controls with the running-**time** readout, then the **↑ Import** / **↓ Export** buttons — kept collapsed by default so the panel shows just the title and the status (no clock). The toggle's open/closed state persists per browser under `tc:annotate-info-more-open` (default closed).
@@ -954,6 +1002,8 @@ Directly below the panel, the **add-panel** shows one of two mutually-exclusive 
 The accent color tracks the active type (violet for Manual, cyan for Eye, etc.).
 
 ### Boundaries editor
+
+![The Boundaries (structure sections) editor — one card per section with type, label, and per-marker actions](images/boundaries-editor.png)
 
 The Boundaries editor is where you build a song's structural map by hand: a list of sections (intro, build-up, drop, and so on), each with a start time, a label, and an importance flag. This is the canonical, audio-driven ground truth — the thing detectors are scored against. Each section appears as a card below the waveform, and you add, split, retime, and label them here.
 
@@ -1055,6 +1105,8 @@ Debounced 1 s to `data/annotations/auto-guess/<annotator>/<slug>.json`.
 
 ## Cue, Span, Loop, and Pattern Layers
 
+![The layer-type chips — Boundaries, Cues, Spans, Loops, Patterns; the active chip is where +Add targets](images/layer-type-chips.png)
+
 Boundaries divide a song into sections, but a lot of what you might want to mark doesn't fit that mould — a single hit, a region where the vocal sits, a four-bar loop to practice, a recurring rhythmic figure. These four annotation *kinds* cover those cases, and they sit alongside boundaries rather than replacing them. Each kind is organised into **layers**: a layer is just a named, colored container of marks, so you can keep (say) your "kick hits" cues separate from your "FX triggers" cues. Briefly:
 
 - a **cue** is a single moment in time (a point);
@@ -1106,6 +1158,8 @@ fresh layer so the first-ever add doesn't need setup.
 
 ### Cue layers
 
+![The Cues layer in the Annotate sidebar](images/cues-layer.png)
+
 A cue marks a single instant in the song — a kick, a vocal entry, an FX trigger — with an optional label. On disk each cue is a small record holding its id, its `time`, an optional `label`, and optionally a list of alternative `candidates` times. Cues are organised into one or more named layers (e.g. *kicks*, *FX triggers*).
 
 - **Horizontal cards** — the editor mirrors the Boundaries layout: each cue is a compact vertical card in a flex-wrap row beneath the waveform, sharing the same shell (`ItemCard.tsx`) as Boundary `SectionCard` and `LoopItemCard`. Only the **currently-selected cue layer** renders below — switch active layer from the right-edge sidebar's *All annotations* list or by clicking a layer card there. A trailing `+ Add @ <time>` card at the end of the row drops a cue at the playhead.
@@ -1121,6 +1175,8 @@ A cue marks a single instant in the song — a kick, a vocal entry, an FX trigge
 > ⚠️ **Delete is destructive and has no undo.** The toolbar's Delete on the Cues tab removes every cue layer for the current song. Other layer types (spans/loops/patterns) on the same song are unaffected.
 
 ### Span layers
+
+![The Spans layer in the Annotate sidebar](images/spans-layer.png)
 
 A span marks a labelled stretch of the song with a start and an end — for example the region where the lead vocal is present, or where a pad sustains. On disk each span holds its id, a `startTime`, an `endTime`, and a `label`. Unlike boundaries, spans are allowed to overlap each other (two things can be happening at once).
 
@@ -1204,6 +1260,10 @@ The **Import menu** in the Marker config panel (paired with the panel's single-c
 
 ## Inspect Workspace
 
+![Algorithm Inspect — per-song view with stacked algorithm prediction rows over the waveform](images/inspect-overview.png)
+
+![The Algorithms sidebar — Run picker plus detector families (MSAF, All-in-one, Ruptures, Custom) with cached/missing status](images/algorithms-sidebar.png)
+
 Algorithm Inspect (the violet-themed tab) is where you run structure-detection algorithms against a song and see how good they are. Each algorithm you run gets its own timeline row stacked under the waveform — drawn so you can compare what it predicted against your own hand-made annotation — and a table of scores tells you, in numbers, how closely it matched. Use it to judge which detector works best on a given track or across your whole corpus.
 
 ### Reference toggle — what you're scoring against
@@ -1234,6 +1294,8 @@ The Custom engine honors every candidate start (a prediction matches if it falls
 When scoring, a predicted boundary rarely lands exactly on your annotated one. The tolerance is the time window within which a prediction still counts as "correct." You can set it from **0.25 s up to 5 s**, in **0.25 s** steps, and it drives both scoring engines. The Custom column re-scores instantly; the `mir_eval` column dims briefly and refreshes about 400 ms after the slider settles (one request per settled value, in-flight requests are cancelled when the slider moves again).
 
 ### Sub-tabs
+
+![The Consensus Inspect / Evaluation sub-tabs with the engine picker and tolerance slider](images/inspect-subtabs.png)
 
 Inspect has two sub-tabs.
 
@@ -1274,6 +1336,8 @@ Switch to *All songs* when you want to process the whole dataset; stay on *Per s
 
 #### Evaluation
 
+![The Evaluation sub-tab — per-engine precision/recall/F1 against your manual annotation](images/inspect-evaluation.png)
+
 One sortable row per loaded algorithm. Click any column header (Precision, Recall, F, Hit/Ref, MNBD, CSR) to sort; default is F descending.
 
 Cell tinting:
@@ -1290,6 +1354,8 @@ The best F row is starred and tinted green; the worst is tinted red. Ruptures ro
 ---
 
 ## Inspect All
+
+![Algorithm Inspect — All songs view with the dataset-wide leaderboard](images/inspect-all-songs.png)
 
 Inspect All is the corpus-wide version of Algorithm Inspect: instead of judging detectors on one song, it scores every algorithm across *all* your reviewed songs at once and ranks them on a leaderboard. This is how you answer "which detector is best overall?" rather than "which is best on this track?" It works from your Manual (or Eye) annotations and the algorithm results already cached for each song.
 
@@ -1324,6 +1390,8 @@ Live progress reporting; on completion the top-N (default 20) configurations are
 
 ## Dataset Prep
 
+![The Dataset Prep banner — set BPM and align the grid in the Song setup sidebar](images/prep-banner.png)
+
 Dataprep (the emerald tab, at `/prep`) is where songs *enter* the corpus and get readied for everyone else's work — you upload audio here, set each song's tempo and beat grid, run batch analysis, and manage disk space. It uses the same audio canvas as the other workspaces but has no section/cue editors, because its job is curation, not annotation. As a rule of thumb: a new song should always be set up here first, before anyone tries to annotate or evaluate it.
 
 ### Differences from Annotate
@@ -1357,6 +1425,8 @@ The manifest refreshes once at the end (not per file), and the last successfully
 When at least one song uploads successfully, an **Upload complete** dialog appears reminding you of the next-step workflow: (1) set the BPM here in **Dataprep** (because boundaries snap to the grid), then (2) switch to the **Annotator Tool** to start marking sections. The dialog has two buttons — **Stay in Dataprep** (dismiss) and **Open Annotator Tool** (jumps to `/annotate`). The selected song carries over.
 
 ### Importing a dataset
+
+![The Import dataset dialog — pick a folder of songs to bring into the corpus](images/import-dataset-dialog.png)
 
 The **⤒ Import dataset** button at the top of the Songs sidebar (admin-only, **Dataset Prep only**) opens the **Import Dataset** dialog — a one-shot way to bring an entire dataset folder into the corpus (audio + song-info + annotations + cached algorithm outputs + stems) without going song-by-song through `+ Upload songs`.
 
@@ -1455,6 +1525,8 @@ When more than one annotator has saved Manual annotations for the same song, the
 ---
 
 ## Custom Detectors
+
+![The Playground — write, save, run, and inspect custom Python detectors against the corpus](images/playground-page.png)
 
 A "detector" is a small program that listens to a song and proposes annotations — boundaries, cues, spans, and so on. TimeCues ships with built-in detectors, but the **Playground** (the `/custom` tab) lets you write your own in Python: edit the code in the browser, run it on a song, and the moment it works it shows up everywhere the built-ins do (in Algorithm Inspect and in Auto-guess). This is how researchers prototype new structure-detection ideas without leaving the app.
 
@@ -1644,6 +1716,12 @@ The UI surfaces `fatal.message` and, when relevant, a *Missing Python module* pa
 
 ### 6. The Custom Detectors UI (`CustomScriptsPage.tsx`)
 
+![The Playground toolbar — How this works, song picker, bulk scope, Reload, and New detector](images/playground-toolbar.png)
+
+![A detector row — status, name, kind/version, and Edit / Run / Run all / Clear outputs / Delete](images/playground-row.png)
+
+![The detector code editor — edit the Python source, manifest, and run inline](images/playground-editor.png)
+
 **Toolbar** — one combined strip. The page controls and the bulk Run / Clear actions share a single bar (and a single **Song ▾** picker), so there's no duplicate single-song row.
 
 | Control | Action |
@@ -1803,6 +1881,10 @@ class SpectralFluxCueDetector(CustomDetector):
 
 ## Team Dashboard
 
+![The Agreement tab — inter-annotator agreement across the corpus](images/team-agreement.png)
+
+![The Team dashboard — overview totals plus per-annotator boundary/eye/auto-guess progress](images/team-overview.png)
+
 The Team Dashboard (the `/team` tab) is the place to see how the whole team is doing and to manage who's on it — it shows each annotator's progress side by side and, for admins, lets you add people and set their permission levels. It's restricted: only **admins and researchers** can open it, and anyone else who tries is sent back to the home page.
 
 Each annotator card on the **Annotators** tab is tagged with:
@@ -1810,6 +1892,8 @@ Each annotator card on the **Annotators** tab is tagged with:
 - a tier chip — `ADMIN` (emerald), `RESEARCHER` (violet), or `TEAM` (cyan) — resolved from `peopleByEmail` in `data/dataset-config.json`. Public users have no chip.
 
 ### Members tab — assign tiers
+
+![The Members tab — assign or remove tiers per member](images/team-members.png)
 
 The Members tab shows **one People table** keyed by email. Each row has a tier dropdown — change someone's tier in place (Admin / Researcher / Team), or use **Remove** to drop them from the list and erase their data.
 
@@ -1850,6 +1934,8 @@ When that teammate later opens the app and signs in — whether by typing the sa
 
 ## Settings
 
+![The Settings page — role banner plus the five collapsible categories](images/settings-overview.png)
+
 The Settings page is where you tune how the app looks and behaves for you, and (if you're an admin) configure defaults for the whole corpus. Most of what's here is *personal* — your choices are saved in your own browser and don't affect teammates. There's no Save button: every change is written immediately and a brief **Saved** pill flashes to confirm. The page's destructive actions are collected at the very bottom in a clearly-marked **Danger Zone**.
 
 Technical note: your personal preferences are stored in your browser under a single key, `timecues.settings.v1` (one JSON object); the shipped defaults are defined in `DEFAULT_SETTINGS` in `src/context/SettingsContext.tsx`.
@@ -1885,6 +1971,8 @@ Below the banner the page is grouped into **five categories**, each with its own
 
 #### Annotator profile
 
+![Annotator profile — display name, email, role, affiliation, and Save profile](images/settings-user-info.png)
+
 Fields are stored on `AnnotatorContext`, not in the settings object; they require clicking **Save profile**.
 
 | Row | Type | Notes |
@@ -1896,6 +1984,8 @@ Fields are stored on `AnnotatorContext`, not in the settings object; they requir
 | ID · auth | read-only | Your immutable annotator ID + sign-in method |
 
 #### Theme
+
+![Theme — dark / light / system color scheme](images/settings-theme.png)
 
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
@@ -1909,6 +1999,8 @@ Personal defaults for what the inspector shows and how annotation editors behave
 
 #### Display & Playback
 
+![Display & playback defaults — sidebar, beat grid, playback rate, and seek steps](images/settings-display-playback.png)
+
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
 | Sidebar collapsed by default | toggle | `false` | `defaultSidebarCollapsed` |
@@ -1919,6 +2011,8 @@ Personal defaults for what the inspector shows and how annotation editors behave
 | Large seek step (`Alt` + arrow) | number | `10 s` | `seekStepLargeSeconds` |
 
 #### Default Signals
+
+![Default signals — master toggle, 3-Band palette, and the twelve signal-row defaults](images/settings-default-signals.png)
 
 The "What's checked in the SIGNALS dropdown when a song opens" group. Master toggle + 12 sub-toggles:
 
@@ -1951,6 +2045,8 @@ The "What's checked in the SIGNALS dropdown when a song opens" group. Master tog
 
 #### Annotations — display
 
+![Annotations — display — default layer visibility and the annotation editors' time unit](images/settings-annotations.png)
+
 Which annotation layers are visible by default, plus the time unit used by the Manual/Eye editors. Vocabulary editing moved to its own subsection below in 2026-05-18.
 
 | Row | Default | Key |
@@ -1961,6 +2057,8 @@ Which annotation layers are visible by default, plus the time unit used by the M
 | Time unit for annotation editors (`Milliseconds` / `Beats & bars`) | `ms` | `annotationTimeUnit` |
 
 #### Vocabularies & taxonomies
+
+![Vocabularies & taxonomies — section, cue, and span label vocabularies with inline dataset-default controls](images/settings-vocabularies-taxonomies.png)
 
 All label vocabularies in one place — the section names that drive Manual/Eye dropdowns, plus the optional cue/span taxonomies. Restructured 2026-05-18: every admin "Save as dataset default" / "Clear dataset default" button now lives **inline under the field it applies to** (visible only when you are admin); the old standalone *Dataset defaults — corpus-wide vocabularies* section under **Corpus management** was retired in the same change.
 
@@ -2050,6 +2148,8 @@ Bars convert to seconds using BPM + time signature when applied.
 
 #### Loops
 
+![Loops — quick-add bar sizes for the Loop editor](images/settings-loops.png)
+
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
 | Loops — quick-add bar sizes | two number inputs `1–64` | `[4, 8]` | `loopQuickAddBars` |
@@ -2057,6 +2157,8 @@ Bars convert to seconds using BPM + time signature when applied.
 Sets the two **+ N-bar loop** buttons that the Loop editor shows at the playhead. Split into its own section in 2026-05-18; previously sat inside *Annotation defaults*.
 
 #### Experimental Annotation Types
+
+![Experimental annotation types & models — opt-in feature flags](images/settings-experimental.png)
 
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
@@ -2067,9 +2169,13 @@ Boundaries (Manual + Auto-guess), Cues, and Spans are always available. **Loops*
 
 ### 🔬 Research
 
+![Evaluation — how the dataset-evaluation tables score region layers and match tolerance](images/settings-evaluation.png)
+
 Algorithmic decisions: which detectors run, how their outputs cluster, and how auto-guess picks centroids. Browser-local but conceptually corpus-shared — the whole research team should be on the same defaults for results to compare cleanly. **Read-only for Team / Public tiers.**
 
 #### Default Algorithms
+
+![Default algorithms — which detectors are pre-selected in Algorithm Inspect](images/settings-default-algorithms.png)
 
 Checkbox grid. Pre-selects which detectors load when entering the inspector. Ruptures CPD methods are excluded by default — toggle them per-song.
 
@@ -2087,6 +2193,8 @@ Key: `defaultAlgorithms`.
 
 #### BPM Detection
 
+![BPM detection — which BPM detectors run and how suggestions are surfaced](images/settings-bpm-detection.png)
+
 Checkbox grid. An empty array means *show all*.
 
 | Detector | Default |
@@ -2101,6 +2209,8 @@ Key: `enabledBpmDetectors`.
 
 #### Auto-Guess Defaults
 
+![Auto-guess defaults — initial values for the Auto-guess panel](images/settings-auto-guess-defaults.png)
+
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
 | Cluster tolerance | slider `0.5–10 s` step `0.5` | `3 s` | `autoGuessClusterTolerance` |
@@ -2112,6 +2222,8 @@ Set the threshold to `0` for legacy *always-show* behavior.
 
 #### Optional GPU Tooling
 
+![Optional GPU tooling — allin1 and Demucs install status](images/settings-gpu-tooling.png)
+
 A status panel only — no editable settings.
 
 - **Status chip**: `detected · fast`, `detected · slow`, or `not detected`
@@ -2120,9 +2232,15 @@ A status panel only — no editable settings.
 
 ### 🛡 Corpus management
 
+![Corpus identity — rename the corpus shown on the landing card and workspace header](images/settings-corpus-identity.png)
+
+![Shared corpus (experimental) — store one annotation set at the corpus root instead of per-annotator](images/settings-shared-corpus.png)
+
 Every control in this category writes to `data/dataset-config.json`. **Read-only for non-admins** — visible (so the team knows what defaults are configured) but disabled with an "Admin only" pill on the category title. Non-admins also see read-only previews of the current dataset defaults so they know whether their local Annotation settings diverge.
 
 #### Admin & Access
+
+![Admin & access — who can view the Team dashboard and manage the corpus](images/settings-admin-access.png)
 
 | Row | Type | Notes |
 |-----|------|-------|
@@ -2138,6 +2256,8 @@ The standalone admin section that lived here was removed when admin **Save as da
 
 #### Storage stats
 
+![Storage stats — on-disk cache usage by bucket](images/settings-storage-stats.png)
+
 | Button | Action |
 |--------|--------|
 | Refresh stats | re-fetch storage breakdown |
@@ -2152,6 +2272,8 @@ The bottom category gathers every destructive action on the page in one place, s
 
 #### Personal — this browser only
 
+![Danger Zone — personal resets that only affect this browser](images/settings-personal.png)
+
 Always usable, regardless of tier. None of these touch anyone else's data, but they have no undo.
 
 | Action | Effect | Confirmation |
@@ -2160,6 +2282,8 @@ Always usable, regardless of tier. None of these touch anyone else's data, but t
 | **Reset local storage** | Clears the entire browser store; signs you out and discards every UI preference. Annotations on disk are NOT affected | "Reset all local browser state? You will be signed out and all UI preferences cleared." |
 
 #### Corpus-wide — affects every annotator
+
+![Danger Zone — corpus-wide destructive actions (admin only)](images/settings-corpus-wide.png)
 
 **Admin only.** The whole sub-section carries an "Admin only" pill in its header and every button is disabled for non-admin tiers. All four actions share the same typed-confirmation dialog — the button stays disabled until you type the exact confirmation word.
 
@@ -2236,6 +2360,8 @@ The full `UserSettings` schema lives in `src/context/SettingsContext.tsx`. The c
 
 ## Keyboard Shortcuts
 
+![The keyboard-shortcuts drawer (press ?) — playback, zoom, and annotation bindings](images/shortcuts-drawer.png)
+
 This is the full list of keyboard shortcuts (you can also pop up a quick reference any time by pressing **?**). To stop them firing while you're typing, shortcuts are ignored whenever your cursor is in a text field, dropdown, or other editable element — with two exceptions that always work: **?** (to open the help drawer) and **Esc** (to close it).
 
 | Group | Key | Action |
@@ -2277,6 +2403,8 @@ This is the full list of keyboard shortcuts (you can also pop up a quick referen
 ---
 
 ## Export & Import
+
+![The Advanced export dialog — Scope, Layers, Formats, and bundling options](images/export-dialog.png)
 
 Export lives in **two places** with different scopes:
 

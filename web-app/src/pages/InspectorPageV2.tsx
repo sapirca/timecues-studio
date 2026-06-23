@@ -965,9 +965,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // section cards/layers stay in the centre column. Width & collapsed state
   // persist per browser; resize handle lives on the LEFT edge so dragging
   // leftwards widens the panel.
-  const ANNOTATE_SIDEBAR_MIN_WIDTH = 300;
+  // Default + min match the left song-list sidebar (SIDEBAR_DEFAULT_WIDTH /
+  // SIDEBAR_MIN_WIDTH) so the right edge doesn't dominate the layout and the
+  // centre column gets the room it needs. Max stays wide for annotators who
+  // want to spread out.
+  const ANNOTATE_SIDEBAR_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
   const ANNOTATE_SIDEBAR_MAX_WIDTH = 640;
-  const ANNOTATE_SIDEBAR_DEFAULT_WIDTH = 380;
+  const ANNOTATE_SIDEBAR_DEFAULT_WIDTH = SIDEBAR_DEFAULT_WIDTH;
   const [annotateSidebarCollapsed, setAnnotateSidebarCollapsed] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem('tc:annotate-sidebar-collapsed');
@@ -1033,9 +1037,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // badges, and surfaces the ▶ Run for this song trigger. Mirrors the
   // Annotate sidebar's geometry (300–640 px, drag-left to widen, collapses
   // to a hover tab on the right edge). Persists per browser.
-  const ALGO_SIDEBAR_MIN_WIDTH = 320;
+  // Match the left song-list sidebar's default + min (see the Annotate
+  // sidebar note above) so both right-edge sidebars stay narrow by default.
+  const ALGO_SIDEBAR_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
   const ALGO_SIDEBAR_MAX_WIDTH = 640;
-  const ALGO_SIDEBAR_DEFAULT_WIDTH = 420;
+  const ALGO_SIDEBAR_DEFAULT_WIDTH = SIDEBAR_DEFAULT_WIDTH;
   const [algoSidebarCollapsed, setAlgoSidebarCollapsed] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem('tc:algo-sidebar-collapsed');
