@@ -5878,7 +5878,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <button
             onClick={() => setSidebarCollapsed(false)}
             title="Show songs"
-            className="fixed left-0 top-[72px] z-30 flex items-center gap-1.5 pl-2.5 pr-3 py-2 rounded-r-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-l-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pl-3.5 transition-all shadow-lg shadow-black/40"
+            className="fixed left-0 top-[72px] z-[60] flex items-center gap-1.5 pl-2.5 pr-3 py-2 rounded-r-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-l-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pl-3.5 transition-all shadow-lg shadow-black/40"
           >
             <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Songs</span>
             <span className="text-xl leading-none font-bold">›</span>
