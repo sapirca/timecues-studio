@@ -78,18 +78,24 @@ export type ScannedSong = {
    *  patterns), each a single AnnotationLayer. Folded into one document by the
    *  `layers` import step alongside any whole-document `annotations.layers`. */
   layerFiles: { type: UserLayer; name: string; file: File }[];
+  /** Cached algorithm-output JSONs (allin1 folds, MSAF, foote, BPM detector,
+   *  algo-clusters …). `name` is the exact filename the server routes on. */
+  algoFiles: { name: string; file: File }[];
   stems: Partial<Record<StemName, { file: File; ext: string }>>;
   warnings: string[];
 };
 
 /** Shared classifier result — `layer` carries the user-layer type + display
- *  name (filename basename); the real layer name lives inside the JSON. */
+ *  name (filename basename); the real layer name lives inside the JSON.
+ *  `algo` carries the in-bundle algorithm-cache filename verbatim (e.g.
+ *  `allin1.json`, `bpm-detections.json`) — the server routes on that name. */
 type Classified = {
-  kind: 'audio' | 'song-info' | AnnotationKind | 'stem' | 'layer';
+  kind: 'audio' | 'song-info' | AnnotationKind | 'stem' | 'layer' | 'algo';
   slug: string;
   stemName?: StemName;
   layerType?: UserLayer;
   layerName?: string;
+  algoName?: string;
 };
 
 export type ScanResult = {
@@ -139,6 +145,20 @@ function classifyServerMirror(parts: string[], file: File): Classified | null {
       if ((STEM_NAMES as readonly string[]).includes(stemBase) && isAudioName(fileName)) {
         return { kind: 'stem', slug, stemName: stemBase as StemName };
       }
+    }
+
+    if (seg === 'algorithm-outputs' && tail.length >= 2) {
+      const family = tail[0];
+      const fileName = tail[tail.length - 1];
+      if (!fileName.toLowerCase().endsWith('.json')) continue;
+      // analysis/<slug>/<file>.json — slug is the dir, name is the file.
+      if (family === 'analysis' && tail.length >= 3) {
+        return { kind: 'algo', slug: tail[1], algoName: fileName };
+      }
+      // bpm-detections/<slug>.json and algo-clusters/<slug>.json — slug is the
+      // basename; rename to the canonical bundle filename the server routes on.
+      if (family === 'bpm-detections') return { kind: 'algo', slug: basenameNoExt(fileName), algoName: 'bpm-detections.json' };
+      if (family === 'algo-clusters') return { kind: 'algo', slug: basenameNoExt(fileName), algoName: 'algo-clusters.json' };
     }
   }
   void file;
@@ -245,7 +265,14 @@ function classifyExportBundle(parts: string[]): Classified | null {
       }
       return null;
     }
-    // grid / algos — layout-recognised but not importable.
+    if (typeDir === 'algos') {
+      // algos/<file>.json — one cached algorithm output. The basename is passed
+      // through verbatim; the server routes bpm-detections.json / algo-clusters
+      // .json to their own dirs and everything else into analysis/<slug>/.
+      if (!lower.endsWith('.json')) return null;
+      return { kind: 'algo', slug, algoName: fileName };
+    }
+    // grid — layout-recognised but not importable.
     return null;
   }
 
@@ -274,6 +301,7 @@ export function scanDatasetFiles(files: File[]): ScanResult {
         songInfo: null,
         annotations: {},
         layerFiles: [],
+        algoFiles: [],
         stems: {},
         warnings: [],
       };
@@ -322,6 +350,8 @@ export function scanDatasetFiles(files: File[]): ScanResult {
       entry.stems[cls.stemName] = { file, ext: audioExt(fileName) };
     } else if (cls.kind === 'layer' && cls.layerType) {
       entry.layerFiles.push({ type: cls.layerType, name: cls.layerName ?? basenameNoExt(fileName), file });
+    } else if (cls.kind === 'algo') {
+      entry.algoFiles.push({ name: cls.algoName ?? fileName, file });
     } else if (cls.kind === 'manual' || cls.kind === 'eye' || cls.kind === 'auto-guess' || cls.kind === 'layers') {
       entry.annotations[cls.kind] = file;
     }
@@ -484,6 +514,21 @@ async function finaliseStemsManifest(slug: string): Promise<void> {
   if (!res.ok) throw new Error(`manifest finalise: HTTP ${res.status}`);
 }
 
+// Persist one cached algorithm output verbatim. The server routes on `name`
+// (bpm-detections.json / algo-clusters.json → their own dirs, everything else
+// into analysis/<slug>/), so we POST the raw bytes rather than re-serializing.
+async function uploadAlgoFile(slug: string, name: string, file: File): Promise<void> {
+  const text = await file.text();
+  JSON.parse(text); // surface a corrupt file as an error before the round-trip
+  const url = `/api/upload-algo/${encodeURIComponent(slug)}?name=${encodeURIComponent(name)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: annotatorHeaders({ 'Content-Type': 'application/json' }),
+    body: text,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} on ${url}`);
+}
+
 async function postJson(url: string, payload: unknown): Promise<void> {
   const res = await fetch(url, {
     method: 'POST',
@@ -500,7 +545,7 @@ async function postJson(url: string, payload: unknown): Promise<void> {
 // orchestrator: a partial result (audio OK, layers failed) is more useful than
 // a single error for the whole song.
 
-export type StepKey = 'audio' | 'songInfo' | 'manual' | 'eye' | 'autoGuess' | 'layers' | 'stems';
+export type StepKey = 'audio' | 'songInfo' | 'manual' | 'eye' | 'autoGuess' | 'layers' | 'algos' | 'stems';
 export type StepStatus = 'skip' | 'ok' | 'error';
 export type SongImportResult = {
   slug: string;
@@ -608,6 +653,19 @@ export async function runImport(
         steps.layers = { status: 'ok' };
       } catch (err) {
         steps.layers = { status: 'error', message: (err as Error).message };
+      }
+    }
+
+    // 3c. Cached algorithm outputs — push each JSON to its on-disk home. One
+    //     failure marks the whole step errored but the rest still upload.
+    if (include.algos && song.algoFiles.length > 0) {
+      try {
+        for (const af of song.algoFiles) {
+          await uploadAlgoFile(song.slug, af.name, af.file);
+        }
+        steps.algos = { status: 'ok' };
+      } catch (err) {
+        steps.algos = { status: 'error', message: (err as Error).message };
       }
     }
 

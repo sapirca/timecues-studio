@@ -371,19 +371,3 @@
   }
   .led-strip circle { opacity: 1; }
 }
-
-/* Frame doc screenshots. The User guide captures are the app's own dark UI,
-   which otherwise blends into the dark Starlight page with no visible edge.
-   A thin theme-aware border + soft shadow gives each shot a clear boundary
-   (reads as a faint light frame on dark, a faint dark frame on light) without
-   baking a frame into the 64 PNGs. Scoped to in-content images only. */
-.sl-markdown-content img {
-  display: block;
-  border: 1px solid var(--sl-color-gray-4, #3a4150);
-  border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
-  background: var(--sl-color-gray-7, #11151c);
-  margin-block: 1.2rem;
-  max-width: 100%;
-  height: auto;
-}

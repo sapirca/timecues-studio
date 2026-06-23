@@ -254,6 +254,28 @@ function probeAudioDuration(url: string): Promise<number | null> {
   });
 }
 
+// Run an async mapper over items with a bounded number of in-flight tasks.
+// Large-audio exports were fetching every song's full body at once via an
+// unbounded Promise.all; under that load individual fetches/res.blob() calls
+// abort, and because each failure was caught-and-skipped the archive shipped
+// silently without the songs. Capping concurrency keeps each transfer healthy.
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await mapper(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function triggerBlobDownload(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -430,7 +452,9 @@ export function ExportManagerModal({
   // historic one-label-per-beat behaviour and is the default.
   const [gridGranularity, setGridGranularity] = useState<GridExportGranularity | 'off'>('beats');
   const [busy, setBusy] = useState(false);
+  const [zipProgress, setZipProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [trackFilter, setTrackFilter] = useState('');
   // Per-slug audio byte counts (null = HEAD failed / no content-length).
@@ -444,7 +468,9 @@ export function ExportManagerModal({
   useEffect(() => {
     if (open) {
       setError(null);
+      setWarning(null);
       setBusy(false);
+      setZipProgress(null);
       setTrackPickerOpen(false);
     }
   }, [open]);
@@ -574,6 +600,7 @@ export function ExportManagerModal({
   // ─── Export action ─────────────────────────────────────────────────────────
   const runExport = async () => {
     setError(null);
+    setWarning(null);
     setBusy(true);
     try {
       const stamp = todayStamp();
@@ -860,11 +887,11 @@ export function ExportManagerModal({
       const cacheFailures: string[] = [];
       const stemFailures: string[] = [];
       if ((includeAlgos || includeStems) && presentation === 'multi') {
-        const listings = await Promise.all(slugs.map(async (slug) => ({
+        const listings = await mapWithConcurrency(slugs, 6, async (slug) => ({
           slug,
           listing: await fetchSongCacheListing(slug),
-        })));
-        await Promise.all(listings.map(async ({ slug, listing }) => {
+        }));
+        await mapWithConcurrency(listings, 4, async ({ slug, listing }) => {
           if (includeAlgos) {
             await Promise.all(listing.analysis.map(async (entry) => {
               // Inline entries (data/algorithm-outputs/*) ship as plain JSON.
@@ -898,7 +925,7 @@ export function ExportManagerModal({
               }
             }));
           }
-        }));
+        });
       }
 
       // Bundle audio for each in-scope song, in parallel. Skipped silently for
@@ -908,7 +935,7 @@ export function ExportManagerModal({
       if (includeAudio) {
         const songsById = new Map(allSongs.map((s) => [s.id, s] as const));
         if (currentSong) songsById.set(currentSong.id, currentSong);
-        const audioFetches = slugs.map(async (slug) => {
+        const fetched = (await mapWithConcurrency(slugs, 4, async (slug) => {
           const entry = songsById.get(slug);
           if (!entry?.url) { audioFailures.push(`${slug} (no url)`); return null; }
           try {
@@ -921,11 +948,10 @@ export function ExportManagerModal({
             return { path: `${slug}/audio${audioExt}`, body: blob } as Entry;
           } catch (err) {
             console.error('[export-audio]', slug, err);
-            audioFailures.push(`${slug} (network)`);
+            audioFailures.push(`${slug} (${err instanceof Error ? err.message : 'network'})`);
             return null;
           }
-        });
-        const fetched = (await Promise.all(audioFetches)).filter((e): e is Entry => e !== null);
+        })).filter((e): e is Entry => e !== null);
         entries.push(...fetched);
       }
 
@@ -937,8 +963,23 @@ export function ExportManagerModal({
 
       if (willZip) {
         const zip = new JSZip();
-        for (const e of entries) zip.file(e.path, e.body);
-        const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+        for (const e of entries) {
+          // Audio/stems/algo binaries make up the bulk of large exports and are
+          // already compact (mp3/flac/wav blobs). DEFLATE-ing ~1GB of them in
+          // single-threaded JS takes minutes and makes the tab look frozen — the
+          // classic "stuck export". Store binaries uncompressed (near-instant,
+          // just CRC + concat) and only DEFLATE the tiny text bodies (JSON/CSV/
+          // markers), where compression actually pays off.
+          const compression = typeof e.body === 'string' ? 'DEFLATE' : 'STORE';
+          zip.file(e.path, e.body, { compression });
+        }
+        setZipProgress(0);
+        const blob = await zip.generateAsync(
+          // streamFiles avoids buffering each entry twice while packing.
+          { type: 'blob', streamFiles: true },
+          (meta) => setZipProgress(meta.percent),
+        );
+        setZipProgress(null);
         setLastZipBytes(blob.size);
         const tag = includeAudio ? 'with-audio' : 'export';
         triggerBlobDownload(`timecues-${tag}-${stamp}.zip`, blob);
@@ -947,6 +988,19 @@ export function ExportManagerModal({
         if (gridFailures.length > 0) console.warn('[export] grid-labels skipped for:', gridFailures);
         if (cacheFailures.length > 0) console.warn('[export] algo caches skipped for:', cacheFailures);
         if (stemFailures.length > 0) console.warn('[export] stems skipped for:', stemFailures);
+        // Surface dropped content so a partial archive is never mistaken for a
+        // complete one. Audio especially — a "with-audio" zip that quietly
+        // shipped without songs is the bug we're guarding against here.
+        const skips: string[] = [];
+        if (audioFailures.length > 0) skips.push(`${audioFailures.length} audio`);
+        if (stemFailures.length > 0) skips.push(`${stemFailures.length} stem file(s)`);
+        if (cacheFailures.length > 0) skips.push(`${cacheFailures.length} algo file(s)`);
+        if (skips.length > 0) {
+          setWarning(
+            `Exported, but skipped ${skips.join(', ')} (fetch failed). `
+            + 'See the browser console for the list. The archive is incomplete.',
+          );
+        }
       } else {
         // Exactly one file — flatten the path so the user gets just <slug>.<ext>.
         const only = entries[0];
@@ -969,11 +1023,15 @@ export function ExportManagerModal({
 
       setBusy(false);
       // Keep the modal open after an audio bundle so the user can see the
-      // resulting zip size; otherwise close it as before.
-      if (!includeAudio) onOpenChange(false);
+      // resulting zip size, or whenever something was skipped so the warning is
+      // visible; otherwise close it as before.
+      const hadSkips =
+        audioFailures.length > 0 || stemFailures.length > 0 || cacheFailures.length > 0;
+      if (!includeAudio && !hadSkips) onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed.');
       setBusy(false);
+      setZipProgress(null);
     }
   };
 
@@ -1333,6 +1391,12 @@ export function ExportManagerModal({
             </div>
           )}
 
+          {warning && (
+            <div className="mx-5 mb-3 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-200">
+              {warning}
+            </div>
+          )}
+
           {/* Footer */}
           <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-white/[0.06]">
             <div className="text-[10px] text-slate-600 uppercase tracking-wider">
@@ -1365,7 +1429,11 @@ export function ExportManagerModal({
                     : 'bg-white/[0.03] text-slate-600 border border-white/[0.04] cursor-not-allowed'
                 }`}
               >
-                {busy ? 'Exporting…' : 'Export'}
+                {busy
+                  ? zipProgress != null
+                    ? `Zipping ${Math.round(zipProgress)}%`
+                    : 'Exporting…'
+                  : 'Export'}
               </button>
             </div>
           </div>

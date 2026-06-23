@@ -29,6 +29,7 @@ const STEP_LABEL: Record<StepKey, string> = {
   eye:      'Eye',
   autoGuess: 'Auto-guess',
   layers:   'Layers',
+  algos:    'Algos',
   stems:    'Stems',
 };
 
@@ -49,6 +50,7 @@ function defaultSelection(song: ScannedSong): SongSelection {
     eye:       !!song.annotations.eye,
     autoGuess: !!song.annotations['auto-guess'],
     layers:    !!song.annotations.layers || song.layerFiles.length > 0,
+    algos:     song.algoFiles.length > 0,
     stems:     Object.keys(song.stems).length > 0,
   };
 }
@@ -158,6 +160,7 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
             eye:      sel.eye,
             autoGuess: sel.autoGuess,
             layers:   sel.layers,
+            algos:    sel.algos,
             stems:    sel.stems,
           },
         };
@@ -373,7 +376,7 @@ function PickStage(props: {
           <span className="text-emerald-300">Export bundle</span> — a ZIP from this app's <span className="text-slate-300">Export</span> button, unzipped: one folder per song with
           {' '}<code className="text-slate-300">&lt;slug&gt;/boundaries/&#123;manual,eye,auto-guess&#125;/&lt;slug&gt;.json</code>,{' '}
           <code className="text-slate-300">&lt;slug&gt;/&#123;cues,spans,loops,patterns&#125;/&lt;layer&gt;.json</code>,{' '}
-          <code className="text-slate-300">&lt;slug&gt;/song-info.json</code>, and <code className="text-slate-300">&lt;slug&gt;/audio.&lt;ext&gt;</code>.
+          <code className="text-slate-300">&lt;slug&gt;/song-info.json</code>, <code className="text-slate-300">&lt;slug&gt;/audio.&lt;ext&gt;</code>, and cached algorithm outputs under <code className="text-slate-300">&lt;slug&gt;/algos/</code>.
           {' '}(Only JSON round-trips — Audacity / CSV / JAMS / MIDI exports are skipped.)
         </li>
         <li>
@@ -438,7 +441,7 @@ function PickStage(props: {
 
 // ── Review stage ────────────────────────────────────────────────────────────
 
-const STEP_KEYS_IN_ORDER: StepKey[] = ['audio', 'songInfo', 'manual', 'eye', 'autoGuess', 'layers', 'stems'];
+const STEP_KEYS_IN_ORDER: StepKey[] = ['audio', 'songInfo', 'manual', 'eye', 'autoGuess', 'layers', 'algos', 'stems'];
 
 function ReviewStage(props: {
   scan: ScanResult;
@@ -483,7 +486,7 @@ function ReviewStage(props: {
         <span className="text-slate-500"> Click the header checkbox to select / deselect all songs, or a column header to bulk-toggle that step.</span>
       </p>
       <div className="border border-white/[0.06] rounded overflow-hidden">
-        <div className="grid grid-cols-[24px_1.6fr_repeat(7,minmax(0,1fr))] gap-2 px-3 py-2 border-b border-white/[0.06] bg-white/[0.02] text-[10px] uppercase tracking-wider text-slate-500">
+        <div className="grid grid-cols-[24px_1.6fr_repeat(8,minmax(0,1fr))] gap-2 px-3 py-2 border-b border-white/[0.06] bg-white/[0.02] text-[10px] uppercase tracking-wider text-slate-500">
           <input
             type="checkbox"
             // Tri-state: indeterminate when some-but-not-all songs are
@@ -525,7 +528,7 @@ function ReviewStage(props: {
           return (
             <div
               key={song.slug}
-              className={`grid grid-cols-[24px_1.6fr_repeat(7,minmax(0,1fr))] gap-2 px-3 py-2 border-b border-white/[0.04] items-center ${sel?.include ? '' : 'opacity-40'}`}
+              className={`grid grid-cols-[24px_1.6fr_repeat(8,minmax(0,1fr))] gap-2 px-3 py-2 border-b border-white/[0.04] items-center ${sel?.include ? '' : 'opacity-40'}`}
             >
               <input
                 type="checkbox"
@@ -564,12 +567,15 @@ function ReviewStage(props: {
                 }
                 // localPresent
                 const willOverwrite = serverPresent;
+                const items = stepItems(song, step);
+                const baseTitle = willOverwrite ? 'Overwrites the file on the server' : 'Will upload this file';
+                const title = items.length ? `${baseTitle}\n• ${items.join('\n• ')}` : baseTitle;
                 return (
-                  <div key={step} className="flex justify-center">
+                  <div key={step} className="flex flex-col items-center gap-0.5 min-w-0">
                     <button
                       onClick={() => onToggleStep(song.slug, step, !stepOn)}
                       disabled={!sel?.include}
-                      title={willOverwrite ? 'Overwrites the file on the server' : 'Will upload this file'}
+                      title={title}
                       className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border transition-colors ${
                         !stepOn
                           ? 'bg-white/[0.03] text-slate-500 border-white/[0.06] line-through'
@@ -578,8 +584,16 @@ function ReviewStage(props: {
                             : 'bg-emerald-500/15 text-emerald-200 border-emerald-400/40 hover:bg-emerald-500/25'
                       }`}
                     >
-                      {willOverwrite ? 'overwrite' : 'upload'}
+                      {willOverwrite ? 'overwrite' : 'upload'}{items.length > 1 ? ` ·${items.length}` : ''}
                     </button>
+                    {items.length > 0 && (
+                      <span
+                        className={`text-[9px] leading-tight max-w-full truncate ${stepOn ? 'text-slate-400' : 'text-slate-600 line-through'}`}
+                        title={items.join(', ')}
+                      >
+                        {items.join(' ')}
+                      </span>
+                    )}
                   </div>
                 );
               })}
@@ -601,6 +615,30 @@ function ReviewStage(props: {
   );
 }
 
+// Steps that fold several source files into one chip — stems (up to 4 WAVs),
+// layers (the doc + per-type cues/spans/loops/patterns files), and algos (N
+// cache JSONs). Itemising them is what keeps the table honest: a single
+// "Stems" chip otherwise hides which of drums/bass/other/vocals actually
+// landed. Returns [] for the one-file steps, which render a plain chip.
+const STEM_ORDER = ['drums', 'bass', 'other', 'vocals'] as const;
+
+function stepItems(song: ScannedSong, step: StepKey): string[] {
+  switch (step) {
+    case 'stems':
+      return STEM_ORDER.filter((n) => (song.stems as Record<string, unknown>)[n]);
+    case 'algos':
+      return song.algoFiles.map((a) => a.name);
+    case 'layers': {
+      const out: string[] = [];
+      if (song.annotations.layers) out.push('layers.json');
+      for (const lf of song.layerFiles) out.push(`${lf.type}: ${lf.name}`);
+      return out;
+    }
+    default:
+      return [];
+  }
+}
+
 function stepHasLocal(song: ScannedSong, step: StepKey): boolean {
   switch (step) {
     case 'audio':    return !!song.audio;
@@ -609,6 +647,7 @@ function stepHasLocal(song: ScannedSong, step: StepKey): boolean {
     case 'eye':      return !!song.annotations.eye;
     case 'autoGuess': return !!song.annotations['auto-guess'];
     case 'layers':   return !!song.annotations.layers || song.layerFiles.length > 0;
+    case 'algos':    return song.algoFiles.length > 0;
     case 'stems':    return Object.keys(song.stems).length > 0;
   }
 }
@@ -622,6 +661,7 @@ function stepHasServer(status: ServerStatus | undefined, step: StepKey): boolean
     case 'eye':      return status.hasEye;
     case 'autoGuess': return status.hasAutoGuess;
     case 'layers':   return status.hasLayers;
+    case 'algos':    return false; // no cheap server probe; treat as "unknown"
     case 'stems':    return false; // no cheap server probe; treat as "unknown"
   }
 }

@@ -2237,6 +2237,68 @@ function serveAlgoClusters(): Plugin {
   }
 }
 
+// Persist one cached-algorithm output on import.
+// POST /api/upload-algo/:slug?name=<file.json>
+//   body: raw JSON bytes for a single algorithm-cache file. Routes by `name`,
+//   mirroring the three on-disk locations serveSongCacheListing reads from:
+//     bpm-detections.json → data/algorithm-outputs/bpm-detections/<slug>.json
+//     algo-clusters.json  → data/algorithm-outputs/algo-clusters/<slug>.json
+//     <anything>.json     → data/algorithm-outputs/analysis/<slug>/<name>
+//   This lets an exported `<slug>/algos/*.json` bundle round-trip back onto the
+//   server through the dataset importer.
+function serveUploadAlgo(): Plugin {
+  return {
+    name: 'upload-algo',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.method !== 'POST') return next()
+        if (!req.url?.startsWith('/api/upload-algo/')) return next()
+
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        res.setHeader('Content-Type', 'application/json')
+
+        // Corpus-mutating — same team gate as the algo-clusters write.
+        const { isOnTeam } = isOnTeamForReq(req)
+        if (!isOnTeam) return send403NotOnTeam(res)
+
+        const urlObj = new URL(req.url, 'http://localhost')
+        const slug = decodeSegment(req.url.slice('/api/upload-algo/'.length).split('?')[0])
+        if (!slug) return send400BadSegment(res, 'slug')
+
+        // `name` is the in-bundle filename. Lock it to a bare JSON basename so a
+        // crafted value can't escape the per-song analysis dir.
+        const name = urlObj.searchParams.get('name') ?? ''
+        if (!/^[A-Za-z0-9._-]+\.json$/.test(name) || name.includes('..')) {
+          res.statusCode = 400; res.end('{"error":"invalid algo file name"}'); return
+        }
+
+        let destPath: string
+        if (name === 'bpm-detections.json') {
+          destPath = path.join(DATA_DIRS.bpmDetections, `${slug}.json`)
+        } else if (name === 'algo-clusters.json') {
+          destPath = path.join(DATA_DIRS.algoClusters, `${slug}.json`)
+        } else {
+          destPath = path.join(ANALYSIS_DIR, slug, name)
+        }
+
+        if (rejectIfBodyTooLarge(req, res, MAX_JSON_BODY)) return
+        let body = ''
+        req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+        req.on('end', () => {
+          // Validate it parses as JSON before persisting — a corrupt upload
+          // shouldn't poison the analysis cache the inspector reads back.
+          try { JSON.parse(body) } catch {
+            res.statusCode = 400; res.end('{"error":"body is not valid JSON"}'); return
+          }
+          fs.mkdirSync(path.dirname(destPath), { recursive: true })
+          fs.writeFileSync(destPath, body, 'utf-8')
+          res.end('{"ok":true}')
+        })
+      })
+    },
+  }
+}
+
 // Proxy /api/mir-eval → Python mir_eval server on localhost:8001
 // The Python server must be started separately:
 //   python tools/python/mir_eval_server.py
@@ -5498,7 +5560,7 @@ export default defineConfig(async () => {
     serveExperimentalCache(),
     proxySpan(), proxyBeatnet(), proxyLoop(), proxyPanns(), proxyPitch(),
     proxyCueExtras(), proxyPercussive(), proxyLyrics(), proxyPattern(),
-    proxyCustomScripts(), serveSongCacheListing(), serveStorageStats(),
+    proxyCustomScripts(), serveSongCacheListing(), serveUploadAlgo(), serveStorageStats(),
     serveCapabilities(),
     ...await loadLolPlugin(), ...await loadExtraServerPlugins(),
   ]
