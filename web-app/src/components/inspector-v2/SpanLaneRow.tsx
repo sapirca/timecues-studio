@@ -15,7 +15,7 @@ import { BeatGridOverlay } from './BeatGridOverlay';
 import { isOnGridLine } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag, createEdgeItemClamp, useBodyMoveDrag } from '../../hooks/useTimelineDrag';
-import { PendingHighlightOverlay, type PendingSelection } from './AnnotationOverlays';
+import { PendingHighlightOverlay, RegionDragOverlay, type PendingSelection } from './AnnotationOverlays';
 import { ReviewControls, reviewBgFor, type ReviewStatus } from './ReviewControls';
 
 const LANE_HEIGHT_PX = 12;
@@ -38,6 +38,10 @@ interface SpanLaneRowProps {
   onSpanMoveStart?: (itemId: string) => void;
   gridProps?: { bpm?: number; gridOffset?: number; beatsPerBar?: number; barGroupSize?: number | null; anchors?: readonly import('../../types/songInfo').TempoAnchor[]; beatOverrides?: Readonly<Record<string, number>>; thickness?: number };
   pendingSelection?: PendingSelection | null;
+  /** Empty-space click → seek; empty-space drag → create a pending highlight. */
+  onSeek?: (time: number) => void;
+  onRegion?: (t1: number, t2: number) => void;
+  onRegionDragStart?: () => void;
   /** Detector-review mode. When set, spans become read-only and render inline ✓/✗. */
   reviewState?: Record<string, ReviewStatus>;
   onAccept?: (itemId: string) => void;
@@ -69,6 +73,7 @@ export function SpanLaneRow({
   onSpanMove, onSpanMoveStart,
   gridProps,
   pendingSelection,
+  onSeek, onRegion, onRegionDragStart,
   reviewState, onAccept, onReject,
 }: SpanLaneRowProps) {
   const reviewMode = !!reviewState;
@@ -126,6 +131,12 @@ export function SpanLaneRow({
         </span>
       )}
 
+      {/* Behind the bands (z="") — bands keep their own mousedowns; empty space
+          falls through to seek / highlight-drag. */}
+      {onSeek && onRegion && (
+        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onRegion} onRegionDragStart={onRegionDragStart} z="" />
+      )}
+
       {placed.map(({ item, lane }) => {
         const left  = duration > 0 ? (item.start / duration) * 100 : 0;
         const width = Math.max(0.5, duration > 0 ? ((item.end - item.start) / duration) * 100 : 0);
@@ -144,16 +155,16 @@ export function SpanLaneRow({
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (reviewMode) return;
                 if (wasDraggedRef.current) {
                   wasDraggedRef.current = false;
                   return;
                 }
+                // Opens the info card in every mode — read-only for detector
+                // layers (review mode); ✓/✗ controls stop propagation.
                 onSpanClick?.(item.id, { x: e.clientX, y: e.clientY });
               }}
-              disabled={reviewMode}
               className={`absolute flex items-stretch overflow-hidden rounded-sm ${
-                reviewMode ? 'cursor-default' : (moveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
+                reviewMode ? 'cursor-pointer' : (moveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
               }`}
               style={{
                 left: `${left}%`,

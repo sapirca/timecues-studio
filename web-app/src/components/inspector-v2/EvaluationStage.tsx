@@ -58,10 +58,6 @@ function isRupturesId(id: string): boolean {
 export interface EvaluationStageProps {
   annotationRows: AlgorithmRow[];
   manualSections: ManualSection[];
-  eyeSections?: ManualSection[];
-  /** When false, hide the Eye option from the eval-reference dropdown
-   *  entirely (gated by the `experimentalEyeAnnotation` Settings flag). */
-  eyeEnabled?: boolean;
   duration: number;
   tolerance: number;
   onToleranceChange: (t: number) => void;
@@ -70,9 +66,15 @@ export interface EvaluationStageProps {
    *  (the other tabs need a slug to fetch detections + reference
    *  annotations against). */
   selectedAudio?: { id: string; name: string } | null;
+  /** When provided, the examined kind is controlled by the parent (the
+   *  inspect-song "Examine" picker) and the internal tab strip is hidden.
+   *  Left undefined in any standalone use, where EvaluationStage owns its
+   *  own tab state and renders the strip. */
+  kind?: EvalTabKey;
+  onKindChange?: (kind: EvalTabKey) => void;
 }
 
-type EvalTabKey = 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
+export type EvalTabKey = 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
 
 const TAB_LABELS: Record<EvalTabKey, string> = {
   boundaries: 'Boundaries',
@@ -88,18 +90,24 @@ const TAB_LABELS: Record<EvalTabKey, string> = {
 export function EvaluationStage({
   annotationRows,
   manualSections,
-  eyeSections = [],
-  eyeEnabled = true,
   duration,
   tolerance,
   onToleranceChange,
   selectedAudio = null,
+  kind,
+  onKindChange,
 }: EvaluationStageProps) {
   const [sortKey, setSortKey] = useState<SortKey>('f1');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [evalRef, setEvalRef] = useState<'manual' | 'eye'>('manual');
+  const [evalRef, setEvalRef] = useState<'manual' | 'autoGuess'>('manual');
   const [customSettings, setCustomSettings] = useState<CustomEvalSettings>(DEFAULT_CUSTOM_EVAL_SETTINGS);
-  const [tab, setTab] = useState<EvalTabKey>('boundaries');
+  // When the parent supplies `kind`, the examined kind is controlled (the
+  // inspect-song "Examine" picker owns it and the internal tab strip is
+  // hidden). Otherwise EvaluationStage owns the state and renders the strip.
+  const controlled = kind !== undefined;
+  const [internalTab, setInternalTab] = useState<EvalTabKey>('boundaries');
+  const tab = kind ?? internalTab;
+  const setTab = onKindChange ?? setInternalTab;
   const { settings } = useSettings();
 
   // Visible tabs depend on which experimental families the user opted into.
@@ -126,17 +134,12 @@ export function EvaluationStage({
   ]);
 
   // Snap back to boundaries if the active tab disappears (flag flipped off).
+  // Only when uncontrolled — the parent owns this fallback when controlled.
   useEffect(() => {
-    if (!visibleTabs.includes(tab)) setTab('boundaries');
-  }, [visibleTabs, tab]);
+    if (!controlled && !visibleTabs.includes(tab)) setTab('boundaries');
+  }, [controlled, visibleTabs, tab, setTab]);
 
-  // If the experimental Eye flag flips off while Eye was the eval reference,
-  // fall back to manual so the (hidden) Eye option can't stay selected.
-  useEffect(() => {
-    if (!eyeEnabled && evalRef === 'eye') setEvalRef('manual');
-  }, [eyeEnabled, evalRef]);
-
-  const refSections = evalRef === 'manual' ? manualSections : eyeSections;
+  const refSections = evalRef === 'manual' ? manualSections : [];
 
   // ── mir_eval (server-side via /api/mir-eval/pairs) — debounced ──────────
   const mirPairs = useMemo<MirEvalPairWithId[] | null>(() => {
@@ -226,9 +229,12 @@ export function EvaluationStage({
   const bestRow  = sorted[0];
   const worstRow = sorted[sorted.length - 1];
 
+  // Only the boundaries table scores against the manual boundary reference;
+  // the cue/span/loop/pattern/lyrics tables fetch their own reference by slug,
+  // so a missing boundary reference must not dead-end them.
   const noRef = !refSections.length;
 
-  if (noRef) {
+  if (noRef && tab === 'boundaries') {
     return (
       <div className="py-6 text-center">
         <p className="text-sm text-gray-500">
@@ -241,11 +247,10 @@ export function EvaluationStage({
           <EvalReferenceDropdown
             value={evalRef}
             onChange={(mode) => {
-              if (mode === 'manual' || mode === 'eye') setEvalRef(mode);
+              if (mode === 'manual' || mode === 'autoGuess') setEvalRef(mode);
             }}
             options={[
               { mode: 'manual',      hasData: manualSections.length > 0 },
-              ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: eyeSections.length > 0 }] : []),
               { mode: 'autoGuess', hasData: false },
             ]}
           />
@@ -267,7 +272,7 @@ export function EvaluationStage({
 
   const singleSongFiles = selectedAudio ? [selectedAudio] : [];
 
-  const TabBar = visibleTabs.length > 1 && (
+  const TabBar = !controlled && visibleTabs.length > 1 && (
     <div className="flex items-center gap-1 border-b border-white/[0.06] -mb-1">
       {visibleTabs.map((k) => (
         <button
@@ -316,11 +321,10 @@ export function EvaluationStage({
         <EvalReferenceDropdown
           value={evalRef}
           onChange={(mode) => {
-            if (mode === 'manual' || mode === 'eye') setEvalRef(mode);
+            if (mode === 'manual' || mode === 'autoGuess') setEvalRef(mode);
           }}
           options={[
             { mode: 'manual',      hasData: manualSections.length > 0 },
-            ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: eyeSections.length > 0 }] : []),
             { mode: 'autoGuess', hasData: false },
           ]}
         />

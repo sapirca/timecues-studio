@@ -23,6 +23,7 @@ class FourOnTheFloorPatternDetector(CustomDetector):
     version = "0.1"
 
     BEATS_PER_BAR = 4
+    SUBBEATS_PER_BEAT = 4
     REPEAT_COUNT = 4
     DOWNBEAT_STEPS = (0, 4, 8, 12)  # 16th-note step indices for 4-on-the-floor
 
@@ -40,4 +41,7 @@ class FourOnTheFloorPatternDetector(CustomDetector):
             label="kick pattern",
             repeat_count=self.REPEAT_COUNT,
             highlighted_beats=list(self.DOWNBEAT_STEPS),
+            # The cycle is one bar, so declare its grid explicitly: the index
+            # space of highlighted_beats is 0 .. steps_per_cycle - 1.
+            steps_per_cycle=self.BEATS_PER_BAR * self.SUBBEATS_PER_BEAT,
         )]

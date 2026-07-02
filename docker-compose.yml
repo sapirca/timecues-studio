@@ -36,15 +36,15 @@
 name: timecues
 
 services:
-  # Four MIR backend servers (bpm/mir/ruptures/custom) run as supervised
-  # child processes inside one container. They share an identical pip floor
-  # (Python 3.11 + librosa>=0.10 + numpy>=1.24), so installing them once
-  # and running them under supervisord cuts ~3x image bytes, registry
-  # uploads, and pull time vs four separate sidecars. msaf stays standalone
-  # because its pins are incompatible (Python 3.10, numpy<1.24, librosa<0.10);
-  # mir-eval stays standalone because it has no librosa / ffmpeg deps to
-  # gain from sharing the base. See docker/core-mir.Dockerfile and
-  # docker/core-mir.supervisord.conf for the program definitions.
+  # Backend servers run as supervised child processes inside one container:
+  # bpm, custom, and dsp (= ruptures + mir multiplexed onto :8003 by
+  # dsp_server.py). They share an identical pip floor (Python 3.11 +
+  # librosa>=0.10 + numpy>=1.24), so installing once and running them under
+  # supervisord cuts image bytes, registry uploads, and pull time vs separate
+  # sidecars. msaf stays standalone because its pins are incompatible (Python
+  # 3.10, numpy<1.24, librosa<0.10); mir-eval stays standalone because it has
+  # no librosa / ffmpeg deps to gain from sharing the base. See
+  # docker/core-mir.Dockerfile and docker/core-mir.supervisord.conf.
   core-mir:
     image: timecues/core-mir:latest
     # Per-container memory ceiling (defense in depth): a leak in one service is
@@ -61,7 +61,7 @@ services:
       # local dev sees the same files the host filesystem has. Prod overrides
       # this to a persistent path on the VM.
       - ${CUSTOM_SCRIPTS_DIR:-./tools/python/custom}:/app/tools/python/custom
-    expose: ["8003", "8004", "8005", "8007"]
+    expose: ["8003", "8004", "8005"]
     restart: unless-stopped
 
   mir-eval:
@@ -100,13 +100,13 @@ services:
       dockerfile: docker/web.Dockerfile
     user: "${HOST_UID:-0}:${HOST_GID:-0}"
     environment:
-      # bpm/mir/ruptures/custom share one merged container; all four env
-      # vars point at the same service. Different ports route each vite
-      # proxy to the right backend server inside the container.
+      # bpm + custom + dsp (ruptures+mir, one process on :8003) share the merged
+      # core-mir container; their env vars all point at it. Different ports route
+      # each vite proxy to the right backend inside the container. msaf and
+      # mir-eval stay standalone (incompatible deps / different concern).
       BPM_HOST: core-mir
-      MIR_HOST: core-mir
+      DSP_HOST: core-mir
       MIR_EVAL_HOST: mir-eval
-      RUPTURES_HOST: core-mir
       MSAF_HOST: msaf
       CUSTOM_HOST: core-mir
       STEMS_HOST: stems
@@ -116,7 +116,6 @@ services:
       # only when the user has flipped the matching experimental flag on.
       SPAN_HOST: span
       BEATNET_HOST: beatnet
-      LOOP_HOST: loop
       PANNS_HOST: panns
       PITCH_HOST: pitch
       CUE_EXTRAS_HOST: cue-extras
@@ -299,22 +298,6 @@ services:
       - ${DATA_DIR:-./data}:/app/data
       - timecues-model-cache:/app/.cache
     expose: ["8010"]
-    restart: unless-stopped
-
-  # LOOP-family detector — chroma-autocorrelation. Pure DSP, no model weights;
-  # slim image so the experimental-models profile stays affordable to spin up
-  # on macOS / Windows hosts that don't have lots of free overlay space.
-  loop:
-    image: timecues/loop:latest
-    mem_limit: 1g
-    profiles: ["experimental-models"]
-    build:
-      context: .
-      dockerfile: docker/loop.Dockerfile
-    user: "${HOST_UID:-0}:${HOST_GID:-0}"
-    volumes:
-      - ${DATA_DIR:-./data}:/app/data
-    expose: ["8012"]
     restart: unless-stopped
 
   # PANNs AudioSet-tagging — CNN14 pretrained, ~80 MB lazy-download. SPAN

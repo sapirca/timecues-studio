@@ -3,7 +3,7 @@ import { annotatorHeaders } from '../utils/annotatorHeaders';
 import { getIsDemo } from '../state/demoFlag';
 import { demoLoadSongInfo, demoSaveSongInfo } from './demoStorage';
 
-/** Load song info; the server seeds from any legacy manual/eye annotation fields on first read.
+/** Load song info; the server seeds from any legacy manual annotation fields on first read.
  *  In Demo Mode, any local edit overrides the canonical server copy so the user's tweaks
  *  to BPM / grid offset survive a refresh without touching the shared dataset. */
 export async function loadSongInfo(slug: string): Promise<SongInfo> {

@@ -8,6 +8,7 @@ import { type CSSProperties } from 'react';
 import type { AnnotationLayer, LoopItem } from '../../types/annotationLayer';
 import type { TempoAnchor } from '../../types/songInfo';
 import { AnnotationPointCard } from './shared/AnnotationPointCard';
+import { detectorBadgeLabel } from './shared/detectorBadge';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
 
 export type LoopAnchor = PopoverAnchor;
@@ -19,6 +20,12 @@ export function useLoopEditPopover() {
 interface LoopEditPopoverProps {
   layer: AnnotationLayer<'loops'>;
   loop: LoopItem;
+  /** When true, inputs are disabled and the Delete button is hidden.
+   *  Used for detector-sourced layers where edits don't make sense. */
+  readOnly?: boolean;
+  /** Raw detector output for this loop — shown as a collapsible JSON block on
+   *  read-only cards. */
+  rawOutput?: unknown;
   popoverRef: React.RefObject<HTMLDivElement | null>;
   positionStyle: CSSProperties;
   onChange: (patch: Partial<LoopItem>) => void;
@@ -40,7 +47,7 @@ interface LoopEditPopoverProps {
 }
 
 export function LoopEditPopover({
-  layer, loop, popoverRef, positionStyle,
+  layer, loop, readOnly = false, rawOutput, popoverRef, positionStyle,
   onChange, onDelete, onClose,
   onPlay, onStop, isPlaying,
   bpm, gridOffset, beatsPerBar, anchors, currentTime,
@@ -48,8 +55,11 @@ export function LoopEditPopover({
   return (
     <AnnotationPointCard
       kind="loop"
+      readOnly={readOnly}
       layerName={layer.name}
       layerColor={layer.color}
+      badge={readOnly ? detectorBadgeLabel(layer.source) : undefined}
+      rawOutput={rawOutput}
       start={loop.start}
       end={loop.end}
       label={loop.label}

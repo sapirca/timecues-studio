@@ -36,6 +36,12 @@ If there's a screencast you'd like recorded first, [say so on the contact page](
     <span class="card-cta">Read the walkthrough →</span>
   </a>
 
+  <a class="tutorial-stub tutorial-card" href="#dynamic-and-manual-tempo">
+    <h3><span class="stub-led ready"></span> Dynamic &amp; manual tempo</h3>
+    <p>For live recordings and songs that drift — derive a tempo curve with the Δ-threshold slider, or pin individual beats by hand on top of a base grid.</p>
+    <span class="card-cta">Read the walkthrough →</span>
+  </a>
+
   <a class="tutorial-stub tutorial-card" href="#annotating-boundaries-with-the-keyboard">
     <h3><span class="stub-led ready"></span> Annotating boundaries with the keyboard</h3>
     <p>The full keyboard-driven flow — M to add, snap-to-grid, the violet-halo tick when you snap, undo/redo, and how to think about the layer cards in the sidebar.</p>
@@ -51,12 +57,6 @@ If there's a screencast you'd like recorded first, [say so on the contact page](
   <a class="tutorial-stub tutorial-card" href="#the-auto-guess-workflow--consensus--clustering">
     <h3><span class="stub-led ready"></span> The Auto-guess workflow</h3>
     <p>Generate an AutoGuess from the four clustered algorithms, then tick through point-by-point with ✓ / ✗ / @ to harvest a clean manual layer in a fraction of the time.</p>
-    <span class="card-cta">Read the walkthrough →</span>
-  </a>
-
-  <a class="tutorial-stub tutorial-card" href="#eye-annotations-from-the-spectrogram">
-    <h3><span class="stub-led ready"></span> Eye annotations from the spectrogram</h3>
-    <p>Doing a quick by-eye pass on the spectrogram alone, when audio playback isn't an option, and how Eye annotations compare to Manual.</p>
     <span class="card-cta">Read the walkthrough →</span>
   </a>
 
@@ -159,8 +159,11 @@ grid, drop your first boundary, save.
 
 ## Creating a new dataset
 
-![The main page entry cards](timecues/images/main-page.png)
-*“Start a new dataset” claims the corpus on disk and makes your account its first admin.*
+![The main page on a fresh deploy](timecues/images/new-dataset-landing.png)
+*On a fresh deploy with no corpus yet, the second card reads “Start a new dataset” — claiming the corpus on disk and making your account its first admin.*
+
+![The new-dataset setup form](timecues/images/new-dataset-form.png)
+*The setup form — name the corpus, then sign in (Google, or an email / username when Google isn't configured) to claim it as the first admin.*
 
 ![Song sidebar header actions](timecues/images/sidebar-header-actions.png)
 *Upload songs, import an existing dataset, or export — all from the sidebar header.*
@@ -252,7 +255,7 @@ A claimed dataset writes to four subtrees under `DATA_DIR` (default
 | Path | Contents |
 |---|---|
 | `data/songs/<slug>/<filename>` | The original audio file, untouched. |
-| `data/annotations/<layer>/<annotator>/<slug>.json` | One file per song per annotator per layer (Manual / Eye / Auto-guess). |
+| `data/annotations/<layer>/<annotator>/<slug>.json` | One file per song per annotator per layer (Manual / Auto-guess). |
 | `data/algorithm-outputs/<algorithm>/<slug>.json` | One file per algorithm per song — the detector run cache. |
 | `data/dataset-config.json` | The single corpus-config — name, people-by-email, default vocabularies, BPM defaults. |
 | `data/stems/<slug>/{vocals,drums,bass,other}.wav` | Demucs stems once extracted (admin runs *Run Demucs* in the source picker). |
@@ -318,22 +321,25 @@ and [Keyboard Shortcuts](/timecues/user-guide/#keyboard-shortcuts).
 ## Comparing algorithms
 
 ![Algorithm Inspect overview](timecues/images/inspect-overview.png)
-*Algorithm Inspect — each detector's predictions stacked as colored timelines over the waveform.*
+*Algorithm Inspect — each detector's predictions stacked as colored timelines over the waveform, with your reference layers (Boundaries / Auto-guess) lined up beneath.*
 
 ![The Algorithms sidebar](timecues/images/algorithms-sidebar.png)
-*Tick detectors in the right sidebar; every tick fires a run (cached by file hash, so repeats are instant).*
+*Tick detectors in the right sidebar — grouped by family (MSAF, All-in-One, Ruptures/CPD, Span, Loop, Cue, Lyrics, Pattern, Custom). Every tick fires a run, cached by file hash, so repeats are instant.*
 
-![Inspect sub-tabs and engine picker](timecues/images/inspect-subtabs.png)
-*Pick the evaluation engine (mir_eval or Custom) and drag the tolerance slider τ.*
+![The Evaluation tab — engine and tolerance](timecues/images/inspect-subtabs.png)
+*The Evaluation tab — choose what to evaluate against, drag the tolerance slider τ, switch the Custom-eval options, and see the best / worst detector for this song at a glance.*
+
+![The per-song algorithm leaderboard](timecues/images/inspect-leaderboard.png)
+*Every detector ranked for this song — mir_eval precision / recall / F1 / hits, alongside the Custom engine's MNBD and CSR columns.*
 
 ![The All-songs leaderboard](timecues/images/inspect-all-songs.png)
-*The All songs sub-tab — a dataset-wide leaderboard you can re-sort by F1, precision, recall, MNBD, or CSR.*
+*The All songs tab — a dataset-wide leaderboard (here: 104 songs, 38 with a manual reference) you can re-sort by F1, precision, recall, MNBD, or CSR.*
 
 The whole point of TimeCues — line every detector up against your
 ground truth and see who wins, per song and across the corpus.
 
-1. **Have a reference layer.** You need at least one of *Manual*,
-   *Eye*, or *Auto-guess (reviewed)* on the song to evaluate against.
+1. **Have a reference layer.** You need at least one of *Manual* or
+   *Auto-guess (reviewed)* on the song to evaluate against.
    Without that, every metric is meaningless — F1 against an empty
    reference is undefined.
 2. **Switch to the *Algorithm Inspect* tab** and pick a song from the
@@ -341,7 +347,7 @@ ground truth and see who wins, per song and across the corpus.
 3. **Tick algorithms in the right sidebar.** Each one you tick fires a
    detector run (cached by file hash, so a repeat run is instant). Their
    predictions stack as colored timelines underneath the waveform.
-4. **Pick a reference** in the *Reference* dropdown — Manual, Eye, or
+4. **Pick a reference** in the *Reference* dropdown — Manual or
    Auto-guess. The metrics panel below the canvas updates immediately.
 5. **Pick the evaluation engine:**
    - **`mir_eval`** — the research-standard hit-rate / F1 / precision /
@@ -382,7 +388,7 @@ and [Inspect All](/timecues/user-guide/#inspect-all).
 ## The Auto-guess workflow — consensus & clustering
 
 ![The Boundaries layer-type chips](timecues/images/layer-type-chips.png)
-*Auto-guess lives alongside Manual and Eye under the Boundaries layer type.*
+*Auto-guess lives alongside Manual under the Boundaries layer type.*
 
 ![Auto-guess defaults in Settings](timecues/images/settings-auto-guess-defaults.png)
 *Auto-guess defaults — cluster tolerance τ, minimum agreement count, and the source-detector subset that feeds the consensus.*
@@ -475,43 +481,6 @@ Deep dive: [Auto-Guess Internals](/timecues/user-guide/#auto-guess-internals)
 covers the full clustering algorithm, the per-detector confidence
 weighting, and the exact grid-search procedure.
 
-## Eye annotations from the spectrogram
-
-![The SIGNALS dropdown](timecues/images/signals-dropdown.png)
-*Enable the spectrogram (and the SSM row) from the SIGNALS menu — your only signal once audio is muted.*
-
-![Eye-mode annotation](timecues/images/annotate-overview.png)
-*Drop boundaries by eye at every visible transition; in Eye mode the audio is automatically muted.*
-
-What does the *eye* — not the ear — recover from a waveform and
-spectrogram alone? Useful for studying visual cues vs. audio cues, and
-for noisy-environment annotation when you can't play audio.
-
-1. **Lock BPM and grid in Dataprep first.**
-2. **Switch to the Annotator Tool → Boundaries → Eye** tab.
-3. **The audio is automatically muted** in Eye mode. The waveform and
-   spectrogram are your only signal.
-4. **Toggle the spectrogram on** from the *SIGNALS* menu in the top
-   viz bar if it isn't already (Eye mode pre-enables it by default).
-   Try also enabling the SSM (self-similarity matrix) row — large
-   off-diagonal jumps are often boundaries the eye catches before the
-   ear.
-5. **Drop boundaries with `M`** at every transition you can *see* —
-   a sudden change in spectral content, a brightening or darkening of
-   the high frequencies, a visual restart in the SSM.
-6. **Cross-reference against Manual afterwards.** Each layer is
-   reviewed independently; the Compare sub-tab shows them side by
-   side. Eye usually nails the macro transitions and misses the
-   smooth-but-audible ones.
-
-> **What you need:** Nothing extra — the spectrogram and SSM are computed in
-> the browser, so Eye mode works in the default stack with no profile or
-> install. The **SSM** row is **off by default**; switch it on per-song from
-> the **SIGNALS** menu, or make it default-on under **Settings → Annotation →
-> Default signals**.
-
-Deep dive: [Annotation Workspace → Eye mode](/timecues/user-guide/#annotation-workspace).
-
 ## Writing a custom detector
 
 ![The Playground page](timecues/images/playground-page.png)
@@ -565,7 +534,7 @@ and how cached results are stored.
 *Each sign-in is a distinct annotator id, so two people's manual layers never clobber each other.*
 
 ![The Team dashboard](timecues/images/team-overview.png)
-*The Team dashboard — per-annotator boundary, eye, and auto-guess progress at a glance.*
+*The Team dashboard — per-annotator boundary and auto-guess progress at a glance.*
 
 ![Inter-annotator agreement](timecues/images/team-agreement.png)
 *Inter-annotator agreement — where two people's boundaries pair up within τ, and where they disagree.*
@@ -654,8 +623,11 @@ Deep dive: [Song Info Bar → BPM](/timecues/user-guide/#song-info-bar).
 
 ## Aligning the beat grid
 
-![Grid alignment controls](timecues/images/grid-alignment.png)
-*Grid alignment — Set bar start (G), Nudge, and the Grid offset (s) field for fine-tuning.*
+![Tempo and grid alignment controls](timecues/images/grid-alignment.png)
+*The Tempo panel in Dataset Prep — set the BPM, then anchor bar 1 with Set bar start (G), Nudge, and the Grid offset (s) field.*
+
+![The beat grid drawn over the waveform](timecues/images/grid-overlay.png)
+*Turn on Show beat grid and the lines ride on the audio — white for beats, red for bar downbeats, and the yellow marker for your bar-start anchor (beat 1). Aligning means sliding those red bar lines onto the song's real downbeats.*
 
 ![The Tempo mode tabs](timecues/images/grid-mode-tabs.png)
 *Tempo mode — Static, Dynamic, or Manual; only the active mode's grid is drawn downstream.*
@@ -671,7 +643,7 @@ drift.
 
 ### Why this matters
 
-Every Manual / Eye boundary snaps to the song's beat grid when *Snap*
+Every Manual boundary snaps to the song's beat grid when *Snap*
 is on (which is the default — see [Snap toggle](/timecues/user-guide/#3-big-icon-controls-zoom--grid--snap--misc)).
 If your grid is misaligned by 240 ms, every boundary you drop with `M`
 lands 240 ms early. Then when you compare against algorithm output
@@ -778,6 +750,83 @@ Deep dive:
 [Grid Mode (Static / Dynamic / Manual)](/timecues/user-guide/#grid-mode-static-bpm--dynamic--manual-adjustment),
 [Manual mode is a two-layer system](/timecues/user-guide/#manual-mode-is-a-two-layer-system),
 and [Metronome Panel](/timecues/user-guide/#metronome-panel-dataset-prep).
+
+## Dynamic and manual tempo
+
+Static BPM assumes one tempo for the whole song. That covers most
+produced music, but live recordings, expressive playing, and stitched
+takes drift — the metronome starts on the kick and walks off it by the
+second chorus. Dynamic and Manual modes are how you make the grid
+follow the music instead of fighting it.
+
+Both live in the same **Tempo** panel as Static, behind the
+**Static / Dynamic / Manual** tabs. Switching modes is **non-destructive** —
+each mode keeps its own grid data, and only the *active* mode's grid is
+drawn downstream in the Annotator Tool and Algorithm Inspect. The
+checkmark on a tab means that mode already has data for this song.
+
+### Dynamic — a tempo curve from anchors
+
+![Dynamic tempo mode](timecues/images/tempo-mode-dynamic.png)
+*Dynamic mode — a piecewise tempo curve defined by anchors, with the Δ-threshold slider controlling how readily a new anchor is dropped.*
+
+Dynamic mode represents the song as a **tempo curve**: a series of
+*anchors*, each carrying a local BPM, with the grid interpolating
+between them. Reach for it when the tempo wanders smoothly — a drummer
+who speeds up into the drop, a band that breathes.
+
+1. **Switch to the *Dynamic* tab.** The app derives an initial curve
+   automatically and the `Active:` label shows how many anchors it
+   placed (e.g. *Dynamic · 22 anchors*).
+2. **Tune the `Δ Threshold` slider** (in BPM). It controls how
+   aggressively the deriver drops a new anchor: a new anchor lands
+   whenever the rolling-median BPM drifts more than this much from the
+   last one. **Lower** = more anchors, follows subtle tempo changes;
+   **higher** = fewer anchors, ignores small fluctuations.
+3. **Click `↻ Re-derive`** to recompute the curve after changing the
+   threshold (or after replacing the audio).
+4. **Verify with the metronome.** Play through the section that used to
+   drift — the click should now track the kick across the whole song,
+   not just at the start.
+
+### Manual — pin beats by hand
+
+![Manual adjustment — pick the base grid](timecues/images/tempo-manual-base.png)
+*Switching to Manual first asks which grid your pinned beats sit on top of — the Static BPM grid, or the Dynamic tempo curve.*
+
+Manual mode is a **two-layer system**: an underlying *base grid* plus
+*pinned beats* you place by hand on top of it. Use it for the hard
+cases — free-tempo intros, stitched studio takes, anything where no
+single curve fits.
+
+1. **Switch to the *Manual* tab.** A dialog asks you to **pick the base
+   grid** — the *Static BPM* grid (a single global tempo) or the
+   *Dynamic* curve (the anchored piecewise tempo). The base is what the
+   grid falls back to anywhere you haven't pinned a beat.
+2. **Pin beats on the waveform.** Drag any beat line on the waveform to
+   the spot where that beat actually lands; it becomes a *pinned beat*.
+   Right-click a pinned beat to unpin it.
+
+![Manual tempo mode](timecues/images/tempo-mode-manual.png)
+*The Manual panel — the chosen base grid, a Change base… escape hatch, Reset grid, and the running count of pinned beats.*
+
+3. **Change the base later** with **Change base…**, or wipe every
+   adjustment with **Reset grid / Clear all adjustments** (this clears
+   only the Manual layer — your Static and Dynamic grids are untouched).
+4. **Watch the `Pinned beats` counter** at the bottom of the panel — it
+   tells you how many beats you've overridden so far.
+
+> **When to use which:** stay on **Static** for ~95% of recorded music;
+> reach for **Dynamic** when the tempo drifts *smoothly* and you want the
+> grid to follow automatically; reach for **Manual** when the tempo is
+> *erratic* and you need beat-level control the deriver can't give you.
+
+> **What you need:** Nothing extra — all three modes are core features
+> in the default stack, with no flag to enable and nothing to install.
+
+Deep dive:
+[Grid Mode (Static / Dynamic / Manual)](/timecues/user-guide/#grid-mode-static-bpm--dynamic--manual-adjustment)
+and [Manual mode is a two-layer system](/timecues/user-guide/#manual-mode-is-a-two-layer-system).
 
 ## Stem separation with Demucs
 
@@ -913,7 +962,7 @@ command and order doesn't matter.
 - **Switching later is just a restart:** `docker compose down`, then a new
   `up` line with a different profile set. Your audio / annotations / caches
   under `data/` persist across every profile.
-- The default stack is enough for Manual / Eye / Auto-guess annotation,
+- The default stack is enough for Manual / Auto-guess annotation,
   MSAF, Ruptures, BPM, MIR features, and custom detectors. Demucs only adds
   stems + All-In-One; experimental only adds the new detector families.
 
@@ -1057,7 +1106,7 @@ syncs to the corpus.
 |---|---|
 | **Display & playback** | Sidebar collapsed by default, show beat grid by default, default playback rate slider (0.5× – 2.0×, step 0.05, default 1.00×). |
 | **Default signals** | Master "Signal overlays on" toggle plus 12 sub-toggles for which signal rows are pre-checked in the SIGNALS dropdown (3-Band waveform, Spectrogram, Cepstrogram/MFCC, Chromagram, Tempogram, SSM, Energy/RMS, Brightness, Novelty, Onsets, Spectral Flux, EQ). Plus a 3-Band palette picker (`Classic` / `Cool` / `Sunset` / `Forest` / `Mono`). |
-| **Annotations — display** | Per-layer visibility defaults (Manual / Eye / Auto-guess) plus a time-unit picker for annotation editors (`Milliseconds` or `Beats & bars`). |
+| **Annotations — display** | Per-layer visibility defaults (Manual / Auto-guess) plus a time-unit picker for annotation editors (`Milliseconds` or `Beats & bars`). |
 | **Vocabularies & taxonomies** | All label vocabularies in one place. Section vocabulary (genre cards plus a custom textarea), cue vocabulary, span vocabulary. Each row has a *Save as dataset default* / *Clear dataset default* button **visible only to admins**, plus a *Local override* pill that appears next to your row when your local value diverges from the admin default. |
 | **Loops** | Default loop names, default cue labels for loops, opt-in for the loops/patterns marker family (experimental). |
 | **BPM & grid protection (personal)** | When on, prevents accidental BPM or Grid Offset edits — the field becomes read-only until you toggle it back off. Useful once a song is fully annotated. |

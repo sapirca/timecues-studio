@@ -22,7 +22,6 @@ describe('scanDatasetFiles — export-bundle layout', () => {
       fileAt('my_song/audio.mp3'),
       fileAt('my_song/song-info.json'),
       fileAt('my_song/boundaries/manual/my_song.json'),
-      fileAt('my_song/boundaries/eye/my_song.json'),
       fileAt('my_song/boundaries/auto-guess/my_song.json'),
       fileAt('my_song/cues/kick-hits.json'),
       fileAt('my_song/cues/fx-triggers.json'),
@@ -36,7 +35,6 @@ describe('scanDatasetFiles — export-bundle layout', () => {
     expect(song.audio).not.toBeNull();
     expect(song.songInfo).not.toBeNull();
     expect(song.annotations.manual).toBeTruthy();
-    expect(song.annotations.eye).toBeTruthy();
     expect(song.annotations['auto-guess']).toBeTruthy();
     // The per-type user-layer files are collected (not dropped) for later
     // reassembly into one AnnotationLayersDocument.
@@ -83,13 +81,13 @@ describe('scanDatasetFiles — export-bundle layout', () => {
       fileAt('my_song/boundaries/manual/my_song.txt'),     // Audacity — lossy
       fileAt('my_song/cues/kick-hits.jams'),               // JAMS — lossy
       fileAt('my_song/grid/my_song.txt'),                  // derived, no endpoint
-      fileAt('my_song/algos/allin1.json'),                 // cache, no endpoint
+      fileAt('my_song/algos/allin1.json'),                 // cached algo output — recognised
     ]);
     const song = songBySlug(songs, 'my_song');
     expect(song.annotations.manual).toBeTruthy();
     expect(song.layerFiles).toHaveLength(0);
+    expect(song.algoFiles.map((a) => a.name)).toEqual(['allin1.json']);
     expect(unrecognized.sort()).toEqual([
-      'my_song/algos/allin1.json',
       'my_song/boundaries/manual/my_song.txt',
       'my_song/cues/kick-hits.jams',
       'my_song/grid/my_song.txt',

@@ -17,7 +17,7 @@ import type {
 } from '../types/manualAnnotation';
 import type { SongInfo } from '../types/songInfo';
 
-type Kind = 'manual' | 'eye' | 'autoGuess' | 'songInfo';
+type Kind = 'manual' | 'autoGuess' | 'songInfo';
 
 function key(kind: Kind, slug: string): string {
   return `tc:demo:${kind}:${slug}`;
@@ -61,18 +61,6 @@ export function demoSaveManual(slug: string, ann: ManualAnnotation): boolean {
 }
 export function demoDeleteManual(slug: string): boolean {
   return safeDel(key('manual', slug));
-}
-
-// ─── Eye ─────────────────────────────────────────────────────────────────────
-
-export function demoLoadEye(slug: string): ManualAnnotation | null {
-  return safeGet<ManualAnnotation>(key('eye', slug));
-}
-export function demoSaveEye(slug: string, ann: ManualAnnotation): boolean {
-  return safeSet(key('eye', slug), ann);
-}
-export function demoDeleteEye(slug: string): boolean {
-  return safeDel(key('eye', slug));
 }
 
 // ─── Auto-guess ──────────────────────────────────────────────────────────────
@@ -124,12 +112,12 @@ export function demoLoadAllStatuses(): Record<string, AnnotationStatus> {
 }
 
 /** Count distinct song slugs that have any user-authored demo work
- *  (manual, eye, or songInfo). Auto-guess is excluded because it's cached
+ *  (manual or songInfo). Auto-guess is excluded because it's cached
  *  algorithm output, not something the user typed. Used to decide whether
  *  exiting demo needs a confirmation prompt. */
 export function demoCountSavedWork(): number {
   const slugs = new Set<string>();
-  const userKinds: Kind[] = ['manual', 'eye', 'songInfo'];
+  const userKinds: Kind[] = ['manual', 'songInfo'];
   const prefixes = userKinds.map((k) => `tc:demo:${k}:`);
   try {
     for (let i = 0; i < localStorage.length; i++) {

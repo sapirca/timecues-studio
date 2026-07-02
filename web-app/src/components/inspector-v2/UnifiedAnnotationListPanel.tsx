@@ -18,7 +18,7 @@
  * cards render below that frame, unframed.
  *
  * Boundaries are special: until the deferred boundaries-as-layers refactor
- * lands, we synthesize one virtual layer per "listening" (Manual / Eye /
+ * lands, we synthesize one virtual layer per "listening" (Manual /
  * Auto-guess / each custom boundary detector with a cached result) from the
  * existing single-doc state. Only Manual exposes an external section setter
  * (setSectionsRef), so it's the only boundary source where the sidebar's X
@@ -34,12 +34,12 @@ import type {
   SpanItem,
   LoopItem,
   PatternItem,
+  LyricsItem,
 } from '../../types/annotationLayer';
 import type {
   ManualAnnotation,
   AutoGuessManualAnnotation,
 } from '../../types/manualAnnotation';
-import type { CustomRegistryEntry, CustomResultEnvelope, CustomBoundaryItem } from '../../types/customScript';
 import { sectionColor, sectionLabel } from './sectionConstants';
 import { isExperimentalType, type AnnotationType } from './shared/tabConfig';
 import type { SourceId } from './shared/AnnotationSourcePicker';
@@ -170,6 +170,23 @@ function patternLayerToUnified(layer: AnnotationLayer<'patterns'>): UnifiedLayer
   };
 }
 
+function lyricsLayerToUnified(layer: AnnotationLayer<'lyrics'>): UnifiedLayer {
+  return {
+    id: layer.id,
+    name: layer.name,
+    color: layer.color,
+    readOnly: layer.readOnly === true,
+    sourceId: layerSourceId(layer),
+    items: (layer.items as LyricsItem[]).slice().sort((a, b) => a.time - b.time).map((l) => ({
+      id: l.id,
+      time: l.time,
+      end: l.end ?? null,
+      label: l.text || `(${l.kind})`,
+      color: layer.color,
+    })),
+  };
+}
+
 function manualToUnified(
   ann: ManualAnnotation | null,
   name: string,
@@ -182,7 +199,7 @@ function manualToUnified(
   // throwing and blanking the whole panel.
   if (!ann || !ann.sections?.length) return null;
   // The layer id is a *stable* key the parent page matches on (e.g.
-  // `'boundaries:Manual'` / `'boundaries:Eye'` in InspectorPageV2's
+  // `'boundaries:Manual'` in InspectorPageV2's
   // delete / toggle / select handlers), so it must NOT track the
   // human-visible `name` (which the user can rename, e.g. "Boundaries 1").
   // Use the source-derived idKey for the id and item ids; fall back to the
@@ -231,49 +248,17 @@ function autoGuessToUnified(ann: AutoGuessManualAnnotation | null, color: string
   };
 }
 
-function customBoundaryToUnified(
-  detector: CustomRegistryEntry,
-  envelope: CustomResultEnvelope | undefined,
-  color: string,
-): UnifiedLayer | null {
-  if (!envelope || envelope.fatal) return null;
-  const items = envelope.items.filter((it): it is CustomBoundaryItem =>
-    typeof (it as CustomBoundaryItem).time_ms === 'number');
-  if (!items.length) return null;
-  return {
-    id: `boundaries:detector:${detector.name}`,
-    name: detector.label || detector.name,
-    color,
-    readOnly: true,
-    sourceId: `detector:${detector.name}` as const,
-    items: items.slice().sort((a, b) => a.time_ms - b.time_ms).map((it, i) => ({
-      id: `${detector.name}:${i}:${it.time_ms}`,
-      time: it.time_ms / 1000,
-      end: null,
-      label: it.label || '',
-      color,
-      importance: it.importance === 'optional' ? 'optional' : 'critical',
-    })),
-  };
-}
-
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface UnifiedAnnotationListPanelProps {
-  /** Owns cues / spans / loops / patterns layers for the active song. */
+  /** Owns cues / spans / loops / patterns layers for the active song. The
+   *  Annotate list is manual-only by design — curated / detector layers live
+   *  in their own Curated sidebar, so none of them flow into this panel. */
   cueLayersDoc: AnnotationLayersDocument | null;
-  /** Detector-sourced read-only layers (one entry per detector + kind). */
-  detectorCueLayers: AnnotationLayer<'cues'>[];
-  detectorSpanLayers: AnnotationLayer<'spans'>[];
-  detectorLoopLayers: AnnotationLayer<'loops'>[];
-  detectorPatternLayers: AnnotationLayer<'patterns'>[];
   /** Boundary single-doc state — one virtual layer per source until the
    *  deferred boundaries-as-layers refactor lands. */
   manualAnnotation: ManualAnnotation | null;
-  eyeAnnotation: ManualAnnotation | null;
   autoGuessAnnotation: AutoGuessManualAnnotation | null;
-  customDetectors: CustomRegistryEntry[];
-  customResults: Record<string, CustomResultEnvelope>;
   /** Active tab — drives the highlighted (cyan/fuchsia) section chip-title. */
   activeAnnotationType: AnnotationType;
   /** Click a section chip-title to make that type active. Mirrors the old
@@ -291,6 +276,8 @@ interface UnifiedAnnotationListPanelProps {
   onFocusLoop?: (selection: { layerId: string; itemId: string } | null) => void;
   focusedPattern?: { layerId: string; itemId: string } | null;
   onFocusPattern?: (selection: { layerId: string; itemId: string } | null) => void;
+  focusedLyrics?: { layerId: string; itemId: string } | null;
+  onFocusLyrics?: (selection: { layerId: string; itemId: string } | null) => void;
   /** Delete a single item from an editable layer. Wired by the parent so the
    *  mutation goes through the same state setters as the editor below the
    *  waveform (manual sections, cueLayersDoc, …). Read-only layers ignore
@@ -321,7 +308,7 @@ interface UnifiedAnnotationListPanelProps {
   onSelectLayer?: (type: AnnotationType, selection: UnifiedLayerSelection) => void;
   /** Experimental gates — mirror the page-level settings flags. */
   experimentalLoopsAndPatterns: boolean;
-  experimentalEyeAnnotation: boolean;
+  experimentalLyricsFamily: boolean;
   /** Per-type marker controls (the Info + Actions panels). Rendered inside the
    *  currently-active section, directly under its chip-title header, so every
    *  edit button (Mark In/Out, + Add, Add layer, Fill defaults, Undo/Redo…)
@@ -333,15 +320,8 @@ interface UnifiedAnnotationListPanelProps {
 
 export function UnifiedAnnotationListPanel({
   cueLayersDoc,
-  detectorCueLayers,
-  detectorSpanLayers,
-  detectorLoopLayers,
-  detectorPatternLayers,
   manualAnnotation,
-  eyeAnnotation,
   autoGuessAnnotation,
-  customDetectors,
-  customResults,
   activeAnnotationType,
   onSelectType,
   onSeekAndPlay,
@@ -349,6 +329,7 @@ export function UnifiedAnnotationListPanel({
   focusedSpan, onFocusSpan,
   focusedLoop, onFocusLoop,
   focusedPattern, onFocusPattern,
+  focusedLyrics, onFocusLyrics,
   onItemDelete,
   onItemToggleImportance,
   onDeleteLayer,
@@ -357,7 +338,7 @@ export function UnifiedAnnotationListPanel({
   selectedLayerIdByType,
   onSelectLayer,
   experimentalLoopsAndPatterns,
-  experimentalEyeAnnotation,
+  experimentalLyricsFamily,
   actionsSlot,
 }: UnifiedAnnotationListPanelProps) {
   // ── Boundaries virtual layers ─────────────────────────────────────────────
@@ -368,58 +349,46 @@ export function UnifiedAnnotationListPanel({
     // handlers keep matching it.
     const manual = manualToUnified(manualAnnotation, 'Boundaries 1', '#a78bfa', 'manual', { readOnly: false, idKey: 'Manual' });
     if (manual) out.push(manual);
-    if (experimentalEyeAnnotation) {
-      // Eye stays read-only here: its panel owns internal undoable state with
-      // no externally-callable section setter (Manual exposes setSectionsRef;
-      // Eye does not), so sidebar mutations would desync the editor.
-      const eye = manualToUnified(eyeAnnotation, 'Eye', '#22d3ee', 'eye', { readOnly: true, idKey: 'Eye' });
-      if (eye) out.push(eye);
-    }
     const ag = autoGuessToUnified(autoGuessAnnotation, '#f59e0b');
     if (ag) out.push(ag);
-    for (const det of customDetectors) {
-      if (det.status !== 'ok') continue;
-      if (det.output_kind !== 'boundary') continue;
-      const lay = customBoundaryToUnified(det, customResults[det.name], '#fbbf24');
-      if (lay) out.push(lay);
-    }
     return out;
-  }, [manualAnnotation, eyeAnnotation, autoGuessAnnotation, experimentalEyeAnnotation, customDetectors, customResults]);
+  }, [manualAnnotation, autoGuessAnnotation]);
 
-  // ── Cue / Span / Loop / Pattern layers (user + detector) ──────────────────
+  // ── Cue / Span / Loop / Pattern layers (user-authored only) ───────────────
+  // Detector-sourced (curated) layers are deliberately excluded — they live in
+  // the Curated sidebar, so the Annotate list never mixes manual with curated.
   const cueLayersUnified = useMemo<UnifiedLayer[]>(() => {
-    const userLayers = (cueLayersDoc?.layers ?? [])
+    return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'cues'> => l.type === 'cues')
       .map(cueLayerToUnified);
-    const detLayers = detectorCueLayers.map(cueLayerToUnified);
-    return [...userLayers, ...detLayers];
-  }, [cueLayersDoc, detectorCueLayers]);
+  }, [cueLayersDoc]);
 
   const spanLayersUnified = useMemo<UnifiedLayer[]>(() => {
-    const userLayers = (cueLayersDoc?.layers ?? [])
+    return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'spans'> => l.type === 'spans')
       .map(spanLayerToUnified);
-    const detLayers = detectorSpanLayers.map(spanLayerToUnified);
-    return [...userLayers, ...detLayers];
-  }, [cueLayersDoc, detectorSpanLayers]);
+  }, [cueLayersDoc]);
 
   const loopLayersUnified = useMemo<UnifiedLayer[]>(() => {
     if (!experimentalLoopsAndPatterns) return [];
-    const userLayers = (cueLayersDoc?.layers ?? [])
+    return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'loops'> => l.type === 'loops')
       .map(loopLayerToUnified);
-    const detLayers = detectorLoopLayers.map(loopLayerToUnified);
-    return [...userLayers, ...detLayers];
-  }, [cueLayersDoc, detectorLoopLayers, experimentalLoopsAndPatterns]);
+  }, [cueLayersDoc, experimentalLoopsAndPatterns]);
 
   const patternLayersUnified = useMemo<UnifiedLayer[]>(() => {
     if (!experimentalLoopsAndPatterns) return [];
-    const userLayers = (cueLayersDoc?.layers ?? [])
+    return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'patterns'> => l.type === 'patterns')
       .map(patternLayerToUnified);
-    const detLayers = detectorPatternLayers.map(patternLayerToUnified);
-    return [...userLayers, ...detLayers];
-  }, [cueLayersDoc, detectorPatternLayers, experimentalLoopsAndPatterns]);
+  }, [cueLayersDoc, experimentalLoopsAndPatterns]);
+
+  const lyricsLayersUnified = useMemo<UnifiedLayer[]>(() => {
+    if (!experimentalLyricsFamily) return [];
+    return (cueLayersDoc?.layers ?? [])
+      .filter((l): l is AnnotationLayer<'lyrics'> => l.type === 'lyrics')
+      .map(lyricsLayerToUnified);
+  }, [cueLayersDoc, experimentalLyricsFamily]);
 
   const sections: Array<{ type: AnnotationType; title: string; layers: UnifiedLayer[]; description: string; emptyHint: string }> = [
     { type: 'boundaries', title: 'Boundaries', layers: boundaryLayers,
@@ -437,6 +406,9 @@ export function UnifiedAnnotationListPanel({
     ...(experimentalLoopsAndPatterns ? [{ type: 'patterns' as AnnotationType, title: 'Patterns', layers: patternLayersUnified,
       description: 'Recurring rhythmic motifs that show up at multiple points in the song.',
       emptyHint: 'No pattern layers yet.' }] : []),
+    ...(experimentalLyricsFamily ? [{ type: 'lyrics' as AnnotationType, title: 'Lyrics', layers: lyricsLayersUnified,
+      description: 'Word- and line-level lyric timestamps (vocal transcription).',
+      emptyHint: 'No lyrics layers yet — run the Lyrics detector or add a layer above.' }] : []),
   ];
 
   const activeSection = sections.find((s) => s.type === activeAnnotationType);
@@ -448,11 +420,12 @@ export function UnifiedAnnotationListPanel({
         All annotations
       </div>
       <div className="space-y-1.5">
-        {/* Horizontal tab row — all type tabs share one row, splitting the
-            width evenly, sitting directly on top of the active type's frame. */}
+        {/* Tab row — type tabs fill the width and wrap to a second row when the
+            panel is too narrow for all six, so labels stay legible (never
+            truncated to "BOU…"). */}
         <nav
           aria-label="Annotation types"
-          className="flex gap-1"
+          className="flex flex-wrap gap-1"
         >
           {sections.map(({ type, title, layers, description }) => (
             <AnnotationTypeChip
@@ -511,6 +484,7 @@ export function UnifiedAnnotationListPanel({
                         if (type === 'spans')    return focusedSpan?.layerId === layer.id ? focusedSpan.itemId : null;
                         if (type === 'loops')    return focusedLoop?.layerId === layer.id ? focusedLoop.itemId : null;
                         if (type === 'patterns') return focusedPattern?.layerId === layer.id ? focusedPattern.itemId : null;
+                        if (type === 'lyrics')   return focusedLyrics?.layerId === layer.id ? focusedLyrics.itemId : null;
                         return null;
                       })()}
                       onSeekItem={(item) => {
@@ -524,6 +498,8 @@ export function UnifiedAnnotationListPanel({
                           onFocusLoop({ layerId: layer.id, itemId: item.id });
                         } else if (type === 'patterns' && onFocusPattern && !layer.readOnly) {
                           onFocusPattern({ layerId: layer.id, itemId: item.id });
+                        } else if (type === 'lyrics' && onFocusLyrics && !layer.readOnly) {
+                          onFocusLyrics({ layerId: layer.id, itemId: item.id });
                         }
                       }}
                       onDeleteItem={onItemDelete && !layer.readOnly

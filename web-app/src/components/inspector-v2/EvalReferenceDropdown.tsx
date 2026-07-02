@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BoundarySource } from './shared/tabConfig';
 
-/** The eval-reference dropdown picks among the three boundary sources, so it
+/** The eval-reference dropdown picks among the boundary sources, so it
  *  reuses `BoundarySource` directly. Re-exported under the legacy name for the
  *  files that already import `EvalReferenceMode`. */
 export type EvalReferenceMode = BoundarySource;
 
 const LABELS: Record<EvalReferenceMode, string> = {
   manual: 'Boundaries',
-  eye: 'Eye',
   autoGuess: 'Auto-guess',
 };
 

@@ -18,6 +18,10 @@
 # --- SPAN family -----------------------------------------------------------
 # (torch + torchaudio installed separately; see header above)
 # Silero-VAD: pulled at first use via torch.hub — no pip dep needed here.
+# torchcodec: torchaudio >= 2.9 delegates audio decoding to torchcodec, so
+# loading the vocals stem raises "torchaudio … requires torchcodec" without
+# it. Needed by the SPAN (silero-vad) detect; harmless on older torchaudio.
+torchcodec
 # JDCNet: pure-PyTorch port lives in tools/python/jdcnet_torch.py; reads
 # the original Keras .hdf5 checkpoint via h5py. Docker bakes the weights
 # into the span image; run.sh fetches them into .cache/jdcnet/ on
@@ -47,7 +51,13 @@ openai-whisper
 # is CC-BY-NC and is NOT used by lyrics_server.py.
 # Pulls transformers + torchaudio (transformers shared with whisper, torchaudio
 # shared with span/beatnet).
-ctc-forced-aligner
+#
+# MUST install from git: the PyPI name `ctc-forced-aligner` was taken over by
+# an unrelated package (deskpai.com) whose API exports `Alignment`/
+# `AlignmentSingleton`, NOT the `load_alignment_model` / `generate_emissions`
+# / `get_alignments` functions lyrics_server.py is written against. A bare
+# `pip install ctc-forced-aligner` pulls the wrong package and fails at import.
+ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
 
 # --- PATTERN family --------------------------------------------------------
 # dtai-locomotif (MIT, KU Leuven) — DTW-warped variable-length motif discovery.

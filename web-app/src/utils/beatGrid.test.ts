@@ -4,6 +4,7 @@ import {
   beatIndexAt,
   beatTimeAt,
   barIndexAt,
+  beatsInRange,
   snapTimeToGrid,
   timeToBarBeat,
   barBeatToTime,
@@ -68,6 +69,52 @@ describe('static-BPM mode (no anchors)', () => {
     const a = visibleGridLines(opts);
     const b = visibleGridLines({ ...opts, anchors: [] });
     expect(b).toEqual(a);
+  });
+});
+
+// ─── Metronome click enumeration (beatsInRange) ──────────────────────────────
+//
+// Regression guard for the "intro is silent" bug: gridOffset is phase only, so
+// the click must sound the same before and after the offset. A clamp on the
+// start beat index (the original bug) would drop every pre-offset click.
+
+describe('beatsInRange — gridOffset is phase, not a start gate', () => {
+  const times = (b: Array<{ t: number }>) => b.map((x) => +x.t.toFixed(6));
+
+  it('emits clicks before the offset (static mode)', () => {
+    // 120 BPM (0.5s/beat), offset 2.0s, play the intro [0, 2].
+    const beats = beatsInRange(120, 2.0, 4, 0, 2);
+    expect(times(beats)).toEqual([0, 0.5, 1.0, 1.5, 2.0]);
+    // Downbeats fall on the offset phase, on both sides of it.
+    expect(beats.filter((b) => b.isDownbeat).map((b) => +b.t.toFixed(6))).toEqual([0, 2.0]);
+  });
+
+  it('is phase-continuous: identical spacing on both sides of the offset', () => {
+    const beats = beatsInRange(120, 2.0, 4, 0, 4);
+    const ts = times(beats);
+    const gaps = ts.slice(1).map((t, i) => +(t - ts[i]).toFixed(6));
+    expect(new Set(gaps)).toEqual(new Set([0.5])); // no glitch at the offset
+  });
+
+  it('a large/absolute offset still clicks from song start (offset is modulo phase)', () => {
+    // offset 10.3 and offset (10.3 mod bar = 0.3) must produce the same clicks.
+    const big = beatsInRange(120, 10.3, 4, 0, 2);
+    const small = beatsInRange(120, 0.3, 4, 0, 2);
+    expect(times(big)).toEqual(times(small));
+    expect(times(big)[0]).toBeCloseTo(0.3, 9); // first audible click well before 10.3
+  });
+
+  it('emits pre-offset clicks in anchored mode', () => {
+    // First tempo anchor at 5s, so the intro [0, 2] is in the pre-anchor region
+    // that uses the global bpm + offset. Pre-offset clicks must still sound.
+    const anchored = [{ timestamp: 5, bpm: 120 }, { timestamp: 9, bpm: 140 }];
+    const beats = beatsInRange(120, 2.0, 4, 0, 2, anchored);
+    expect(times(beats)).toEqual([0, 0.5, 1.0, 1.5, 2.0]);
+  });
+
+  it('never starts negative — clicks stay at t >= from', () => {
+    const beats = beatsInRange(120, 2.0, 4, 0, 2);
+    expect(beats.every((b) => b.t >= 0)).toBe(true);
   });
 });
 

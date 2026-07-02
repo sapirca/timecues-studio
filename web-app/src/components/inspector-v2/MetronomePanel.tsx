@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { SongInfo } from '../../types/songInfo';
-import { beatIndexAt, beatTimeAt } from '../../utils/beatGrid';
+import { beatsInRange as gridBeatsInRange } from '../../utils/beatGrid';
 import {
   applyTap,
   emptyTapTempoState,
@@ -24,7 +24,15 @@ export interface MetronomePanelProps {
 }
 
 const SCHED_INTERVAL_MS = 25;
-const LOOKAHEAD_S = 0.1;
+// How far ahead clicks are queued into the Web Audio clock. This must exceed
+// the worst-case gap between scheduler ticks. Browsers throttle setInterval to
+// ~1s once the tab is backgrounded, so a small (e.g. 0.1s) horizon would let
+// the playhead outrun the queued clicks and the metronome would fall silent
+// even though the song keeps playing. 2s gives comfortable margin over the ~1s
+// throttle; already-queued clicks fire on time from the audio clock while the
+// JS timer is stalled. The trade-off — up to 2s of clicks are queued ahead —
+// is handled by cancelFutureClicks() on seek/stop.
+const LOOKAHEAD_S = 2.0;
 const SEEK_BACKWARD_THRESHOLD = -0.05;
 const SEEK_FORWARD_THRESHOLD = 0.5;
 const CLICK_DURATION_S = 0.04;
@@ -70,11 +78,10 @@ function parseBeatsPerBar(ts: string): number {
 }
 
 /** Enumerate beat times in [from, to] (song-time seconds) given the current
- *  grid. Routes through the anchor-aware engine helpers in beatGrid.ts so
- *  Dynamic / Manual modes tick at the right segment-local tempo when their
- *  anchors are present. When Manual-mode beat overrides exist, clicks land
- *  on the pinned positions rather than the macro grid. Static mode (no
- *  anchors, no overrides) is unchanged. */
+ *  grid. Thin adapter over beatGrid's `beatsInRange`: it pulls the click-track
+ *  inputs off SongInfo (anchors only when present; overrides only in Manual
+ *  mode) and delegates the actual walk. The shared helper treats gridOffset as
+ *  phase only, so clicks sound the same before and after the offset. */
 function beatsInRange(songInfo: SongInfo, from: number, to: number): Array<{ t: number; isDownbeat: boolean }> {
   const bpm = songInfo.bpm;
   if (!bpm || bpm <= 0) return [];
@@ -82,21 +89,7 @@ function beatsInRange(songInfo: SongInfo, from: number, to: number): Array<{ t: 
   const offset = songInfo.gridOffset ?? 0;
   const anchors = songInfo.tempoAnchors && songInfo.tempoAnchors.length > 0 ? songInfo.tempoAnchors : undefined;
   const overrides = songInfo.gridMode === 'manual' && songInfo.beatOverrides ? songInfo.beatOverrides : undefined;
-
-  // Walk by beat index. For static this is `idx = ceil((from-offset)/dBeat)`;
-  // anchored mode uses the cumulative-beat math via beatIndexAt + beatTimeAt.
-  // We start a couple of beats early so an overridden beat that pulled
-  // forward earlier than its macro position is still in range.
-  const startIdx = Math.max(0, beatIndexAt(from, bpm, offset, anchors) - 2);
-  const out: Array<{ t: number; isDownbeat: boolean }> = [];
-  const HARD_CAP = 128;
-  for (let i = startIdx; out.length < HARD_CAP; i++) {
-    const t = beatTimeAt(i, bpm, offset, anchors, overrides);
-    if (t < from) continue;
-    if (t > to) break;
-    out.push({ t, isDownbeat: i % beatsPerBar === 0 });
-  }
-  return out;
+  return gridBeatsInRange(bpm, offset, beatsPerBar, from, to, anchors, overrides);
 }
 
 /** Resolve the grid the click scheduler should tick against. The metronome is
@@ -113,8 +106,10 @@ function effectiveMetroInfo(base: SongInfo | null, tappedBpm: number | null): So
   return base;
 }
 
-/** Schedule a single beat click. Downbeats are louder + higher-pitched (woodblock-ish). */
-function scheduleClick(ctx: AudioContext, master: GainNode, startAt: number, isDownbeat: boolean, pitch: Pitch) {
+/** Schedule a single beat click. Downbeats are louder + higher-pitched
+ *  (woodblock-ish). Returns the source + envelope nodes so a later seek/stop
+ *  can silence clicks that were queued ahead but haven't fired yet. */
+function scheduleClick(ctx: AudioContext, master: GainNode, startAt: number, isDownbeat: boolean, pitch: Pitch): { src: AudioBufferSourceNode; env: GainNode } {
   const sampleRate = ctx.sampleRate;
   const len = Math.max(1, Math.floor(CLICK_DURATION_S * sampleRate));
   const buf = ctx.createBuffer(1, len, sampleRate);
@@ -135,6 +130,7 @@ function scheduleClick(ctx: AudioContext, master: GainNode, startAt: number, isD
   src.connect(bp).connect(env).connect(master);
   src.start(startAt);
   src.stop(startAt + CLICK_DURATION_S + 0.01);
+  return { src, env };
 }
 
 export function MetronomePanel({
@@ -164,8 +160,47 @@ export function MetronomePanel({
   const cursorRef = useRef(playerTime);
   const ctxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
+  // Clicks queued ahead into the audio clock (up to LOOKAHEAD_S). Tracked so a
+  // seek or stop can silence the ones that haven't fired yet.
+  const scheduledRef = useRef<Array<{ src: AudioBufferSourceNode; env: GainNode; at: number }>>([]);
+  // Maps the song clock to the Web Audio clock: { ctxT, songT }. The incoming
+  // `playerTime` prop is fed by WaveSurfer's audioprocess → requestAnimationFrame,
+  // which the browser freezes in a backgrounded tab — so the prop goes stale
+  // even though the song's media element keeps playing. We re-anchor on every
+  // fresh prop value (foreground) and, when it stalls, extrapolate song time
+  // from ctx.currentTime (which never stops) so clicks keep scheduling.
+  const clockAnchorRef = useRef<{ ctxT: number; songT: number } | null>(null);
   songInfoRef.current = songInfo;
   playerTimeRef.current = playerTime;
+
+  // Best estimate of the current song time, robust to a stalled rAF time feed.
+  const estimateSongTime = useCallback((): number => {
+    const ctx = ctxRef.current;
+    const anchor = clockAnchorRef.current;
+    if (!ctx || !anchor) return playerTimeRef.current;
+    return anchor.songT + (ctx.currentTime - anchor.ctxT);
+  }, []);
+
+  // Silence every queued click that hasn't started yet, and forget the ones
+  // that already fired. Called on seek and on stop so a long lookahead never
+  // leaves stale clicks ringing at the wrong song position.
+  const cancelFutureClicks = useCallback(() => {
+    const ctx = ctxRef.current;
+    const now = ctx ? ctx.currentTime : 0;
+    const keep: typeof scheduledRef.current = [];
+    for (const node of scheduledRef.current) {
+      if (ctx && node.at > now) {
+        try {
+          node.env.gain.cancelScheduledValues(now);
+          node.env.gain.setValueAtTime(0, now);
+          node.src.stop(now);
+        } catch { /* node already started/stopped — nothing to cancel */ }
+      } else {
+        keep.push(node); // already firing/fired — let it ring out
+      }
+    }
+    scheduledRef.current = keep;
+  }, []);
 
   // Detect seeks (large playhead jumps) and reset the scheduler cursor so
   // clicks aren't replayed or skipped.
@@ -173,9 +208,25 @@ export function MetronomePanel({
     const delta = playerTime - lastSeenTimeRef.current;
     if (delta < SEEK_BACKWARD_THRESHOLD || delta > SEEK_FORWARD_THRESHOLD) {
       cursorRef.current = playerTime;
+      // Drop clicks queued for the old position so the jump doesn't replay them.
+      cancelFutureClicks();
+      // Re-anchor the song↔audio clock map ONLY on a real discontinuity. A
+      // click's audio-clock time reduces to `anchor.ctxT + (b.t - anchor.songT)`,
+      // so its placement depends solely on this anchor — NOT on the per-beat
+      // clock read. Re-anchoring every frame from the rAF-fed `playerTime` (which
+      // carries ±10ms sampling jitter between when the player time is true and
+      // when ctx.currentTime is read) injected that jitter straight into the
+      // click spacing, so a steady tempo wobbled audibly. The media element and
+      // the AudioContext share the audio hardware clock, so a single anchor stays
+      // in sync for the whole playback segment without per-frame correction. A
+      // backgrounded tab (rAF frozen) is covered because estimateSongTime()
+      // extrapolates from ctx.currentTime; returning to the foreground produces a
+      // large playerTime jump that lands here and re-anchors.
+      const ctx = ctxRef.current;
+      if (ctx) clockAnchorRef.current = { ctxT: ctx.currentTime, songT: playerTime };
     }
     lastSeenTimeRef.current = playerTime;
-  }, [playerTime]);
+  }, [playerTime, cancelFutureClicks]);
 
   // Create or reuse the AudioContext + master gain. Chrome's autoplay policy
   // requires resume() to be called inside a user gesture, so we run this from
@@ -219,24 +270,42 @@ export function MetronomePanel({
     if (!ctx || !master) return; // ensureAudioContext() wasn't called yet — toggle must be clicked first
     if (ctx.state === 'suspended') void ctx.resume();
     cursorRef.current = playerTimeRef.current;
+    clockAnchorRef.current = { ctxT: ctx.currentTime, songT: playerTimeRef.current };
 
     const tick = () => {
       const info = effectiveMetroInfo(songInfoRef.current, tappedBpmRef.current);
       if (!info || !info.bpm) return;
-      const now = playerTimeRef.current;
+      // Use the extrapolated song time, not the raw prop: in a backgrounded tab
+      // the prop's rAF feed freezes while the song (and ctx.currentTime) play on.
+      const now = estimateSongTime();
       const horizon = now + LOOKAHEAD_S;
       const from = Math.max(cursorRef.current, now);
       const beats = beatsInRange(info, from, horizon);
       for (const b of beats) {
         const startAt = ctx.currentTime + Math.max(0, b.t - now);
-        scheduleClick(ctx, master, startAt, b.isDownbeat, clickPitchRef.current);
+        const nodes = scheduleClick(ctx, master, startAt, b.isDownbeat, clickPitchRef.current);
+        scheduledRef.current.push({ ...nodes, at: startAt });
       }
       cursorRef.current = horizon;
+      // Forget clicks that have already finished so the tracking array doesn't
+      // grow without bound over a long playthrough.
+      const cutoff = ctx.currentTime - CLICK_DURATION_S;
+      if (scheduledRef.current.length > 64) {
+        scheduledRef.current = scheduledRef.current.filter((n) => n.at >= cutoff);
+      }
     };
 
+    // Fill the look-ahead window immediately so the first beats are queued at
+    // playback start instead of after the first 25ms interval — and so they're
+    // placed against the anchor just set above, before any other effect runs.
+    tick();
     const id = window.setInterval(tick, SCHED_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [playerIsPlaying, clickEnabled, hasGrid]);
+    return () => {
+      window.clearInterval(id);
+      // Stopping playback (or losing the grid) silences anything still queued.
+      cancelFutureClicks();
+    };
+  }, [playerIsPlaying, clickEnabled, hasGrid, cancelFutureClicks, estimateSongTime]);
 
   // ── Tap tempo ─────────────────────────────────────────────────────────────
   // Each tap feeds the pure reducer in ./tapTempo.ts, which maintains the

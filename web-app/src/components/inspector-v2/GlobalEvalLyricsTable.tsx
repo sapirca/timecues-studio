@@ -17,6 +17,7 @@ import { loadLyricsText } from '../../services/lyricsText';
 import { loadLayers } from '../../services/annotationLayers';
 import { evaluateLyrics, type LyricsEvalResult } from '../../utils/evaluation';
 import type { LyricsItem, AnnotationLayer } from '../../types/annotationLayer';
+import { InfoDot } from './InfoDot';
 
 export interface LyricsEvalAudioEntry {
   id: string;
@@ -150,9 +151,11 @@ export function GlobalEvalLyricsTable({
         <div>
           <h3 className="text-sm font-semibold text-violet-200">
             Lyrics algorithms <span className="text-[10px] uppercase tracking-wider text-slate-500 ml-1">· experimental</span>
+            <InfoDot className="ml-1.5" label="How lyrics algorithms are scored" align="left">
+              Evaluated against the first lyrics layer in each song's annotation document.
+            </InfoDot>
           </h3>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Evaluated against the first lyrics layer in each song's annotation document.{' '}
             {audioFiles.length === 0
               ? 'No songs loaded.'
               : `${songsWithRef}/${audioFiles.length} with a lyrics layer · ${songsWithWordRef} with word-level reference (drives WER + word onset F1).`}

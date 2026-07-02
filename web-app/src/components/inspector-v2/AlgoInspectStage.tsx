@@ -6,6 +6,7 @@ import type { ManualSection } from '../../types/manualAnnotation';
 import { CustomEvalControls, DEFAULT_CUSTOM_EVAL_SETTINGS, type CustomEvalSettings } from './CustomEvalControls';
 import { EvalReferenceDropdown, type EvalReferenceMode } from './EvalReferenceDropdown';
 import { ConsensusClusterControls } from './ConsensusClusterControls';
+import { InfoDot } from './InfoDot';
 import { PreviewWindow, type PreviewRegion } from './PreviewWindow';
 
 type ReferenceMode = EvalReferenceMode;
@@ -21,7 +22,15 @@ export interface ToolState {
 export interface AlgorithmRow {
   id: string;
   label: string;
-  sections: { time: number; endTime: number; label: string; type: string; color?: string }[];
+  /** `raw` carries the detector's original per-section JSON (every field it
+   *  emitted, before the lossy map onto time/endTime/label/type) so the algo
+   *  Inspect card can surface it as "Raw model output" — parity with the
+   *  curator cards. Absent → the card falls back to the mapped section. */
+  sections: { time: number; endTime: number; label: string; type: string; color?: string; raw?: unknown }[];
+  /** LOOP-family only: which beat grid the detector aligned to
+   *  ("song-info" | "allin1" | "librosa"). Drives a small lane badge so the
+   *  annotator can see whether loops sit on the curator-aligned grid. */
+  gridSource?: string | null;
 }
 
 // ─── Tool-state → row builder constants ───────────────────────────────────────
@@ -43,7 +52,6 @@ const ALGO_LABELS: Record<string, string> = {
   'silero-vad':                'Silero-VAD',
   'jdcnet-voicing':            'JDCNet (voicing)',
   'panns-cnn14':               'PANNs CNN14',
-  'chroma-autocorr':           'Chroma loops',
   'basic-pitch':               'basic-pitch',
   'librosa-key':               'librosa key',
   'autochord-chords':          'autochord',
@@ -59,10 +67,6 @@ const ALGO_LABELS: Record<string, string> = {
  *  panns-cnn14 lives here too — same output kind, separate sidecar. */
 export const SPAN_ALGO_IDS = ['silero-vad', 'jdcnet-voicing', 'panns-cnn14'] as const;
 export type SpanAlgoId = typeof SPAN_ALGO_IDS[number];
-
-/** LOOP-family algo IDs (gated by `experimentalLoopFamily`). */
-export const LOOP_ALGO_IDS = ['chroma-autocorr'] as const;
-export type LoopAlgoId = typeof LOOP_ALGO_IDS[number];
 
 /** CUE-family note-onset detector IDs (gated by `experimentalCueExtras`). */
 export const PITCH_ALGO_IDS = ['basic-pitch'] as const;
@@ -92,7 +96,6 @@ const ALGO_ORDER = [
   'allin1',
   ...[0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`),
   ...SPAN_ALGO_IDS,
-  ...LOOP_ALGO_IDS,
   ...PITCH_ALGO_IDS,
   ...CUE_EXTRAS_ALGO_IDS,
   ...PERCUSSIVE_ALGO_IDS,
@@ -100,8 +103,8 @@ const ALGO_ORDER = [
   ...PATTERN_ALGO_IDS,
 ];
 
-// The four Demucs stems, in the order per-stem rows stack under their base row.
-const STEM_ROW_ORDER = ['vocals', 'drums', 'bass', 'other'] as const;
+// The six Demucs stems, in the order per-stem rows stack under their base row.
+const STEM_ROW_ORDER = ['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'] as const;
 
 function algoLabel(id: string): string {
   // Composite per-stem id "<algo>__<stem>" → "<base label> · <stem>".
@@ -121,6 +124,13 @@ const SECTION_COLORS: Record<string, string> = {
 };
 
 function sectionBg(type: string) { return SECTION_COLORS[type] ?? SECTION_COLORS.default; }
+
+/** Example detectors ship as templates (tools/python/custom/example_*.py) and
+ *  register as `custom:example_…` rows. They're opt-in in the consensus picker:
+ *  excluded from the default selection and never auto-added by the row-sync
+ *  effect, so they only join the consensus when the user checks them on in the
+ *  Settings popover. */
+const isExampleAlgoId = (id: string) => id.startsWith('custom:example_');
 
 // Hit/miss marker palette (used for tick overlays on the reference row)
 const HIT_COLOR = '#22c55e';
@@ -146,11 +156,16 @@ export function buildAnnotationRows(toolStates: Record<string, ToolState>): Algo
     // result always carries `sections`. The old per-toolId dispatch existed only
     // to narrow the discriminated union; the composite stem ids can't be
     // narrowed that way, so read sections structurally instead.
-    const sections =
+    const rawSections =
       (state.result.result as { sections?: { time: number; endTime: number; label: string; type: string }[] })
         .sections ?? [];
-    if (!sections.length) return [];
-    return [{ id, label: algoLabel(id), sections }];
+    if (!rawSections.length) return [];
+    // Keep the rendered shape, but pin each section's full original object as
+    // `raw` — MSAF carries energy/centroid, lyrics carry per-word fields, etc.,
+    // all of which the narrowed type drops but the card should still show.
+    const sections = rawSections.map((s) => ({ ...s, raw: s }));
+    const gridSource = (state.result.result as { gridSource?: string | null }).gridSource ?? undefined;
+    return [{ id, label: algoLabel(id), sections, gridSource }];
   });
 }
 
@@ -513,12 +528,10 @@ function MiniBlockRow({
 
 const REFERENCE_ROW_LABELS: Record<ReferenceMode, string> = {
   manual: 'Boundaries',
-  eye: 'Eye',
   autoGuess: 'Auto-guess',
 };
 const REFERENCE_ROW_COLORS: Record<ReferenceMode, string> = {
   manual: '#f59e0b',
-  eye: '#2dd4bf',
   autoGuess: '#a855f7',
 };
 
@@ -564,13 +577,17 @@ function AutoConsensusPanel({
   const [clusterTol, setClusterTol] = useState(3);
   const [minAgreement, setMinAgreement] = useState(2);
   const [method, setMethod] = useState<CentroidMethod>('metamed');
-  const [selectedAlgoIds, setSelectedAlgoIds] = useState<Set<string>>(() => new Set(rows.map((r) => r.id)));
+  const [selectedAlgoIds, setSelectedAlgoIds] = useState<Set<string>>(
+    () => new Set(rows.filter((r) => !isExampleAlgoId(r.id)).map((r) => r.id)),
+  );
 
   useEffect(() => {
     setSelectedAlgoIds((prev) => {
       const next = new Set(prev);
       let changed = false;
-      rows.forEach((r) => { if (!next.has(r.id)) { next.add(r.id); changed = true; } });
+      // Auto-add newly discovered rows so real detectors light up on arrival —
+      // but skip example detectors, which stay opt-in until the user checks them.
+      rows.forEach((r) => { if (!isExampleAlgoId(r.id) && !next.has(r.id)) { next.add(r.id); changed = true; } });
       return changed ? next : prev;
     });
   }, [rows]);
@@ -809,11 +826,12 @@ function AutoConsensusPanel({
 export interface AlgoInspectStageProps {
   annotationRows: AlgorithmRow[];
   manualSections: ManualSection[];
-  eyeSections?: ManualSection[];
   autoGuessSections?: ManualSection[];
-  /** When false, hide the Eye option from the eval-reference dropdown
-   *  entirely (gated by the `experimentalEyeAnnotation` Settings flag). */
-  eyeEnabled?: boolean;
+  /** Whether the Auto-guess reference layer is currently shown (the
+   *  same viz-panel visibility toggle, off by default). When off, its
+   *  eval-reference option is hidden here too — the user opts in from the
+   *  viz panel before they can score consensus against it. */
+  showAutoGuess?: boolean;
   duration: number;
   tolerance: number;
   onToleranceChange: (t: number) => void;
@@ -839,9 +857,8 @@ export interface AlgoInspectStageProps {
 export function AlgoInspectStage({
   annotationRows,
   manualSections,
-  eyeSections = [],
   autoGuessSections = [],
-  eyeEnabled = true,
+  showAutoGuess = true,
   duration,
   tolerance,
   onToleranceChange,
@@ -860,28 +877,30 @@ export function AlgoInspectStage({
   const [referenceMode, setReferenceMode] = useState<ReferenceMode>('manual');
   const [customSettings, setCustomSettings] = useState<CustomEvalSettings>(DEFAULT_CUSTOM_EVAL_SETTINGS);
 
-  // Fall back to manual if the chosen reference disappears (including when
-  // the experimental Eye flag flips off while Eye was selected).
+  const autoGuessAvailable = showAutoGuess && autoGuessSections.length > 0;
+
+  // Fall back to manual if the chosen reference disappears (e.g. the Auto-guess
+  // show toggle is turned off while that reference was selected).
   useEffect(() => {
-    if (referenceMode === 'eye'       && (!eyeEnabled || !eyeSections.length) && manualSections.length) setReferenceMode('manual');
-    if (referenceMode === 'autoGuess' && !autoGuessSections.length && manualSections.length) setReferenceMode('manual');
-  }, [referenceMode, eyeEnabled, eyeSections.length, autoGuessSections.length, manualSections.length]);
+    if (referenceMode === 'autoGuess' && !autoGuessAvailable && manualSections.length) setReferenceMode('manual');
+  }, [referenceMode, autoGuessAvailable, manualSections.length]);
 
   const referenceSections = useMemo(() => {
-    if (referenceMode === 'eye')       return eyeSections;
     if (referenceMode === 'autoGuess') return autoGuessSections;
     return manualSections;
-  }, [referenceMode, manualSections, eyeSections, autoGuessSections]);
+  }, [referenceMode, manualSections, autoGuessSections]);
 
   return (
     <div className="space-y-3">
       {/* Header layout mirrors the Evaluation tab: title on the left, reference + τ on the right. */}
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1">
-          <h3 className="text-sm font-semibold text-gray-300">Consensus Inspect</h3>
-          <p className="text-[11px] text-gray-600 mt-0.5">
-            Aggregate algorithm boundaries into a single consensus and score it against {referenceMode}.
-          </p>
+          <h3 className="text-sm font-semibold text-gray-300 inline-flex items-center gap-1">
+            Consensus Inspect
+            <InfoDot label="What Consensus Inspect does" align="left">
+              Aggregate algorithm boundaries into a single consensus and score it against the chosen reference.
+            </InfoDot>
+          </h3>
         </div>
 
         <EvalReferenceDropdown
@@ -889,8 +908,7 @@ export function AlgoInspectStage({
           onChange={setReferenceMode}
           options={[
             { mode: 'manual',      hasData: manualSections.length      > 0 },
-            ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: eyeSections.length > 0 }] : []),
-            { mode: 'autoGuess', hasData: autoGuessSections.length > 0 },
+            ...(showAutoGuess ? [{ mode: 'autoGuess' as const, hasData: autoGuessSections.length > 0 }] : []),
           ]}
         />
 

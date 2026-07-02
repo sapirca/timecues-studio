@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { useSettings } from '../../context/SettingsContext';
-import { loadAnnotation, loadEyeAnnotation } from '../../services/manualAnnotations';
+import { loadAnnotation } from '../../services/manualAnnotations';
 import {
   fetchMirEvalPairs,
   isMirEvalResult,
@@ -130,9 +130,7 @@ interface RawSongData {
   songId: string;
   songName: string;
   manualTimes: number[];
-  eyeTimes: number[];
   manualSections: ManualSection[];
-  eyeSections: ManualSection[];
   algoTimes: Record<string, number[]>;
 }
 
@@ -159,7 +157,7 @@ type SortKey =
   | 'algo' | 'group' | 'songs'
   | 'precision' | 'recall' | 'f1' | 'minF1' | 'maxF1'
   | 'cPrecision' | 'cRecall' | 'cF1' | 'mnbd' | 'csr';
-type EvalRef = Extract<EvalReferenceMode, 'manual' | 'eye'>;
+type EvalRef = Extract<EvalReferenceMode, 'manual'>;
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
 
@@ -336,13 +334,12 @@ function computeConsensusTimes(
 // covers that case separately via `evaluateCustom`.
 async function evaluateConsensusForDataset(
   rawData: RawSongData[],
-  evalRef: EvalRef,
   params: { tolEval: number; clusterTol: number; minAgreement: number; method: AutoGuessCentroidMethod; algos: Set<string> },
 ): Promise<{ precision: number; recall: number; f1: number; minF1: number; maxF1: number; songCount: number; meanBoundaries: number } | null> {
   const pairs: MirEvalPairWithId[] = [];
   const pairBoundaryCount = new Map<string, number>();
   for (const song of rawData) {
-    const refTimes = evalRef === 'manual' ? song.manualTimes : song.eyeTimes;
+    const refTimes = song.manualTimes;
     if (!refTimes.length) continue;
     const cons = computeConsensusTimes(song.algoTimes, params.algos, params.clusterTol, params.minAgreement, params.method);
     if (!cons.length) continue;
@@ -443,7 +440,6 @@ type EvalMode = 'per-algo' | 'consensus';
 
 export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   const { settings } = useSettings();
-  const eyeEnabled = settings.experimentalEyeAnnotation;
   const [evalRef, setEvalRef] = useState<EvalRef>('manual');
   const [tolerance, setTolerance] = useState(0.5);
   const [sortKey, setSortKey] = useState<SortKey>('f1');
@@ -508,12 +504,6 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
     if (minAgreement > max) setMinAgreement(max);
   }, [selectedAlgos.size, minAgreement]);
 
-  // If the experimental Eye flag flips off while the eval reference was Eye,
-  // fall back to manual so the (hidden) Eye option can't stay selected.
-  useEffect(() => {
-    if (!eyeEnabled && evalRef === 'eye') setEvalRef('manual');
-  }, [eyeEnabled, evalRef]);
-
   // ── Data loading ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!audioFiles.length) return;
@@ -526,9 +516,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
       const results: RawSongData[] = [];
       for (const song of audioFiles) {
         if (cancelled) break;
-        const [manualAnn, eyeAnn, ...algoResults] = await Promise.all([
+        const [manualAnn, ...algoResults] = await Promise.all([
           loadAnnotation(song.id),
-          loadEyeAnnotation(song.id),
           ...ALGO_ORDER.map((toolId) => loadAlgoJson(song.id, toolId)),
         ]);
         const algoTimes: Record<string, number[]> = {};
@@ -543,14 +532,11 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
         // (e.g. early stubs that only record metadata like `time_spent_seconds`)
         // have no sections field; without the chain `.map` throws on undefined.
         const manualSections = manualAnn?.sections ?? [];
-        const eyeSections  = eyeAnn?.sections  ?? [];
         results.push({
           songId: song.id,
           songName: song.name,
           manualTimes: manualSections.map((s) => s.time),
-          eyeTimes:  eyeSections.map((s) => s.time),
           manualSections,
-          eyeSections,
           algoTimes,
         });
         if (!cancelled) {
@@ -574,7 +560,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   const songAlgoPairs = useMemo<MirEvalPairWithId[] | null>(() => {
     const pairs: MirEvalPairWithId[] = [];
     for (const song of rawData) {
-      const refTimes = evalRef === 'manual' ? song.manualTimes : song.eyeTimes;
+      const refTimes = song.manualTimes;
       if (!refTimes.length) continue;
       for (const [toolId, estTimes] of Object.entries(song.algoTimes)) {
         if (!estTimes.length) continue;
@@ -592,8 +578,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
   const songMetrics = useMemo(() => {
     return rawData.map((song) => {
-      const refTimes = evalRef === 'manual' ? song.manualTimes : song.eyeTimes;
-      const refSections = evalRef === 'manual' ? song.manualSections : song.eyeSections;
+      const refTimes = song.manualTimes;
+      const refSections = song.manualSections;
       const algoResults: Record<string, { mir: MirEvalResult | null; custom: AlgoEvalResult }> = {};
       if (refTimes.length) {
         for (const [toolId, estTimes] of Object.entries(song.algoTimes)) {
@@ -756,7 +742,6 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   }, [sortedAggregates, sortKey]);
 
   const songsWithManual = rawData.filter((d) => d.manualTimes.length > 0).length;
-  const songsWithEye  = rawData.filter((d) => d.eyeTimes.length  > 0).length;
 
   // ── Consensus per-song & aggregate (for consensus mode) ───────────────
   // Pre-compute consensus times per song (no mir_eval yet), then batch P/R/F
@@ -766,8 +751,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
       songId: song.songId,
       songName: song.songName,
       cons: computeConsensusTimes(song.algoTimes, selectedAlgos, clusterTol, minAgreement, centroidMethod),
-      refTimes: evalRef === 'manual' ? song.manualTimes : song.eyeTimes,
-      refSections: evalRef === 'manual' ? song.manualSections : song.eyeSections,
+      refTimes: song.manualTimes,
+      refSections: song.manualSections,
     }));
   }, [rawData, evalRef, selectedAlgos, clusterTol, minAgreement, centroidMethod]);
 
@@ -966,7 +951,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
         for (const m of methods) {
           for (const tauE of evalTauGrid) {
             if (searchCancelRef.current) break;
-            const r = await evaluateConsensusForDataset(rawData, evalRef, {
+            const r = await evaluateConsensusForDataset(rawData, {
               tolEval: tauE, clusterTol: tolC, minAgreement: minA, method: m, algos,
             });
             if (r) {
@@ -999,7 +984,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
   async function runOnceConsensus() {
     if (!rawData.length || selectedAlgos.size === 0) return;
-    const r = await evaluateConsensusForDataset(rawData, evalRef, {
+    const r = await evaluateConsensusForDataset(rawData, {
       tolEval: tolerance,
       clusterTol,
       minAgreement: Math.min(minAgreement, selectedAlgos.size),
@@ -1088,11 +1073,10 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
               <EvalReferenceDropdown
                 value={evalRef}
                 onChange={(mode) => {
-                  if (mode === 'manual' || mode === 'eye') setEvalRef(mode);
+                  if (mode === 'manual') setEvalRef(mode);
                 }}
                 options={[
                   { mode: 'manual',    hasData: songsWithManual > 0 },
-                  ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: songsWithEye > 0 }] : []),
                   { mode: 'autoGuess', hasData: false },
                 ]}
               />
@@ -1232,8 +1216,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
         </div>
       ) : (
         <div className="text-[11px] text-gray-600">
-          {totalSongs} songs · {songsWithManual} with Manual
-          {eyeEnabled && <> · {songsWithEye} with Eye</>} ·{' '}
+          {totalSongs} songs · {songsWithManual} with Manual ·{' '}
           evaluating against <span className="text-gray-400">{evalRef}</span> at τ = {tolerance}s
         </div>
       )}
@@ -1247,8 +1230,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
       {loadState === 'done' && !mirLoading && !mirError && rawData.length > 0 && songAlgoPairs === null && (
         <div className="rounded border border-amber-900/50 bg-amber-900/10 px-3 py-1.5 text-[11px] text-amber-400 leading-relaxed">
-          {(evalRef === 'manual' ? songsWithManual : songsWithEye) === 0 ? (
-            <>No <span className="text-amber-300">{evalRef === 'manual' ? 'Manual' : 'Eye'}</span> annotations to evaluate against.</>
+          {songsWithManual === 0 ? (
+            <>No <span className="text-amber-300">Manual</span> annotations to evaluate against.</>
           ) : (
             <>No algorithms cache — please run algorithms.</>
           )}
@@ -1697,7 +1680,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
                 outputs section boundaries (in seconds). We pool all those timestamps across algorithms,
                 merge nearby ones into clusters, and keep only the clusters that enough <em>different</em> algorithms
                 voted for. Each surviving cluster becomes one consensus boundary at a single moment in time.
-                Then we score those consensus boundaries against the manual/eye reference (precision/recall/F1)
+                Then we score those consensus boundaries against the manual reference (precision/recall/F1)
                 with the standard tolerance τ.
               </div>
               <ul className="space-y-1 list-disc pl-5 text-gray-400">
@@ -1806,7 +1789,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
       {/* ── Consensus aggregate result ──────────────────────────────────── */}
       {evalMode === 'consensus' && rawData.length > 0 && (() => {
-        const refSongCount = rawData.filter((s) => (evalRef === 'manual' ? s.manualTimes : s.eyeTimes).length > 0).length;
+        const refSongCount = rawData.filter((s) => s.manualTimes.length > 0).length;
         const songsWithBoundaries = consensusPerSong.filter((s) => s.consensusTimes.length > 0).length;
         const noConsensusReason = !consensusAggregate
           ? (refSongCount === 0

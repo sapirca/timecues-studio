@@ -14,7 +14,7 @@
  * Audacity / Sonic Vis / mir_eval / REAPER are flat boundary-list formats,
  * so the parser returns plain `ManualSection[]` and the caller wraps it into
  * the right annotation shape. JSON returns the full parsed object so
- * callers can preserve unknown fields (e.g. `eye_status`, `ready_for_review`).
+ * callers can preserve unknown fields (e.g. `auto_guess_status`, `ready_for_review`).
  * JAMS keeps just the segments — the `file_metadata` block is discarded
  * because it does not map onto any TimeCues field.
  */
@@ -40,7 +40,7 @@ function titleCase(s: string): string {
 
 export interface ParsedJsonAnnotation {
   sections: ManualSection[];
-  /** Remaining top-level fields (song, reviewed, annotated_at, eye_status, …). */
+  /** Remaining top-level fields (song, reviewed, annotated_at, auto_guess_status, …). */
   rest: Record<string, unknown>;
 }
 

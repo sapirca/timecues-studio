@@ -2,7 +2,7 @@
  * useTimelineDrag — shared mouse-drag-to-reposition machinery for every
  * annotation marker on the visualization canvas.
  *
- * Boundary handles, eye/cue/anchor points, loop/span/pattern edges all
+ * Boundary handles, cue/anchor points, loop/span/pattern edges all
  * share the same physics: grab the marker, document-level mousemove maps
  * x-pixels → song-time within the row's container rect, mouseup ends.
  * The payload is generic so callers can encode whatever target identity

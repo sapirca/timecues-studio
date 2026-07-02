@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { ManualSection, AutoGuessPoint } from '../../types/manualAnnotation';
 import { isOnGridLine, SNAP_INDICATOR_COLOR } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
@@ -24,12 +24,10 @@ function sectionBg(type: string) { return SECTION_COLORS[type] ?? SECTION_COLORS
 
 // ─── Manual markers ─────────────────────────────────────────────────────────────
 
-// Lane offsets: each layer's number label sits in its own horizontal band at the
-// top of the signal, so coincident Manual/Eye boundaries don't render their labels
-// on top of each other. Each line also gets a tiny colored "cap" in its lane so
-// the layer is identifiable even when the 1px lines occlude one another.
+// Lane offsets: the number label sits in its own horizontal band at the top of
+// the signal. Each line also gets a tiny colored "cap" in its lane so the
+// boundary is identifiable even when the 1px lines occlude one another.
 const LANE_MANUAL_TOP = 1;   // px — row 1
-const LANE_EYE_TOP  = 10;  // px — row 2
 const LANE_CAP_W    = 5;   // px — width of the colored cap that sits inside the lane
 
 function ManualMarkerLine({ s, i, duration, grid, onMouseDown }: {
@@ -94,44 +92,6 @@ function ManualCandidateMarkerLine({ t, sectionIndex, type, duration }: { t: num
   );
 }
 
-// ─── Eye markers ──────────────────────────────────────────────────────────────
-
-function EyeMarkerLine({ t, i, duration, grid, onMouseDown }: {
-  t: number; i: number; duration: number; grid?: GridSnapInfo;
-  /** When provided, the cap+number patch becomes a drag handle. */
-  onMouseDown?: (e: React.MouseEvent, pointIdx: number) => void;
-}) {
-  const snapped = isOnGridLine(t, grid?.bpm, grid?.gridOffset, grid?.beatsPerBar);
-  const draggable = !!onMouseDown;
-  return (
-    <div
-      className="absolute top-0 bottom-0 pointer-events-none z-10"
-      style={{ left: `${(t / duration) * 100}%` }}
-    >
-      <div className="absolute inset-y-0 left-0 w-px" style={{ background: '#2dd4bf', opacity: 0.9 }} />
-      {/* Lane cap doubles as drag handle when onMouseDown is wired. */}
-      <div
-        className={`absolute ${draggable ? 'pointer-events-auto cursor-ew-resize' : ''}`}
-        style={{ top: LANE_EYE_TOP, left: -3, width: LANE_CAP_W + 6, height: 12, background: '#2dd4bf', opacity: 0.9, borderRadius: 1 }}
-        onMouseDown={onMouseDown ? (e) => onMouseDown(e, i) : undefined}
-        title={draggable ? `Eye point ${i + 1} · drag to reposition` : undefined}
-      />
-      {snapped && (
-        <SnapTick
-          style={{ top: LANE_EYE_TOP + 8, left: -1 }}
-          title={`Eye boundary ${i + 1} is on the beat grid`}
-        />
-      )}
-      <div
-        className="absolute text-[7px] font-mono leading-none text-teal-300 select-none pointer-events-none"
-        style={{ top: LANE_EYE_TOP, left: LANE_CAP_W + 1, textShadow: '0 0 4px rgba(0,0,0,0.9)' }}
-      >
-        {i + 1}
-      </div>
-    </div>
-  );
-}
-
 // ─── Pending selection highlight ──────────────────────────────────────────────
 
 export type PendingSelection = { t1: number; t2: number | null };
@@ -172,6 +132,85 @@ export function PendingHighlightOverlay({ sel, duration, grid }: { sel: PendingS
       style={{ left: `${(sel.t1 / duration) * 100}%`, width: '2px', background: snapped ? SNAP_INDICATOR_COLOR : '#2dd4bf' }}
     >
       {snapped && <SnapTick style={{ top: 2, left: -2 }} title="Pending boundary is on the beat grid" />}
+    </div>
+  );
+}
+
+// ─── Click + drag-to-region overlay ──────────────────────────────────────────
+// A thin absolute-inset overlay that turns a plain click into onVizClick(t)
+// (seek) and a drag into onVizRegion(t1, t2) (create a pending highlight) —
+// the same gesture the 3-Band waveform / signal rows support.
+//
+// `z` controls the stacking class. Signal/MIR rows mount it on TOP of the
+// visualization (default `z-[1]`, which still sits below AnnotationOverlays
+// markers at z-10/z-20). Annotation lane rows instead mount it as an EARLIER
+// sibling with `z=""` so it sits BEHIND the lane's interactive items (ticks,
+// bands) — those paint on top and keep receiving their own mousedowns, while
+// empty space between them falls through to this overlay.
+export function RegionDragOverlay({ duration, onVizClick, onVizRegion, onRegionDragStart, z = 'z-[1]' }: {
+  duration: number;
+  onVizClick: (t: number) => void;
+  onVizRegion: (t1: number, t2: number) => void;
+  onRegionDragStart?: () => void;
+  z?: string;
+}) {
+  const [dragSel, setDragSel] = useState<{ s: number; e: number } | null>(null);
+  const dragRef = useRef<{ time: number; x: number } | null>(null);
+
+  const timeAt = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || duration <= 0) return 0;
+    return Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * duration));
+  };
+  const onMD = (e: React.MouseEvent<HTMLDivElement>) => {
+    const t = timeAt(e);
+    dragRef.current = { time: t, x: e.clientX };
+    // A plain click should only seek — defer the teal selection box until the
+    // drag passes the same 6px threshold the commit uses below.
+    onRegionDragStart?.();
+    e.preventDefault();
+  };
+  const onMM = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    if (Math.abs(e.clientX - dragRef.current.x) > 6) {
+      setDragSel({ s: dragRef.current.time, e: timeAt(e) });
+    } else {
+      setDragSel(null);
+    }
+  };
+  const onMU = (e: React.MouseEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const endT = timeAt(e);
+    const px = Math.abs(e.clientX - drag.x);
+    const t1 = Math.min(drag.time, endT);
+    const t2 = Math.max(drag.time, endT);
+    if (px > 6 && t2 - t1 > 0.1) onVizRegion(t1, t2);
+    else onVizClick(drag.time);
+    dragRef.current = null;
+    setDragSel(null);
+  };
+  const onML = () => { dragRef.current = null; setDragSel(null); };
+
+  return (
+    <div
+      className={`absolute inset-0 ${z}`}
+      style={{ cursor: 'crosshair' }}
+      onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onML}
+    >
+      {dragSel && duration > 0 && (
+        <div
+          className="absolute top-0 bottom-0 pointer-events-none"
+          style={{
+            left: `${(Math.min(dragSel.s, dragSel.e) / duration) * 100}%`,
+            width: `${(Math.abs(dragSel.e - dragSel.s) / duration) * 100}%`,
+            minWidth: 1,
+            background: 'rgba(45,212,191,0.13)',
+            borderLeft: '2px solid rgba(45,212,191,0.7)',
+            borderRight: Math.abs(dragSel.e - dragSel.s) > 0.1 ? '2px solid rgba(45,212,191,0.7)' : 'none',
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -298,7 +337,7 @@ export function AutoGuessOverlay({
   );
 }
 
-// ─── Combined annotation overlay (manual lines + eye lines + pending highlight) ─
+// ─── Combined annotation overlay (manual lines + pending highlight) ─
 
 export interface AnnotationOverlaysProps {
   duration: number;
@@ -312,13 +351,7 @@ export interface AnnotationOverlaysProps {
    *  via the same clamp logic on the page side. */
   onManualMarkerDrag?: (sectionIdx: number, time: number) => void;
   onManualMarkerDragStart?: () => void;
-  // Eye
-  eyeTimes?: number[];
-  showEye?: boolean;
-  /** Drag an eye marker cap to retime the point. */
-  onEyeMarkerDrag?: (pointIdx: number, time: number) => void;
-  onEyeMarkerDragStart?: () => void;
-  // Pending (eye selection)
+  // Pending selection
   pendingSelection?: PendingSelection | null;
   /** Beat-grid info — when present, boundaries lying on a grid line render a
    *  small violet "snapped" indicator. Decoupled from grid-overlay visibility
@@ -330,8 +363,6 @@ export function AnnotationOverlays({
   duration,
   manualSections, showManual,
   onManualMarkerDrag, onManualMarkerDragStart,
-  eyeTimes, showEye,
-  onEyeMarkerDrag, onEyeMarkerDragStart,
   pendingSelection,
   grid,
 }: AnnotationOverlaysProps) {
@@ -355,19 +386,9 @@ export function AnnotationOverlays({
       return Math.max(prevTime + 0.1, Math.min(nextTime - 0.1, raw));
     },
   });
-  const { startDrag: startEyeDrag } = useTimelineDrag<{ idx: number }>({
-    containerRef,
-    duration,
-    onDragStart: () => onEyeMarkerDragStart?.(),
-    onDrag: ({ idx }, t) => onEyeMarkerDrag?.(idx, t),
-    // Eye points may cross each other during a drag — the EyeEditorPanel
-    // re-sorts on close, so we only clamp to the song bounds here.
-  });
-
   if (duration <= 0) return null;
 
   const manualDraggable = !!onManualMarkerDrag;
-  const eyeDraggable = !!onEyeMarkerDrag;
 
   return (
     <div ref={containerRef} className="absolute inset-0 pointer-events-none">
@@ -380,12 +401,6 @@ export function AnnotationOverlays({
         <ManualMarkerLine
           key={i} s={s} i={i} duration={duration} grid={grid}
           onMouseDown={manualDraggable ? (e, idx) => startManualDrag({ idx }, e) : undefined}
-        />
-      ))}
-      {showEye && eyeTimes?.map((t, i) => (
-        <EyeMarkerLine
-          key={i} t={t} i={i} duration={duration} grid={grid}
-          onMouseDown={eyeDraggable ? (e, idx) => startEyeDrag({ idx }, e) : undefined}
         />
       ))}
       {pendingSelection && (

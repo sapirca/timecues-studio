@@ -28,7 +28,7 @@ import {
   getLayerStatus,
   newPatternItem,
   newPatternLayer,
-  patternStepsPerCycle,
+  resolvePatternSteps,
   pickDefaultLayerColor,
   setLayerStatus,
 } from '../../types/annotationLayer';
@@ -499,7 +499,8 @@ interface PatternDetailPanelProps {
 }
 
 function PatternDetailPanel({ pattern, color, beatsPerBar, onPatchItem }: PatternDetailPanelProps) {
-  const stepsPerCycle = patternStepsPerCycle(beatsPerBar);
+  const stepsPerCycle = resolvePatternSteps(pattern, beatsPerBar);
+  const cycleBeats = Math.round(stepsPerCycle / PATTERN_SUBBEATS_PER_BEAT);
   return (
     <div
       className="rounded border bg-white/[0.02] px-3 py-2 space-y-2"
@@ -511,17 +512,17 @@ function PatternDetailPanel({ pattern, color, beatsPerBar, onPatchItem }: Patter
       <div className="text-[9px] uppercase tracking-wider text-slate-500">
         Pattern #{(pattern.label || 'untitled').slice(0, 40)} · sub-beats
         <span className="normal-case text-slate-600 ml-1">
-          ({stepsPerCycle}/cycle = {beatsPerBar} beats × {PATTERN_SUBBEATS_PER_BEAT} — click or drag to toggle)
+          ({stepsPerCycle}/cycle = {cycleBeats} beats × {PATTERN_SUBBEATS_PER_BEAT} — click or drag to toggle)
         </span>
       </div>
       <BeatChipPicker
         color={color}
-        beatsPerBar={beatsPerBar}
+        steps={stepsPerCycle}
         highlighted={pattern.highlightedBeats}
         onChange={(next) => onPatchItem({ highlightedBeats: next })}
       />
       <BeatChipPresets
-        beatsPerBar={beatsPerBar}
+        beatsPerBar={cycleBeats}
         onApply={(next) => onPatchItem({ highlightedBeats: next })}
       />
       <label className="block">
@@ -550,14 +551,29 @@ PatternEditorPanel.displayName = 'PatternEditorPanel';
  *  each. Every chip is independently toggleable. Down-beats (1st chip in each
  *  group) carry the beat number; off-beats show a "·" to advertise they're
  *  interactive, not decorative dividers. */
-export function BeatChipPicker({ color, beatsPerBar, highlighted, onChange }: {
+export function BeatChipPicker({ color, steps, highlighted, onChange, readOnly = false, playheadStep = null }: {
   color: string;
-  beatsPerBar: number;
+  /** Total sub-steps in the cycle (the index space). Grouped visually into
+   *  `ceil(steps / PATTERN_SUBBEATS_PER_BEAT)` beat-groups. */
+  steps: number;
   highlighted: number[];
   onChange: (next: number[]) => void;
+  /** When true, chips render their highlighted state but can't be toggled —
+   *  used by read-only (detector-sourced) pattern cards. */
+  readOnly?: boolean;
+  /** Live playhead position as a fractional sub-beat index inside the current
+   *  cycle (0..steps), or null when audio isn't playing through the region.
+   *  Drives the karaoke sweep: passed chips fill, hits "fire", the step under
+   *  the playhead carries a ring. */
+  playheadStep?: number | null;
 }) {
-  const safeBpb = Math.max(1, Math.floor(beatsPerBar || 4));
+  const total = Math.max(1, Math.floor(steps || PATTERN_SUBBEATS_PER_BEAT));
+  const numBeats = Math.ceil(total / PATTERN_SUBBEATS_PER_BEAT);
   const hSet = new Set(highlighted);
+  // Karaoke sweep state. `current` is the chip the playhead sits on right now;
+  // every chip at or before it has "played" this cycle.
+  const sweeping = playheadStep != null;
+  const current = sweeping ? Math.min(total - 1, Math.max(0, Math.floor(playheadStep))) : -1;
   // Drag-paint: pointer-down on a chip latches a paint mode (the OPPOSITE of
   // the clicked chip's current state) and pointer-enter on subsequent chips
   // applies that same state. Click-to-toggle is a special case (paint mode
@@ -570,6 +586,7 @@ export function BeatChipPicker({ color, beatsPerBar, highlighted, onChange }: {
   };
 
   const beginPaint = (i: number) => {
+    if (readOnly) return;
     const draft = new Set(hSet);
     const mode: 'set' | 'clear' = draft.has(i) ? 'clear' : 'set';
     paintingRef.current = mode;
@@ -579,6 +596,7 @@ export function BeatChipPicker({ color, beatsPerBar, highlighted, onChange }: {
   };
 
   const continuePaint = (i: number) => {
+    if (readOnly) return;
     const mode = paintingRef.current;
     if (!mode) return;
     const draft = draftRef.current;
@@ -602,27 +620,59 @@ export function BeatChipPicker({ color, beatsPerBar, highlighted, onChange }: {
   }, []);
 
   return (
-    <div className="flex items-center gap-2 flex-wrap select-none">
-      {Array.from({ length: safeBpb }, (_, beatIdx) => (
+    <div className={`flex items-center gap-2 flex-wrap select-none ${readOnly ? 'pointer-events-none opacity-80' : ''}`}>
+      {Array.from({ length: numBeats }, (_, beatIdx) => (
         <div key={beatIdx} className="flex items-center gap-0.5">
           {Array.from({ length: PATTERN_SUBBEATS_PER_BEAT }, (_, subIdx) => {
             const i = beatIdx * PATTERN_SUBBEATS_PER_BEAT + subIdx;
+            if (i >= total) return null;
             const on = hSet.has(i);
             const isDownBeat = subIdx === 0;
+            const isCurrent = sweeping && i === current;
+            const passed = sweeping && i <= current; // already played this cycle
+            const upcoming = sweeping && i > current; // not yet reached this cycle
+
+            const classes = ['w-5 h-6 rounded-sm text-[9px] font-mono border cursor-pointer transition-all touch-none'];
+            const style: React.CSSProperties = {};
+            if (on) {
+              style.background = color;
+              style.borderColor = color;
+              (style as Record<string, string>)['--chip-glow'] = `${color}88`;
+              classes.push('text-white');
+              if (passed) {
+                // Hit just "fired" — punch up the glow for the karaoke flash.
+                style.boxShadow = `0 0 12px ${color}, 0 0 4px ${color}`;
+              } else if (upcoming) {
+                // Hit hasn't been reached yet this cycle — dim it back.
+                style.opacity = 0.3;
+              } else {
+                classes.push('shadow-[0_0_6px_var(--chip-glow)]');
+              }
+            } else {
+              style.borderColor = isDownBeat ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.12)';
+              if (passed) {
+                // Empty step the sweep has crossed — faint trail so the fill reads.
+                style.background = 'rgba(255,255,255,0.07)';
+                classes.push(isDownBeat ? 'text-slate-300' : 'text-slate-400');
+              } else {
+                classes.push('bg-[#0a0b0d]');
+                classes.push(isDownBeat ? 'text-slate-300 hover:text-slate-100 hover:bg-white/[0.06]' : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.06]');
+              }
+            }
+            if (isCurrent) {
+              // Playhead marker — a ring on the step playing right now.
+              style.outline = `2px solid ${color}`;
+              style.outlineOffset = '1px';
+            }
+
             return (
               <button
                 key={`${beatIdx}-${subIdx}`}
                 type="button"
                 onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); beginPaint(i); }}
                 onPointerEnter={() => continuePaint(i)}
-                className={`w-5 h-6 rounded-sm text-[9px] font-mono border cursor-pointer transition-colors touch-none ${
-                  on
-                    ? 'text-white shadow-[0_0_6px_var(--chip-glow)]'
-                    : `bg-[#0a0b0d] ${isDownBeat ? 'text-slate-300 hover:text-slate-100 hover:bg-white/[0.06]' : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.06]'}`
-                }`}
-                style={on
-                  ? { background: color, borderColor: color, ['--chip-glow' as keyof React.CSSProperties]: `${color}88` } as React.CSSProperties
-                  : { borderColor: isDownBeat ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.12)' }}
+                className={classes.join(' ')}
+                style={style}
                 title={`Beat ${beatIdx + 1}${isDownBeat ? '' : `.${subIdx + 1}`} (16th ${i + 1}) — ${on ? 'tick will play here, click to clear' : 'click to highlight'}`}
               >
                 {isDownBeat ? beatIdx + 1 : (on ? '' : '·')}

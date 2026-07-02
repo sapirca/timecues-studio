@@ -5,7 +5,6 @@ import { listPercussiveAlgorithms } from '../services/percussiveDetection';
 import { beatnetHealth } from '../services/beatnetDetection';
 import { listPitchAlgorithms } from '../services/pitchDetection';
 import { listCueExtrasAlgorithms } from '../services/cueExtrasDetection';
-import { listLoopAlgorithms } from '../services/loopDetection';
 import { listLyricsAlgorithms } from '../services/lyricsDetection';
 import { listPatternAlgorithms } from '../services/patternDetection';
 import { familyHasCached } from '../services/experimentalAlgorithms';
@@ -56,7 +55,7 @@ export function useExperimentalAvailability(): ExperimentalAvailability {
   const refresh = useCallback(async () => {
     setLoading(true);
     const [
-      span, panns, perc, beat, pitch, cueExtras, loop, lyrics, pattern,
+      span, panns, perc, beat, pitch, cueExtras, lyrics, pattern,
       cSpan, cPanns, cPerc, cBeat, cPitch, cCue, cLoop, cLyrics, cPattern,
     ] = await Promise.all([
       listSpanAlgorithms(),
@@ -65,7 +64,6 @@ export function useExperimentalAvailability(): ExperimentalAvailability {
       beatnetHealth(),
       listPitchAlgorithms(),
       listCueExtrasAlgorithms(),
-      listLoopAlgorithms(),
       listLyricsAlgorithms(),
       listPatternAlgorithms(),
       familyHasCached('span'),
@@ -81,7 +79,10 @@ export function useExperimentalAvailability(): ExperimentalAvailability {
     const serverUp: FamilyFlags = {
       spanFamily: span !== null || panns !== null || perc !== null,
       cueExtras: beat !== null || pitch !== null || cueExtras !== null,
-      loopFamily: loop !== null,
+      // The loop detector moved to the in-process custom-detector path
+      // (curated_loop_chroma) — there's no separate sidecar to probe, so
+      // "can re-run" tracks whether any cached loop result exists on disk.
+      loopFamily: cLoop,
       lyricsFamily: lyrics !== null,
       patternFamily: pattern !== null,
     };

@@ -14,8 +14,13 @@ import {
 } from '../services/customScripts';
 import { loadAnnotation } from '../services/manualAnnotations';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
+import { useDemucsStems, fetchStemManifest, stemsFromManifest, type StemManifest } from '../hooks/useDemucsStems';
+import { StemsRunLog } from '../components/inspector-v2/StemsRunLog';
+import { useCapabilities } from '../hooks/useCapabilities';
+import { GPU_TOOLS_UNAVAILABLE_HINT } from '../services/capabilities';
 import type {
   CustomBoundaryItem,
+  CustomOutputKind,
   CustomRegistryEntry,
   CustomResultEnvelope,
   CustomValidationError,
@@ -76,6 +81,9 @@ interface ManifestSong {
   /** Display name. Some manifest variants call it `title`, others `name`. */
   title?: string;
   name?: string;
+  /** Audio URL — present in /analysis/manifest.json; used to locate the song's
+   *  stem manifest so the Playground can show / trigger Demucs stems. */
+  url?: string;
 }
 
 const STATUS_BADGE: Record<CustomRegistryEntry['status'], { label: string; className: string }> = {
@@ -88,12 +96,61 @@ const STATUS_BADGE: Record<CustomRegistryEntry['status'], { label: string; class
  *  Returns the value of `key = "..."` for the first match — only handles the
  *  simple single-line form the contract uses, which is enough for `name` and
  *  `label`. */
-function parseClassAttr(code: string, key: 'name' | 'label'): string | null {
+function parseClassAttr(code: string, key: string): string | null {
   const re = new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(?:"([^"\\n]*)"|'([^'\\n]*)')`, 'm');
   const m = code.match(re);
   if (!m) return null;
   const v = (m[1] ?? m[2] ?? '').trim();
   return v.length > 0 ? v : null;
+}
+
+/** Output kinds a detector may declare — mirrors CustomOutputKind / ALLOWED_OUTPUT_KIND. */
+const OUTPUT_KINDS: readonly CustomOutputKind[] = ['boundary', 'cue', 'span', 'loop', 'pattern', 'lyrics'];
+
+/** Python-side defaults for the must-have flags (custom_api.py CustomDetector).
+ *  Used when a flag line is absent from the source so the editor controls match
+ *  what the loader would actually read via getattr(). */
+const FLAG_DEFAULTS = { is_algorithm: true, is_annotation: false, output_kind: 'boundary' as CustomOutputKind };
+
+/** Parse a boolean class attribute (`key = True | False`). Returns null when the
+ *  line is absent, so callers can fall back to the Python-side default. */
+function parseBoolAttr(code: string, key: string): boolean | null {
+  const m = code.match(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(True|False)\\b`, 'm'));
+  return m ? m[1] === 'True' : null;
+}
+
+/** Parse a string-literal class attribute constrained to an allowed set. */
+function parseEnumAttr<T extends string>(code: string, key: string, allowed: readonly T[]): T | null {
+  const v = parseClassAttr(code, key);
+  return v != null && (allowed as readonly string[]).includes(v) ? (v as T) : null;
+}
+
+/** Insert a new attribute assignment into the first CustomDetector subclass body,
+ *  right after the class header, indented one level past the class keyword.
+ *  Returns the code unchanged when no such class is found. */
+function insertClassAttr(code: string, assignment: string): string {
+  const lines = code.split('\n');
+  const idx = lines.findIndex((l) => /^\s*class\s+\w+\s*\(.*\bCustomDetector\b.*\)\s*:/.test(l));
+  if (idx === -1) return code;
+  const classIndent = lines[idx].match(/^\s*/)?.[0] ?? '';
+  lines.splice(idx + 1, 0, `${classIndent}    ${assignment}`);
+  return lines.join('\n');
+}
+
+/** Rewrite (or insert) a boolean flag assignment, mirroring the server's
+ *  patch_script_flags so the editor buffer stays the single source of truth.
+ *  Preserves the existing line's indentation and trailing comment. */
+function setBoolFlagInCode(code: string, key: string, value: boolean): string {
+  const re = new RegExp(`^([ \\t]*)(${key})([ \\t]*=[ \\t]*)(?:True|False)([ \\t]*(?:#.*)?)$`, 'm');
+  const lit = value ? 'True' : 'False';
+  return re.test(code) ? code.replace(re, `$1$2$3${lit}$4`) : insertClassAttr(code, `${key} = ${lit}`);
+}
+
+/** Rewrite (or insert) a string-literal flag assignment, preserving indentation
+ *  and trailing comment. */
+function setStrFlagInCode(code: string, key: string, value: string): string {
+  const re = new RegExp(`^([ \\t]*)(${key})([ \\t]*=[ \\t]*)(?:"[^"\\n]*"|'[^'\\n]*')([ \\t]*(?:#.*)?)$`, 'm');
+  return re.test(code) ? code.replace(re, `$1$2$3"${value}"$4`) : insertClassAttr(code, `${key} = "${value}"`);
 }
 
 const NAME_RE_CLIENT = /^[a-z][a-z0-9_-]{0,30}$/;
@@ -198,6 +255,43 @@ function FlagToggle({
   );
 }
 
+/** An on/off switch for a boolean detector flag, used in the editor's Flags row.
+ *  Shows the flag's source name, an explicit on/off state, and a "(default)"
+ *  hint when the value is implied (no assignment line in the source yet). */
+function FlagSwitch({
+  name, tip, value, defaulted, onChange,
+}: {
+  name: string;
+  tip: string;
+  value: boolean;
+  defaulted?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px]" title={tip}>
+      <code className="text-slate-400">{name}</code>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={value}
+        aria-label={`${name}: ${value ? 'on' : 'off'}`}
+        onClick={() => onChange(!value)}
+        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition ${
+          value ? 'bg-emerald-600/70' : 'bg-slate-700'
+        }`}
+      >
+        <span
+          className={`inline-block h-3 w-3 transform rounded-full bg-white transition ${
+            value ? 'translate-x-3.5' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+      <span className={`w-6 ${value ? 'text-emerald-300' : 'text-slate-500'}`}>{value ? 'on' : 'off'}</span>
+      {defaulted && <span className="text-slate-600">(default)</span>}
+    </span>
+  );
+}
+
 interface BatchRow {
   slug: string;
   title: string;
@@ -253,6 +347,18 @@ export function CustomScriptsPage() {
    *  keystroke so the title/subtitle preview stays in sync. */
   const parsedName = useMemo(() => parseClassAttr(uploadCode, 'name'), [uploadCode]);
   const parsedLabel = useMemo(() => parseClassAttr(uploadCode, 'label'), [uploadCode]);
+  /** Must-have flags parsed live from the editor buffer. null = no assignment
+   *  line yet, so the dedicated controls fall back to the Python-side default
+   *  and flag a "(default)" hint. Re-derived on every keystroke / paste, so the
+   *  controls always reflect what the loader would read from the source. */
+  const parsedAlgorithm = useMemo(() => parseBoolAttr(uploadCode, 'is_algorithm'), [uploadCode]);
+  const parsedAnnotation = useMemo(() => parseBoolAttr(uploadCode, 'is_annotation'), [uploadCode]);
+  const parsedOutputKind = useMemo(() => parseEnumAttr(uploadCode, 'output_kind', OUTPUT_KINDS), [uploadCode]);
+  const effAlgorithm = parsedAlgorithm ?? FLAG_DEFAULTS.is_algorithm;
+  const effAnnotation = parsedAnnotation ?? FLAG_DEFAULTS.is_annotation;
+  const effOutputKind = parsedOutputKind ?? FLAG_DEFAULTS.output_kind;
+  /** At least one surfacing flag must stay on, mirroring the loader's rule. */
+  const flagsValid = effAlgorithm || effAnnotation;
   /** Errors from the latest save attempt. Rendered BELOW the editor so the
    *  user can fix the code without losing context. Cleared on successful save. */
   const [uploadErrors, setUploadErrors] = useState<CustomValidationError[]>([]);
@@ -261,6 +367,49 @@ export function CustomScriptsPage() {
    *  a row that's currently mid-page — without this the editor pops up above
    *  the click point and looks like nothing happened. */
   const editorRef = useRef<HTMLDivElement | null>(null);
+
+  // ── Demucs stems for the selected song ─────────────────────────────────────
+  // Reuses the exact run/poll/cancel/kill flow from the inspector (useDemucsStems)
+  // so the Playground can stem a song before running stem-scoped curators. The
+  // manifest tells us which stems already exist on disk.
+  const { capabilities } = useCapabilities();
+  const selectedSong = useMemo(() => songs.find((s) => s.id === selectedSlug) ?? null, [songs, selectedSlug]);
+  const [stemManifest, setStemManifest] = useState<StemManifest | null>(null);
+  const [stemManifestLoading, setStemManifestLoading] = useState(false);
+  const selectedSlugRef = useRef(selectedSlug);
+  useEffect(() => { selectedSlugRef.current = selectedSlug; }, [selectedSlug]);
+
+  const {
+    job: demucsJob,
+    runStems,
+    cancelStems,
+    killStems,
+    dismissError: dismissStemsError,
+    elapsedSec: stemsElapsedSec,
+  } = useDemucsStems({
+    onComplete: (audio, m) => {
+      if (selectedSlugRef.current === audio.id) setStemManifest(m);
+    },
+  });
+
+  // Refetch the stem manifest whenever the selected song changes so the
+  // "has stems" readout reflects what's actually on disk for that track.
+  useEffect(() => {
+    if (!selectedSong?.url) { setStemManifest(null); return; }
+    let cancelled = false;
+    setStemManifestLoading(true);
+    fetchStemManifest(selectedSong.url)
+      .then((m) => { if (!cancelled) setStemManifest(m); })
+      .finally(() => { if (!cancelled) setStemManifestLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedSong?.url]);
+
+  const presentStems = useMemo(() => stemsFromManifest(stemManifest), [stemManifest]);
+  const stemsRunning = demucsJob?.slug === selectedSlug && demucsJob?.status === 'running';
+  const handleRunStems = useCallback(() => {
+    if (!selectedSong?.url) return;
+    runStems({ id: selectedSong.id, name: selectedSong.title ?? selectedSong.name ?? selectedSong.id, url: selectedSong.url });
+  }, [selectedSong, runStems]);
 
   const refresh = useCallback(async () => {
     try {
@@ -479,15 +628,23 @@ export function CustomScriptsPage() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!confirm(`Delete custom detector "${name}"? This removes the .py file and all cached results.`)) return;
+    if (!confirm(
+      `Delete custom detector "${name}"?\n\n` +
+      `The .py source is moved to the app trash (tools/python/custom/.trash/), ` +
+      `not erased — delete it from disk manually if you want it gone for good. ` +
+      `Cached algorithm results are wiped.`
+    )) return;
     setBusy((b) => ({ ...b, [name]: 'delete' }));
     try {
       cancelBatchRef.current[name] = true;
-      await deleteDetector(name);
+      const { message } = await deleteDetector(name);
       setResults((r) => { const next = { ...r }; delete next[name]; return next; });
       setManualByRun((g) => { const next = { ...g }; delete next[name]; return next; });
       setBatchByDetector((b) => { const next = { ...b }; delete next[name]; return next; });
       await refresh();
+      setTopMessage({ kind: 'info', text: message });
+    } catch (e) {
+      setTopMessage({ kind: 'error', text: `Delete failed: ${(e as Error).message}` });
     } finally {
       setBusy((b) => ({ ...b, [name]: null }));
     }
@@ -696,6 +853,17 @@ export function CustomScriptsPage() {
       return;
     }
 
+    // Surfacing flags: re-validate against the live buffer so a pasted-in code
+    // block with both flags off is caught here, not just server-side.
+    if (!((parseBoolAttr(uploadCode, 'is_algorithm') ?? FLAG_DEFAULTS.is_algorithm) ||
+          (parseBoolAttr(uploadCode, 'is_annotation') ?? FLAG_DEFAULTS.is_annotation))) {
+      setTopMessage({
+        kind: 'error',
+        text: 'At least one of is_algorithm / is_annotation must be on — toggle one in Flags before saving.',
+      });
+      return;
+    }
+
     // Refuse a rename-by-edit: the user changed the `name` line while editing
     // an existing file. Tell them to save-as-copy and clean up the old one.
     if (uploadIsEditing && uploadOriginalName && newName !== uploadOriginalName) {
@@ -745,21 +913,28 @@ export function CustomScriptsPage() {
           execute it on that track — or <strong>Run all</strong> to sweep every song at once.
         </InfoBanner>
         <header className="pb-3 border-b border-white/[0.06]">
-          <h1 className="text-lg font-medium text-slate-100">Playground</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-medium text-slate-100">Playground</h1>
+            <button
+              onClick={() => setHelpOpen((v) => !v)}
+              aria-label={helpOpen ? 'Hide the on-page guide' : 'Show the on-page guide'}
+              aria-pressed={helpOpen}
+              title="How this works — show / hide the on-page guide"
+              className={`grid place-items-center w-5 h-5 rounded-full border text-[11px] font-semibold leading-none transition ${
+                helpOpen
+                  ? 'border-sky-400/60 bg-sky-500/15 text-sky-300'
+                  : 'border-white/15 text-slate-400 hover:border-white/30 hover:text-slate-200'
+              }`}
+            >
+              i
+            </button>
+          </div>
           <p className="text-[11px] text-slate-500 mt-0.5">
             {detectors.length} file{detectors.length === 1 ? '' : 's'} in <code>tools/python/custom/</code> · {okCount} runnable
           </p>
         </header>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-[#14171d] border border-white/[0.06] rounded px-3 py-2 text-xs">
-          <button
-            onClick={() => setHelpOpen((v) => !v)}
-            className="px-3 py-1.5 rounded border border-white/10 hover:border-white/20 hover:bg-white/[0.03] transition"
-            title="Show / hide the on-page guide"
-          >
-            {helpOpen ? 'Hide help' : 'How this works'}
-          </button>
-
           <select
             className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-1.5 text-slate-200 min-w-[12rem]"
             value={selectedSlug}
@@ -780,6 +955,46 @@ export function CustomScriptsPage() {
               <option key={s.id} value={s.id}>{s.title ?? s.name ?? s.id}</option>
             ))}
           </select>
+
+          {/* ── Demucs stems for the selected song ── */}
+          <span className="text-slate-700" aria-hidden>·</span>
+          <span className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-slate-500">Stems</span>
+            {!selectedSlug ? (
+              <span className="text-slate-500">—</span>
+            ) : stemManifestLoading ? (
+              <span className="text-slate-500">checking…</span>
+            ) : presentStems.length > 0 ? (
+              <span className="text-emerald-300" title={`On disk: ${presentStems.join(', ')}`}>
+                ✓ {presentStems.length} stem{presentStems.length === 1 ? '' : 's'} ({presentStems.join(', ')})
+              </span>
+            ) : (
+              <span className="text-amber-300" title="No Demucs stems cached for this song yet.">
+                none cached
+              </span>
+            )}
+
+            <button
+              onClick={handleRunStems}
+              disabled={!selectedSlug || !selectedSong?.url || stemsRunning}
+              className="px-2 py-1 rounded border border-violet-700/50 bg-violet-900/30 text-violet-200 hover:bg-violet-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                // The capability probe can be slow / report a false negative,
+                // so (like the inspector) we still let the user click and let
+                // the backend be the source of truth — surfacing the hint only
+                // as advice when the probe says Demucs is unreachable.
+                !capabilities.demucs
+                  ? `Demucs may be unavailable — ${GPU_TOOLS_UNAVAILABLE_HINT}`
+                  : presentStems.length > 0
+                    ? 'Re-run Demucs (overwrites the cached stems for this song).'
+                    : 'Run Demucs stem separation for this song.'
+              }
+            >
+              {stemsRunning
+                ? `⏳ Stemming${demucsJob?.progressPct != null ? ` ${demucsJob.progressPct}%` : '…'}`
+                : presentStems.length > 0 ? '↻ Re-run stems' : '▶ Run stems'}
+            </button>
+          </span>
 
           {detectors.length > 0 && (
             <>
@@ -864,6 +1079,19 @@ export function CustomScriptsPage() {
           </div>
         </div>
 
+        {/* Demucs stem-separation report — live terminal log + per-stem progress
+            for the selected song, modelled on the algorithm-run log panel. */}
+        {demucsJob && demucsJob.slug === selectedSlug && (
+          <StemsRunLog
+            job={demucsJob}
+            elapsedSec={stemsElapsedSec}
+            presentStems={presentStems}
+            onCancel={cancelStems}
+            onKill={killStems}
+            onDismiss={dismissStemsError}
+          />
+        )}
+
         {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
         {topMessage && (
@@ -915,6 +1143,53 @@ export function CustomScriptsPage() {
             {nameChangedMidEdit && (
               <div className="text-[11px] px-2 py-1.5 rounded border border-amber-700/40 bg-amber-900/20 text-amber-200">
                 You changed the name from <code>{uploadOriginalName}</code> to <code>{parsedName}</code>. Saving will create <code>{parsedName}.py</code> as a new file — your existing <code>{uploadOriginalName}.py</code> will stay. Delete it from the list afterwards if you want.
+              </div>
+            )}
+
+            {/* ── Must-have flags ──────────────────────────────────────────
+                Dedicated controls for the flags the loader reads from the
+                source. Two-way synced with the code buffer: pasting new code
+                updates these instantly (they're derived from `uploadCode`), and
+                flipping a control rewrites the matching assignment line. */}
+            <div className="flex gap-3">
+              <label className="text-[11px] uppercase tracking-wider text-slate-500 w-14 mt-1.5">Flags</label>
+              <div className="flex-1 flex flex-wrap items-center gap-x-5 gap-y-2">
+                <FlagSwitch
+                  name="is_algorithm"
+                  tip="Show as a read-only row in the inspector's algorithm picker."
+                  value={effAlgorithm}
+                  defaulted={parsedAlgorithm == null}
+                  onChange={(v) => setUploadCode((c) => setBoolFlagInCode(c, 'is_algorithm', v))}
+                />
+                <FlagSwitch
+                  name="is_annotation"
+                  tip="Surface as an editable annotation track in the inspector with ✓/✗/@ review cards."
+                  value={effAnnotation}
+                  defaulted={parsedAnnotation == null}
+                  onChange={(v) => setUploadCode((c) => setBoolFlagInCode(c, 'is_annotation', v))}
+                />
+                <label
+                  className="inline-flex items-center gap-1.5 text-[11px]"
+                  title="What kind of timed output detect() returns."
+                >
+                  <code className="text-slate-400">output_kind</code>
+                  <select
+                    value={effOutputKind}
+                    onChange={(e) => setUploadCode((c) => setStrFlagInCode(c, 'output_kind', e.target.value))}
+                    className="bg-[#0a0b0d] border border-white/10 rounded px-1.5 py-0.5 text-slate-200"
+                  >
+                    {OUTPUT_KINDS.map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                  {parsedOutputKind == null && <span className="text-slate-600">(default)</span>}
+                </label>
+              </div>
+            </div>
+            {!flagsValid && (
+              <div className="text-[11px] px-2 py-1.5 rounded border border-rose-700/40 bg-rose-900/20 text-rose-200">
+                At least one of <code>is_algorithm</code> / <code>is_annotation</code> must be on — otherwise the
+                detector won't surface anywhere in the inspector, and Save will be rejected.
               </div>
             )}
 

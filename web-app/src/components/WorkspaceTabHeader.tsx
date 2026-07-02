@@ -109,7 +109,7 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
   });
 
   return (
-    <div className="relative z-30 w-full flex items-center gap-3 px-3 py-2 rounded-md border border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+    <div className="relative z-30 w-full flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 rounded-md border border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
       {/* Left group: back + studio mark + demo chip. flex-1 so the centered
           nav between this and the right group sits in the true visual middle. */}
       <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -150,7 +150,7 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
       </div>
       {/* Center: workspace tabs. shrink-0 keeps them from compressing if the
           side groups grow; overflow-x-auto rescues narrow viewports. */}
-      <nav className="flex items-center gap-1 shrink-0 overflow-x-auto">
+      <nav className="flex items-center gap-1 shrink-0 max-w-full overflow-x-auto">
         {visibleTabs.map((t) => {
           const isActive = t.id === resolvedActive;
           const activeClasses = ACCENT_ACTIVE[t.accent] ?? 'border-cyan-400 text-cyan-200';

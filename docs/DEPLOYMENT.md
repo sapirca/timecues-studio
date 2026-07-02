@@ -117,7 +117,7 @@ without Docker, Apple Silicon notes, and every flag — lives in
 
 ## Optional heavy models
 
-The base stack covers manual/eye/auto-guess annotation, MSAF, ruptures, BPM
+The base stack covers manual/auto-guess annotation, MSAF, ruptures, BPM
 detection, and custom detectors — enough for most teams. Two heavier
 capabilities are opt-in, because they need much more disk and RAM:
 

@@ -1,6 +1,12 @@
-import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, createContext, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { BEAT_GRID_UNIT_OPTIONS, type BeatGridUnit } from './SharedVizPanel';
+
+// Compact mode flag — threaded to Column / DropdownGroup / IconButton so the
+// slim sticky transport can reuse this whole bar with no labels and smaller
+// 32px buttons (instead of the full 40px + label-below layout). Defaults to
+// the full bar so every existing render is untouched.
+const CompactCtx = createContext(false);
 
 export interface AlgoOverlayOption {
   id: string;
@@ -32,15 +38,16 @@ export interface InteriorLayerOption {
 }
 
 export interface VizControlBarProps {
+  /** Slim variant for the sticky scroll header: drops the column labels and
+   *  the text chips (mode/BPM badge, warnings, Detected pills), shrinks the
+   *  buttons, and lays everything out on a single borderless inline row so it
+   *  fits next to the slim transport. Defaults to the full bar. */
+  compact?: boolean;
   /** Hide the entire Annotations dropdown (e.g. data-prep, where the curator
    *  shouldn't be distracted by annotation layers). Defaults to shown. */
   showAnnotations?: boolean;
   // Annotation toggles
   showManual: boolean;      onToggleManual: (v: boolean) => void;
-  showEye: boolean;       onToggleEye: (v: boolean) => void;
-  /** When false, hide the Eye checkbox entirely (gated by the
-   *  `experimentalEyeAnnotation` Settings flag). */
-  eyeEnabled?: boolean;
   showAutoGuess: boolean; onToggleAutoGuess: (v: boolean) => void;
   /** Draw section markers on top of 3-Band / Spectrogram. Off lets you see the bar grid clearly. */
   showSignalOverlays?: boolean; onToggleSignalOverlays?: (v: boolean) => void;
@@ -103,6 +110,12 @@ export interface VizControlBarProps {
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onZoomReset?: () => void;
+  // Playback speed — slows the whole song (and every currentTime-driven viz:
+  // karaoke, beat-grid sweep) by multiplying WaveSurfer's playback rate at the
+  // source. `playbackRate` is the current multiplier (1 = normal). When
+  // `onPlaybackRateChange` is omitted the Speed control is hidden.
+  playbackRate?: number;
+  onPlaybackRateChange?: (rate: number) => void;
   // Algorithm overlays
   algoOptions?: AlgoOverlayOption[];
   selectedAlgos?: Set<string>;
@@ -218,6 +231,11 @@ function Checkbox({ label, color, checked, onChange, title }: {
  *  perfectly. The wrapper is `position: relative` so popovers/menus on the
  *  buttons inside can anchor to the column. */
 function Column({ label, children }: { label: string; children: React.ReactNode }) {
+  const compact = useContext(CompactCtx);
+  // Compact drops the label and the vertical stack — just the inline buttons.
+  if (compact) {
+    return <div className="relative flex items-center gap-px">{children}</div>;
+  }
   return (
     <div className="relative flex flex-col items-center gap-1">
       <div className="flex items-center gap-px">{children}</div>
@@ -268,6 +286,7 @@ function DropdownGroup({ icon, badge, isOpen, onToggle, children, accent }: {
     };
   }, [isOpen]);
 
+  const compact = useContext(CompactCtx);
   const style: React.CSSProperties | undefined = isOpen
     ? {
         background: `${accent}33`,
@@ -284,7 +303,7 @@ function DropdownGroup({ icon, badge, isOpen, onToggle, children, accent }: {
         onClick={onToggle}
         style={style}
         aria-expanded={isOpen}
-        className={`relative flex items-center justify-center w-10 h-10 rounded border transition-all cursor-pointer hover:border-white/[0.30] hover:text-slate-100 ${
+        className={`relative flex items-center justify-center ${compact ? 'w-8 h-8' : 'w-10 h-10'} rounded border transition-all cursor-pointer hover:border-white/[0.30] hover:text-slate-100 ${
           isOpen ? '' : 'bg-transparent border-white/[0.18] tc-viz-icon-inactive'
         }`}
       >
@@ -354,6 +373,7 @@ function IconButton({
   disabled?: boolean;
   dataTestId?: string;
 }) {
+  const compact = useContext(CompactCtx);
   const style: React.CSSProperties | undefined = pressed
     ? {
         background: `${accent}33`,
@@ -371,7 +391,7 @@ function IconButton({
       data-testid={dataTestId}
       aria-pressed={pressed}
       style={style}
-      className={`flex items-center justify-center w-10 h-10 rounded border transition-all ${
+      className={`flex items-center justify-center ${compact ? 'w-8 h-8' : 'w-10 h-10'} rounded border transition-all ${
         pressed ? '' : 'bg-transparent border-white/[0.18] tc-viz-icon-inactive'
       } ${
         disabled
@@ -498,9 +518,9 @@ function renderModeBadge(
 }
 
 export function VizControlBar({
+  compact = false,
   showAnnotations = true,
   showManual, onToggleManual,
-  showEye, onToggleEye, eyeEnabled = true,
   showAutoGuess, onToggleAutoGuess,
   showSignalOverlays = true, onToggleSignalOverlays,
   minConsensus = 1, onMinConsensusChange, totalAlgos,
@@ -529,6 +549,7 @@ export function VizControlBar({
   captureGlobalHScroll, onToggleCaptureGlobalHScroll,
   gridLineThickness, onGridLineThicknessChange,
   zoomFactor = 1, atMaxZoom = false, onZoomIn, onZoomOut, onZoomReset,
+  playbackRate = 1, onPlaybackRateChange,
   algoOptions, selectedAlgos, onToggleAlgo, showAlgos = true,
   singleInfoDetections,
   customAnnotationOptions, hiddenCustomAnnotations, onToggleCustomAnnotation,
@@ -585,7 +606,7 @@ export function VizControlBar({
     loopDetectors.forEach((o) => { if (o.visible !== visible) onToggleLoopLayerVisibility?.(o.id); });
     patternDetectors.forEach((o) => { if (o.visible !== visible) onTogglePatternLayerVisibility?.(o.id); });
   };
-  const annotationsActive = [showManual, eyeEnabled && showEye, showAutoGuess].filter(Boolean).length
+  const annotationsActive = [showManual, showAutoGuess].filter(Boolean).length
     + visibleCustomAnnotations.length
     + visibleCueLayers.length
     + visibleSpanLayers.length
@@ -605,9 +626,12 @@ export function VizControlBar({
   const miscOpen = openGroup === 'misc';
 
   return (
+    <CompactCtx.Provider value={compact}>
     <div
       ref={containerRef}
-      className="flex flex-wrap items-end gap-3 px-3 py-2 bg-[#14171d]/80 border border-white/[0.14] rounded-md"
+      className={compact
+        ? 'flex items-center gap-1'
+        : 'flex flex-wrap items-end gap-3 px-3 py-2 bg-[#14171d]/80 border border-white/[0.14] rounded-md'}
     >
       {/* ── Annotations ────────────────────────────────────────────── */}
       {showAnnotations && (
@@ -660,9 +684,6 @@ export function VizControlBar({
             </button>
           ))}
         </div>
-        {eyeEnabled && (
-          <Checkbox label="Eye" color="#2dd4bf" checked={showEye} onChange={onToggleEye} />
-        )}
 
         {/* ── Cues (user layers only — detectors live under Custom Detectors) ── */}
         {cueLayerOptions && onToggleCueLayerVisibility && (() => {
@@ -911,7 +932,7 @@ export function VizControlBar({
           disabled={atFit}
           title="Reset zoom — fit (0)"
           data-testid="viz-zoom-reset"
-          className={`px-2 h-10 text-[11px] font-mono min-w-[3rem] text-center border border-white/[0.18] transition-colors ${
+          className={`px-2 ${compact ? 'h-8' : 'h-10'} text-[11px] font-mono min-w-[3rem] text-center border border-white/[0.18] transition-colors ${
             atFit
               ? 'bg-transparent text-slate-300 cursor-default'
               : 'bg-white/[0.05] hover:bg-white/[0.10] text-slate-100 cursor-pointer'
@@ -928,6 +949,28 @@ export function VizControlBar({
           dataTestId="viz-zoom-in"
         />
       </Column>
+
+      {/* ── Speed (slow the whole song + its karaoke/grid sweep) ──── */}
+      {onPlaybackRateChange && (
+        <Column label="Speed">
+          <select
+            value={playbackRate}
+            onChange={(e) => onPlaybackRateChange(Number(e.target.value))}
+            title="Playback speed — slows the song and the karaoke/beat-grid sweep together (pitch preserved)"
+            data-testid="viz-playback-speed"
+            className={`${compact ? 'h-8' : 'h-10'} w-auto pl-2 pr-0.5 text-[11px] font-mono rounded border transition-colors focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 cursor-pointer ${
+              Math.abs(playbackRate - 1) < 1e-3
+                ? 'bg-white/[0.05] hover:bg-white/[0.10] border-white/[0.22] text-slate-100'
+                : 'bg-emerald-500/15 border-emerald-500/50 text-emerald-200'
+            }`}
+          >
+            <option value={1}>1×</option>
+            <option value={0.75}>0.75×</option>
+            <option value={0.5}>0.5×</option>
+            <option value={0.25}>0.25×</option>
+          </select>
+        </Column>
+      )}
 
       <span className="w-px h-10 bg-white/[0.18] mb-4" aria-hidden="true" />
 
@@ -947,7 +990,7 @@ export function VizControlBar({
           disabled={!showBeatGrid || !bpm}
           title="Grid granularity"
           data-testid="viz-grid-unit"
-          className={`h-10 w-auto pl-2 pr-0.5 text-[11px] font-mono rounded border transition-colors focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 ${
+          className={`${compact ? 'h-8' : 'h-10'} w-auto pl-2 pr-0.5 text-[11px] font-mono rounded border transition-colors focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 ${
             !showBeatGrid || !bpm
               ? 'bg-transparent border-white/[0.15] text-slate-500 cursor-not-allowed'
               : 'bg-white/[0.05] hover:bg-white/[0.10] border-white/[0.22] text-slate-100 cursor-pointer'
@@ -978,7 +1021,7 @@ export function VizControlBar({
       {/* Inline grid status (warning chip when BPM missing, mode badge in prep).
           Stacks into two lines to match the mode-badge layout and keep the
           chip the same height as the adjacent icon buttons. */}
-      {gridWarn && (
+      {gridWarn && !compact && (
         <span
           className="flex flex-col items-center justify-center leading-tight px-1.5 py-0.5 rounded text-[10px] font-mono border border-amber-500/50 bg-amber-500/15 text-amber-200 whitespace-nowrap mb-4 self-end"
           data-testid="beat-grid-no-bpm-warning"
@@ -987,7 +1030,7 @@ export function VizControlBar({
           <span className="text-[9px] opacity-90">set a BPM for this song</span>
         </span>
       )}
-      {modeBadge && <span className="mb-4 self-end">{modeBadge}</span>}
+      {modeBadge && !compact && <span className="mb-4 self-end">{modeBadge}</span>}
 
       {/* ── Misc (extras dropdown — currently just block swipe-back) ─ */}
       <Column label="Misc">
@@ -1030,7 +1073,7 @@ export function VizControlBar({
       {/* ── Algos (Inspect only) ─────────────────────────────────── */}
       {showAlgos && algoOptions && onToggleAlgo && selectedAlgos && (
         <>
-        <span className="w-px h-10 bg-white/[0.18] mb-4" aria-hidden="true" />
+        <span className={`w-px bg-white/[0.18] ${compact ? 'h-6 self-center' : 'h-10 mb-4'}`} aria-hidden="true" />
         <Column label="Algos">
         <DropdownGroup
           icon={AlgosIcon}
@@ -1121,9 +1164,9 @@ export function VizControlBar({
       {/* ── Detected single-value info (Key / Language) ──────────────
            Always-visible read-only pills. These detectors produce one value
            for the whole track, so they don't get a timeline overlay row. ── */}
-      {singleInfoDetections && singleInfoDetections.length > 0 && (
+      {singleInfoDetections && singleInfoDetections.length > 0 && !compact && (
         <>
-        <span className="w-px h-10 bg-white/[0.18] mb-4" aria-hidden="true" />
+        <span className={`w-px bg-white/[0.18] ${compact ? 'h-6 self-center' : 'h-10 mb-4'}`} aria-hidden="true" />
         <Column label="Detected">
           <div className="flex items-center gap-1.5 flex-wrap max-w-[260px]">
             {singleInfoDetections.map((d) => {
@@ -1145,5 +1188,6 @@ export function VizControlBar({
         </>
       )}
     </div>
+    </CompactCtx.Provider>
   );
 }

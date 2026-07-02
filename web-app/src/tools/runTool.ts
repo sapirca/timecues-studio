@@ -107,7 +107,7 @@ export interface HPSResult {
 
 // Demucs stem separation result (offline-cached, loaded from /stems/<slug>/manifest.json)
 export interface DemucsResult {
-  stems: { vocals: string; drums: string; bass: string; other: string };
+  stems: { vocals: string; drums: string; bass: string; other: string; guitar?: string; piano?: string };
   model: string;
   audioFile: string;
   computedAt: number;
@@ -181,22 +181,6 @@ export interface SpanStructureResult {
 }
 
 export type SpanToolId = 'silero-vad' | 'jdcnet-voicing' | 'panns-cnn14';
-
-/** LOOP-family detector result (experimental — gated by `experimentalLoopFamily`).
- *  Stored under data/algorithm-outputs/loop/<slug>/<algo>.json. Sections shape
- *  matches the BOUNDARY-family inspector so the row visualization works without
- *  a separate render path. */
-export interface LoopStructureResult {
-  algorithm: string;
-  algoName: string;
-  audioFile: string;
-  duration: number;
-  sections: { time: number; endTime: number; type: string; label: string }[];
-  computedAt: number;
-  elapsedSec: number;
-}
-
-export type LoopToolId = 'chroma-autocorr';
 
 /** PATTERN-family detector result (experimental — gated by `experimentalPatternFamily`).
  *  Stored under data/algorithm-outputs/pattern/<slug>/<algo>.json. Each detected
@@ -302,7 +286,6 @@ export type ToolResultData =
   | { toolId: 'silero-vad';     result: SpanStructureResult }
   | { toolId: 'jdcnet-voicing'; result: SpanStructureResult }
   | { toolId: 'panns-cnn14';    result: SpanStructureResult }
-  | { toolId: 'chroma-autocorr'; result: LoopStructureResult }
   | { toolId: 'basic-pitch';    result: PitchNoteCueResult }
   | { toolId: 'librosa-key';      result: CueExtrasResult }
   | { toolId: 'autochord-chords'; result: CueExtrasResult }
@@ -608,48 +591,6 @@ async function loadOrRunPanns(audioSlug: string): Promise<SpanStructureResult> {
     duration:   payload.duration ?? 0,
     sections:   (payload.spans ?? []).map((s) => ({
       time: s.start, endTime: s.end, type: s.label, label: s.label,
-    })),
-    computedAt: Date.now(),
-    elapsedSec: (payload.ms ?? 0) / 1000,
-  };
-}
-
-/** Load a LOOP-family detector's cached result via the python loop_server
- *  (/api/loop). Falls back to POST on cache miss. Sections are the `loops`
- *  array projected onto the boundary inspector's row shape. */
-async function loadOrRunLoop(audioSlug: string): Promise<LoopStructureResult> {
-  const toolId = 'chroma-autocorr';
-  const cacheUrl = `/api/loop/detect/${encodeURIComponent(audioSlug)}/${encodeURIComponent(toolId)}`;
-  let raw: unknown = null;
-  try {
-    const cacheRes = await fetch(cacheUrl);
-    if (cacheRes.ok) raw = await cacheRes.json();
-  } catch { raw = null; }
-
-  if (!raw || typeof raw !== 'object' || !('loops' in raw)) {
-    const post = await fetch('/api/loop/detect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug: audioSlug, algo: toolId }),
-    });
-    if (!post.ok) {
-      const err = await post.json().catch(() => ({ error: `HTTP ${post.status}` }));
-      if (post.status === 503) {
-        throw new Error('LOOP sidecar is not running. Start it with:\n  docker compose --profile experimental-models up --build loop');
-      }
-      throw new Error((err as { error?: string }).error ?? `LOOP detect failed (${post.status})`);
-    }
-    raw = await post.json();
-  }
-  const payload = raw as { audio_file?: string; duration?: number; loops?: { start: number; end: number; label: string; bars: number | null }[]; ms?: number; ok?: boolean; error?: string };
-  if (payload.ok === false) throw new Error(payload.error ?? 'LOOP returned ok=false');
-  return {
-    algorithm:  toolId,
-    algoName:   toolId,
-    audioFile:  payload.audio_file ?? `${audioSlug}.mp3`,
-    duration:   payload.duration ?? 0,
-    sections:   (payload.loops ?? []).map((l) => ({
-      time: l.start, endTime: l.end, type: 'loop', label: l.label,
     })),
     computedAt: Date.now(),
     elapsedSec: (payload.ms ?? 0) / 1000,
@@ -1146,12 +1087,6 @@ export async function runTool(
       if (!audioSlug) throw new Error('PANNs requires an audioSlug.');
       const result = await loadOrRunPanns(audioSlug);
       return { toolId: 'panns-cnn14', result };
-    }
-
-    case 'chroma-autocorr': {
-      if (!audioSlug) throw new Error('LOOP tools require an audioSlug.');
-      const result = await loadOrRunLoop(audioSlug);
-      return { toolId: 'chroma-autocorr', result };
     }
 
     case 'basic-pitch': {

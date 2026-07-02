@@ -1,12 +1,11 @@
 /**
  * Unified source picker that lives below the annotation-type tabs. Replaces
- * the old `Manual | Eye | Auto-guess` sub-chip row under the Boundaries tab
+ * the old `Manual | Auto-guess` sub-chip row under the Boundaries tab
  * and adds the same picker for every other annotation type (cues / spans /
  * loops / patterns).
  *
  * Options:
  *   - `manual`     — user-authored annotations (the existing editor).
- *   - `eye`        — boundaries only, experimental.
  *   - `autoGuess`  — clustering of detector outputs. For boundaries this loads
  *                    the existing AutoGuessPanel; for other types it renders a
  *                    "coming soon" banner (no algorithm yet).
@@ -26,19 +25,19 @@ import { useEffect, useRef, useState } from 'react';
 /** Identifier for a single source option. `detector:<name>` is opaque on
  *  purpose — the parent extracts the detector name and looks up the entry in
  *  `customDetectors`. */
-export type SourceId = 'manual' | 'eye' | 'autoGuess' | `detector:${string}`;
+export type SourceId = 'manual' | 'autoGuess' | `detector:${string}`;
 
 /** True when the source is a user-authored custom detector. Used to render
  *  the leading `{}` glyph that distinguishes detector entries from built-in
- *  Manual / Eye / Auto-guess sources. Text color stays regular so the row
+ *  Manual / Auto-guess sources. Text color stays regular so the row
  *  reads like any other option; only the glyph is themed. */
 function isDetectorSource(id: SourceId): boolean {
   return typeof id === 'string' && id.startsWith('detector:');
 }
 
-/** Annotation categories that get a picker. Boundaries handle Eye + AutoGuess
+/** Annotation categories that get a picker. Boundaries handle AutoGuess
  *  (real clustering); the others get AutoGuess as a "coming soon" stub. */
-export type AnnotationCategory = 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns';
+export type AnnotationCategory = 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
 
 export interface SourceOption {
   id: SourceId;
@@ -46,8 +45,8 @@ export interface SourceOption {
   /** False renders the option grey and non-interactive (used for AutoGuess on
    *  non-boundary types until algorithms ship). */
   comingSoon?: boolean;
-  /** Dashed-border styling — currently only for Eye when experimental flag is
-   *  on, so the experimental status is visually obvious from the picker. */
+  /** Distinct styling so an experimental source's status is visually obvious
+   *  from the picker. */
   experimental?: boolean;
   /** Detector entry has a per-annotator edited output file on disk — render
    *  a small dot next to the label so the user knows there's pending work. */

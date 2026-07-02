@@ -6,16 +6,16 @@
 //   1. Server-mirror layout — folders shaped like data/:
 //        songs/<slug>/<slug>.mp3
 //        song-info/<slug>.json
-//        annotations/{manual,eye,auto-guess,layers}/<annotator>/<slug>.json
+//        annotations/{manual,auto-guess,layers}/<annotator>/<slug>.json
 //        stems/<slug>/{drums,bass,other,vocals}.{wav,mp3,...}
 //   2. Flat per-song bundle — audio + sibling JSONs sharing a basename:
 //        track_a.mp3
 //        track_a.info.json
 //        track_a.layers.json
-//        track_a.manual.json     ← also .eye.json, .auto-guess.json
+//        track_a.manual.json     ← also .auto-guess.json
 //        track_a.stems/{vocals,drums,...}.wav
 //   3. Export-bundle layout — what ExportManagerModal writes (one dir per slug):
-//        <slug>/boundaries/{manual,eye,auto-guess}/[<annotator>/]<slug>.json
+//        <slug>/boundaries/{manual,auto-guess}/[<annotator>/]<slug>.json
 //        <slug>/{cues,spans,loops,patterns}/[<annotator>/]<layer-name>.json
 //        <slug>/song-info.json
 //        <slug>/audio.<ext>
@@ -63,7 +63,7 @@ function basenameNoExt(name: string): string {
 
 // ── Scanned model ────────────────────────────────────────────────────────────
 
-export type AnnotationKind = 'manual' | 'eye' | 'auto-guess' | 'layers';
+export type AnnotationKind = 'manual' | 'auto-guess' | 'layers';
 /** User-created layer kinds the export-bundle layout splits into one file each.
  *  On the server they all live inside a single annotation-layers document, so
  *  the importer reassembles them before POSTing. */
@@ -131,7 +131,6 @@ function classifyServerMirror(parts: string[], file: File): Classified | null {
       if (!fileName.toLowerCase().endsWith('.json')) continue;
       const slug = basenameNoExt(fileName);
       if (bucket === 'manual')     return { kind: 'manual', slug };
-      if (bucket === 'eye')        return { kind: 'eye', slug };
       if (bucket === 'auto-guess') return { kind: 'auto-guess', slug };
       if (bucket === 'layers')     return { kind: 'layers', slug };
       // 'custom' is intentionally skipped — multi-script routing is out of
@@ -186,7 +185,7 @@ function classifyFlatBundle(parts: string[]): Classified | null {
     }
   }
 
-  // 3. Sidecar JSONs: <slug>.{info,manual,eye,auto-guess,layers}.json
+  // 3. Sidecar JSONs: <slug>.{info,manual,auto-guess,layers}.json
   const lower = fileName.toLowerCase();
   if (lower.endsWith('.json')) {
     const stripped = basenameNoExt(lower);
@@ -195,7 +194,6 @@ function classifyFlatBundle(parts: string[]): Classified | null {
       { suffix: '.info',        kind: 'song-info'  },
       { suffix: '.song-info',   kind: 'song-info'  },
       { suffix: '.manual',      kind: 'manual'     },
-      { suffix: '.eye',         kind: 'eye'        },
       { suffix: '.auto-guess',  kind: 'auto-guess' },
       { suffix: '.autoguess',   kind: 'auto-guess' },
       { suffix: '.layers',      kind: 'layers'     },
@@ -212,9 +210,8 @@ function classifyFlatBundle(parts: string[]): Classified | null {
 // Boundary kind sub-dirs under `<slug>/boundaries/` map straight onto the
 // annotation kind. (custom is intentionally absent — out of scope, same as
 // the server-mirror classifier.)
-const BOUNDARY_DIR_KIND: Record<string, 'manual' | 'eye' | 'auto-guess'> = {
+const BOUNDARY_DIR_KIND: Record<string, 'manual' | 'auto-guess'> = {
   manual: 'manual',
-  eye: 'eye',
   'auto-guess': 'auto-guess',
 };
 const USER_LAYER_DIRS = new Set<UserLayer>(['cues', 'spans', 'loops', 'patterns']);
@@ -352,7 +349,7 @@ export function scanDatasetFiles(files: File[]): ScanResult {
       entry.layerFiles.push({ type: cls.layerType, name: cls.layerName ?? basenameNoExt(fileName), file });
     } else if (cls.kind === 'algo') {
       entry.algoFiles.push({ name: cls.algoName ?? fileName, file });
-    } else if (cls.kind === 'manual' || cls.kind === 'eye' || cls.kind === 'auto-guess' || cls.kind === 'layers') {
+    } else if (cls.kind === 'manual' || cls.kind === 'auto-guess' || cls.kind === 'layers') {
       entry.annotations[cls.kind] = file;
     }
   }
@@ -374,7 +371,6 @@ export type ServerStatus = {
   songExists: boolean;
   hasSongInfo: boolean;
   hasManual: boolean;
-  hasEye: boolean;
   hasAutoGuess: boolean;
   hasLayers: boolean;
 };
@@ -383,7 +379,6 @@ const EMPTY_STATUS: ServerStatus = {
   songExists: false,
   hasSongInfo: false,
   hasManual: false,
-  hasEye: false,
   hasAutoGuess: false,
   hasLayers: false,
 };
@@ -420,10 +415,9 @@ export async function checkServerStatus(slugs: string[]): Promise<Record<string,
   const result: Record<string, ServerStatus> = {};
   await Promise.all(slugs.map(async (slug) => {
     const enc = encodeURIComponent(slug);
-    const [hasSongInfo, hasManual, hasEye, hasAutoGuess, hasLayers] = await Promise.all([
+    const [hasSongInfo, hasManual, hasAutoGuess, hasLayers] = await Promise.all([
       jsonExists(`/api/song-info/${enc}`),
       jsonExists(`/api/manual-annotations/${enc}`),
-      jsonExists(`/api/eye-annotations/${enc}`),
       jsonExists(`/api/auto-guess-annotations/${enc}`),
       jsonExists(`/api/annotation-layers/${enc}`),
     ]);
@@ -431,7 +425,6 @@ export async function checkServerStatus(slugs: string[]): Promise<Record<string,
       songExists: existingAudio.has(slug),
       hasSongInfo,
       hasManual,
-      hasEye,
       hasAutoGuess,
       hasLayers,
     };
@@ -545,7 +538,7 @@ async function postJson(url: string, payload: unknown): Promise<void> {
 // orchestrator: a partial result (audio OK, layers failed) is more useful than
 // a single error for the whole song.
 
-export type StepKey = 'audio' | 'songInfo' | 'manual' | 'eye' | 'autoGuess' | 'layers' | 'algos' | 'stems';
+export type StepKey = 'audio' | 'songInfo' | 'manual' | 'autoGuess' | 'layers' | 'algos' | 'stems';
 export type StepStatus = 'skip' | 'ok' | 'error';
 export type SongImportResult = {
   slug: string;
@@ -604,11 +597,10 @@ export async function runImport(
       }
     }
 
-    // 3. Boundary annotations — manual/eye/auto-guess each POST one document
+    // 3. Boundary annotations — manual/auto-guess each POST one document
     //    verbatim. Sequential keeps the dialog's per-step status legible.
     const annTargets: { key: StepKey; file: File | undefined; url: string }[] = [
       { key: 'manual',    file: song.annotations.manual,    url: `/api/manual-annotations/${encodeURIComponent(song.slug)}` },
-      { key: 'eye',       file: song.annotations.eye,       url: `/api/eye-annotations/${encodeURIComponent(song.slug)}` },
       { key: 'autoGuess', file: song.annotations['auto-guess'], url: `/api/auto-guess-annotations/${encodeURIComponent(song.slug)}` },
     ];
     for (const t of annTargets) {

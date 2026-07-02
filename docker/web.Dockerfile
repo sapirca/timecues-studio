@@ -53,6 +53,16 @@ RUN npm ci
 COPY web-app/ ./
 RUN npx vite build
 
+# Make node_modules writable by any UID the container may run as. `npm ci`
+# above created it owned by root, and it survives into dev via the anonymous
+# volume on /app/web-app/node_modules. At startup vite writes its config-loader
+# temp file (node_modules/.vite-temp) and dep-optimize cache (node_modules/.vite);
+# under a non-root HOST_UID (the Linux data-ownership mode) those writes failed
+# with EACCES. Drop any stale root-owned scratch dirs and make the node_modules
+# top dir writable so the running user can (re)create them.
+RUN rm -rf node_modules/.vite node_modules/.vite-temp \
+    && chmod a+w node_modules
+
 # Ship the read-only default dataset (CC0 audio + song-info). Lives at
 # /app/data-default and is not overlaid by any bind mount, so the web app's
 # fallback resolver can always find these slugs even on a fresh install with

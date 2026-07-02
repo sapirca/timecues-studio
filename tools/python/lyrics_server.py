@@ -68,9 +68,27 @@ PORT = 8016
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import (  # noqa: E402
     find_audio, stem_audio, cache_name, LYRICS_OUTPUTS_DIR as CACHE_DIR,
+    DATA_DIR, DEFAULT_DATA_DIR,
 )
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_reference_text(slug: str) -> str | None:
+    """The per-song reference lyrics saved by the Lyrics text panel
+    (data/lyrics-text/<slug>.txt, with a data-default seed fallback). Lets any
+    caller — including the CLI curated pipeline — run ctc-forced-aligner without
+    threading the transcript through, mirroring what the web run path posts."""
+    for base in (DATA_DIR, DEFAULT_DATA_DIR):
+        p = base / "lyrics-text" / f"{slug}.txt"
+        try:
+            if p.is_file():
+                txt = p.read_text(encoding="utf-8").strip()
+                if txt:
+                    return txt
+        except Exception:
+            pass
+    return None
 
 try:
     import numpy as np  # noqa: F401
@@ -324,6 +342,10 @@ def detect_one(
             raise FileNotFoundError(f"audio not found for slug: {slug}")
     needs_text = bool(ALGORITHMS[algo].get("needs_text", False))
     if needs_text:
+        # Fall back to the saved per-song reference when the caller didn't pass
+        # one — so the CLI pipeline can run ctc just like the web app does.
+        if not reference_text:
+            reference_text = _load_reference_text(slug)
         result = ALGORITHMS[algo]["detect"](audio_path, language, reference_text)  # type: ignore[misc]
     else:
         result = ALGORITHMS[algo]["detect"](audio_path, language)  # type: ignore[misc]

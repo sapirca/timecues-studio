@@ -1,14 +1,14 @@
-# Unified core MIR sidecar — runs four backend servers in one container.
+# Unified core MIR sidecar — runs the backend servers in one container.
 #
 #   bpm        :8004   librosa + madmom-fork (CPJKU community)
-#   mir        :8007   librosa + scipy + pyloudnorm + MIRtoolbox-parity custom
-#   ruptures   :8003   librosa + ruptures change-point detection
+#   dsp        :8003   ruptures (change-point) + mir (MIRtoolbox features),
+#                      multiplexed onto one port by dsp_server.py
 #   custom     :8005   user-uploaded Python detector sandbox (rlimit child fork)
 #
-# All four shared an identical Python 3.11 + numpy>=1.24 + librosa>=0.10
+# All shared an identical Python 3.11 + numpy>=1.24 + librosa>=0.10
 # floor, so each was redundantly installing the same ~600 MB of wheels.
 # Merging cuts registry storage and pull bytes to one copy and replaces
-# four `docker compose pull / up` cycles with one. msaf stays standalone
+# several `docker compose pull / up` cycles with one. msaf stays standalone
 # because its pins are incompatible (Python 3.10, numpy<1.24, librosa<0.10);
 # mir-eval stays standalone because it has no librosa / ffmpeg deps to
 # gain from sharing the base; web is Node.
@@ -78,11 +78,19 @@ COPY tools/python/paths.py            /app/tools/python/paths.py
 COPY tools/python/bpm_server.py       /app/tools/python/bpm_server.py
 COPY tools/python/mir_server.py       /app/tools/python/mir_server.py
 COPY tools/python/ruptures_server.py  /app/tools/python/ruptures_server.py
+# dsp_server.py multiplexes ruptures + mir onto one port; it imports the two
+# modules above, so all three must be present in the image.
+COPY tools/python/dsp_server.py       /app/tools/python/dsp_server.py
 COPY tools/python/custom_server.py    /app/tools/python/custom_server.py
 COPY tools/python/custom_loader.py    /app/tools/python/custom_loader.py
 COPY tools/python/custom_runner.py    /app/tools/python/custom_runner.py
 COPY tools/python/custom_api.py       /app/tools/python/custom_api.py
 COPY tools/python/shared/             /app/tools/python/shared/
+# The first-party curated detectors are thin stubs over tools/python/generators/
+# (e.g. curated_lyrics → generators.lyrics). Without this package the custom
+# sandbox's scan() fails to import them ("No module named 'generators'") and
+# they degrade to load_error/boundary, so their cached outputs never render.
+COPY tools/python/generators/         /app/tools/python/generators/
 
 # Seed detectors at a sibling path so a runtime bind mount on
 # tools/python/custom/ doesn't hide them. The entrypoint promotes any
@@ -99,5 +107,5 @@ COPY docker/core-mir.supervisord.conf /app/supervisord.conf
 COPY docker/core-mir-entrypoint.sh    /usr/local/bin/core-mir-entrypoint.sh
 RUN chmod +x /usr/local/bin/core-mir-entrypoint.sh
 
-EXPOSE 8003 8004 8005 8007
+EXPOSE 8003 8004 8005
 CMD ["/usr/local/bin/core-mir-entrypoint.sh"]

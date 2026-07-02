@@ -34,7 +34,6 @@ browser (currently the user's email, e.g. `you@example.com`).
 | `annotators/<id>.json` | n/a | One file per annotator. Saved sign-up profile (displayName, email, role, affiliation, authMethod, invitedBy). Used by the Email login pane to detect returning users and by the Team page's invite flow. |
 | `dataset-config.json` | n/a | Single corpus-wide config file: `peopleByEmail` access tiers (admin/researcher/team/public), `sharedCorpus`, `corpusName`, BPM/grid lock state. Legacy `adminEmails` / `teamEmails` arrays are kept for back-compat. |
 | `annotations/manual/<annotator>/<slug>.json` | yes | Reviewed section-boundary annotations. Source of truth. |
-| `annotations/eye/<annotator>/<slug>.json` | yes | By-eye boundaries from spectrogram inspection. |
 | `annotations/auto-guess/<annotator>/<slug>.json` | yes | AutoGuess output (algorithm clusters with per-point ✓/✗/@ review). |
 | `annotations/layers/<annotator>/<slug>.json` | yes | User-created annotation layers (Cues, Spans, Loops, Patterns). One file per song per annotator holds ALL custom layers — ordering, rename, visibility, items. |
 | `annotations/custom/<script_name>/<annotator>/<slug>.json` | yes | Annotations produced by custom user scripts. |
@@ -46,14 +45,14 @@ browser (currently the user's email, e.g. `you@example.com`).
 | `algorithm-outputs/custom/<script_name>/<slug>.json` | no | Algorithm-mode results from custom user scripts. |
 
 `data-default/` ships only the parallel `songs/`, `song-info/`, and
-`annotations/{manual,eye,auto-guess}/` (the annotation subdirs are empty —
+`annotations/{manual,auto-guess}/` (the annotation subdirs are empty —
 just `.gitkeep` placeholders, since the seed corpus has no human labels).
 It also ships pre-computed Demucs stems at `data-default/stems/<slug>/` so
 demo visitors can hear individual stems on the CC0 tracks.
 
 **Note on annotation timing:** there is no separate `annotations/timing/`
 folder. Per-song time spent is embedded as `time_spent_seconds` directly in
-each annotation JSON (manual / eye / auto-guess), co-located with the
+each annotation JSON (manual / auto-guess), co-located with the
 annotation it describes.
 
 ## API surface
@@ -64,7 +63,6 @@ The Vite dev server exposes each folder under a stable URL prefix that does
 | URL | On-disk |
 |---|---|
 | `GET/POST/DELETE /api/manual-annotations/:slug` | `<root>/annotations/manual/<annotator>/<slug>.json` |
-| `GET/POST/DELETE /api/eye-annotations/:slug` | `<root>/annotations/eye/<annotator>/<slug>.json` |
 | `GET/POST/DELETE /api/auto-guess-annotations/:slug` | `<root>/annotations/auto-guess/<annotator>/<slug>.json` |
 | `GET/POST /api/annotation-times/:slug` | embedded `time_spent_seconds` in the above |
 | `GET/POST/DELETE /api/song-info/:slug` | `<root>/song-info/<slug>.json` |

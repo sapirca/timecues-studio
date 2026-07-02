@@ -1,16 +1,18 @@
 // LOOP-family eval table for the all-songs view. Sibling to
 // GlobalEvalSpanTable — appears below it when `experimentalLoopFamily`
-// is on. Compares each LOOP detector's per-song output (cached at
-// /api/loop/detect/<slug>/<algo>) against the user's first loop
-// reference layer; songs without a loop layer show '—'.
+// is on. Compares each LOOP detector's per-song output (the new
+// custom-detector path, /api/custom-scripts/result/<algo>/<slug>) against
+// the user's first loop reference layer; songs without a loop layer show '—'.
 
 import { useEffect, useMemo, useState } from 'react';
-import { loadCachedLoop, runLoopDetection, type LoopDetectionResult } from '../../services/loopDetection';
+import { getDetectorResult, runDetector } from '../../services/customScripts';
+import type { CustomResultEnvelope } from '../../types/customScript';
 import { loadCachedBpm } from '../../services/bpmDetection';
 import { loadLayers } from '../../services/annotationLayers';
 import { evaluateLoops, effectiveLayerMode, type LoopEvalResult } from '../../utils/evaluation';
 import type { LoopItem, AnnotationLayer, LayerEvalMode } from '../../types/annotationLayer';
 import { useSettings } from '../../context/SettingsContext';
+import { InfoDot } from './InfoDot';
 
 export interface LoopEvalAudioEntry {
   id: string;
@@ -39,9 +41,9 @@ interface AlgoAggregate {
   songsWithBarGrid: number;
 }
 
-const LOOP_ALGO_IDS = ['chroma-autocorr'] as const;
+const LOOP_ALGO_IDS = ['curated_loop_chroma'] as const;
 const LOOP_LABELS: Record<string, string> = {
-  'chroma-autocorr': 'Chroma autocorr',
+  'curated_loop_chroma': 'Chroma loops',
 };
 
 function pickLoopReference(
@@ -55,12 +57,12 @@ function pickLoopReference(
   return { items: [], mode: 'full-annotation' };
 }
 
-async function loadPredictedLoops(slug: string, algo: string, force: boolean): Promise<LoopDetectionResult | null> {
+async function loadPredictedLoops(slug: string, algo: string, force: boolean): Promise<CustomResultEnvelope | null> {
   if (!force) {
-    const cached = await loadCachedLoop(slug, algo);
-    if (cached && cached.ok !== false) return cached;
+    const env = await getDetectorResult(algo, slug);
+    if (env && !env.fatal) return env;
   }
-  return runLoopDetection(slug, algo, force);
+  return runDetector(algo, slug, { force });
 }
 
 /** Pick a representative BPM from a cached BpmDetectionResult. Prefers the
@@ -85,14 +87,25 @@ function pickBarGridFromBpm(
   return null;
 }
 
-function predsToLoopItems(pred: LoopDetectionResult): LoopItem[] {
-  return pred.loops.map((l, i) => ({
-    id: `${pred.algorithm}:${i}`,
-    start: l.start,
-    end: l.end,
-    label: l.label,
-    bars: l.bars ?? undefined,
-  }));
+/** Parse the leading bar count from a loop label like "8 bars · 0.97".
+ *  Returns undefined when the label is absent or has no leading "<n> bars". */
+function parseBarsFromLabel(label?: string): number | undefined {
+  if (!label) return undefined;
+  const m = label.match(/^(\d+)\s*bars?/);
+  return m ? Number(m[1]) : undefined;
+}
+
+function predsToLoopItems(pred: CustomResultEnvelope): LoopItem[] {
+  return pred.items.map((it, i) => {
+    const item = it as { start_ms: number; duration_ms: number; label?: string | null };
+    return {
+      id: `${pred.name}:${i}`,
+      start: item.start_ms / 1000,
+      end: (item.start_ms + item.duration_ms) / 1000,
+      label: item.label ?? '',
+      bars: parseBarsFromLabel(item.label ?? undefined),
+    };
+  });
 }
 
 export function GlobalEvalLoopTable({
@@ -119,9 +132,9 @@ export function GlobalEvalLoopTable({
         const results: Record<string, LoopEvalResult | null> = {};
         for (const algo of LOOP_ALGO_IDS) {
           const pred = await loadPredictedLoops(a.id, algo, false);
-          if (!pred || pred.ok === false) { results[algo] = null; continue; }
+          if (!pred || pred.fatal) { results[algo] = null; continue; }
           if (ref.length === 0) { results[algo] = null; continue; }
-          const duration = pred.duration || trackDurationFallback;
+          const duration = (pred.duration_ms / 1000) || trackDurationFallback;
           results[algo] = evaluateLoops(ref, predsToLoopItems(pred), duration, {
             mode: effectiveLayerMode(mode, forceCandidates),
             barGrid: barGrid ?? undefined,
@@ -169,9 +182,11 @@ export function GlobalEvalLoopTable({
         <div>
           <h3 className="text-sm font-semibold text-fuchsia-200">
             Loop algorithms <span className="text-[10px] uppercase tracking-wider text-slate-500 ml-1">· experimental</span>
+            <InfoDot className="ml-1.5" label="How loop algorithms are scored" align="left">
+              Evaluated against the first loop layer in each song's annotation document.
+            </InfoDot>
           </h3>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Evaluated against the first loop layer in each song's annotation document.{' '}
             {audioFiles.length === 0
               ? 'No songs loaded.'
               : `${songsWithRef}/${audioFiles.length} song${audioFiles.length === 1 ? '' : 's'} have a loop reference.`}

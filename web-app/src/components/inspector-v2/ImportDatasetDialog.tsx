@@ -26,7 +26,6 @@ const STEP_LABEL: Record<StepKey, string> = {
   audio:    'Audio',
   songInfo: 'Song info',
   manual:   'Manual',
-  eye:      'Eye',
   autoGuess: 'Auto-guess',
   layers:   'Layers',
   algos:    'Algos',
@@ -47,7 +46,6 @@ function defaultSelection(song: ScannedSong): SongSelection {
     audio:     !!song.audio,
     songInfo:  !!song.songInfo,
     manual:    !!song.annotations.manual,
-    eye:       !!song.annotations.eye,
     autoGuess: !!song.annotations['auto-guess'],
     layers:    !!song.annotations.layers || song.layerFiles.length > 0,
     algos:     song.algoFiles.length > 0,
@@ -157,7 +155,6 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
             audio:    sel.audio,
             songInfo: sel.songInfo,
             manual:   sel.manual,
-            eye:      sel.eye,
             autoGuess: sel.autoGuess,
             layers:   sel.layers,
             algos:    sel.algos,
@@ -369,12 +366,12 @@ function PickStage(props: {
           ({' '}
           <code className="text-slate-300">songs/&lt;slug&gt;/&lt;slug&gt;.mp3</code>,{' '}
           <code className="text-slate-300">song-info/&lt;slug&gt;.json</code>,{' '}
-          <code className="text-slate-300">annotations/&#123;manual,eye,auto-guess,layers&#125;/&lt;annotator&gt;/&lt;slug&gt;.json</code>,{' '}
-          <code className="text-slate-300">stems/&lt;slug&gt;/&#123;drums,bass,other,vocals&#125;.wav</code>).
+          <code className="text-slate-300">annotations/&#123;manual,auto-guess,layers&#125;/&lt;annotator&gt;/&lt;slug&gt;.json</code>,{' '}
+          <code className="text-slate-300">stems/&lt;slug&gt;/&#123;drums,bass,other,vocals,guitar,piano&#125;.wav</code>).
         </li>
         <li>
           <span className="text-emerald-300">Export bundle</span> — a ZIP from this app's <span className="text-slate-300">Export</span> button, unzipped: one folder per song with
-          {' '}<code className="text-slate-300">&lt;slug&gt;/boundaries/&#123;manual,eye,auto-guess&#125;/&lt;slug&gt;.json</code>,{' '}
+          {' '}<code className="text-slate-300">&lt;slug&gt;/boundaries/&#123;manual,auto-guess&#125;/&lt;slug&gt;.json</code>,{' '}
           <code className="text-slate-300">&lt;slug&gt;/&#123;cues,spans,loops,patterns&#125;/&lt;layer&gt;.json</code>,{' '}
           <code className="text-slate-300">&lt;slug&gt;/song-info.json</code>, <code className="text-slate-300">&lt;slug&gt;/audio.&lt;ext&gt;</code>, and cached algorithm outputs under <code className="text-slate-300">&lt;slug&gt;/algos/</code>.
           {' '}(Only JSON round-trips — Audacity / CSV / JAMS / MIDI exports are skipped.)
@@ -441,7 +438,7 @@ function PickStage(props: {
 
 // ── Review stage ────────────────────────────────────────────────────────────
 
-const STEP_KEYS_IN_ORDER: StepKey[] = ['audio', 'songInfo', 'manual', 'eye', 'autoGuess', 'layers', 'algos', 'stems'];
+const STEP_KEYS_IN_ORDER: StepKey[] = ['audio', 'songInfo', 'manual', 'autoGuess', 'layers', 'algos', 'stems'];
 
 function ReviewStage(props: {
   scan: ScanResult;
@@ -615,12 +612,12 @@ function ReviewStage(props: {
   );
 }
 
-// Steps that fold several source files into one chip — stems (up to 4 WAVs),
+// Steps that fold several source files into one chip — stems (up to 6 WAVs),
 // layers (the doc + per-type cues/spans/loops/patterns files), and algos (N
 // cache JSONs). Itemising them is what keeps the table honest: a single
-// "Stems" chip otherwise hides which of drums/bass/other/vocals actually
-// landed. Returns [] for the one-file steps, which render a plain chip.
-const STEM_ORDER = ['drums', 'bass', 'other', 'vocals'] as const;
+// "Stems" chip otherwise hides which of drums/bass/other/vocals/guitar/piano
+// actually landed. Returns [] for the one-file steps, which render a plain chip.
+const STEM_ORDER = ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano'] as const;
 
 function stepItems(song: ScannedSong, step: StepKey): string[] {
   switch (step) {
@@ -644,7 +641,6 @@ function stepHasLocal(song: ScannedSong, step: StepKey): boolean {
     case 'audio':    return !!song.audio;
     case 'songInfo': return !!song.songInfo;
     case 'manual':   return !!song.annotations.manual;
-    case 'eye':      return !!song.annotations.eye;
     case 'autoGuess': return !!song.annotations['auto-guess'];
     case 'layers':   return !!song.annotations.layers || song.layerFiles.length > 0;
     case 'algos':    return song.algoFiles.length > 0;
@@ -658,7 +654,6 @@ function stepHasServer(status: ServerStatus | undefined, step: StepKey): boolean
     case 'audio':    return status.songExists;
     case 'songInfo': return status.hasSongInfo;
     case 'manual':   return status.hasManual;
-    case 'eye':      return status.hasEye;
     case 'autoGuess': return status.hasAutoGuess;
     case 'layers':   return status.hasLayers;
     case 'algos':    return false; // no cheap server probe; treat as "unknown"

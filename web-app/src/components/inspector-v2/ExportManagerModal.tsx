@@ -6,7 +6,7 @@
  *
  * Behaviour
  *  - Scope: current track | selected tracks (multi-select) | entire dataset
- *  - Layers: manual / eye / auto-guess / cues / spans / loops / patterns
+ *  - Layers: manual / auto-guess / cues / spans / loops / patterns
  *    (any subset, must pick at least one)
  *  - Formats: any subset of TimeCues JSON | Audacity Label Track |
  *    Sonic Visualiser CSV | JAMS | mir_eval | MIDI markers | REAPER regions.
@@ -15,7 +15,7 @@
  *    pattern files.
  *  - Auto-bundle: any time we'd produce >1 file, output is forced into a
  *    single .zip with a per-song directory layout:
- *      <slug>/boundaries/{manual|eye|auto-guess}/<slug>.<ext>
+ *      <slug>/boundaries/{manual|auto-guess}/<slug>.<ext>
  *      <slug>/{cues|spans|loops|patterns}/<layer-name>.<ext>
  *      <slug>/{song-info.json, audio.<ext>, algos/…, stems/…}
  *    Multi-annotator corpus dumps (Entire dataset + researcher tier) insert an
@@ -80,19 +80,17 @@ const FORMAT_EXT: Record<Format, string> = {
   reaper: 'csv',
 };
 
-const JAMS_LAYER_KIND: Record<ManualLayer, 'manual' | 'eye' | 'auto-guess'> = {
+const JAMS_LAYER_KIND: Record<ManualLayer, 'manual' | 'auto-guess'> = {
   manual: 'manual',
-  eye: 'eye',
   autoGuess: 'auto-guess',
 };
 
-/** In-zip directory for each layer type. Boundary kinds (manual/eye/
- *  auto-guess) are nested under `boundaries/` so all three sit together inside
- *  each song folder; user-layer kinds (cues/spans/loops/patterns) sit as
- *  siblings of `boundaries/`. */
+/** In-zip directory for each layer type. Boundary kinds (manual/auto-guess)
+ *  are nested under `boundaries/` so they sit together inside each song
+ *  folder; user-layer kinds (cues/spans/loops/patterns) sit as siblings of
+ *  `boundaries/`. */
 const LAYER_DIR: Record<Layer, string> = {
   manual: 'boundaries/manual',
-  eye: 'boundaries/eye',
   autoGuess: 'boundaries/auto-guess',
   cues: 'cues',
   spans: 'spans',
@@ -102,7 +100,6 @@ const LAYER_DIR: Record<Layer, string> = {
 
 const LAYER_LABEL: Record<Layer, string> = {
   manual: 'Boundaries (ground truth)',
-  eye: 'Eye (visual only)',
   autoGuess: 'Auto-Guess (algorithm clustering)',
   cues: 'Cues (timestamped events)',
   spans: 'Spans (labeled intervals)',
@@ -110,7 +107,7 @@ const LAYER_LABEL: Record<Layer, string> = {
   patterns: 'Patterns (repeating motifs)',
 };
 
-const ALL_LAYERS: Layer[] = ['manual', 'eye', 'autoGuess', 'cues', 'spans', 'loops', 'patterns'];
+const ALL_LAYERS: Layer[] = ['manual', 'autoGuess', 'cues', 'spans', 'loops', 'patterns'];
 
 /** Whether a (layer, format) pair has a sensible serializer.
  *  - Marker formats (audacity/sonicVis/jams/mirEval/midi/reaper) work for any
@@ -143,7 +140,6 @@ export interface ExportManagerModalProps {
   allSongs: SongEntry[];
   /** Already-loaded annotations for the current song, used for the fast single-song path. */
   manualAnnotation: ManualAnnotation | null;
-  eyeAnnotation: ManualAnnotation | null;
   autoGuessAnnotation: AutoGuessManualAnnotation | null;
   /** Already-loaded user layers for the current song (cues/spans/loops/patterns).
    *  When null the modal lazy-loads them for the current-song scope path. */
@@ -202,7 +198,7 @@ interface BulkAllAnnotators<T> {
 }
 
 /** Bulk fetch annotations for the *current* annotator. Returns slug → ann. */
-async function fetchBulkMine<T>(kind: 'manual' | 'eye' | 'auto-guess'): Promise<Record<string, T>> {
+async function fetchBulkMine<T>(kind: 'manual' | 'auto-guess'): Promise<Record<string, T>> {
   const res = await fetch(`/api/bulk-annotations/${kind}`, {
     headers: annotatorHeaders(),
   });
@@ -214,7 +210,7 @@ async function fetchBulkMine<T>(kind: 'manual' | 'eye' | 'auto-guess'): Promise<
 /** Bulk fetch annotations across every annotator (researcher/admin only).
  *  Returns slug → annotator → ann. Empty `{}` on auth failure — caller is
  *  expected to fall back to the current-annotator shape. */
-async function fetchBulkAll<T>(kind: 'manual' | 'eye' | 'auto-guess'): Promise<Record<string, Record<string, T>>> {
+async function fetchBulkAll<T>(kind: 'manual' | 'auto-guess'): Promise<Record<string, Record<string, T>>> {
   const res = await fetch(`/api/bulk-annotations/${kind}?scope=all`, {
     headers: annotatorHeaders(),
   });
@@ -399,14 +395,12 @@ export function ExportManagerModal({
   currentSong,
   allSongs,
   manualAnnotation,
-  eyeAnnotation,
   autoGuessAnnotation,
   layersDocument,
   presentation = 'multi',
 }: ExportManagerModalProps) {
   const { settings } = useSettings();
   const showLoopsAndPatterns = settings.experimentalLoopsAndPatterns;
-  const showEye = settings.experimentalEyeAnnotation;
 
   // Single-presentation locks scope to the current track. The selectable
   // layer set still allows everything available for the current song.
@@ -417,7 +411,7 @@ export function ExportManagerModal({
 
   const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(() => new Set());
   const [layers, setLayers] = useState<Record<Layer, boolean>>({
-    manual: true, eye: false, autoGuess: false,
+    manual: true, autoGuess: false,
     cues: true, spans: true, loops: true, patterns: true,
   });
   const [selectedFormats, setSelectedFormats] = useState<Set<Format>>(() => new Set(['json']));
@@ -529,12 +523,11 @@ export function ExportManagerModal({
     return { bytes, known, unknown };
   }, [audioSizes]);
 
-  // Layer kinds currently surfaced in the UI. Patterns/Loops and Eye are
+  // Layer kinds currently surfaced in the UI. Patterns/Loops are
   // hidden when their experimental flag is off so we don't tease the UI.
   const visibleLayerKinds: Layer[] = useMemo(() => {
     return ALL_LAYERS.filter((k) => {
       if ((k === 'loops' || k === 'patterns') && !showLoopsAndPatterns) return false;
-      if (k === 'eye' && !showEye) return false;
       // Patterns can't be expressed in any flat marker format. With multiple
       // formats, the layer stays visible as long as at least one selected
       // format can carry it (i.e. JSON is in the set when Patterns is the
@@ -544,7 +537,7 @@ export function ExportManagerModal({
       }
       return true;
     });
-  }, [showLoopsAndPatterns, showEye, formatsArr]);
+  }, [showLoopsAndPatterns, formatsArr]);
 
   const activeLayers: Layer[] = useMemo(
     () => visibleLayerKinds.filter((k) => layers[k]),
@@ -616,7 +609,6 @@ export function ExportManagerModal({
       // dir in the zip path (only when more than one annotator contributed).
       const currentAnnotatorId = getCurrentAnnotatorId() ?? 'unknown';
       const manualMap: Record<string, Record<string, ManualAnnotation>> = {};
-      const eyeMap: Record<string, Record<string, ManualAnnotation>> = {};
       const autoGuessMap: Record<string, Record<string, AutoGuessManualAnnotation>> = {};
       const layerDocs: Record<string, Record<string, AnnotationLayersDocument>> = {};
       const needAnyUserLayer =
@@ -633,7 +625,6 @@ export function ExportManagerModal({
 
       if (scope === 'current' && currentSong) {
         if (layers.manual && manualAnnotation) wrapSingle(manualMap, currentSong.id, manualAnnotation);
-        if (layers.eye && eyeAnnotation) wrapSingle(eyeMap, currentSong.id, eyeAnnotation);
         if (layers.autoGuess && autoGuessAnnotation) wrapSingle(autoGuessMap, currentSong.id, autoGuessAnnotation);
         if (needAnyUserLayer) {
           // Prefer the already-loaded layers document so we don't re-hit the
@@ -665,7 +656,7 @@ export function ExportManagerModal({
           }
         };
         const fetchKind = async <T,>(
-          kind: 'manual' | 'eye' | 'auto-guess',
+          kind: 'manual' | 'auto-guess',
           map: Record<string, Record<string, T>>,
         ) => {
           if (wantsAllAnnotators) {
@@ -677,7 +668,6 @@ export function ExportManagerModal({
         };
 
         if (layers.manual) fetches.push(fetchKind<ManualAnnotation>('manual', manualMap));
-        if (layers.eye) fetches.push(fetchKind<ManualAnnotation>('eye', eyeMap));
         if (layers.autoGuess) fetches.push(fetchKind<AutoGuessManualAnnotation>('auto-guess', autoGuessMap));
 
         if (needAnyUserLayer) {
@@ -754,11 +744,10 @@ export function ExportManagerModal({
         const bpm = songInfoMap[slug]?.bpm;
 
         // Boundary kinds — one document per annotator per song, per format.
-        for (const kind of ['manual', 'eye', 'autoGuess'] as ManualLayer[]) {
+        for (const kind of ['manual', 'autoGuess'] as ManualLayer[]) {
           if (!layers[kind]) continue;
           const byAnn =
             kind === 'manual' ? manualMap[slug] :
-            kind === 'eye' ? eyeMap[slug] :
             autoGuessMap[slug];
           if (!byAnn) continue;
           const annotatorIds = Object.keys(byAnn);

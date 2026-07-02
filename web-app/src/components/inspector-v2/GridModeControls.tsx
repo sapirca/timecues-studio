@@ -7,6 +7,7 @@ import { useState } from 'react';
 import type { SongInfo, GridMode, ManualBaseGridMode } from '../../types/songInfo';
 import { effectiveGridMode, getActiveAnchorCount, getActiveBeatOverrideCount } from '../../types/songInfo';
 import { ManualBasePickerModal } from './ManualBasePickerModal';
+import { InfoDot } from './InfoDot';
 
 export interface GridModeControlsProps {
   songInfo: SongInfo | null;
@@ -148,7 +149,12 @@ export function GridModeControls({
   return (
     <div className="space-y-2.5">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className="text-xs text-slate-400 uppercase tracking-wider">Tempo mode</span>
+        <span className="text-xs text-slate-400 uppercase tracking-wider inline-flex items-center gap-1">
+          Tempo mode
+          <InfoDot label="About tempo modes" align="left">
+            Only the active mode's grid is drawn downstream (Annotation Tool + Algorithm Inspect). Switching modes never deletes the others' data.
+          </InfoDot>
+        </span>
         <span className="text-sm font-mono text-slate-300">
           Active: <span className="text-slate-100 font-semibold">{MODE_LABEL[mode]}</span>
           {mode === 'manual' && manualBase && (
@@ -170,9 +176,6 @@ export function GridModeControls({
         {renderOption('dynamic', 'Dynamic')}
         {renderOption('manual',  'Manual')}
       </nav>
-      <p className="text-xs text-slate-500 leading-snug">
-        Only the active mode's grid is drawn downstream (Annotation Tool + Algorithm Inspect). Switching never deletes the others' data.
-      </p>
       {mode === 'manual' && !locked && manualBase !== undefined && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-emerald-500/30 bg-emerald-500/[0.05]">
           <span className="text-xs font-mono text-emerald-300 font-semibold">
@@ -194,10 +197,13 @@ export function GridModeControls({
         </div>
       )}
       {mode === 'dynamic' && onRederive && !locked && (
-        <div className="px-3 py-2 rounded-md border border-cyan-500/30 bg-cyan-500/[0.05] space-y-1.5">
+        <div className="px-3 py-2 rounded-md border border-cyan-500/30 bg-cyan-500/[0.05] space-y-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-cyan-300 font-semibold">
+            <span className="text-xs font-mono text-cyan-300 font-semibold shrink-0 inline-flex items-center gap-1">
               Δ Threshold
+              <InfoDot label="About the Δ threshold" align="left">
+                Drops a new tempo anchor whenever the rolling-median BPM drifts more than this much from the last anchor. Lower = more anchors, follows subtle tempo changes; higher = fewer anchors, ignores small fluctuations.
+              </InfoDot>
             </span>
             <input
               type="range"
@@ -206,22 +212,19 @@ export function GridModeControls({
               step={1}
               value={dynamicThreshold}
               onChange={(e) => setDynamicThreshold(parseInt(e.target.value, 10) || 5)}
-              className="flex-1 max-w-[160px] accent-cyan-400"
+              className="flex-1 min-w-0 accent-cyan-400"
               title={`Threshold: ${dynamicThreshold} BPM`}
             />
-            <span className="text-xs font-mono font-semibold text-cyan-200 tabular-nums w-14">{dynamicThreshold} BPM</span>
-            <button
-              type="button"
-              onClick={() => onRederive(dynamicThreshold)}
-              className="ml-auto px-4 py-2 rounded-md text-sm font-mono font-semibold uppercase tracking-wider border-2 border-cyan-400/60 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 hover:border-cyan-300/80 transition-all"
-              title="Replace current anchors with a fresh Dynamic-mode baseline at this threshold."
-            >
-              ↻ Re-derive
-            </button>
+            <span className="text-xs font-mono font-semibold text-cyan-200 tabular-nums w-14 text-right shrink-0">{dynamicThreshold} BPM</span>
           </div>
-          <p className="text-[10px] text-slate-400 leading-snug">
-            Drops a new tempo anchor whenever the rolling-median BPM drifts more than this much from the last anchor. Lower = more anchors, follows subtle tempo changes; higher = fewer anchors, ignores small fluctuations.
-          </p>
+          <button
+            type="button"
+            onClick={() => onRederive(dynamicThreshold)}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-md text-sm font-mono font-semibold uppercase tracking-wider border-2 border-cyan-400/60 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 hover:border-cyan-300/80 transition-all"
+            title="Replace current anchors with a fresh Dynamic-mode baseline at this threshold."
+          >
+            ↻ Re-derive
+          </button>
         </div>
       )}
       {!locked && (anchorCount > 0 || overrideCount > 0 || mode !== 'static') && (

@@ -48,9 +48,8 @@ export interface SectionCardProps {
 }
 
 /**
- * Visualization-free section card used by both Manual and Eye editors.
- * Behavior is identical except play/stop is opt-in (Manual passes it; Eye doesn't,
- * since by-eye annotation is purely visual).
+ * Visualization-free section card used by the Manual editor.
+ * Play/stop is opt-in (passed in by the caller).
  */
 export function SectionCard({
   index, section, endTime, isLast,

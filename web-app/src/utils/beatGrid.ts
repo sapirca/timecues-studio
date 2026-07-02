@@ -115,6 +115,44 @@ export function beatTimeAt(
   return anchors[anchors.length - 1].timestamp;
 }
 
+// Enumerate beat times in [from, to] (seconds) for the metronome click track.
+//
+// gridOffset is *phase only* — it sets where bar 1 / beat 1 sits, NOT where the
+// pulse begins. The pulse extends infinitely in both directions, so beats
+// before the offset (negative beat indices) are emitted just like beats after
+// it: the click sounds the same on either side of the offset. The only floor on
+// emitted times is `from` (the caller passes `from >= 0`), which keeps clicks
+// out of negative time. The downbeat accent is derived from the beat index with
+// a sign-safe modulo so it lands correctly even for negative indices.
+//
+// Routes through the same anchor-aware helpers as the rest of the grid so
+// Dynamic / Manual modes tick at the right segment-local tempo, and Manual-mode
+// per-beat overrides pull clicks onto their pinned positions. Static mode (no
+// anchors, no overrides) walks the plain `gridOffset + i*dBeat` grid.
+export function beatsInRange(
+  bpm: number,
+  gridOffset: number,
+  beatsPerBar: number,
+  from: number,
+  to: number,
+  anchors?: readonly TempoAnchor[],
+  overrides?: Readonly<Record<string, number>>,
+): Array<{ t: number; isDownbeat: boolean }> {
+  if (!Number.isFinite(bpm) || bpm <= 0 || beatsPerBar <= 0) return [];
+  // Start a couple of beats early so an overridden beat that pulled forward
+  // earlier than its macro position is still in range.
+  const startIdx = beatIndexAt(from, bpm, gridOffset, anchors) - 2;
+  const out: Array<{ t: number; isDownbeat: boolean }> = [];
+  const HARD_CAP = 256;
+  for (let i = startIdx; out.length < HARD_CAP; i++) {
+    const t = beatTimeAt(i, bpm, gridOffset, anchors, overrides);
+    if (t < from) continue;
+    if (t > to) break;
+    out.push({ t, isDownbeat: ((i % beatsPerBar) + beatsPerBar) % beatsPerBar === 0 });
+  }
+  return out;
+}
+
 // ─── Anchor lookups (Dynamic / Manual adjustment) ────────────────────────────
 //
 // Pure read helpers. They never mutate the array, never sort — the caller is

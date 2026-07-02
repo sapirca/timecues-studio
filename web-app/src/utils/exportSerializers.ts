@@ -215,7 +215,7 @@ export function convertToMirEval(sections: ExportSection[]): string {
 // caller doesn't pass an explicit duration. Zero-duration tail markers (the
 // last manual section, all auto-guess boundaries) are preserved as instants.
 
-export type JamsLayerKind = 'manual' | 'eye' | 'auto-guess' | 'grid';
+export type JamsLayerKind = 'manual' | 'auto-guess' | 'grid';
 
 export interface JamsOptions {
   /** Song slug — written to file_metadata.identifiers.slug. */

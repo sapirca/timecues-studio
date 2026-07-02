@@ -100,6 +100,12 @@ except ImportError:
     _LIBROSA_OK = False
 
 try:
+    from energy_gate import gate_point_events
+    _ENERGY_GATE_OK = True
+except Exception:
+    _ENERGY_GATE_OK = False
+
+try:
     import autochord  # noqa: F401
     _AUTOCHORD_OK = True
 except Exception:
@@ -276,11 +282,18 @@ def detect_librosa_onsets(audio_path: Path) -> dict:
                 "label":      "onset",
                 "confidence": max(0.0, min(1.0, strength)) if strength is not None else None,
             })
+        # Onset strength is normalized to the stem's own peak, so noise-floor
+        # bleed in a near-silent stem peaks at confidence ~1.0. Drop onsets in
+        # regions that are inaudible in absolute terms.
+        gated_out = 0
+        if _ENERGY_GATE_OK:
+            cues, gated_out = gate_point_events(cues, y, sr)
         return {
             "algorithm": algo,
             "ok":        True,
             "cues":      cues,
             "duration":  float(len(y) / sr),
+            "gated_out": gated_out,
             "ms":        _time_ms(t0),
         }
     except Exception as e:
@@ -335,6 +348,7 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
         "stem":        stem or "mix",
         "duration":    result.get("duration", 0.0),
         "cues":        result.get("cues", []),
+        "gated_out":   result.get("gated_out", 0),
         "ok":          result.get("ok", False),
         "error":       result.get("error"),
         "ms":          result.get("ms", 0),

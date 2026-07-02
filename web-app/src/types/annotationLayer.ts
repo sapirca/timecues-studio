@@ -60,7 +60,7 @@ export function derivePillDisplay(
 /** Per-layer-type workflow status. Lives on AnnotationLayersDocument so the
  *  four layer kinds (cues/spans/loops/patterns) that share the same document
  *  can each carry their own pill independently. */
-export type LayerStatusByType = Partial<Record<'cues' | 'spans' | 'loops' | 'patterns', AnnotationStage>>;
+export type LayerStatusByType = Partial<Record<'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics', AnnotationStage>>;
 
 // ─── Item shapes (one per paradigm) ─────────────────────────────────────────
 
@@ -171,12 +171,28 @@ export interface LoopItem {
  *  beats-per-bar × this constant (16 for 4/4, 12 for 3/4, 20 for 5/4 …). */
 export const PATTERN_SUBBEATS_PER_BEAT = 4;
 
-/** Steps per cycle = beatsPerBar × PATTERN_SUBBEATS_PER_BEAT. The pattern UI
- *  renders this many toggleable chips, grouped into `beatsPerBar` groups of
- *  PATTERN_SUBBEATS_PER_BEAT. */
+/** Fallback steps per cycle = beatsPerBar × PATTERN_SUBBEATS_PER_BEAT. Used
+ *  only when a pattern doesn't declare its own `stepsPerCycle` (user-created
+ *  or legacy items); detector patterns carry an explicit grid — see
+ *  `resolvePatternSteps`. */
 export function patternStepsPerCycle(beatsPerBar: number): number {
   const n = Math.max(1, Math.floor(beatsPerBar || 4));
   return n * PATTERN_SUBBEATS_PER_BEAT;
+}
+
+/** The number of sub-steps in a pattern's cycle — the index space of its
+ *  `highlightedBeats`. Prefers the pattern's own declared `stepsPerCycle`
+ *  (set by the detector that emitted it); falls back to the song-bar formula
+ *  for user-created / legacy patterns that don't declare one. */
+export function resolvePatternSteps(
+  item: Pick<PatternItem, 'stepsPerCycle'>,
+  beatsPerBar: number,
+): number {
+  const declared = item.stepsPerCycle;
+  if (declared !== undefined && Number.isFinite(declared) && declared >= 1) {
+    return Math.floor(declared);
+  }
+  return patternStepsPerCycle(beatsPerBar);
 }
 
 /** A labeled interval that visually multiplies into `repeatCount` tiled copies.
@@ -200,9 +216,15 @@ export interface PatternItem {
   description?: string;
   /** How many times this cycle repeats in the song. Must be >= 1. */
   repeatCount: number;
-  /** 0-based step indices inside one cycle (0..beatsPerBar*PATTERN_SUBBEATS_PER_BEAT-1)
-   *  that are emphasised. Empty = no steps emphasised. Multi-select. */
+  /** 0-based step indices inside one cycle (0..stepsPerCycle-1) that are
+   *  emphasised. Empty = no steps emphasised. Multi-select. */
   highlightedBeats: number[];
+  /** How many sub-steps the cycle is divided into — the index space of
+   *  `highlightedBeats`. Set by the detector that emitted the pattern so the
+   *  grid reflects the model's resolution. Absent on user-created / legacy
+   *  patterns, which fall back to `beatsPerBar × PATTERN_SUBBEATS_PER_BEAT`
+   *  (see `resolvePatternSteps`). */
+  stepsPerCycle?: number;
   /** Marker for the sub-beat grid model (16th-note resolution). Absent on
    *  pre-2026-05-20 documents which stored beat indices (0..3); the loader
    *  upgrades those by multiplying highlightedBeats × PATTERN_SUBBEATS_PER_BEAT
@@ -253,6 +275,17 @@ export interface AnnotationLayer<T extends AnnotationLayerType = AnnotationLayer
    *  points came from. The annotator edits it freely; the original detector
    *  output is untouched. UI may show a "from <X>" badge. */
   importedFrom?: string;
+  /** Demucs stem a detector-sourced layer was built from ("vocals" | "drums" |
+   *  "bass" | "other" | "guitar" | "piano"), or "mix" for whole-track
+   *  detectors. Drives the lane label's stem tag and the highlight shown while
+   *  that stem is auditioned. Only set on read-only detector layers; undefined
+   *  on user-authored ones. */
+  sourceStem?: 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano' | 'mix';
+  /** The detector's one-line manifest `description` — the algorithm/heuristic
+   *  this layer's items came from (e.g. "RMS energy presence of the vocals
+   *  Demucs stem"). Surfaced in the lane's ⓘ info popover. Only set on
+   *  read-only detector layers; undefined on user-authored ones. */
+  sourceDescription?: string;
   /** Per-layer evaluation mode. Default `'full-annotation'` when omitted —
    *  pre-Phase-2 documents on disk don't have this field. See `LayerEvalMode`. */
   mode?: LayerEvalMode;
@@ -354,8 +387,33 @@ export function newLoopLayer(name: string, color: string): AnnotationLayer<'loop
   };
 }
 
+/** Backend-supported, gated by the experimentalLyricsFamily Settings flag.
+ *  Lyrics layers default to no snap — word timestamps are sub-beat and should
+ *  not be quantized to the grid. */
+export function newLyricsLayer(name: string, color: string): AnnotationLayer<'lyrics'> {
+  return {
+    id: newId(),
+    name,
+    type: 'lyrics',
+    visible: true,
+    color,
+    snap: 'off',
+    items: [],
+  };
+}
+
 export function newCueItem(time: number, label = '', description = ''): CueItem {
   return { id: newId(), time, label, description };
+}
+
+/** A new lyric item. `end` is only meaningful for `kind === 'line'`. */
+export function newLyricsItem(
+  time: number,
+  text = '',
+  kind: 'word' | 'line' = 'word',
+  end?: number,
+): LyricsItem {
+  return { id: newId(), time, text, kind, ...(end !== undefined ? { end } : {}) };
 }
 
 export function newSpanItem(start: number, end: number, label = '', description = ''): SpanItem {

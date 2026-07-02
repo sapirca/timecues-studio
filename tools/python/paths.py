@@ -7,7 +7,6 @@ Per-song hierarchy:
   ├── song-info/          — Per-annotator metadata: <annotator>.json
   ├── annotations/        — All annotation types grouped by slug
   │   ├── manual/<annotator>/<slug>.json
-  │   ├── eye/<annotator>/<slug>.json
   │   ├── auto-guess/<annotator>/<slug>.json
   │   └── layers/<annotator>/<slug>.json
   ├── stems/              — Demix stems
@@ -110,10 +109,11 @@ WEB_STEMS_DIR     = REPO_ROOT / "web-app" / "public" / "stems"
 DATA_STEMS_DIR    = DATA_DIR / "stems"
 DEFAULT_STEMS_DIR = DEFAULT_DATA_DIR / "stems"
 
-# The four Demucs stems. "mix" is the full track (the default, non-stem run) and
-# is intentionally NOT in this set — callers treat stem in (None, "mix") as the
-# full-mix path through find_audio().
-STEM_NAMES = ("vocals", "drums", "bass", "other")
+# The six Demucs stems (htdemucs_6s). "mix" is the full track (the default,
+# non-stem run) and is intentionally NOT in this set — callers treat stem in
+# (None, "mix") as the full-mix path through find_audio(). `guitar` and `piano`
+# are the 6-source split of the old single `other` stem.
+STEM_NAMES = ("vocals", "drums", "bass", "other", "guitar", "piano")
 
 
 def stem_audio(slug: str, stem: str) -> Optional[Path]:
@@ -156,9 +156,6 @@ def song_info_dir(slug: str) -> Path:
 # Annotation type directories (per-song)
 def manual_annotations_dir(slug: str) -> Path:
     return annotations_dir(slug) / "manual"
-
-def eye_annotations_dir(slug: str) -> Path:
-    return annotations_dir(slug) / "eye"
 
 def auto_guess_annotations_dir(slug: str) -> Path:
     return annotations_dir(slug) / "auto-guess"
@@ -240,13 +237,11 @@ _DEFAULT_ANNOTATIONS_DIR = DEFAULT_DATA_DIR / "annotations"
 
 # Annotation folders (per-annotator subdirs: <dir>/<annotator>/<slug>.json)
 MANUAL_ANNOTATIONS_DIR       = _ANNOTATIONS_DIR / "manual"
-EYE_ANNOTATIONS_DIR        = _ANNOTATIONS_DIR / "eye"
 AUTO_GUESS_ANNOTATIONS_DIR = _ANNOTATIONS_DIR / "auto-guess"
 ANNOTATION_TIMES_DIR       = _ANNOTATIONS_DIR / "timing"
 
 # Default annotation folders shipped with the container (parallel layout).
 DEFAULT_MANUAL_ANNOTATIONS_DIR       = _DEFAULT_ANNOTATIONS_DIR / "manual"
-DEFAULT_EYE_ANNOTATIONS_DIR        = _DEFAULT_ANNOTATIONS_DIR / "eye"
 DEFAULT_AUTO_GUESS_ANNOTATIONS_DIR = _DEFAULT_ANNOTATIONS_DIR / "auto-guess"
 
 # Custom-script annotation folders (per-script subdir + per-annotator subdir).
@@ -276,6 +271,11 @@ MIR_FEATURES_DIR   = _ALGO_OUTPUTS_DIR / "mir-features"
 
 # Custom-script result cache (algorithm-mode): <dir>/<script_name>/<slug>.json
 CUSTOM_RESULTS_DIR = _ALGO_OUTPUTS_DIR / "custom"
+# Read-only data-default seed for the above, shipped inside the image. Lets the
+# demo corpus's curated outputs render on a fresh data dir without a writable
+# cache (parallels DEFAULT_SONGS_DIR / DEFAULT_SONG_INFO_DIR). User data at
+# CUSTOM_RESULTS_DIR always takes precedence.
+DEFAULT_CUSTOM_RESULTS_DIR = DEFAULT_DATA_DIR / "algorithm-outputs" / "custom"
 
 # MSAF raw outputs (per-slug folder: msaf/<slug>/msaf-{algo}.json + estimations.jams)
 MSAF_DIR             = _ALGO_OUTPUTS_DIR / "msaf"

@@ -57,8 +57,9 @@ if (!process.env.VITE_COMMIT_SHA) {
 // container reaches them via the internal compose network.
 const BPM_HOST = process.env.BPM_HOST ?? '127.0.0.1'
 const MIR_EVAL_HOST = process.env.MIR_EVAL_HOST ?? 'localhost'
-const MIR_HOST = process.env.MIR_HOST ?? '127.0.0.1'
-const RUPTURES_HOST = process.env.RUPTURES_HOST ?? '127.0.0.1'
+// The consolidated DSP server (dsp_server.py, :8003) hosts ruptures and mir
+// behind one port. msaf stays its own sidecar — incompatible numpy/librosa pins.
+const DSP_HOST = process.env.DSP_HOST ?? '127.0.0.1'
 const MSAF_HOST = process.env.MSAF_HOST ?? '127.0.0.1'
 const CUSTOM_HOST = process.env.CUSTOM_HOST ?? '127.0.0.1'
 const STEMS_HOST = process.env.STEMS_HOST ?? '127.0.0.1'
@@ -69,7 +70,6 @@ const STEMS_PORT = 8006
 // profile. When the profile isn't running, the proxy returns 503.
 const SPAN_HOST = process.env.SPAN_HOST ?? '127.0.0.1'
 const BEATNET_HOST = process.env.BEATNET_HOST ?? '127.0.0.1'
-const LOOP_HOST = process.env.LOOP_HOST ?? '127.0.0.1'
 const PANNS_HOST = process.env.PANNS_HOST ?? '127.0.0.1'
 const PITCH_HOST = process.env.PITCH_HOST ?? '127.0.0.1'
 const CUE_EXTRAS_HOST = process.env.CUE_EXTRAS_HOST ?? '127.0.0.1'
@@ -412,7 +412,6 @@ type CorpusBase = {
   songs: string;
   songInfo: string;
   manualAnnotations: string;
-  eyeAnnotations: string;
   autoGuessAnnotations: string;
   stems: string;
 }
@@ -420,7 +419,6 @@ const TEAM_CORPUS: CorpusBase = {
   songs: DATA_DIRS.songs,
   songInfo: DATA_DIRS.songInfo,
   manualAnnotations: DATA_DIRS.manualAnnotations,
-  eyeAnnotations: DATA_DIRS.eyeAnnotations,
   autoGuessAnnotations: DATA_DIRS.autoGuessAnnotations,
   stems: STEMS_DIR,
 }
@@ -428,7 +426,6 @@ const DEMO_CORPUS: CorpusBase = {
   songs: DEFAULT_DATA_DIRS.songs,
   songInfo: DEFAULT_DATA_DIRS.songInfo,
   manualAnnotations: DEFAULT_DATA_DIRS.manualAnnotations,
-  eyeAnnotations: DEFAULT_DATA_DIRS.eyeAnnotations,
   autoGuessAnnotations: DEFAULT_DATA_DIRS.autoGuessAnnotations,
   stems: DEFAULT_DATA_DIRS.stems,
 }
@@ -474,13 +471,12 @@ function clearCacheForSong(slug: string, file: string) {
   }
 }
 
-// Remove every annotator's annotation files for a slug across manual/eye/auto-guess
+// Remove every annotator's annotation files for a slug across manual/auto-guess
 // and per-script custom annotations, plus the shared song-info file. Only the
 // user-writable tree under data/ is touched — data-default/ seeds stay intact.
 function clearAnnotationsForSong(slug: string) {
   const annotationBases = [
     DATA_DIRS.manualAnnotations,
-    DATA_DIRS.eyeAnnotations,
     DATA_DIRS.autoGuessAnnotations,
   ]
   for (const base of annotationBases) {
@@ -710,7 +706,6 @@ function serveManualAnnotations(): Plugin {
 
         const corpus = corpusForReq(req)
         const dir = corpus.manualAnnotations
-        const eyeDir = corpus.eyeAnnotations
         const autoGuessDir = corpus.autoGuessAnnotations
 
         // LIST  GET /api/manual-annotations  or  /api/manual-annotations/
@@ -719,16 +714,6 @@ function serveManualAnnotations(): Plugin {
           const statuses = Object.entries(visibleManual).map(([slug, filePath]) => {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-              const eyeFile = resolveAnnotationFile(eyeDir, annotatorId, slug)
-              let eyeStatus: string | null = null
-              let eyeSectionsCount = 0
-              if (eyeFile.exists) {
-                try {
-                  const eyeData = JSON.parse(fs.readFileSync(eyeFile.filePath, 'utf-8'))
-                  eyeStatus = eyeData.eye_status ?? null
-                  eyeSectionsCount = Array.isArray(eyeData.sections) ? eyeData.sections.length : 0
-                } catch { /* ignore */ }
-              }
               const autoGuessFile = resolveAnnotationFile(autoGuessDir, annotatorId, slug)
               let autoGuessStatus: string | null = null
               let autoGuessPointsCount = 0
@@ -744,16 +729,14 @@ function serveManualAnnotations(): Plugin {
                 reviewed: !!data.reviewed,
                 ready_for_review: !!data.ready_for_review,
                 genre: data.genre ?? null,
-                eye_status: eyeStatus,
                 auto_guess_status: autoGuessStatus,
                 // Item counts so the sidebar popover applies the same
                 // hasItems × status rule as the editor's StatusPill.
                 sections_count: Array.isArray(data.sections) ? data.sections.length : 0,
-                eye_sections_count: eyeSectionsCount,
                 auto_guess_points_count: autoGuessPointsCount,
               }
             } catch {
-              return { slug, reviewed: false, ready_for_review: false, eye_status: null, sections_count: 0, eye_sections_count: 0, auto_guess_points_count: 0 }
+              return { slug, reviewed: false, ready_for_review: false, sections_count: 0, auto_guess_points_count: 0 }
             }
           })
           res.end(JSON.stringify(statuses))
@@ -1030,7 +1013,7 @@ function serveAnalysis(): Plugin {
 // re-running needs the container back up.
 // Composite detector id ↔ (algo, stem). The unit of work is the composite id:
 // the bare algo for the full mix, "<algo>__<stem>" for a per-stem run (stem ∈
-// vocals/drums/bass/other). This mirrors cache_name() in tools/python/paths.py
+// vocals/drums/bass/other/guitar/piano). This mirrors cache_name() in tools/python/paths.py
 // — the same string keys the on-disk JSON, the /api/<fam>/detect/<slug>/<id>
 // URL, and the UI overlay set. Splitting on the FIRST "__" keeps algo ids that
 // themselves contain a single underscore (none today) unambiguous.
@@ -1046,7 +1029,6 @@ const EXPERIMENTAL_FAMILY_DIRS: Record<string, string> = {
   'panns':      DATA_DIRS.panns,
   'beatnet':    DATA_DIRS.beatnet,
   'pitch':      DATA_DIRS.pitch,
-  'loop':       DATA_DIRS.loop,
   'percussive': DATA_DIRS.percussive,
   'pattern':    DATA_DIRS.pattern,
 }
@@ -1481,7 +1463,7 @@ function wipeCurrentDataset(): {
   // Wipe whole annotation trees in case orphan annotations exist for slugs
   // that were already missing from data/songs/.
   let annotationDirsDeleted = 0
-  for (const base of [DATA_DIRS.manualAnnotations, DATA_DIRS.eyeAnnotations, DATA_DIRS.autoGuessAnnotations, DATA_DIRS.customAnnotations]) {
+  for (const base of [DATA_DIRS.manualAnnotations, DATA_DIRS.autoGuessAnnotations, DATA_DIRS.customAnnotations]) {
     if (fs.existsSync(base)) { rmIfExists(base); annotationDirsDeleted += 1 }
   }
   // Annotator sign-up profiles — wiped so re-signing rebuilds them.
@@ -1536,91 +1518,6 @@ function serveDatasetAdmin(): Plugin {
   }
 }
 
-// Serve and persist eye ("by-eye") annotations at /api/eye-annotations
-// Same ManualAnnotation shape, annotated visually rather than from algo output.
-// GET    /api/eye-annotations/:slug  → read one (200 + null if absent)
-// POST   /api/eye-annotations/:slug  → write one
-// DELETE /api/eye-annotations/:slug  → delete
-function serveEyeAnnotations(): Plugin {
-  if (!fs.existsSync(DATA_DIRS.eyeAnnotations)) fs.mkdirSync(DATA_DIRS.eyeAnnotations, { recursive: true })
-
-  return {
-    name: 'eye-annotations',
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        if (!req.url?.startsWith('/api/eye-annotations')) return next()
-
-        const suffix = req.url.slice('/api/eye-annotations'.length)
-        res.setHeader('Access-Control-Allow-Origin', '*')
-        res.setHeader('Content-Type', 'application/json')
-
-        const annotatorId = readAnnotatorIdFromReq(req)
-        if (!annotatorId) return send401MissingAnnotator(res)
-
-        const dir = corpusForReq(req).eyeAnnotations
-
-        const match = suffix.match(/^\/([^/]+)$/)
-        if (!match) return next()
-        const slug = decodeSegment(match[1])
-        if (!slug) return send400BadSegment(res, 'slug')
-
-        if (req.method === 'GET') {
-          const resolved = resolveAnnotationFile(dir, annotatorId, slug)
-          if (resolved.exists) {
-            res.end(fs.readFileSync(resolved.filePath, 'utf-8'))
-          } else {
-            // 200 + null body: see /api/manual-annotations comment above.
-            res.end('null')
-          }
-          return
-        }
-
-        if (req.method === 'POST' || req.method === 'DELETE') {
-          const { isOnTeam } = isOnTeamForReq(req)
-          if (!isOnTeam) return send403NotOnTeam(res)
-        }
-
-        if (req.method === 'POST') {
-          if (rejectIfBodyTooLarge(req, res, MAX_JSON_BODY)) return
-          let body = ''
-          req.on('data', (chunk: Buffer) => { body += chunk.toString() })
-          req.on('end', () => {
-            try {
-              const data = JSON.parse(body)
-              const ownPath = ownAnnotationPath(dir, annotatorId, slug)
-              const ownDir = path.dirname(ownPath)
-              if (!fs.existsSync(ownDir)) fs.mkdirSync(ownDir, { recursive: true })
-              if (data.time_spent_seconds === undefined && fs.existsSync(ownPath)) {
-                try {
-                  const prev = JSON.parse(fs.readFileSync(ownPath, 'utf-8'))
-                  if (typeof prev?.time_spent_seconds === 'number') {
-                    data.time_spent_seconds = prev.time_spent_seconds
-                  }
-                } catch { /* ignore */ }
-              }
-              fs.writeFileSync(ownPath, JSON.stringify(data, null, 2), 'utf-8')
-              res.end('{"ok":true}')
-            } catch {
-              res.statusCode = 400
-              res.end('{"error":"invalid json"}')
-            }
-          })
-          return
-        }
-
-        if (req.method === 'DELETE') {
-          const ownPath = ownAnnotationPath(dir, annotatorId, slug)
-          if (fs.existsSync(ownPath)) fs.unlinkSync(ownPath)
-          res.end('{"ok":true}')
-          return
-        }
-
-        next()
-      })
-    },
-  }
-}
-
 // Serve and persist per-song info (BPM, time signature, grid offset) at
 // /api/song-info. Song-level — not tied to a specific annotation type.
 // Sole source of truth for these fields; annotation files no longer carry them
@@ -1653,7 +1550,7 @@ function serveSongInfo(): Plugin {
             res.end(fs.readFileSync(filePath, 'utf-8'))
             return
           }
-          // No file on disk → return JSON null, matching the manual/eye/
+          // No file on disk → return JSON null, matching the manual/
           // auto-guess endpoints. Callers (songInfo.loadSongInfo) already
           // coalesce null into makeEmptySongInfo(slug). Returning a synthesized
           // default object made the Import-Dataset dialog's "does this exist?"
@@ -1682,13 +1579,24 @@ function serveSongInfo(): Plugin {
           let body = ''
           req.on('data', (chunk: Buffer) => { body += chunk.toString() })
           req.on('end', () => {
+            let data: unknown
             try {
-              const data = JSON.parse(body)
-              fs.writeFileSync(writePath, JSON.stringify(data, null, 2), 'utf-8')
-              res.end('{"ok":true}')
+              data = JSON.parse(body)
             } catch {
               res.statusCode = 400
               res.end('{"error":"invalid json"}')
+              return
+            }
+            try {
+              // The team song-info/ dir is created lazily — it may not exist
+              // yet on a fresh corpus (only songs/ is made on audio upload), so
+              // ensure it before writing or the write throws ENOENT.
+              fs.mkdirSync(path.dirname(writePath), { recursive: true })
+              fs.writeFileSync(writePath, JSON.stringify(data, null, 2), 'utf-8')
+              res.end('{"ok":true}')
+            } catch (err) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: 'write failed', detail: String(err) }))
             }
           })
           return
@@ -1978,7 +1886,7 @@ function serveDatasetConfig(): Plugin {
 
         // DELETE /api/people/<email-or-id> — admin-only destructive purge.
         // Removes the person from peopleByEmail AND deletes every annotation
-        // file they own (manual/eye/auto-guess + per-script custom) plus their
+        // file they own (manual/auto-guess + per-script custom) plus their
         // annotator profile from disk. The Team → Members `Remove` button
         // triggers this after a typed DELETE_USER confirmation. The key is
         // usually a real email, but can also be a username-style key like
@@ -2043,7 +1951,6 @@ function serveDatasetConfig(): Plugin {
           const summary = { deletedIds: [] as string[], removedDirs: 0, removedFiles: 0, removedProfiles: 0 }
           const standardDirs = [
             DATA_DIRS.manualAnnotations,
-            DATA_DIRS.eyeAnnotations,
             DATA_DIRS.autoGuessAnnotations,
           ]
           for (const id of idsToPurge) {
@@ -2350,67 +2257,25 @@ function proxyMirEval(): Plugin {
   }
 }
 
-// Proxy /api/mir → Python MIR feature server on localhost:8007.
-// The Python server must be started separately:
-//   python tools/python/mir_server.py
-function proxyMir(): Plugin {
+// Proxy the consolidated DSP server families → localhost:8003 (dsp_server.py).
+// One reverse proxy for the single process that hosts ruptures and mir. Auth is
+// preserved: expensive analysis runs (non-GET) on ruptures require team
+// membership; mir extraction and all GETs are open. (msaf is a separate sidecar
+// with its own proxy path — incompatible deps keep it out of this process.)
+//   python tools/python/dsp_server.py
+function proxyDsp(): Plugin {
   return {
-    name: 'proxy-mir',
+    name: 'proxy-dsp',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (!req.url?.startsWith('/api/mir/')) return next()
+        const url = req.url ?? ''
+        const isRuptures = url.startsWith('/api/ruptures')
+        const isMir = url.startsWith('/api/mir/')
+        if (!isRuptures && !isMir) return next()
 
-        const chunks: Buffer[] = []
-        req.on('data', (chunk: Buffer) => chunks.push(chunk))
-        req.on('end', () => {
-          const body = Buffer.concat(chunks)
-          const options: http.RequestOptions = {
-            hostname: MIR_HOST,
-            port: 8007,
-            path: req.url,
-            method: req.method,
-            headers: {
-              'Content-Type': 'application/json',
-              'Content-Length': body.length,
-            },
-          }
-
-          const proxy = http.request(options, (proxyRes) => {
-            res.writeHead(proxyRes.statusCode ?? 502, {
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-            })
-            proxyRes.pipe(res)
-          })
-
-          proxy.on('error', () => {
-            res.statusCode = 503
-            res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({
-              error: 'Python MIR feature server is not running.',
-              hint: 'python tools/python/mir_server.py',
-            }))
-          })
-
-          if (body.length) proxy.write(body)
-          proxy.end()
-        })
-      })
-    },
-  }
-}
-
-// Proxy /api/ruptures → Python Ruptures server on localhost:8003
-function proxyRuptures(): Plugin {
-  return {
-    name: 'proxy-ruptures',
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        if (!req.url?.startsWith('/api/ruptures')) return next()
-
-        // /api/ruptures/health is the only GET; everything else is an
-        // expensive analysis run that should require team membership.
-        if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+        // Expensive analysis runs (non-GET) on ruptures require team
+        // membership; mir extraction and all GETs are open.
+        if (isRuptures && (req.method ?? 'GET').toUpperCase() !== 'GET') {
           const { isOnTeam, annotatorId } = isOnTeamForReq(req)
           if (!annotatorId) return send401MissingAnnotator(res)
           if (!isOnTeam) return send403NotOnTeam(res)
@@ -2421,7 +2286,7 @@ function proxyRuptures(): Plugin {
         req.on('end', () => {
           const body = Buffer.concat(chunks)
           const options: http.RequestOptions = {
-            hostname: RUPTURES_HOST,
+            hostname: DSP_HOST,
             port: 8003,
             path: req.url,
             method: req.method,
@@ -2443,8 +2308,8 @@ function proxyRuptures(): Plugin {
             res.statusCode = 503
             res.setHeader('Content-Type', 'application/json')
             res.end(JSON.stringify({
-              error: 'Ruptures server is not running.',
-              hint: 'python tools/python/ruptures_server.py',
+              error: 'DSP server is not running.',
+              hint: 'python tools/python/dsp_server.py',
             }))
           })
 
@@ -2754,7 +2619,6 @@ function makeFamilyProxy(
   }
 }
 
-const proxyLoop       = (): Plugin => makeFamilyProxy('loop',       '/api/loop',       LOOP_HOST,       8012, 'loop')
 const proxyPanns      = (): Plugin => makeFamilyProxy('panns',      '/api/panns',      PANNS_HOST,      8013, 'panns')
 const proxyPitch      = (): Plugin => makeFamilyProxy('pitch',      '/api/pitch',      PITCH_HOST,      8011, 'pitch')
 const proxyCueExtras  = (): Plugin => makeFamilyProxy('cue-extras', '/api/cue-extras', CUE_EXTRAS_HOST, 8014, 'cue-extras')
@@ -3164,7 +3028,6 @@ function serveStorageStats(): Plugin {
 
     const annotations =
         annotationSizeForSlug(DATA_DIRS.manualAnnotations, slug)
-      + annotationSizeForSlug(DATA_DIRS.eyeAnnotations,  slug)
       + annotationSizeForSlug(DATA_DIRS.autoGuessAnnotations, slug)
       + annotationSizeForSlug(DATA_DIRS.songInfo, slug)
 
@@ -3448,7 +3311,7 @@ function serveRunAlgorithms(): Plugin {
   // Each call writes ruptures-<suffix>.json to the analysis dir.
   const runRupturesOne = (job: Job, slug: string, suffix: string): Promise<RunResult> =>
     runSidecarOne(job, suffix, {
-      host: RUPTURES_HOST, port: 8003, apiPath: '/api/ruptures/analyze',
+      host: DSP_HOST, port: 8003, apiPath: '/api/ruptures/analyze',
       body: { slug, suffix }, downHint: 'is the ruptures server running on :8003?',
     })
 
@@ -3486,8 +3349,8 @@ function serveRunAlgorithms(): Plugin {
     })
   }
 
-  // Run a single MSAF algorithm by POST-ing to the python server on :8002.
-  // Each call writes <algorithm>.json to the analysis dir.
+  // Run a single MSAF algorithm by POST-ing to the standalone msaf server on
+  // :8002 (separate sidecar — incompatible deps). Writes <algorithm>.json.
   const runMsafOne = (job: Job, slug: string, algorithm: string): Promise<RunResult> =>
     runSidecarOne(job, algorithm, {
       host: MSAF_HOST, port: 8002, apiPath: '/api/msaf/analyze',
@@ -3643,12 +3506,6 @@ function serveRunAlgorithms(): Plugin {
         const pannsRequested = algorithms
           .filter((a) => PANNS_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.panns, slug, `${a}.json`)))
-
-        // LOOP family (chroma-autocorr).
-        const LOOP_IDS = ['chroma-autocorr']
-        const loopRequested = algorithms
-          .filter((a) => LOOP_IDS.includes(splitStemId(a).algo))
-          .filter((a) => !isFreshCache(path.join(DATA_DIRS.loop, slug, `${a}.json`)))
 
         // CUE-family note-onset detector (basic-pitch).
         const PITCH_IDS = ['basic-pitch']
@@ -3835,10 +3692,6 @@ function serveRunAlgorithms(): Plugin {
             await runFamilyBlock(
               'PANNs (SPAN)', PANNS_IDS, PANNS_HOST, 8013,
               '/api/panns/detect', 'panns', pannsRequested,
-            )
-            await runFamilyBlock(
-              'LOOP family', LOOP_IDS, LOOP_HOST, 8012,
-              '/api/loop/detect', 'loop', loopRequested,
             )
             await runFamilyBlock(
               'basic-pitch (CUE)', PITCH_IDS, PITCH_HOST, 8011,
@@ -4091,20 +3944,19 @@ function serveRunDemucs(): Plugin {
 }
 
 // Persist annotation time per song by embedding a `time_spent_seconds` field
-// directly in each annotation JSON (manual-annotations, eye-annotations,
+// directly in each annotation JSON (manual-annotations,
 // auto-guess-annotations). The time stays co-located with the annotation it
 // describes.
 //
-// GET  /api/annotation-times/:slug → { slug, perType: { manual, eye, autoGuess } }
+// GET  /api/annotation-times/:slug → { slug, perType: { manual, autoGuess } }
 // POST /api/annotation-times/:slug body { perType: {...} } — writes the values
 //   into each annotation file. A minimal stub `{ song, time_spent_seconds }`
 //   is created only when the value is non-zero and no annotation file exists.
 function serveAnnotationTimes(): Plugin {
   const manualDir      = DATA_DIRS.manualAnnotations
-  const eyeDir       = DATA_DIRS.eyeAnnotations
   const autoGuessDir = DATA_DIRS.autoGuessAnnotations
 
-  type PerType = { manual: number; eye: number; autoGuess: number }
+  type PerType = { manual: number; autoGuess: number }
 
   const readEmbedded = (filePath: string): number => {
     if (!fs.existsSync(filePath)) return 0
@@ -4162,13 +4014,11 @@ function serveAnnotationTimes(): Plugin {
         if (!slug) return send400BadSegment(res, 'slug')
 
         const manualPath      = ownAnnotationPath(manualDir,      annotatorId, slug)
-        const eyePath       = ownAnnotationPath(eyeDir,       annotatorId, slug)
         const autoGuessPath = ownAnnotationPath(autoGuessDir, annotatorId, slug)
 
         if (req.method === 'GET') {
           const perType: PerType = {
             manual:      readEmbedded(manualPath),
-            eye:       readEmbedded(eyePath),
             autoGuess: readEmbedded(autoGuessPath),
           }
           res.end(JSON.stringify({ slug, perType }))
@@ -4184,11 +4034,9 @@ function serveAnnotationTimes(): Plugin {
               const incoming = JSON.parse(body)
               const perType: PerType = {
                 manual:      Math.max(0, Math.round(Number(incoming?.perType?.manual)      || 0)),
-                eye:       Math.max(0, Math.round(Number(incoming?.perType?.eye)       || 0)),
                 autoGuess: Math.max(0, Math.round(Number(incoming?.perType?.autoGuess ?? incoming?.perType?.consensus) || 0)),
               }
               writeEmbedded(manualPath,      slug, path.dirname(manualPath),      perType.manual)
-              writeEmbedded(eyePath,       slug, path.dirname(eyePath),       perType.eye)
               writeEmbedded(autoGuessPath, slug, path.dirname(autoGuessPath), perType.autoGuess)
               res.end('{"ok":true}')
             } catch {
@@ -4206,16 +4054,14 @@ function serveAnnotationTimes(): Plugin {
 }
 
 // Bulk-export all annotations of a given type. Used by the "Download all"
-// menu so a single fetch returns every Manual/Eye/Auto-Guess annotation as one
+// menu so a single fetch returns every Manual/Auto-Guess annotation as one
 // JSON bundle, rather than the client doing N separate fetches.
 //
 // GET /api/bulk-annotations/manual        → { exported_at, type, count, annotations: { slug: ann } }
-// GET /api/bulk-annotations/eye         → ditto
 // GET /api/bulk-annotations/auto-guess  → ditto
-// GET /api/bulk-annotations/all         → { exported_at, type:'all', annotations: { slug: { manual, eye, autoGuess } } }
+// GET /api/bulk-annotations/all         → { exported_at, type:'all', annotations: { slug: { manual, autoGuess } } }
 function serveBulkAnnotations(): Plugin {
   const manualDir      = DATA_DIRS.manualAnnotations
-  const eyeDir       = DATA_DIRS.eyeAnnotations
   const autoGuessDir = DATA_DIRS.autoGuessAnnotations
 
   /** Read every annotation file owned by `annotatorId`. */
@@ -4275,8 +4121,8 @@ function serveBulkAnnotations(): Plugin {
           if (!annotatorId) return send401MissingAnnotator(res)
         }
 
-        if (kind === 'manual' || kind === 'eye' || kind === 'auto-guess') {
-          const dir = kind === 'manual' ? manualDir : kind === 'eye' ? eyeDir : autoGuessDir
+        if (kind === 'manual' || kind === 'auto-guess') {
+          const dir = kind === 'manual' ? manualDir : autoGuessDir
           if (scope === 'all') {
             const byAnnotator = readAllAnnotators(dir)
             const slugs = Object.keys(byAnnotator).length
@@ -4296,20 +4142,17 @@ function serveBulkAnnotations(): Plugin {
         if (kind === 'all') {
           if (scope === 'all') {
             const manual      = readAllAnnotators(manualDir)
-            const eye       = readAllAnnotators(eyeDir)
             const autoGuess = readAllAnnotators(autoGuessDir)
             const slugs = new Set<string>([
-              ...Object.keys(manual), ...Object.keys(eye), ...Object.keys(autoGuess),
+              ...Object.keys(manual), ...Object.keys(autoGuess),
             ])
             const annotations: Record<string, {
               manual: Record<string, unknown>;
-              eye: Record<string, unknown>;
               autoGuess: Record<string, unknown>;
             }> = {}
             for (const slug of slugs) {
               annotations[slug] = {
                 manual: manual[slug] ?? {},
-                eye: eye[slug] ?? {},
                 autoGuess: autoGuess[slug] ?? {},
               }
             }
@@ -4319,16 +4162,14 @@ function serveBulkAnnotations(): Plugin {
             return
           }
           const manual      = readAllVisible(manualDir,      annotatorId!)
-          const eye       = readAllVisible(eyeDir,       annotatorId!)
           const autoGuess = readAllVisible(autoGuessDir, annotatorId!)
           const slugs = new Set<string>([
-            ...Object.keys(manual), ...Object.keys(eye), ...Object.keys(autoGuess),
+            ...Object.keys(manual), ...Object.keys(autoGuess),
           ])
-          const annotations: Record<string, { manual: unknown; eye: unknown; autoGuess: unknown }> = {}
+          const annotations: Record<string, { manual: unknown; autoGuess: unknown }> = {}
           for (const slug of slugs) {
             annotations[slug] = {
               manual: manual[slug] ?? null,
-              eye: eye[slug] ?? null,
               autoGuess: autoGuess[slug] ?? null,
             }
           }
@@ -4531,14 +4372,13 @@ function serveAnnotationLayers(): Plugin {
 // all of them at once for cross-annotator comparison.
 //
 // GET /api/annotations/:slug/annotators
-//   → [{ id, has: { manual, eye, autoGuess } }, ...]
+//   → [{ id, has: { manual, autoGuess } }, ...]
 //
 // GET /api/annotations/:slug/all
-//   → { slug, manual: { <annId>: ManualAnnotation }, eye: {...}, autoGuess: {...} }
+//   → { slug, manual: { <annId>: ManualAnnotation }, autoGuess: {...} }
 //   One round trip; the comparison view uses this instead of N+1 fetches.
 function serveAnnotatorListing(): Plugin {
   const manualDir      = DATA_DIRS.manualAnnotations
-  const eyeDir       = DATA_DIRS.eyeAnnotations
   const autoGuessDir = DATA_DIRS.autoGuessAnnotations
 
   function readAllForSlug(baseDir: string, slug: string): Record<string, unknown> {
@@ -4556,7 +4396,7 @@ function serveAnnotatorListing(): Plugin {
   // username collisions on the Username sign-in form so two people can't
   // unknowingly share `local-alice`.
   function annotatorIdInUse(id: string): boolean {
-    for (const base of [manualDir, eyeDir, autoGuessDir]) {
+    for (const base of [manualDir, autoGuessDir]) {
       if (fs.existsSync(path.join(base, id))) return true
     }
     return false
@@ -4612,7 +4452,6 @@ function serveAnnotatorListing(): Plugin {
           if (!slug) return send400BadSegment(res, 'slug')
           const allIds = new Set<string>([
             ...listAnnotatorDirs(manualDir),
-            ...listAnnotatorDirs(eyeDir),
             ...listAnnotatorDirs(autoGuessDir),
           ])
           const fileExists = (base: string, id: string) =>
@@ -4622,10 +4461,9 @@ function serveAnnotatorListing(): Plugin {
             id,
             has: {
               manual:      fileExists(manualDir,      id),
-              eye:       fileExists(eyeDir,       id),
               autoGuess: fileExists(autoGuessDir, id),
             },
-          })).filter((r) => r.has.manual || r.has.eye || r.has.autoGuess)
+          })).filter((r) => r.has.manual || r.has.autoGuess)
 
           res.end(JSON.stringify(result))
           return
@@ -4637,7 +4475,6 @@ function serveAnnotatorListing(): Plugin {
         res.end(JSON.stringify({
           slug,
           manual:      readAllForSlug(manualDir,      slug),
-          eye:       readAllForSlug(eyeDir,       slug),
           autoGuess: readAllForSlug(autoGuessDir, slug),
         }))
       })
@@ -5015,7 +4852,6 @@ function serveEmailDomainCheck(): Plugin {
 // are excluded so the dashboard reflects real human work.
 function serveTeamStats(): Plugin {
   const manualDir      = DATA_DIRS.manualAnnotations
-  const eyeDir       = DATA_DIRS.eyeAnnotations
   const autoGuessDir = DATA_DIRS.autoGuessAnnotations
   const customDir    = DATA_DIRS.customAnnotations
 
@@ -5037,7 +4873,6 @@ function serveTeamStats(): Plugin {
   type AnnotatorStats = {
     id: string
     manual: SourceStats
-    eye: SourceStats
     autoGuess: SourceStats
     custom: CustomStats
     totalTimeSeconds: number
@@ -5055,13 +4890,13 @@ function serveTeamStats(): Plugin {
     return a > b ? a : b
   }
 
-  // Walks <baseDir>/<annotatorId>/*.json for manual/eye/autoGuess.
-  // `kind` controls how we count "reviewed" and "boundaries" — manual/eye use
+  // Walks <baseDir>/<annotatorId>/*.json for manual/autoGuess.
+  // `kind` controls how we count "reviewed" and "boundaries" — manual uses
   // `reviewed` + `sections`, autoGuess uses `auto_guess_status === 'done'`
   // + `points`.
   function collectStandardSource(
     baseDir: string,
-    kind: 'manual' | 'eye' | 'autoGuess',
+    kind: 'manual' | 'autoGuess',
     accum: Map<string, AnnotatorStats>,
     songAnnotators: Map<string, Set<string>>,
   ) {
@@ -5074,7 +4909,6 @@ function serveTeamStats(): Plugin {
       const entry = accum.get(annId) ?? {
         id: annId,
         manual: emptySourceStats(),
-        eye: emptySourceStats(),
         autoGuess: emptySourceStats(),
         custom: { count: 0, scripts: [], songs: [] },
         totalTimeSeconds: 0,
@@ -5095,7 +4929,7 @@ function serveTeamStats(): Plugin {
         const timeSpent = Number(data.time_spent_seconds)
         if (Number.isFinite(timeSpent) && timeSpent > 0) bucket.totalTimeSeconds += timeSpent
 
-        if (kind === 'manual' || kind === 'eye') {
+        if (kind === 'manual') {
           if (data.reviewed === true) bucket.reviewedCount += 1
           const sections = Array.isArray(data.sections) ? data.sections : []
           bucket.totalBoundaries += sections.length
@@ -5148,7 +4982,6 @@ function serveTeamStats(): Plugin {
         const entry = accum.get(annId) ?? {
           id: annId,
           manual: emptySourceStats(),
-          eye: emptySourceStats(),
           autoGuess: emptySourceStats(),
           custom: { count: 0, scripts: [], songs: [] },
           totalTimeSeconds: 0,
@@ -5186,20 +5019,19 @@ function serveTeamStats(): Plugin {
         const accum = new Map<string, AnnotatorStats>()
         const songAnnotators = new Map<string, Set<string>>()
         collectStandardSource(manualDir,      'manual',      accum, songAnnotators)
-        collectStandardSource(eyeDir,       'eye',       accum, songAnnotators)
         collectStandardSource(autoGuessDir, 'autoGuess', accum, songAnnotators)
         collectCustomSource(accum, songAnnotators)
 
         // Roll up per-annotator totals + sort song lists for deterministic output.
         const annotators = Array.from(accum.values()).map((a) => {
-          for (const k of ['manual', 'eye', 'autoGuess'] as const) {
+          for (const k of ['manual', 'autoGuess'] as const) {
             a[k].songs.sort()
           }
           a.custom.songs.sort()
           a.custom.scripts.sort()
-          a.totalTimeSeconds = a.manual.totalTimeSeconds + a.eye.totalTimeSeconds + a.autoGuess.totalTimeSeconds
-          a.totalAnnotations = a.manual.count + a.eye.count + a.autoGuess.count + a.custom.count
-          a.lastModified = newerIso(newerIso(a.manual.lastModified, a.eye.lastModified), a.autoGuess.lastModified)
+          a.totalTimeSeconds = a.manual.totalTimeSeconds + a.autoGuess.totalTimeSeconds
+          a.totalAnnotations = a.manual.count + a.autoGuess.count + a.custom.count
+          a.lastModified = newerIso(a.manual.lastModified, a.autoGuess.lastModified)
           return a
         })
         annotators.sort((a, b) => b.totalAnnotations - a.totalAnnotations || a.id.localeCompare(b.id))
@@ -5548,17 +5380,17 @@ export default defineConfig(async () => {
   // react() and excludeStemsFromDist() stay unwrapped (no configureServer hook).
   const apiPlugins: Plugin[] = [
     serveManifest(), serveAnalysis(), serveSongAudio(), serveStems(),
-    serveManualAnnotations(), serveAutoGuessAnnotations(), serveEyeAnnotations(),
+    serveManualAnnotations(), serveAutoGuessAnnotations(),
     serveSongInfo(), serveLyricsText(), serveSetlists(), serveDatasetConfig(),
     serveCorpusStats(), serveAlgoClusters(), serveAnnotationTimes(), serveUploadSong(),
     serveUploadStems(), serveSongsAdmin(), serveDatasetAdmin(), serveRunAlgorithms(),
     serveRunDemucs(), serveBulkAnnotations(), serveLayersBulk(), serveAnnotationLayers(),
     serveAnnotatorListing(), serveAnnotatorProfiles(), serveEmailDomainCheck(),
-    serveTeamStats(), proxyMirEval(), proxyMir(), proxyRuptures(), proxyBpm(),
+    serveTeamStats(), proxyMirEval(), proxyDsp(), proxyBpm(),
     // In-process cache reader — MUST precede the experimental family proxies so
     // cached GETs are served from disk even when the sidecar containers are down.
     serveExperimentalCache(),
-    proxySpan(), proxyBeatnet(), proxyLoop(), proxyPanns(), proxyPitch(),
+    proxySpan(), proxyBeatnet(), proxyPanns(), proxyPitch(),
     proxyCueExtras(), proxyPercussive(), proxyLyrics(), proxyPattern(),
     proxyCustomScripts(), serveSongCacheListing(), serveUploadAlgo(), serveStorageStats(),
     serveCapabilities(),

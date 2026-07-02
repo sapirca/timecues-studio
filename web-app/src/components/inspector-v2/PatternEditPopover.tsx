@@ -6,10 +6,11 @@
 
 import { type CSSProperties } from 'react';
 import type { AnnotationLayer, PatternItem } from '../../types/annotationLayer';
-import { PATTERN_SUBBEATS_PER_BEAT, patternStepsPerCycle } from '../../types/annotationLayer';
+import { PATTERN_SUBBEATS_PER_BEAT, resolvePatternSteps } from '../../types/annotationLayer';
 import type { TempoAnchor } from '../../types/songInfo';
 import { BeatChipPicker } from './PatternEditorPanel';
 import { AnnotationPointCard } from './shared/AnnotationPointCard';
+import { detectorBadgeLabel } from './shared/detectorBadge';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
 
 export type PatternAnchor = PopoverAnchor;
@@ -21,6 +22,12 @@ export function usePatternEditPopover() {
 interface PatternEditPopoverProps {
   layer: AnnotationLayer<'patterns'>;
   pattern: PatternItem;
+  /** When true, inputs (label, times, repeats, sub-beat chips) are disabled and
+   *  the Delete button is hidden. Used for detector-sourced layers. */
+  readOnly?: boolean;
+  /** Raw detector output for this pattern — shown as a collapsible JSON block
+   *  on read-only cards. */
+  rawOutput?: unknown;
   /** Song time-signature numerator — sets the sub-beat chip count
    *  (`beatsPerBar × PATTERN_SUBBEATS_PER_BEAT`). Defaults to 4 when no grid
    *  is configured. */
@@ -53,7 +60,7 @@ function fmtTime(t: number): string {
 }
 
 export function PatternEditPopover({
-  layer, pattern, beatsPerBar, popoverRef, positionStyle,
+  layer, pattern, readOnly = false, rawOutput, beatsPerBar, popoverRef, positionStyle,
   onChange, onDelete, onClose,
   onPlay, onStop, isPlaying,
   bpm, gridOffset, anchors, currentTime,
@@ -61,6 +68,18 @@ export function PatternEditPopover({
   const cycle = Math.max(0, pattern.end - pattern.start);
   const reps = Math.max(1, Math.floor(pattern.repeatCount));
   const regionEnd = pattern.start + reps * cycle;
+  const steps = resolvePatternSteps(pattern, beatsPerBar);
+  const cycleBeats = Math.round(steps / PATTERN_SUBBEATS_PER_BEAT);
+
+  // Karaoke sweep: map the live playhead to a fractional sub-beat position
+  // inside the *current* cycle so the chip grid lights up as each step plays.
+  // Resets at the top of every cycle (elapsed mod cycle) to track the loop;
+  // null whenever playback isn't inside the repeated region.
+  const playheadStep =
+    isPlaying && currentTime != null && cycle > 0 &&
+    currentTime >= pattern.start && currentTime < regionEnd
+      ? ((currentTime - pattern.start) % cycle) / cycle * steps
+      : null;
 
   const extras = (
     <>
@@ -72,11 +91,12 @@ export function PatternEditPopover({
             min={1}
             max={256}
             value={pattern.repeatCount}
+            disabled={readOnly}
             onChange={(e) => {
               const n = Math.max(1, Math.min(256, Math.floor(Number(e.target.value) || 1)));
               onChange({ repeatCount: n });
             }}
-            className="w-16 bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[12px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-fuchsia-400/40"
+            className={`w-16 bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[12px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-fuchsia-400/40 ${readOnly ? 'cursor-not-allowed opacity-70' : ''}`}
           />
         </label>
         <span className="text-[10px] font-mono text-slate-400" title="Region end (cycle × repeats)">
@@ -86,13 +106,15 @@ export function PatternEditPopover({
 
       <div>
         <span className="block text-[9px] uppercase tracking-wider text-slate-300 mb-0.5">
-          Sub-beats <span className="normal-case text-slate-400">({patternStepsPerCycle(beatsPerBar)}/cycle = {beatsPerBar} × {PATTERN_SUBBEATS_PER_BEAT} — click to toggle)</span>
+          Sub-beats <span className="normal-case text-slate-400">({steps}/cycle = {cycleBeats} × {PATTERN_SUBBEATS_PER_BEAT} — click to toggle)</span>
         </span>
         <BeatChipPicker
           color={layer.color}
-          beatsPerBar={beatsPerBar}
+          steps={steps}
           highlighted={pattern.highlightedBeats}
           onChange={(next) => onChange({ highlightedBeats: next })}
+          readOnly={readOnly}
+          playheadStep={playheadStep}
         />
       </div>
     </>
@@ -101,11 +123,13 @@ export function PatternEditPopover({
   return (
     <AnnotationPointCard
       kind="pattern"
+      readOnly={readOnly}
       layerName={layer.name}
+      badge={readOnly ? detectorBadgeLabel(layer.source) : undefined}
+      rawOutput={rawOutput}
       layerColor={layer.color}
       start={pattern.start}
       end={pattern.end}
-      regionEnd={regionEnd}
       label={pattern.label}
       labelPlaceholder="short label (e.g. kick pattern A)"
       description={pattern.description ?? ''}

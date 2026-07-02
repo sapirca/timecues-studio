@@ -9,7 +9,7 @@ Endpoints
   GET    /api/custom-scripts/file/:name         → raw source of <name>.py (for the UI editor)
   POST   /api/custom-scripts/reload             → re-scan tools/python/custom/
   POST   /api/custom-scripts/upload             → body {name, code} → write file + reload
-  DELETE /api/custom-scripts/:name              → remove file + cached results
+  DELETE /api/custom-scripts/:name              → move .py to custom/.trash + wipe cached results
   DELETE /api/custom-scripts/:name/outputs      → wipe algorithm cache + this annotator's
                                                    annotations for the detector (keeps the .py)
   POST   /api/custom-scripts/run/:name          → query ?slug=...&force=1 → run + persist
@@ -298,16 +298,33 @@ def patch_script_flags(name: str, *, is_algorithm: bool, is_annotation: bool) ->
     raise RuntimeError("loader did not see the file after patch — try /reload")
 
 
-def delete_script(name: str) -> bool:
+# Soft-deleted sources are moved here rather than unlinked, so a researcher
+# who deletes a detector by mistake can recover the .py from disk. The folder
+# is a dotfile, so scan() (which skips dotfiles and non-.py entries) never
+# surfaces trashed detectors back into the registry.
+TRASH_DIR = CUSTOM_DIR / ".trash"
+
+
+def delete_script(name: str) -> Optional[Path]:
+    """Soft-delete a detector: move its .py into CUSTOM_DIR/.trash and wipe
+    cached algorithm results. Returns the trash path, or None if no source
+    file backed the name (nothing to delete)."""
     if not _safe_name(name):
-        return False
+        return None
     target = _resolve_script_file(name)
-    removed = False
+    trashed_to: Optional[Path] = None
     if target is not None:
-        target.unlink()
-        removed = True
-    delete_results_for(name)  # also wipes cached algorithm-mode results
-    return removed
+        TRASH_DIR.mkdir(parents=True, exist_ok=True)
+        dest = TRASH_DIR / target.name
+        # Avoid clobbering an earlier trashed file with the same stem.
+        suffix = 1
+        while dest.exists():
+            dest = TRASH_DIR / f"{target.stem}.{suffix}{target.suffix}"
+            suffix += 1
+        target.rename(dest)
+        trashed_to = dest
+    delete_results_for(name)  # cached results are regenerable; wipe them
+    return trashed_to
 
 
 def read_script(name: str) -> Optional[str]:
@@ -823,8 +840,18 @@ class Handler(BaseHTTPRequestHandler):
             name = unquote(m.group(1))
             if not _safe_name(name):
                 self._send(400, {"error": "invalid name"}); return
-            removed = delete_script(name)
-            self._send(200 if removed else 404, {"ok": removed})
+            trashed_to = delete_script(name)
+            if trashed_to is None:
+                self._send(404, {"ok": False, "error": "not found"}); return
+            self._send(200, {
+                "ok": True,
+                "trashed_to": str(trashed_to),
+                "message": (
+                    f'"{name}" moved to the app trash. The source file is kept '
+                    f"on disk at {trashed_to} — delete it manually if you want "
+                    "it gone for good."
+                ),
+            })
             return
 
         m = re.fullmatch(r"/api/custom-annotations/([^/]+)/(.+)", path)

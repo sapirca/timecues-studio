@@ -890,6 +890,47 @@ def _cors():
     }
 
 
+# ─── Route handlers ──────────────────────────────────────────────────────────
+# Shared by the standalone server below and the consolidated dsp_server.py.
+# Each returns (status_code, body) or None when the path isn't a mir route.
+
+def handle_get(full_path: str):
+    path = full_path.split("?")[0]
+    if path == "/api/mir/health":
+        return 200, {
+            "ok":            _LIBROSA_OK,
+            "librosaOk":     _LIBROSA_OK,
+            "scipyOk":       _SCIPY_OK,
+            "pyloudnormOk":  _PYLOUDNORM_OK,
+            "essentiaOk":    _ESSENTIA_OK,
+            "sections":      list(_SECTIONS.keys()) + ["highlevel"],
+        }
+    if path.startswith("/api/mir/features/"):
+        slug = path[len("/api/mir/features/"):]
+        cache_path = CACHE_DIR / f"{slug}.json"
+        if cache_path.exists():
+            return 200, json.loads(cache_path.read_text())
+        return 200, None
+    return None
+
+
+def handle_post(full_path: str, body: dict):
+    path = full_path.split("?")[0]
+    if path == "/api/mir/extract":
+        slug     = safe_segment(str(body.get("slug", "")).strip())
+        force    = bool(body.get("force", False))
+        sections = body.get("sections") or None
+        if not slug:
+            return 400, {"error": "invalid or missing slug"}
+        try:
+            return 200, extract(slug, force=force, sections=sections)
+        except FileNotFoundError as e:
+            return 404, {"error": str(e)}
+        except Exception as e:
+            return 500, {"error": f"extraction failed: {type(e).__name__}: {e}"}
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         code = str(args[1]) if len(args) > 1 else "???"
@@ -913,53 +954,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-
-        if path == "/api/mir/health":
-            self._send(200, {
-                "ok":            _LIBROSA_OK,
-                "librosaOk":     _LIBROSA_OK,
-                "scipyOk":       _SCIPY_OK,
-                "pyloudnormOk":  _PYLOUDNORM_OK,
-                "essentiaOk":    _ESSENTIA_OK,
-                "sections":      list(_SECTIONS.keys()) + ["highlevel"],
-            })
-            return
-
-        if path.startswith("/api/mir/features/"):
-            slug = path[len("/api/mir/features/"):]
-            cache_path = CACHE_DIR / f"{slug}.json"
-            if cache_path.exists():
-                self._send(200, json.loads(cache_path.read_text()))
-            else:
-                self._send(200, None)
-            return
-
-        self._send(404, {"error": "not found"})
+        self._send(*(handle_get(self.path) or (404, {"error": "not found"})))
 
     def do_POST(self):
-        path   = self.path.split("?")[0]
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length)) if length else {}
         except json.JSONDecodeError as e:
             self._send(400, {"error": f"invalid JSON: {e}"}); return
-
-        if path == "/api/mir/extract":
-            slug     = safe_segment(str(body.get("slug", "")).strip())
-            force    = bool(body.get("force", False))
-            sections = body.get("sections") or None
-            if not slug:
-                self._send(400, {"error": "invalid or missing slug"}); return
-            try:
-                self._send(200, extract(slug, force=force, sections=sections))
-            except FileNotFoundError as e:
-                self._send(404, {"error": str(e)})
-            except Exception as e:
-                self._send(500, {"error": f"extraction failed: {type(e).__name__}: {e}"})
-            return
-
-        self._send(404, {"error": "not found"})
+        self._send(*(handle_post(self.path, body) or (404, {"error": "not found"})))
 
 
 # ─── Entrypoint ──────────────────────────────────────────────────────────────

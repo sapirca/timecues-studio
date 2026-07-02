@@ -13,6 +13,7 @@ import { loadLayers } from '../../services/annotationLayers';
 import { evaluatePatterns, effectiveLayerMode, type PatternEvalResult } from '../../utils/evaluation';
 import type { PatternItem, AnnotationLayer, LayerEvalMode } from '../../types/annotationLayer';
 import { useSettings } from '../../context/SettingsContext';
+import { InfoDot } from './InfoDot';
 
 export interface PatternEvalAudioEntry {
   id: string;
@@ -165,10 +166,11 @@ export function GlobalEvalPatternTable({
         <div>
           <h3 className="text-sm font-semibold text-emerald-200">
             Pattern algorithms <span className="text-[10px] uppercase tracking-wider text-slate-500 ml-1">· experimental</span>
+            <InfoDot className="ml-1.5" label="How pattern algorithms are scored" align="left">
+              Aggregate stats over all cached pattern detections, plus eval against the first pattern layer in each song's annotation document.
+            </InfoDot>
           </h3>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Aggregate stats over all cached pattern detections, plus eval against the first pattern layer in each song's
-            annotation document.{' '}
             {audioFiles.length === 0
               ? 'No songs loaded.'
               : `${songsWithRef}/${audioFiles.length} song${audioFiles.length === 1 ? '' : 's'} have a pattern reference.`}

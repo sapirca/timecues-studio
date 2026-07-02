@@ -3,7 +3,7 @@
  *
  * Per-song downloads are handled directly in the editor panels (e.g.
  * `downloadAnnotation` in manualAnnotations.ts). This module covers the
- * "all songs" cases — Manual, Eye, Auto-Guess, or everything together.
+ * "all songs" cases — Manual, Auto-Guess, or everything together.
  *
  * The dev-server `/api/bulk-annotations/<kind>` endpoint returns a single
  * JSON bundle, which we save to a date-stamped file.
@@ -11,11 +11,11 @@
 
 import type { ManualAnnotation, AutoGuessManualAnnotation } from '../types/manualAnnotation';
 
-export type BulkKind = 'manual' | 'eye' | 'auto-guess' | 'all';
+export type BulkKind = 'manual' | 'auto-guess' | 'all';
 
 interface BulkBundleSingle<T> {
   exported_at: string;
-  type: 'manual' | 'eye' | 'auto-guess';
+  type: 'manual' | 'auto-guess';
   count: number;
   annotations: Record<string, T>;
 }
@@ -26,7 +26,6 @@ interface BulkBundleAll {
   count: number;
   annotations: Record<string, {
     manual: ManualAnnotation | null;
-    eye: ManualAnnotation | null;
     autoGuess: AutoGuessManualAnnotation | null;
   }>;
 }

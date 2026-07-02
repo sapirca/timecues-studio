@@ -11,8 +11,6 @@ export interface ManualSection {
   candidates?: number[];
 }
 
-export type EyeStatus = 'done' | 'wip' | 'none';
-
 export type AutoGuessStatus = 'done' | 'wip' | 'none';
 
 export interface ManualAnnotation {
@@ -21,8 +19,6 @@ export interface ManualAnnotation {
   reviewed: boolean;      // explicitly marked done by the annotator
   ready_for_review?: boolean; // annotator considers it ~done but wants a second look
   genre?: string;         // e.g. "Organic House / Tribal / Desert Tech"
-  /** Status of the eye/by-eye annotation for this song */
-  eye_status?: EyeStatus;
   /** Status of the auto-guess annotation review for this song */
   auto_guess_status?: AutoGuessStatus;
   sections: ManualSection[];
@@ -37,14 +33,12 @@ export interface AnnotationStatus {
   reviewed: boolean;
   ready_for_review?: boolean;
   genre?: string;
-  eye_status?: EyeStatus;
   auto_guess_status?: AutoGuessStatus;
   /** Item counts on the actual files. The sidebar feeds these into the shared
    *  `derivePillDisplay` so its popover never disagrees with the editor's
    *  StatusPill (e.g. an empty `sections` list shows "Not started" even when
    *  the stored `reviewed` flag is still true from a prior session). */
   sections_count?: number;
-  eye_sections_count?: number;
   auto_guess_points_count?: number;
 }
 

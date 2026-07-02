@@ -10,7 +10,7 @@
  *  `loop` and `pattern` are gated by the `experimentalLoopsAndPatterns`
  *  Settings flag — the registry filters them out of the response when the
  *  flag is off, matching how the corresponding annotation tabs are hidden. */
-export type CustomOutputKind = 'boundary' | 'cue' | 'span' | 'loop' | 'pattern';
+export type CustomOutputKind = 'boundary' | 'cue' | 'span' | 'loop' | 'pattern' | 'lyrics';
 export type CustomImportance = 'critical' | 'optional';
 
 export type CustomRegistryStatus = 'ok' | 'load_error' | 'validation_error';
@@ -36,8 +36,16 @@ export interface CustomRegistryEntry {
   is_annotation: boolean;
   description: string;
   version: string;
+  /** Demucs stem this detector reads from ("vocals" | "drums" | "bass" |
+   *  "other"), or "mix" for whole-track detectors. null when the detector
+   *  declares none — the UI then leaves the lane label untouched. */
+  stem: CustomDetectorStem | null;
   errors: CustomValidationError[];
 }
+
+/** Source stem a detector was built from. Mirrors ALLOWED_STEM in
+ *  tools/python/custom_loader.py. */
+export type CustomDetectorStem = 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano' | 'mix';
 
 /** GET /api/custom-scripts response. */
 export interface CustomRegistryResponse {
@@ -97,6 +105,20 @@ export interface CustomPatternItem {
   label: string | null;
   repeat_count: number;
   highlighted_beats: number[] | null;
+  /** How many sub-steps the cycle is divided into — the index space of
+   *  `highlighted_beats` (0..steps_per_cycle-1). Null/absent ⇒ the UI falls
+   *  back to `beatsPerBar × PATTERN_SUBBEATS_PER_BEAT`. */
+  steps_per_cycle: number | null;
+}
+
+/** Word- or line-level lyric timestamp. `end_ms` is present for line-level
+ *  entries (and word-level when the model provides it). Gated by the
+ *  experimentalLyricsFamily flag on the UI side. */
+export interface CustomLyricsItem {
+  time_ms: number;
+  end_ms: number | null;
+  text: string;
+  kind: 'word' | 'line';
 }
 
 export interface CustomFatalError {
@@ -142,6 +164,7 @@ export interface CustomResultEnvelope {
     | CustomSpanItem
     | CustomLoopItem
     | CustomPatternItem
+    | CustomLyricsItem
   )[];
   errors: CustomValidationError[];
   stats: { accepted: number; rejected: number };

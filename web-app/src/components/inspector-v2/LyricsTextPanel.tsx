@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadLyricsText, saveLyricsText } from '../../services/lyricsText';
+import { InfoDot } from './InfoDot';
 
 // 600 ms debounce — fast enough that "Saved" appears within a phrase of
 // typing, slow enough that a paragraph paste doesn't fire mid-character.
@@ -75,12 +76,12 @@ export function LyricsTextPanel({ slug }: LyricsTextPanelProps) {
         <div>
           <h3 className="text-[12px] font-semibold text-emerald-200">
             Reference lyrics <span className="text-[10px] uppercase tracking-wider text-slate-500 ml-1">· experimental</span>
+            <InfoDot className="ml-1.5" label="About reference lyrics" align="left">
+              Paste the song's lyrics here. Shared across annotators; used as the
+              alignment target for SOFA / ctc-forced-aligner. Whisper transcribes
+              independently and ignores this field.
+            </InfoDot>
           </h3>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            Paste the song's lyrics here. Shared across annotators; used as the
-            alignment target for SOFA / ctc-forced-aligner. Whisper transcribes
-            independently and ignores this field.
-          </p>
         </div>
         <SaveBadge state={saveState} />
       </div>

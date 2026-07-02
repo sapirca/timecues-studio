@@ -54,11 +54,10 @@ export interface UserSettings {
 
   // Annotations
   defaultShowManual: boolean;
-  defaultShowEye: boolean;
   defaultShowAutoGuess: boolean;
   /** Time unit used in annotation editors / cue lists. */
   annotationTimeUnit: TimeUnit;
-  /** Vocabulary used by the Manual/Eye section type dropdowns — flat de-duplicated list.
+  /** Vocabulary used by the Manual section type dropdowns — flat de-duplicated list.
    *  This is the authoritative input the editors read; consumers don't look at genres. */
   sectionTypeVocabulary: string[];
   /** Which genre cards are toggled ON in the multi-select vocabulary UI.
@@ -88,10 +87,6 @@ export interface UserSettings {
   // stay hidden in shipped builds; flip on locally to test as the UI lands.
   // Boundaries (Manual), Cues, and Spans are always available.
   experimentalLoopsAndPatterns: boolean;
-  // Experimental: Eye sub-tab under Boundaries (independent second observer
-  // pass over the same structural sections). Hidden by default; flip on to
-  // expose the Eye tab, editor, canvas overlay, and visibility toggle.
-  experimentalEyeAnnotation: boolean;
   // Experimental: SPAN-family detection algorithms (Silero-VAD, JDCNet voicing,
   // future MIRFLEX). Output is voiced/instrument intervals. Hidden by default;
   // needs the `experimental-models` docker compose profile to be running so the
@@ -166,7 +161,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   seekStepMediumSeconds: 5,
   seekStepLargeSeconds: 10,
 
-  defaultShowSignalOverlays: true,
+  defaultShowSignalOverlays: false,
   defaultShowEnergy: false,
   defaultShowBrightness: false,
   defaultShowNovelty: false,
@@ -177,8 +172,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   defaultShowSsm: false,
 
   defaultShowManual: true,
-  defaultShowEye: true,
-  defaultShowAutoGuess: true,
+  defaultShowAutoGuess: false,
   annotationTimeUnit: 'ms',
   sectionTypeVocabulary: [...DEFAULT_VOCABULARY],
   sectionVocabularyGenres: null,
@@ -199,8 +193,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
     'allin1-fold4', 'allin1-fold5', 'allin1-fold6', 'allin1-fold7',
     // SPAN family
     'silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive',
-    // LOOP family
-    'chroma-autocorr',
     // CUE family extras
     'basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets',
     // LYRICS family
@@ -225,7 +217,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   // explicitly turned a flag off in Settings keep that choice because
   // localStorage overlays this default at hydration time.
   experimentalLoopsAndPatterns: true,
-  experimentalEyeAnnotation: true,
   experimentalSpanFamily: true,
   experimentalCueExtras: true,
   experimentalLoopFamily: true,
@@ -298,10 +289,9 @@ function readStored(): UserSettings {
     ) {
       parsed.sectionVocabularyGenres = detectVocabularyGenres(parsed.sectionTypeVocabulary);
     }
-    // 2026-05-20 migration: experimentalAnnotationTypes split into two flags.
+    // 2026-05-20 migration: experimentalAnnotationTypes → experimentalLoopsAndPatterns.
     // Old flag gated Spans+Loops+Patterns; Spans is now always-on so the old
-    // setting maps cleanly onto Loops+Patterns. Eye gets its own new flag
-    // defaulting to false (independent opt-in).
+    // setting maps cleanly onto Loops+Patterns.
     if (
       parsed.experimentalLoopsAndPatterns === undefined &&
       parsed.experimentalAnnotationTypes !== undefined
@@ -309,6 +299,21 @@ function readStored(): UserSettings {
       parsed.experimentalLoopsAndPatterns = !!parsed.experimentalAnnotationTypes;
     }
     delete parsed.experimentalAnnotationTypes;
+    // 2026-06-26 migration: "Overlay all on signals" and auto-guess must never
+    // start on. Both default to false in DEFAULT_SETTINGS, but returning users
+    // persisted `true` back when those defaults were true — and
+    // {...DEFAULT_SETTINGS, ...parsed} lets the stale true win. Force each off
+    // exactly once (guarded by a sentinel so a deliberate re-enable in Settings
+    // still persists afterwards). Separate sentinels so the auto-guess force-off
+    // still runs for users who already migrated the overlay flag on a prior load.
+    if (!parsed._signalOverlaysOffMigrated) {
+      parsed.defaultShowSignalOverlays = false;
+      parsed._signalOverlaysOffMigrated = true;
+    }
+    if (!parsed._autoGuessOffMigrated) {
+      parsed.defaultShowAutoGuess = false;
+      parsed._autoGuessOffMigrated = true;
+    }
     return { ...DEFAULT_SETTINGS, ...parsed } as UserSettings;
   } catch {
     return DEFAULT_SETTINGS;

@@ -3,7 +3,7 @@ import { annotatorHeaders } from '../../utils/annotatorHeaders';
 
 interface AnnotatorEntry {
   id: string;
-  has: { manual: boolean; eye: boolean; autoGuess: boolean };
+  has: { manual: boolean; autoGuess: boolean };
 }
 
 interface Props {

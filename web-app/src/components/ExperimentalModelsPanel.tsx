@@ -23,10 +23,6 @@ import {
   initializeBeatnet,
 } from '../services/beatnetDetection';
 import {
-  listLoopAlgorithms,
-  initializeLoopAlgorithm,
-} from '../services/loopDetection';
-import {
   listPannsAlgorithms,
   initializePannsAlgorithm,
 } from '../services/pannsDetection';
@@ -79,10 +75,6 @@ const SPAN_SIZE_BY_ID: Record<string, string> = {
 
 const PANNS_SIZE_BY_ID: Record<string, string> = {
   'panns-cnn14':     '~80 MB',
-};
-
-const LOOP_SIZE_BY_ID: Record<string, string> = {
-  'chroma-autocorr': 'pure DSP',
 };
 
 const PITCH_SIZE_BY_ID: Record<string, string> = {
@@ -186,33 +178,6 @@ export function ExperimentalModelsPanel({
             size: PITCH_SIZE_BY_ID[a.id] ?? '?',
             status: a.available ? 'ready' : 'error',
             error: a.available ? undefined : 'basic_pitch missing in sidecar',
-          });
-        }
-      }
-    }
-
-    if (loopFamilyEnabled) {
-      const loopAlgos = await listLoopAlgorithms();
-      if (loopAlgos === null) {
-        next.push({
-          id: 'loop:unreachable',
-          family: 'loop',
-          name: 'LOOP family server',
-          description: 'Chroma-autocorrelation loop finder.',
-          size: '—',
-          status: 'unreachable',
-          error: 'docker compose --profile experimental-models up --build loop',
-        });
-      } else {
-        for (const a of loopAlgos) {
-          next.push({
-            id: `loop:${a.id}`,
-            family: 'loop',
-            name: a.name,
-            description: a.description,
-            size: LOOP_SIZE_BY_ID[a.id] ?? '?',
-            status: a.available ? 'ready' : 'error',
-            error: a.available ? undefined : 'librosa / numpy missing in sidecar',
           });
         }
       }
@@ -368,7 +333,6 @@ export function ExperimentalModelsPanel({
     switch (row.family) {
       case 'span':       res = await initializeSpanAlgorithm(algoId); break;
       case 'panns':      res = await initializePannsAlgorithm(algoId); break;
-      case 'loop':       res = await initializeLoopAlgorithm(algoId); break;
       case 'pitch':      res = await initializePitchAlgorithm(algoId); break;
       case 'cue-extras': res = await initializeCueExtrasAlgorithm(algoId); break;
       case 'percussive': res = await initializePercussiveAlgorithm(algoId); break;

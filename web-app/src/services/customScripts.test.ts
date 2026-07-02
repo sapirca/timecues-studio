@@ -270,9 +270,20 @@ describe('customScripts URL contract', () => {
     });
   });
 
-  it('deleteDetector returns false on failure without throwing', async () => {
-    mockFetch({ ok: false, status: 500 });
-    const ok = await deleteDetector('x');
-    expect(ok).toBe(false);
+  it('deleteDetector sends a DELETE with the annotator header and returns the trash info', async () => {
+    const { calls } = mockFetch({
+      ok: true,
+      body: { ok: true, trashed_to: '/x/custom/.trash/my_detector.py', message: 'moved to trash' },
+    });
+    const res = await deleteDetector('my detector');
+    expect(res).toEqual({ message: 'moved to trash', trashed_to: '/x/custom/.trash/my_detector.py' });
+    expect(calls[0].url).toBe('/api/custom-scripts/my%20detector');
+    expect(calls[0].init?.method).toBe('DELETE');
+    expect(calls[0].init?.headers).toBeDefined();
+  });
+
+  it('deleteDetector throws the server message on failure', async () => {
+    mockFetch({ ok: false, status: 401, body: { message: 'missing header' } });
+    await expect(deleteDetector('x')).rejects.toThrow('missing header');
   });
 });

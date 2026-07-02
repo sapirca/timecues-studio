@@ -50,9 +50,11 @@ const STEM_LABELS: Record<StemSource, string> = {
   drums:  'Drums',
   bass:   'Bass',
   other:  'Other',
+  guitar: 'Guitar',
+  piano:  'Piano',
 };
 
-const ALL_STEMS: StemSource[] = ['mix', 'vocals', 'drums', 'bass', 'other'];
+const ALL_STEMS: StemSource[] = ['mix', 'vocals', 'drums', 'bass', 'other', 'guitar', 'piano'];
 
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);

@@ -42,7 +42,13 @@ class Template(CustomDetector):
     is_annotation = True           # ALSO surface as an editable annotation tab
 
     # ── Optional metadata ──────────────────────────────────────────────────
+    # `description` and `stem` populate the lane's ⓘ info popover in the canvas:
+    # `description` is the one-line blurb, `stem` is the "Stem" row and also gets
+    # appended to the lane title, e.g. label "Template" + stem "mix" →
+    # "Template (mix)". Omit `stem` (or leave it None) and the lane shows a
+    # generic "(curated)" tag instead and won't light up during stem audition.
     description = "Starter scaffold — emits one boundary every 30 seconds. Copy this file to start your own detector."
+    stem = "mix"                    # "vocals" | "drums" | "bass" | "other" | "mix"
     version = "0.1"
 
     def detect(self, ctx: DetectionContext) -> list[Boundary]:

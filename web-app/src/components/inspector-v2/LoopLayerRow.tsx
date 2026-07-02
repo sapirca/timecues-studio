@@ -14,7 +14,7 @@ import { BeatGridOverlay } from './BeatGridOverlay';
 import { isOnGridLine } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag, createEdgeItemClamp, useBodyMoveDrag } from '../../hooks/useTimelineDrag';
-import { PendingHighlightOverlay, type PendingSelection } from './AnnotationOverlays';
+import { PendingHighlightOverlay, RegionDragOverlay, type PendingSelection } from './AnnotationOverlays';
 import { ReviewControls, reviewBgFor, type ReviewStatus } from './ReviewControls';
 
 interface LoopLayerRowProps {
@@ -38,6 +38,10 @@ interface LoopLayerRowProps {
   onLoopMoveStart?: (itemId: string) => void;
   gridProps?: { bpm?: number; gridOffset?: number; beatsPerBar?: number; barGroupSize?: number | null; anchors?: readonly import('../../types/songInfo').TempoAnchor[]; beatOverrides?: Readonly<Record<string, number>>; thickness?: number };
   pendingSelection?: PendingSelection | null;
+  /** Empty-space click → seek; empty-space drag → create a pending highlight. */
+  onSeek?: (time: number) => void;
+  onRegion?: (t1: number, t2: number) => void;
+  onRegionDragStart?: () => void;
   /** Detector-review mode. When set, loops become read-only and render inline ✓/✗. */
   reviewState?: Record<string, ReviewStatus>;
   onAccept?: (itemId: string) => void;
@@ -51,6 +55,7 @@ export function LoopLayerRow({
   onLoopMove, onLoopMoveStart,
   gridProps,
   pendingSelection,
+  onSeek, onRegion, onRegionDragStart,
   reviewState, onAccept, onReject,
 }: LoopLayerRowProps) {
   const reviewMode = !!reviewState;
@@ -104,6 +109,11 @@ export function LoopLayerRow({
         </span>
       )}
 
+      {/* Behind the bands (z="") — empty space falls through to seek / highlight-drag. */}
+      {onSeek && onRegion && (
+        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onRegion} onRegionDragStart={onRegionDragStart} z="" />
+      )}
+
       {items.map((loop) => {
         const left  = duration > 0 ? (loop.start / duration) * 100 : 0;
         const width = Math.max(0.5, duration > 0 ? ((loop.end - loop.start) / duration) * 100 : 0);
@@ -127,16 +137,16 @@ export function LoopLayerRow({
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (reviewMode) return;
                 if (wasDraggedRef.current) {
                   wasDraggedRef.current = false;
                   return;
                 }
+                // Opens the info card in every mode — read-only for detector
+                // layers (review mode); ✓/✗ controls stop propagation.
                 onLoopClick?.(loop.id, { x: e.clientX, y: e.clientY });
               }}
-              disabled={reviewMode}
               className={`absolute top-0 bottom-0 flex items-stretch overflow-hidden ${
-                reviewMode ? 'cursor-default' : (moveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
+                reviewMode ? 'cursor-pointer' : (moveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
               }`}
               style={{
                 left: `${left}%`,

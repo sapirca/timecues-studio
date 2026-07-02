@@ -43,7 +43,6 @@ data/                 Runtime user data — annotations, algorithm caches, and
 │                      to data-default/ when a slug is absent.
 ├── annotations/      Per-annotator labels — see DATA.md for the layered scheme.
 │   ├── manual/       Reviewed boundary annotations (the source of truth).
-│   ├── eye/          By-eye annotations from spectrogram inspection.
 │   ├── auto-guess/   AutoGuess clusters (per-point ✓/✗/@ review).
 │   └── timing/       Per-song annotation-time tracking.
 ├── algorithm-outputs/ Cached algorithm runs.

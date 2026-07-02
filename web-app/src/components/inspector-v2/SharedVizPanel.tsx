@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { useTimelineDrag } from '../../hooks/useTimelineDrag';
 import { PlayerPanel, type PlayerAccent } from '../PlayerPanel';
 import { StemSourcePicker } from './StemSourcePicker';
+import { detectorBadgeLabel } from './shared/detectorBadge';
 import type { StemSource } from '../../pages/InspectorPageV2';
 import { FrequencyWaveform } from '../FrequencyWaveform';
 import { SpectrogramAnnotated } from '../SpectrogramAnnotated';
@@ -15,6 +16,7 @@ import {
   AnnotationOverlays,
   AutoGuessOverlay,
   PendingHighlightOverlay,
+  RegionDragOverlay,
   type PendingSelection,
 } from './AnnotationOverlays';
 import { PreviewWindow, type PreviewRegion } from './PreviewWindow';
@@ -22,12 +24,13 @@ import { LayerAudioControls, type LayerAudioConfig, DEFAULT_LAYER_AUDIO } from '
 import { TimeDisplayBar } from './TimeDisplayBar';
 import { BeatGridOverlay } from './BeatGridOverlay';
 import { CueLayerRow } from './CueLayerRow';
+import { LyricsLayerRow } from './LyricsLayerRow';
 import { LoopLayerRow } from './LoopLayerRow';
 import { SpanLaneRow } from './SpanLaneRow';
 import { PatternLaneRow } from './PatternLaneRow';
 import { AnnotationPointCard } from './shared/AnnotationPointCard';
 import { useAnnotationPopover } from './shared/useAnnotationPopover';
-import { PATTERN_SUBBEATS_PER_BEAT } from '../../types/annotationLayer';
+import { resolvePatternSteps } from '../../types/annotationLayer';
 import type { ManualSection, AutoGuessPoint } from '../../types/manualAnnotation';
 import type { AnnotationLayer } from '../../types/annotationLayer';
 import { useBoundaryAudioFeedback } from '../../hooks/useBoundaryAudioFeedback';
@@ -47,7 +50,7 @@ function sectionBg(type: string) { return SECTION_COLORS[type] ?? SECTION_COLORS
 // ─── Row ordering ─────────────────────────────────────────────────────────────
 
 export type VizRowId = string; // fixed IDs + dynamic algo overlay IDs
-export const DEFAULT_FIXED_ROW_ORDER: VizRowId[] = ['waveform', 'eq', 'manual', 'eye', 'autoGuess', 'spectrogram', 'cepstrogram', 'chroma', 'tempogram', 'ssm', 'energy', 'brightness', 'novelty', 'onsets', 'flux'];
+export const DEFAULT_FIXED_ROW_ORDER: VizRowId[] = ['waveform', 'eq', 'manual', 'autoGuess', 'spectrogram', 'cepstrogram', 'chroma', 'tempogram', 'ssm', 'energy', 'brightness', 'novelty', 'onsets', 'flux'];
 const FIXED_ROW_IDS = new Set(DEFAULT_FIXED_ROW_ORDER);
 
 // ─── Row label ────────────────────────────────────────────────────────────────
@@ -115,7 +118,7 @@ function RowLabel({ text, color = 'text-gray-600', dragHandlers, onResizeStart }
       title={dragHandlers ? 'Drag to reorder' : undefined}
     >
       <span
-        className={`text-[10px] uppercase tracking-wide text-center leading-tight min-w-0 flex-1 truncate ${color}`}
+        className={`text-[10px] uppercase tracking-wide text-center leading-tight min-w-0 flex-1 whitespace-normal break-words ${color}`}
         title={text}
       >{text}</span>
       <LabelResizeHandle onResizeStart={onResizeStart} />
@@ -141,14 +144,34 @@ function LayerRowLabel({
   onSelect,
   dragHandlers,
   onResizeStart,
+  auditionedStem,
 }: {
   layer: AnnotationLayer;
   isSelected: boolean;
   onSelect?: () => void;
   dragHandlers?: RowDragHandlers;
   onResizeStart?: (e: React.PointerEvent) => void;
+  /** Stem currently being auditioned in the player. Detector layers built from
+   *  this stem light up so the annotator can see, at a glance, which curated
+   *  layers belong to the stem they're listening to. 'mix' (the whole track)
+   *  matches nothing — every layer would qualify, so it's not a useful cue. */
+  auditionedStem?: StemSource;
 }) {
+  const auditioned =
+    !!auditionedStem && auditionedStem !== 'mix' && layer.sourceStem === auditionedStem;
+  // Detector-sourced lanes carry provenance (which heuristic/algorithm + which
+  // Demucs stem). Surface it behind a small inline ⓘ at the end of the lane
+  // name so the annotator can confirm what a curated layer actually is without
+  // leaving the canvas. Inlining it (rather than a separate cell with margin)
+  // keeps it from eating lane width. User-authored layers have no detector
+  // origin, so they get no icon.
+  const detectorId =
+    layer.source && layer.source.startsWith('detector:') ? detectorBadgeLabel(layer.source) : undefined;
+  const hasInfo = !!(layer.sourceDescription || layer.sourceStem || detectorId);
+  const info = useAnnotationPopover({ width: 300, height: 220 });
+  const infoOpen = info.open?.layerId === layer.id;
   return (
+    <>
     <div
       className={`${STICKY_LABEL_CELL} transition-colors ${
         dragHandlers ? 'cursor-grab active:cursor-grabbing' : ''
@@ -159,6 +182,12 @@ function LayerRowLabel({
         // it, horizontally-scrolled row content bleeds through the sticky title.
         background: `linear-gradient(90deg, ${layer.color}22 0%, #0a0b0d 100%), #0a0b0d`,
         boxShadow: `inset 3px 0 0 0 ${layer.color}, inset -1px 0 0 0 ${layer.color}66`,
+      } : auditioned ? {
+        // Auditioning this layer's source stem: tint + a soft inset ring so the
+        // lane reads as "this is what you're hearing" without stealing the
+        // bolder treatment reserved for the actively-selected layer.
+        background: `linear-gradient(90deg, ${layer.color}1a 0%, #0a0b0d 100%), #0a0b0d`,
+        boxShadow: `inset 2px 0 0 0 ${layer.color}aa`,
       } : undefined}
       draggable={dragHandlers?.draggable}
       onDragStart={dragHandlers?.onDragStart}
@@ -170,22 +199,84 @@ function LayerRowLabel({
       role={onSelect ? 'button' : undefined}
       tabIndex={onSelect ? 0 : undefined}
       title={onSelect
-        ? `${layer.name} — click to make this the active layer (switches the tab + ADD+ target)`
+        ? `${layer.name} — click to make this the active layer (switches the tab + ADD+ target)${auditioned ? `\nBuilt from the ${auditionedStem} stem you're auditioning.` : ''}`
         : (dragHandlers ? 'Drag to reorder' : layer.name)}
     >
       <span
-        className={`text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1 ${
-          isSelected ? 'font-bold' : ''
+        className={`text-[10px] uppercase tracking-wide text-center leading-tight whitespace-normal break-words min-w-0 flex-1 ${
+          isSelected || auditioned ? 'font-bold' : ''
         }`}
         style={{
           color: layer.color,
-          textShadow: isSelected ? `0 0 6px ${layer.color}cc, 0 0 12px ${layer.color}66` : undefined,
+          textShadow: isSelected
+            ? `0 0 6px ${layer.color}cc, 0 0 12px ${layer.color}66`
+            : auditioned ? `0 0 6px ${layer.color}88` : undefined,
         }}
       >
         {layer.name}
+        {hasInfo && (
+          <button
+            type="button"
+            aria-label={`${layer.name} — show source detector & stem`}
+            title="What built this layer?"
+            // Inline, right after the last word of the name — not a separate
+            // cell — so it costs almost no lane width. Stop the click bubbling
+            // to the row's select/drag handlers: it only toggles the popover.
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (infoOpen) { info.close(); return; }
+              const r = e.currentTarget.getBoundingClientRect();
+              info.openAt(layer.id, 'info', { x: r.right, y: r.top });
+            }}
+            className={`ml-0.5 inline-flex items-center justify-center align-middle w-2.5 h-2.5 rounded-full text-[7px] font-bold leading-none transition-colors ${
+              infoOpen ? 'text-[#0a0b0d]' : 'text-gray-500 hover:text-gray-200'
+            }`}
+            style={infoOpen ? { background: layer.color } : { border: `1px solid currentColor` }}
+          >
+            i
+          </button>
+        )}
       </span>
       <LabelResizeHandle onResizeStart={onResizeStart} />
     </div>
+    {infoOpen && (
+      <div
+        ref={info.popoverRef}
+        style={info.positionStyle}
+        className="z-50 w-[280px] rounded-md border border-gray-700 bg-[#0d0f13] p-3 shadow-xl text-left"
+      >
+        <div className="flex items-start gap-2 mb-2">
+          <span
+            className="mt-0.5 w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ background: layer.color }}
+          />
+          <span className="text-[12px] font-semibold text-gray-100 leading-snug normal-case">
+            {layer.name}
+          </span>
+        </div>
+        {layer.sourceDescription && (
+          <p className="text-[11px] text-gray-300 leading-snug mb-2 normal-case">
+            {layer.sourceDescription}
+          </p>
+        )}
+        <dl className="text-[10px] leading-tight space-y-1 normal-case">
+          {layer.sourceStem && (
+            <div className="flex gap-2">
+              <dt className="text-gray-500 w-14 shrink-0">Stem</dt>
+              <dd className="text-gray-200 font-mono">{layer.sourceStem}</dd>
+            </div>
+          )}
+          {detectorId && (
+            <div className="flex gap-2">
+              <dt className="text-gray-500 w-14 shrink-0">Detector</dt>
+              <dd className="text-gray-200 font-mono break-all">{detectorId}</dd>
+            </div>
+          )}
+        </dl>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -354,10 +445,7 @@ function Sparkline({ data, color, height = 40, currentTime, duration, label, onS
   onResizeStart?: (e: React.PointerEvent) => void;
   overlay?: {
     manualSections?: ManualSection[]; showManual: boolean;
-    eyeTimes: number[]; showEye: boolean;
     onManualMarkerDrag?: (idx: number, t: number) => void;
-    onEyeMarkerDrag?: (idx: number, t: number) => void;
-    onEyeMarkerDragStart?: () => void;
   };
   /** Pending Mark In/Out highlight. Shown regardless of the "Overlay on signals"
    *  toggle so an in-progress two-step selection stays visible across every row. */
@@ -477,10 +565,6 @@ function Sparkline({ data, color, height = 40, currentTime, duration, label, onS
             manualSections={overlay.manualSections}
             showManual={overlay.showManual}
             onManualMarkerDrag={overlay.onManualMarkerDrag}
-            eyeTimes={overlay.eyeTimes}
-            showEye={overlay.showEye}
-            onEyeMarkerDrag={overlay.onEyeMarkerDrag}
-            onEyeMarkerDragStart={overlay.onEyeMarkerDragStart}
             grid={gridProps}
           />
         )}
@@ -509,16 +593,15 @@ function Sparkline({ data, color, height = 40, currentTime, duration, label, onS
 }
 
 // ─── Signal markers overlay ───────────────────────────────────────────────────
-// Renders every "chosen" annotation (Manual + Eye + Auto-guess + custom-detector
+// Renders every "chosen" annotation (Manual + Auto-guess + custom-detector
 // boundaries + cue/span/loop/pattern layers) as 1px vertical lines (points) or
 // faint translucent bands (intervals) over the parent signal row. The same
 // payload is reused for every signal panel so toggling "Overlay all on signals"
 // from the toolbar gates a single source of truth.
 //
 // Stacks safely on top of the existing AnnotationOverlays / SpectrogramDragOverlay
-// (3-Band + Spectrogram + sparklines) — Manual + Eye lines simply overlap pixel-
-// perfectly. Pointer events stay off so it never blocks clicks / drag handles
-// underneath.
+// (3-Band + Spectrogram + sparklines) — the lines simply overlap pixel-perfectly.
+// Pointer events stay off so it never blocks clicks / drag handles underneath.
 interface SignalPointMarker { time: number; color: string; opacity?: number }
 interface SignalBandMarker { start: number; end: number; color: string; opacity?: number }
 function SignalMarkersOverlay({ points, bands, duration }: {
@@ -563,10 +646,45 @@ function SignalMarkersOverlay({ points, bands, duration }: {
 
 // ─── Algo timeline row ────────────────────────────────────────────────────────
 
-function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, renderKind = 'boundary', dragHandlers, onResizeStart, sectionColorOverrides, gridProps, focusedSectionIdx, onSectionClick }: {
+/** Tiny lane badge naming the beat grid a LOOP detector aligned to. The grid
+ *  is what makes loop boundaries line up with the curator's bars, so making it
+ *  visible answers "why don't these loops sit on my grid?" at a glance:
+ *    song-info → the curator-aligned grid (best)
+ *    allin1    → auto-detected grid (no curator corrections applied)
+ *    librosa   → the detector's own beat tracking (most likely to drift) */
+function GridSourceBadge({ source }: { source: string }) {
+  const tone: Record<string, string> = {
+    'song-info': 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50',
+    allin1:      'bg-amber-900/50 text-amber-300 border-amber-700/50',
+    librosa:     'bg-rose-900/50 text-rose-300 border-rose-700/50',
+  };
+  const title: Record<string, string> = {
+    'song-info': 'Loops aligned to the curator-aligned grid (data/song-info) — best alignment with your bars.',
+    allin1:      'Loops aligned to the auto-detected allin1 grid (no curator grid for this song).',
+    librosa:     "Loops aligned to librosa's own beat tracking (no song-info or allin1 grid found) — may drift from your bars.",
+  };
+  return (
+    <span
+      title={title[source] ?? `Loop grid: ${source}`}
+      className={`ml-0.5 inline-block align-middle px-1 rounded-sm text-[7px] font-semibold leading-[1.4] normal-case border ${
+        tone[source] ?? 'bg-slate-800/60 text-slate-300 border-slate-600/50'
+      }`}
+    >
+      {source}
+    </span>
+  );
+}
+
+function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, renderKind = 'boundary', dragHandlers, onResizeStart, sectionColorOverrides, gridProps, focusedSectionIdx, onSectionClick, info, infoId, gridSource }: {
   sections: { time: number; endTime: number; label: string; type: string; color?: string }[];
   duration: number; currentTime: number; label: string;
   labelColor?: string;
+  /** Model reference card behind an inline ⓘ at the end of the lane name. */
+  info?: AlgoLaneInfo;
+  /** Stable id for the ⓘ popover (the overlay row id). */
+  infoId?: string;
+  /** LOOP-family only: beat grid the detector aligned to — small lane badge. */
+  gridSource?: string | null;
   /** Drives the per-section shape: contiguous blocks ('boundary'), translucent
    *  bands ('span'), or thin centred ticks ('point'). Defaults to 'boundary'. */
   renderKind?: AlgoRenderKind;
@@ -585,7 +703,14 @@ function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, r
   // row's algo color as the base instead so these rows read as "their" hue.
   const baseColor = labelColor ?? sectionBg('default');
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  // ⓘ provenance popover — what model produced this lane, what it extracts, and
+  // its input / output. Same control + placement as the curated lanes' ⓘ.
+  const infoPop = useAnnotationPopover({ width: 330, height: 280 });
+  const infoKey = infoId ?? label;
+  const infoOpen = !!info && infoPop.open?.layerId === infoKey;
+  const accent = labelColor ?? '#94a3b8';
   return (
+    <>
     <div className="flex flex-1 min-w-0 items-stretch">
       <div
         className={`${STICKY_LABEL_CELL} ${dragHandlers ? 'cursor-grab active:cursor-grabbing' : ''}`}
@@ -595,10 +720,31 @@ function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, r
         title={dragHandlers ? 'Drag to reorder' : undefined}
       >
         <span
-          className="text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1"
+          className="text-[10px] uppercase tracking-wide text-center leading-tight whitespace-normal break-words min-w-0 flex-1"
           style={labelColor ? { color: labelColor } : undefined}
         >
           {label}
+          {info && (
+            <button
+              type="button"
+              aria-label={`${label} — show model details`}
+              title="What is this algorithm?"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (infoOpen) { infoPop.close(); return; }
+                const r = e.currentTarget.getBoundingClientRect();
+                infoPop.openAt(infoKey, 'info', { x: r.right, y: r.top });
+              }}
+              className={`ml-0.5 inline-flex items-center justify-center align-middle w-2.5 h-2.5 rounded-full text-[7px] font-bold leading-none transition-colors ${
+                infoOpen ? 'text-[#0a0b0d]' : 'text-gray-500 hover:text-gray-200'
+              }`}
+              style={infoOpen ? { background: accent } : { border: '1px solid currentColor' }}
+            >
+              i
+            </button>
+          )}
+          {gridSource && <GridSourceBadge source={gridSource} />}
         </span>
         <LabelResizeHandle onResizeStart={onResizeStart} />
       </div>
@@ -693,6 +839,37 @@ function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, r
         <div className="absolute top-0 bottom-0 w-px pointer-events-none" style={{ left: `${pct}%`, background: 'rgba(255,255,255,0.75)' }} />
       </div>
     </div>
+    {info && infoOpen && (
+      <div
+        ref={infoPop.popoverRef}
+        style={infoPop.positionStyle}
+        className="z-50 w-[330px] rounded-md border border-gray-700 bg-[#0d0f13] p-3.5 shadow-xl text-left"
+      >
+        <div className="flex items-start gap-2 mb-2.5">
+          <span className="mt-1 w-3 h-3 rounded-full shrink-0" style={{ background: accent }} />
+          <span className="text-[15px] font-semibold text-gray-100 leading-snug normal-case">{label}</span>
+        </div>
+        <dl className="text-[13px] leading-snug space-y-2 normal-case">
+          <div className="flex gap-2">
+            <dt className="text-gray-500 w-[72px] shrink-0">Model</dt>
+            <dd className="text-gray-200">{info.model}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="text-gray-500 w-[72px] shrink-0">Extracts</dt>
+            <dd className="text-gray-200">{info.extracts}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="text-gray-500 w-[72px] shrink-0">Input</dt>
+            <dd className="text-gray-200">{info.input}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="text-gray-500 w-[72px] shrink-0">Output</dt>
+            <dd className="text-gray-200">{info.output}</dd>
+          </div>
+        </dl>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -701,7 +878,6 @@ function AlgoTimelineRow({ sections, duration, currentTime, label, labelColor, r
 function SpectrogramDragOverlay({
   duration, currentTime,
   manualSections, showManual, onManualMarkerDrag,
-  eyeTimes, showEye, onEyeMarkerDrag, onEyeMarkerDragStart,
   pendingSelection,
   onVizClick, onVizRegion, onRegionDragStart,
   snapToGrid, bpm, beatOffset, beatsPerBar, anchors, beatOverrides,
@@ -709,9 +885,6 @@ function SpectrogramDragOverlay({
   duration: number; currentTime: number;
   manualSections?: ManualSection[]; showManual: boolean;
   onManualMarkerDrag?: (idx: number, t: number) => void;
-  eyeTimes: number[]; showEye: boolean;
-  onEyeMarkerDrag?: (idx: number, t: number) => void;
-  onEyeMarkerDragStart?: () => void;
   pendingSelection?: PendingSelection | null;
   onVizClick: (t: number) => void;
   onVizRegion: (t1: number, t2: number) => void;
@@ -736,14 +909,18 @@ function SpectrogramDragOverlay({
   };
   const onMD = (e: React.MouseEvent<HTMLDivElement>) => {
     const t = timeAt(e); dragRef.current = { time: t, x: e.clientX };
-    const ts = snap(t);
-    setDragSel({ s: ts, e: ts });
+    // A plain click should only seek — defer the teal selection box until the
+    // drag passes the same 6px threshold the commit uses below.
     onRegionDragStart?.();
     e.preventDefault();
   };
   const onMM = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragRef.current) return;
-    setDragSel({ s: snap(dragRef.current.time), e: snap(timeAt(e)) });
+    if (Math.abs(e.clientX - dragRef.current.x) > 6) {
+      setDragSel({ s: snap(dragRef.current.time), e: snap(timeAt(e)) });
+    } else {
+      setDragSel(null);
+    }
   };
   const onMU = (e: React.MouseEvent<HTMLDivElement>) => {
     const drag = dragRef.current; if (!drag) return;
@@ -768,87 +945,11 @@ function SpectrogramDragOverlay({
         manualSections={manualSections}
         showManual={showManual}
         onManualMarkerDrag={onManualMarkerDrag}
-        eyeTimes={eyeTimes}
-        showEye={showEye}
-        onEyeMarkerDrag={onEyeMarkerDrag}
-        onEyeMarkerDragStart={onEyeMarkerDragStart}
         pendingSelection={pendingSelection}
         grid={bpm ? { bpm, gridOffset: beatOffset, beatsPerBar } : undefined}
       />
       {dragSel && duration > 0 && (
         <div className="absolute top-0 bottom-0 pointer-events-none z-25"
-          style={{
-            left: `${(Math.min(dragSel.s, dragSel.e) / duration) * 100}%`,
-            width: `${(Math.abs(dragSel.e - dragSel.s) / duration) * 100}%`,
-            minWidth: 1,
-            background: 'rgba(45,212,191,0.13)',
-            borderLeft: '2px solid rgba(45,212,191,0.7)',
-            borderRight: Math.abs(dragSel.e - dragSel.s) > 0.1 ? '2px solid rgba(45,212,191,0.7)' : 'none',
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Click + drag-to-region overlay (signal/MIR rows) ─────────────────────────
-// Thin overlay mounted absolute-inset on top of any signal/MIR visualization
-// (EQ, Sparklines, cepstrogram, chroma, tempogram, SSM). Translates a plain
-// click into onVizClick(t) (seek + clear preview) and a drag into onVizRegion
-// (preview-region create) — the same gestures the 3-Band waveform and
-// Spectrogram already support, now available on every signal row.
-function RegionDragOverlay({ duration, onVizClick, onVizRegion, onRegionDragStart }: {
-  duration: number;
-  onVizClick: (t: number) => void;
-  onVizRegion: (t1: number, t2: number) => void;
-  onRegionDragStart?: () => void;
-}) {
-  const [dragSel, setDragSel] = useState<{ s: number; e: number } | null>(null);
-  const dragRef = useRef<{ time: number; x: number } | null>(null);
-
-  const timeAt = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0 || duration <= 0) return 0;
-    return Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * duration));
-  };
-  const onMD = (e: React.MouseEvent<HTMLDivElement>) => {
-    const t = timeAt(e);
-    dragRef.current = { time: t, x: e.clientX };
-    setDragSel({ s: t, e: t });
-    onRegionDragStart?.();
-    e.preventDefault();
-  };
-  const onMM = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!dragRef.current) return;
-    setDragSel({ s: dragRef.current.time, e: timeAt(e) });
-  };
-  const onMU = (e: React.MouseEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const endT = timeAt(e);
-    const px = Math.abs(e.clientX - drag.x);
-    const t1 = Math.min(drag.time, endT);
-    const t2 = Math.max(drag.time, endT);
-    if (px > 6 && t2 - t1 > 0.1) onVizRegion(t1, t2);
-    else onVizClick(drag.time);
-    dragRef.current = null;
-    setDragSel(null);
-  };
-  const onML = () => { dragRef.current = null; setDragSel(null); };
-
-  return (
-    // z-[1]: keeps overlay below AnnotationOverlays markers (z-10/z-20) so
-    // marker drag handles still receive their pointer-events-auto mousedowns.
-    // Empty space on the row still hits the overlay because AnnotationOverlays'
-    // own container is pointer-events-none.
-    <div
-      className="absolute inset-0 z-[1]"
-      style={{ cursor: 'crosshair' }}
-      onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onML}
-    >
-      {dragSel && duration > 0 && (
-        <div
-          className="absolute top-0 bottom-0 pointer-events-none"
           style={{
             left: `${(Math.min(dragSel.s, dragSel.e) / duration) * 100}%`,
             width: `${(Math.abs(dragSel.e - dragSel.s) / duration) * 100}%`,
@@ -891,13 +992,25 @@ export type BeatGridUnit = typeof BEAT_GRID_UNIT_OPTIONS[number];
  *  on its start time (onsets / key / chords) — like cue markers. */
 export type AlgoRenderKind = 'boundary' | 'span' | 'point';
 
+/** Reference card shown behind the ⓘ on an algo lane — what the model is, what
+ *  it extracts, and its input / output. Mirrors the curated layers' ⓘ. */
+export interface AlgoLaneInfo { model: string; extracts: string; input: string; output: string; }
+
 export interface AlgoOverlay {
   id: string;
   label: string;
   labelColor?: string;
   /** Defaults to 'boundary' when unset. */
   renderKind?: AlgoRenderKind;
-  sections: { time: number; endTime: number; label: string; type: string; color?: string }[];
+  /** `raw` is the detector's original per-section JSON (energy/centroid,
+   *  candidates, per-word fields, …) — surfaced as "Raw model output" in the
+   *  algo Inspect card. Falls back to the mapped section when absent. */
+  sections: { time: number; endTime: number; label: string; type: string; color?: string; raw?: unknown }[];
+  /** Optional model reference card surfaced behind an inline ⓘ on the lane. */
+  info?: AlgoLaneInfo;
+  /** LOOP-family only: which beat grid the detector aligned to
+   *  ("song-info" | "allin1" | "librosa"). Rendered as a small lane badge. */
+  gridSource?: string | null;
 }
 
 export interface MirCurves {
@@ -973,12 +1086,10 @@ export interface SharedVizPanelProps {
   snapToGrid?: boolean;
   // Marker data
   manualSections?: ManualSection[];
-  eyeSections?: ManualSection[];
   autoGuessPoints?: AutoGuessPoint[];
   pendingSelection?: PendingSelection | null;
   // Visibility
   showManual: boolean;
-  showEye: boolean;
   showAutoGuess: boolean;
   /** Draw section markers on top of 3-Band / Spectrogram. Off lets the bar grid show through. Defaults to true. */
   showSignalOverlays?: boolean;
@@ -1010,11 +1121,7 @@ export interface SharedVizPanelProps {
   /** Drag-to-retime callback for the thin manual ghost marker that appears
    *  on signal rows. Same payload as onManualBoundaryChange. */
   onManualMarkerDrag?: (sectionIndex: number, newTime: number) => void;
-  /** Drag-to-retime callback for the thin eye ghost marker on signal rows. */
-  onEyeMarkerDrag?: (pointIndex: number, newTime: number) => void;
-  onEyeMarkerDragStart?: () => void;
   onManualSectionClick?: (sectionIndex: number, anchor: { x: number; y: number }) => void;
-  onEyeSectionClick?: (sectionIndex: number, anchor: { x: number; y: number }) => void;
   onManualUndo?: () => void;
   canManualUndo?: boolean;
   // Auto-guess callbacks
@@ -1056,6 +1163,8 @@ export interface SharedVizPanelProps {
   onReady?: () => void;
   onTimeUpdate: (t: number) => void;
   onPlayingChange: (playing: boolean) => void;
+  /** Playback-speed multiplier forwarded to the PlayerPanel (1 = normal). */
+  playbackRate?: number;
   onScrollChange: (scrollLeft: number) => void;
   onViewChange: (zoomFactor: number, containerWidth: number, atMaxZoom: boolean) => void;
   // Viz scroll sync
@@ -1078,14 +1187,14 @@ export interface SharedVizPanelProps {
   rowOrder?: VizRowId[];
   onReorderRow?: (draggedId: VizRowId, targetId: VizRowId) => void;
   // Section-color palette overrides (keyed by section type, e.g. 'intro' → '#a78bfa').
-  // Applies to manual/eye/auto-guess block rows + algo overlay rows.
+  // Applies to manual/auto-guess block rows + algo overlay rows.
   sectionColorOverrides?: Record<string, string>;
   onSectionColorChange?: (type: string, color: string) => void;
   onResetSectionColors?: () => void;
   // Reset row order back to default; shown when user has reordered.
   onResetRowOrder?: () => void;
   hasCustomRowOrder?: boolean;
-  /** Per-layer auralisation config (manual/eye/autoGuess). Plays a panned click on each boundary during playback. */
+  /** Per-layer auralisation config (manual/autoGuess). Plays a panned click on each boundary during playback. */
   layerAudioConfig?: Record<string, LayerAudioConfig>;
   onLayerAudioChange?: (layerId: string, config: LayerAudioConfig) => void;
   /** Theme accent for the embedded PlayerPanel (waveform color, play btn, BPM pill, etc.) */
@@ -1183,6 +1292,18 @@ export interface SharedVizPanelProps {
    *  all its repeats) without changing the cycle length. */
   onPatternMove?: (layerId: string, itemId: string, newStart: number, newEnd: number) => void;
   onPatternMoveStart?: (layerId: string, itemId: string) => void;
+  /** User-created + detector-sourced Lyrics layers (gated by
+   *  experimentalLyricsFamily). Each renders word/line ticks with text. */
+  lyricsLayers?: AnnotationLayer<'lyrics'>[];
+  /** Lyric currently focused in editor/popover — highlighted on the canvas. */
+  focusedLyrics?: { layerId: string; itemId: string } | null;
+  /** Fired when the user clicks a lyric tick on the canvas. */
+  onLyricsClick?: (layerId: string, itemId: string, anchor: { x: number; y: number }) => void;
+  /** Seek the playhead to a clicked word (works on read-only detector rows too). */
+  onLyricsSeek?: (time: number) => void;
+  /** Drag a lyric tick to retime it. */
+  onLyricsDrag?: (layerId: string, itemId: string, newTime: number) => void;
+  onLyricsDragStart?: (layerId: string, itemId: string) => void;
   /** When true, register a window-level wheel listener that redirects every
    *  horizontal trackpad/wheel gesture on the page to scroll the viz timeline
    *  (and suppresses the browser swipe-back/forward gesture). Default false. */
@@ -1193,7 +1314,7 @@ export interface SharedVizPanelProps {
   enablePatternBeatAudio?: boolean;
   /** Currently-active annotation tab. Drives the "selected layer" highlight
    *  on the matching viz row label (neon accent + glow). */
-  activeAnnotationType?: 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns';
+  activeAnnotationType?: 'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
   /** Selected layer id per type (same map fed to the unified sidebar). Used
    *  to mark exactly one viz row as the active target. */
   selectedLayerIdByType?: Partial<Record<'boundaries' | 'cues' | 'spans' | 'loops' | 'patterns', string | null>>;
@@ -1237,15 +1358,15 @@ export function SharedVizPanel({
   bpm, timeSignature, beatOffset, beatsPerBar = 4,
   showBeatGrid, beatGridUnit, anchors, beatOverrides, gridMode, onDeleteAnchor, onAnchorDrag, onAnchorDragStart, onBeatDrag, onClearBeatOverride, manualEditLocked,
   snapToGrid = false,
-  manualSections, eyeSections, autoGuessPoints, pendingSelection,
-  showManual, showEye, showAutoGuess,
+  manualSections, autoGuessPoints, pendingSelection,
+  showManual, showAutoGuess,
   showSignalOverlays = true,
   showWaveform, showEQ = false, showSpectrogram, showCepstrogram, showChroma, showTempogram, showSsm,
   mirCurves, mirComputing = false, showEnergy, showBrightness, showNovelty, showOnsets, showFlux,
   algoOverlays,
   onVizClick, onVizRegion, onRegionDragStart, onManualBoundaryChange, onManualBoundaryDragStart,
-  onManualMarkerDrag, onEyeMarkerDrag, onEyeMarkerDragStart,
-  onManualSectionClick, onEyeSectionClick, onManualUndo, canManualUndo,
+  onManualMarkerDrag,
+  onManualSectionClick, onManualUndo, canManualUndo,
   onMarkCorrect, onMarkIncorrect, onMarkPending,
   customAnnotationRows,
   hiddenCustomAnnotations,
@@ -1253,7 +1374,7 @@ export function SharedVizPanel({
   onCustomAnnotationMarkPending,
   detectorLayerReview, onDetectorLayerAccept, onDetectorLayerReject,
   seekRef, playRef, pauseRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef,
-  onBufferReady, onReady, onTimeUpdate, onPlayingChange, onScrollChange, onViewChange,
+  onBufferReady, onReady, onTimeUpdate, onPlayingChange, playbackRate, onScrollChange, onViewChange,
   vizScrollContainerRef, vizSignalWidth, vizZoomFactor = 1, onVizScroll,
   playerIsPlaying, onSeekAndPlay, onPause,
   previewRegion, onPreviewRegionChange, onPreviewPlay, onPreviewPause, onPreviewDismiss, onPreviewLoopToggle,
@@ -1275,6 +1396,7 @@ export function SharedVizPanel({
   loopLayers, focusedLoop, playingLoopId, onLoopClick, onLoopEdgeDrag, onLoopEdgeDragStart, onLoopMove, onLoopMoveStart,
   spanLayers, focusedSpan, onSpanClick, onSpanEdgeDrag, onSpanEdgeDragStart, onSpanMove, onSpanMoveStart,
   patternLayers, focusedPattern, playingPatternId, onPatternClick, onPatternEdgeDrag, onPatternEdgeDragStart, onPatternMove, onPatternMoveStart,
+  lyricsLayers, focusedLyrics, onLyricsClick, onLyricsSeek, onLyricsDrag, onLyricsDragStart,
   captureGlobalHScroll = false,
   enablePatternBeatAudio = false,
   activeAnnotationType,
@@ -1545,16 +1667,6 @@ export function SharedVizPanel({
     })),
   [manualSections, duration]);
 
-  // Eye block sections
-  const eyeBlockSections = useMemo(() =>
-    (eyeSections ?? []).map((s, i) => ({
-      time: s.time,
-      endTime: (eyeSections ?? [])[i + 1]?.time ?? duration,
-      label: s.label,
-      type: s.type,
-    })),
-  [eyeSections, duration]);
-
   // Auto-guess block sections (colored by review status)
   const autoGuessBlockSections = useMemo(() => {
     if (!autoGuessPoints?.length) return [];
@@ -1568,16 +1680,13 @@ export function SharedVizPanel({
     }));
   }, [autoGuessPoints, duration]);
 
-  // Eye times for marker lines on 3-band
-  const eyeTimes = useMemo(() => eyeSections?.map(s => s.time) ?? [], [eyeSections]);
-
   // Overlay payload for Sparkline rows. Undefined when "Overlay on signals" is off,
   // so the sparkline renders no annotation markers at all.
   const sparklineOverlay = useMemo(
     () => showSignalOverlays
-      ? { manualSections, showManual, eyeTimes, showEye, onManualMarkerDrag, onEyeMarkerDrag, onEyeMarkerDragStart }
+      ? { manualSections, showManual, onManualMarkerDrag }
       : undefined,
-    [showSignalOverlays, manualSections, showManual, eyeTimes, showEye, onManualMarkerDrag, onEyeMarkerDrag, onEyeMarkerDragStart],
+    [showSignalOverlays, manualSections, showManual, onManualMarkerDrag],
   );
 
   // Unified marker payload for SignalMarkersOverlay. Walks every annotation
@@ -1591,9 +1700,6 @@ export function SharedVizPanel({
     const bands: SignalBandMarker[] = [];
     if (showManual && manualSections) {
       for (const s of manualSections) points.push({ time: s.time, color: sectionBg(s.type), opacity: 0.85 });
-    }
-    if (showEye && eyeSections) {
-      for (const s of eyeSections) points.push({ time: s.time, color: '#2dd4bf', opacity: 0.85 });
     }
     if (showAutoGuess && autoGuessPoints) {
       for (const p of autoGuessPoints) {
@@ -1628,30 +1734,38 @@ export function SharedVizPanel({
         bands.push({ start: item.start, end: totalEnd, color: layer.color, opacity: 0.08 });
       }
     }
+    for (const layer of lyricsLayers ?? []) {
+      if (!layer.visible) continue;
+      for (const item of layer.items) {
+        if (item.end != null && item.end > item.time) {
+          bands.push({ start: item.time, end: item.end, color: layer.color, opacity: 0.08 });
+        } else {
+          points.push({ time: item.time, color: layer.color, opacity: 0.6 });
+        }
+      }
+    }
     return { points, bands };
   }, [
     showSignalOverlays,
     showManual, manualSections,
-    showEye, eyeSections,
     showAutoGuess, autoGuessPoints,
     customAnnotationRows, hiddenCustomAnnotations,
-    cueLayers, spanLayers, loopLayers, patternLayers,
+    cueLayers, spanLayers, loopLayers, patternLayers, lyricsLayers,
   ]);
 
   // Section types currently rendered → used by the section-color palette picker.
-  // Walks Manual/Eye + visible algo overlays. Auto-guess uses per-section status colors so it's excluded.
+  // Walks Manual + visible algo overlays. Auto-guess uses per-section status colors so it's excluded.
   const visibleSectionTypes = useMemo(() => {
     const order = rowOrder ?? DEFAULT_FIXED_ROW_ORDER;
     const types = new Set<string>();
     if (showManual && manualBlockSections.length) for (const s of manualBlockSections) types.add(s.type);
-    if (showEye  && eyeBlockSections.length)  for (const s of eyeBlockSections)  types.add(s.type);
     for (const rowId of order) {
       if (FIXED_ROW_IDS.has(rowId)) continue;
       const overlay = algoOverlays.find((o) => o.id === rowId);
       if (overlay) for (const s of overlay.sections) types.add(s.type);
     }
     return Array.from(types).sort();
-  }, [rowOrder, showManual, showEye, manualBlockSections, eyeBlockSections, algoOverlays]);
+  }, [rowOrder, showManual, manualBlockSections, algoOverlays]);
 
   // No section overlay on spectrogram — manual already shown as dedicated block row above
 
@@ -1668,16 +1782,11 @@ export function SharedVizPanel({
 
   // ── Auralisation: per-layer click pips on boundary crossings ───────────────
   const manualAudio = layerAudioConfig?.manual ?? DEFAULT_LAYER_AUDIO;
-  const eyeAudio = layerAudioConfig?.eye ?? DEFAULT_LAYER_AUDIO;
   const autoGuessAudio = layerAudioConfig?.autoGuess ?? DEFAULT_LAYER_AUDIO;
 
   const manualTimes = useMemo(
     () => (manualSections ?? []).map((s) => s.time).sort((a, b) => a - b),
     [manualSections],
-  );
-  const eyeTimesAudio = useMemo(
-    () => (eyeSections ?? []).map((s) => s.time).sort((a, b) => a - b),
-    [eyeSections],
   );
   const autoGuessTimes = useMemo(
     () =>
@@ -1690,14 +1799,15 @@ export function SharedVizPanel({
 
   // Pattern sub-beat ticks: for every visible Pattern layer, for every item
   // with at least one highlighted step, emit a tick at
-  // `start + i*cycle + b*(cycle/(beatsPerBar*PATTERN_SUBBEATS_PER_BEAT))` for
-  // each repetition i and highlighted step b. The list is fed to
-  // useBoundaryAudioFeedback alongside Manual/Eye/AutoGuess so the same
+  // `start + i*cycle + b*(cycle/stepsPerCycle)` for each repetition i and
+  // highlighted step b. `stepsPerCycle` is the pattern's declared grid
+  // (detector-provided) or the `beatsPerBar × 4` fallback — the SAME count the
+  // chip strip renders, so audio and chips always agree. The list is fed to
+  // useBoundaryAudioFeedback alongside Manual/AutoGuess so the same
   // click-scheduling pipeline applies. Distinct pan + frequency keep the
   // pattern ticks separable from the boundary cues by ear.
   const patternTickTimes = useMemo(() => {
     if (!patternLayers?.length) return [] as number[];
-    const stepsPerCycle = Math.max(1, Math.floor((beatsPerBar || 4))) * PATTERN_SUBBEATS_PER_BEAT;
     const out: number[] = [];
     for (const layer of patternLayers) {
       if (!layer.visible) continue;
@@ -1706,7 +1816,7 @@ export function SharedVizPanel({
         const cycle = p.end - p.start;
         if (cycle <= 0) continue;
         const reps = Math.max(1, Math.floor(p.repeatCount));
-        const stepDur = cycle / stepsPerCycle;
+        const stepDur = cycle / resolvePatternSteps(p, beatsPerBar);
         for (let i = 0; i < reps; i++) {
           for (const b of p.highlightedBeats) {
             out.push(p.start + i * cycle + b * stepDur);
@@ -1748,7 +1858,6 @@ export function SharedVizPanel({
   const audioLayers = useMemo(
     () => [
       { id: 'manual', times: manualTimes, clickFreq: 2500, ...manualAudio },
-      { id: 'eye', times: eyeTimesAudio, clickFreq: 1500, ...eyeAudio },
       { id: 'autoGuess', times: autoGuessTimes, clickFreq: 3500, ...autoGuessAudio },
       // Pattern beat ticks — gated behind `enablePatternBeatAudio` so the
       // annotator stage stays silent (the per-beat clicks otherwise read as a
@@ -1759,7 +1868,7 @@ export function SharedVizPanel({
         return { id: e.id, times: e.times, clickFreq: e.freq, ...cfg };
       }),
     ],
-    [manualTimes, eyeTimesAudio, autoGuessTimes, manualAudio, eyeAudio, autoGuessAudio, patternTickTimes, enablePatternBeatAudio, userLayerAudioEntries, layerAudioConfig],
+    [manualTimes, autoGuessTimes, manualAudio, autoGuessAudio, patternTickTimes, enablePatternBeatAudio, userLayerAudioEntries, layerAudioConfig],
   );
 
   useBoundaryAudioFeedback(audioLayers, currentTime, playerIsPlaying);
@@ -1768,13 +1877,12 @@ export function SharedVizPanel({
   const audioMixerLayers = useMemo(() => {
     const out: { id: string; label: string; accent: string; freq: number }[] = [];
     if (showManual && manualTimes.length) out.push({ id: 'manual', label: 'Boundaries', accent: '#f59e0b', freq: 2500 });
-    if (showEye && eyeTimesAudio.length) out.push({ id: 'eye', label: 'Eye', accent: '#2dd4bf', freq: 1500 });
     if (showAutoGuess && autoGuessTimes.length) out.push({ id: 'autoGuess', label: 'Auto-G', accent: '#a78bfa', freq: 3500 });
     for (const e of userLayerAudioEntries) {
       out.push({ id: e.id, label: e.label, accent: e.accent, freq: e.freq });
     }
     return out;
-  }, [showManual, showEye, showAutoGuess, manualTimes.length, eyeTimesAudio.length, autoGuessTimes.length, userLayerAudioEntries]);
+  }, [showManual, showAutoGuess, manualTimes.length, autoGuessTimes.length, userLayerAudioEntries]);
 
   if (!playerUrl) return null;
 
@@ -1873,6 +1981,7 @@ export function SharedVizPanel({
             zoomToRangeRef={zoomToRangeRef}
             onScrollChange={onScrollChange}
             onPlayingChange={onPlayingChange}
+            playbackRate={playbackRate}
             accent={playerAccent}
             onGridOffsetChange={onGridOffsetChange}
             onGridOffsetDragStart={onGridOffsetDragStart}
@@ -2062,10 +2171,6 @@ export function SharedVizPanel({
                           manualSections={manualSections}
                           showManual={showManual && showSignalOverlays}
                           onManualMarkerDrag={showSignalOverlays ? onManualMarkerDrag : undefined}
-                          eyeTimes={eyeTimes}
-                          showEye={showEye && showSignalOverlays}
-                          onEyeMarkerDrag={showSignalOverlays ? onEyeMarkerDrag : undefined}
-                          onEyeMarkerDragStart={showSignalOverlays ? onEyeMarkerDragStart : undefined}
                           pendingSelection={pendingSelection}
                           grid={gridProps}
                         />
@@ -2120,7 +2225,7 @@ export function SharedVizPanel({
                       {onManualUndo && (
                         <button onClick={onManualUndo} disabled={!canManualUndo} title="Undo last change" className="text-[10px] leading-none disabled:opacity-20 text-amber-400/70 hover:text-amber-300 transition-opacity">↩</button>
                       )}
-                      <span className="text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1 text-amber-400/70">Boundaries</span>
+                      <span className="text-[10px] uppercase tracking-wide text-center leading-tight whitespace-normal break-words min-w-0 flex-1 text-amber-400/70">Boundaries</span>
                       <LabelResizeHandle onResizeStart={handleLabelColResizeStart} />
                     </div>
                     <SectionBlockRow
@@ -2134,20 +2239,6 @@ export function SharedVizPanel({
                       gridProps={gridProps}
                       pendingSelection={pendingSelection}
                     />
-                  </div>
-                );
-
-              case 'eye':
-                if (!showEye) return null;
-                return (
-                  <div key="eye" className={rowClass} {...dropProps}>
-                    <RowLabel text="Eye" color="text-teal-400/70" dragHandlers={dragHandlers} onResizeStart={handleLabelColResizeStart} />
-                    <div className="flex-1 min-w-0 overflow-hidden flex items-stretch">
-                      {eyeBlockSections.length > 0
-                        ? <SectionBlockRow sections={eyeBlockSections} duration={duration} currentTime={currentTime} onSectionClick={onEyeSectionClick} sectionColorOverrides={sectionColorOverrides} gridProps={gridProps} pendingSelection={pendingSelection} />
-                        : <div className="flex-1 h-5 rounded bg-gray-900/30 flex items-center px-2"><span className="text-[10px] text-gray-700 italic">no eye annotation</span></div>
-                      }
-                    </div>
                   </div>
                 );
 
@@ -2230,10 +2321,6 @@ export function SharedVizPanel({
                           manualSections={manualSections}
                           showManual={showManual && showSignalOverlays}
                           onManualMarkerDrag={showSignalOverlays ? onManualMarkerDrag : undefined}
-                          eyeTimes={eyeTimes}
-                          showEye={showEye && showSignalOverlays}
-                          onEyeMarkerDrag={showSignalOverlays ? onEyeMarkerDrag : undefined}
-                          onEyeMarkerDragStart={showSignalOverlays ? onEyeMarkerDragStart : undefined}
                           pendingSelection={pendingSelection}
                           onVizClick={onVizClick}
                           onVizRegion={onVizRegion}
@@ -2420,6 +2507,7 @@ export function SharedVizPanel({
                     >
                       <LayerRowLabel
                         layer={layer}
+                        auditionedStem={stemSource}
                         isSelected={isSelected}
                         onSelect={onSelect}
                         dragHandlers={dragHandlers}
@@ -2430,6 +2518,9 @@ export function SharedVizPanel({
                         style={isSelected ? { boxShadow: `0 0 0 1px ${layer.color}aa, 0 0 14px ${layer.color}55`, clipPath: 'inset(-16px -16px -16px 0)' } : undefined}
                       >
                       <PatternLaneRow
+                        onSeek={onVizClick}
+                        onRegion={onVizRegion}
+                        onRegionDragStart={onRegionDragStart}
                         items={layer.items}
                         color={layer.color}
                         duration={duration}
@@ -2473,6 +2564,7 @@ export function SharedVizPanel({
                     >
                       <LayerRowLabel
                         layer={layer}
+                        auditionedStem={stemSource}
                         isSelected={isSelected}
                         onSelect={onSelect}
                         dragHandlers={dragHandlers}
@@ -2483,6 +2575,9 @@ export function SharedVizPanel({
                         style={isSelected ? { boxShadow: `0 0 0 1px ${layer.color}aa, 0 0 14px ${layer.color}55`, clipPath: 'inset(-16px -16px -16px 0)' } : undefined}
                       >
                       <SpanLaneRow
+                        onSeek={onVizClick}
+                        onRegion={onVizRegion}
+                        onRegionDragStart={onRegionDragStart}
                         items={layer.items}
                         color={layer.color}
                         duration={duration}
@@ -2525,6 +2620,7 @@ export function SharedVizPanel({
                     >
                       <LayerRowLabel
                         layer={layer}
+                        auditionedStem={stemSource}
                         isSelected={isSelected}
                         onSelect={onSelect}
                         dragHandlers={dragHandlers}
@@ -2535,6 +2631,9 @@ export function SharedVizPanel({
                         style={isSelected ? { boxShadow: `0 0 0 1px ${layer.color}aa, 0 0 14px ${layer.color}55`, clipPath: 'inset(-16px -16px -16px 0)' } : undefined}
                       >
                       <LoopLayerRow
+                        onSeek={onVizClick}
+                        onRegion={onVizRegion}
+                        onRegionDragStart={onRegionDragStart}
                         items={layer.items}
                         color={layer.color}
                         duration={duration}
@@ -2579,6 +2678,7 @@ export function SharedVizPanel({
                     >
                       <LayerRowLabel
                         layer={layer}
+                        auditionedStem={stemSource}
                         isSelected={isSelected}
                         onSelect={onSelect}
                         dragHandlers={dragHandlers}
@@ -2589,6 +2689,9 @@ export function SharedVizPanel({
                         style={isSelected ? { boxShadow: `0 0 0 1px ${layer.color}aa, 0 0 14px ${layer.color}55`, clipPath: 'inset(-16px -16px -16px 0)' } : undefined}
                       >
                         <CueLayerRow
+                          onSeek={onVizClick}
+                          onRegion={onVizRegion}
+                          onRegionDragStart={onRegionDragStart}
                           items={layer.items}
                           color={layer.color}
                           duration={duration}
@@ -2600,6 +2703,47 @@ export function SharedVizPanel({
                             : undefined}
                           onCueDragStart={onCueDragStart
                             ? (itemId) => onCueDragStart(layer.id, itemId)
+                            : undefined}
+                          gridProps={gridProps}
+                          pendingSelection={pendingSelection}
+                          reviewState={detectorLayerReview?.[layer.id]}
+                          onAccept={(itemId) => onDetectorLayerAccept?.(layer.id, itemId)}
+                          onReject={(itemId) => onDetectorLayerReject?.(layer.id, itemId)}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                if (rowId.startsWith('lyrics-layer:')) {
+                  const layer = lyricsLayers?.find((l) => `lyrics-layer:${l.id}` === rowId);
+                  if (!layer || !layer.visible) return null;
+                  return (
+                    <div key={rowId} className={rowClass} {...dropProps}>
+                      <LayerRowLabel
+                        layer={layer}
+                        auditionedStem={stemSource}
+                        isSelected={false}
+                        onSelect={() => {}}
+                        dragHandlers={dragHandlers}
+                        onResizeStart={handleLabelColResizeStart}
+                      />
+                      <div className="flex-1 min-w-0 flex items-stretch">
+                        <LyricsLayerRow
+                          onSeek={onVizClick}
+                          onRegion={onVizRegion}
+                          onRegionDragStart={onRegionDragStart}
+                          items={layer.items}
+                          color={layer.color}
+                          duration={duration}
+                          currentTime={currentTime}
+                          focusedItemId={focusedLyrics?.layerId === layer.id ? focusedLyrics.itemId : null}
+                          onLyricsClick={(itemId, anchor) => onLyricsClick?.(layer.id, itemId, anchor)}
+                          onLyricsSeek={onLyricsSeek}
+                          onLyricsDrag={onLyricsDrag
+                            ? (itemId, time) => onLyricsDrag(layer.id, itemId, time)
+                            : undefined}
+                          onLyricsDragStart={onLyricsDragStart
+                            ? (itemId) => onLyricsDragStart(layer.id, itemId)
                             : undefined}
                           gridProps={gridProps}
                           pendingSelection={pendingSelection}
@@ -2642,7 +2786,7 @@ export function SharedVizPanel({
                           title={dragHandlers ? 'Drag to reorder' : undefined}
                         >
                           <span
-                            className="text-[10px] uppercase tracking-wide text-center leading-tight truncate min-w-0 flex-1"
+                            className="text-[10px] uppercase tracking-wide text-center leading-tight whitespace-normal break-words min-w-0 flex-1"
                             style={{ color: cfg.color }}
                           >
                             {cfg.label}
@@ -2704,6 +2848,9 @@ export function SharedVizPanel({
                       labelColor={overlay.labelColor}
                       renderKind={overlay.renderKind}
                       sections={overlay.sections}
+                      info={overlay.info}
+                      infoId={overlay.id}
+                      gridSource={overlay.gridSource}
                       duration={duration}
                       currentTime={currentTime}
                       dragHandlers={dragHandlers}
@@ -2751,6 +2898,11 @@ export function SharedVizPanel({
               />
             </div>
           )}
+
+          {/* Bottom breathing room — without this the last row butts against
+              the scroll container's clipped edge and reads as trimmed. Roughly
+              one-to-two empty lane-heights of slack. */}
+          <div aria-hidden="true" className="h-12 shrink-0" />
         </div>
       </div>
 
@@ -2780,6 +2932,7 @@ export function SharedVizPanel({
             hideImportance
             hideDelete
             readOnly
+            rawOutput={section.raw ?? section}
             bpm={gridProps?.bpm}
             gridOffset={gridProps?.gridOffset}
             beatsPerBar={gridProps?.beatsPerBar}

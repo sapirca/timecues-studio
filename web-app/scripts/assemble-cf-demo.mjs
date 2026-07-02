@@ -13,6 +13,12 @@
 //   /analysis/<slug>/<file>     ← data-default/algorithm-outputs/analysis/<slug>/<file>
 //   /api/song-info/<slug>       ← data-default/song-info/<slug>.json  (loadSongInfo falls
 //                                  through to this for real BPM/grid in demo mode)
+//   /api/custom-scripts         ← data-default/demo-custom-registry.json (the curated
+//                                  detector registry; served via an exact _redirects
+//                                  rule since the path also roots the result files below)
+//   /api/custom-scripts/result/<name>/<slug>
+//                               ← data-default/algorithm-outputs/custom/<name>/<slug>.json
+//                                  (curated detector outputs — Karaoke lyrics, cues, spans…)
 //   /api/dataset-config         ← public-safe stub  { callerTier: "public" }
 //   /api/corpus/stats           ← { songs, admins, researchers, team }
 //
@@ -34,6 +40,12 @@ const SONGS_DIR = path.join(DEFAULT_DATA, 'songs');
 const STEMS_DIR = path.join(DEFAULT_DATA, 'stems');
 const ANALYSIS_DIR = path.join(DEFAULT_DATA, 'algorithm-outputs', 'analysis');
 const SONGINFO_DIR = path.join(DEFAULT_DATA, 'song-info');
+const CUSTOM_DIR = path.join(DEFAULT_DATA, 'algorithm-outputs', 'custom');
+const CUSTOM_REGISTRY_FIXTURE = path.join(DEFAULT_DATA, 'demo-custom-registry.json');
+// Experimental loop/pattern detectors are hidden by the real backend unless the
+// experimentalLoopsAndPatterns Settings flag is on; the demo defaults it off, so
+// match that and leave them out of the baked registry.
+const GATED_OUTPUT_KINDS = new Set(['loop', 'pattern']);
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a)$/i;
 
@@ -123,6 +135,52 @@ for (const slug of fs.readdirSync(SONGS_DIR)) {
 manifest.sort((a, b) => a.name.localeCompare(b.name));
 writeFile(path.join('analysis', 'manifest.json'), JSON.stringify(manifest));
 
+// ─── 1b. Curated custom-detector outputs + registry ──────────────────────────
+// The Inspector loads each registered detector's cached result and turns
+// `lyrics`/`cue`/`span`/… envelopes into overlay + Karaoke layers. With no
+// backend, the static mirror serves the committed demo cache instead:
+//   listDetectors()      → GET /api/custom-scripts                  (registry)
+//   getDetectorResult()  → GET /api/custom-scripts/result/<n>/<s>   (envelope)
+// The registry is filtered to detectors that actually have demo data and
+// aren't experimental loop/pattern, mirroring the flag-off backend response.
+const demoSlugs = new Set(manifest.map((m) => m.id));
+const registryFixture = readJSON(CUSTOM_REGISTRY_FIXTURE);
+const kindByName = new Map(
+  (registryFixture?.detectors ?? []).map((d) => [d.name, d.output_kind]),
+);
+let customResultCount = 0;
+const detectorsWithDemoData = new Set();
+if (fs.existsSync(CUSTOM_DIR)) {
+  for (const name of fs.readdirSync(CUSTOM_DIR)) {
+    const detDir = path.join(CUSTOM_DIR, name);
+    try { if (!fs.statSync(detDir).isDirectory()) continue; } catch { continue; }
+    // Skip detectors the registry won't list (unknown or gated kind) so we
+    // don't bake orphan result files the SPA never fetches.
+    const kind = kindByName.get(name);
+    if (!kind || GATED_OUTPUT_KINDS.has(kind)) continue;
+    for (const slug of demoSlugs) {
+      const src = path.join(detDir, `${slug}.json`);
+      if (!fs.existsSync(src)) continue;
+      writeFile(path.join('api', 'custom-scripts', 'result', name, slug),
+        fs.readFileSync(src, 'utf-8'));
+      detectorsWithDemoData.add(name);
+      customResultCount++;
+    }
+  }
+}
+// Registry → /api/custom-scripts-registry.json (an exact _redirects rule maps
+// the real fetch URL /api/custom-scripts onto it; see _redirects below).
+let customDetectorCount = 0;
+if (registryFixture && Array.isArray(registryFixture.detectors)) {
+  const detectors = registryFixture.detectors.filter(
+    (d) => detectorsWithDemoData.has(d.name) && !GATED_OUTPUT_KINDS.has(d.output_kind),
+  );
+  writeFile(path.join('api', 'custom-scripts-registry.json'), JSON.stringify({ detectors }));
+  customDetectorCount = detectors.length;
+} else {
+  console.warn('[assemble-cf-demo] WARN: no demo-custom-registry.json — curated/Karaoke layers will be absent from the mirror.');
+}
+
 // ─── 2. Public-safe API stubs ────────────────────────────────────────────────
 // dataset-config: server filters sensitive keys for public callers; the static
 // mirror has none to filter — ship only the resolved tier. Never the real
@@ -146,6 +204,10 @@ writeFile('_redirects', [
   '# Static Cloudflare mirror of the TimeCues public/demo tier.',
   '# Unbaked data paths 404 (the SPA degrades gracefully); all other paths',
   '# fall through to the SPA so deep links / refresh work.',
+  '# Curated detector registry: the fetch URL has no file (the path roots the',
+  '# baked result files), so map it explicitly. Result files are real assets,',
+  '# served before any rule. This exact rule must precede the /api/* 404.',
+  '/api/custom-scripts   /api/custom-scripts-registry.json   200',
   '/api/*       /_static-demo-404.json   404',
   '/analysis/*  /_static-demo-404.json   404',
   '/stems/*     /_static-demo-404.json   404',
@@ -171,5 +233,6 @@ writeFile('_headers', [
 console.log(
   `[assemble-cf-demo] OK — ${manifest.length} songs ` +
   `(${audioCount} audio, ${stemCount} stem sets, ${analysisCount} analysis dirs, ` +
-  `${songInfoCount} song-info), stubs + _redirects + _headers written to dist/.`
+  `${songInfoCount} song-info, ${customDetectorCount} curated detectors / ` +
+  `${customResultCount} cached outputs), stubs + _redirects + _headers written to dist/.`
 );

@@ -104,6 +104,12 @@ interface PlayerPanelProps {
   zoomToRangeRef?: RefObject<((t1: number, t2: number) => void) | null>;
   /** Called when play/pause state changes */
   onPlayingChange?: (playing: boolean) => void;
+  /** Playback speed multiplier (1 = normal, 0.5 = half-speed, …). Applied
+   *  once here at the audio source via WaveSurfer's setPlaybackRate, so the
+   *  playhead — and every currentTime-driven viz (karaoke, beat grid sweep) —
+   *  slows in lockstep with no extra wiring. Pitch is preserved so the song
+   *  stays musically recognizable when slowed. Defaults to 1. */
+  playbackRate?: number;
   /** Theme accent colors. Defaults to indigo. */
   accent?: PlayerAccent;
   /** Called while the user holds Alt and drags horizontally on the waveform to slide the grid. */
@@ -198,7 +204,7 @@ function parseTrackName(trackName?: string): { artist: string; song: string } | 
   return { artist: 'Unknown Artist', song: trimmed };
 }
 
-export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, beatOffset = 0, beatsPerBar = 4, barGroupSize, subBeatDivision, beatGroupSize, gridThickness = 1, onBufferReady, onReady, onTimeUpdate, onViewChange, seekRef, playRef, pauseRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef, onScrollChange, onPlayingChange, accent = DEFAULT_PLAYER_ACCENT, onGridOffsetChange, onGridOffsetDragStart, showBarNumbers = false, anchors, beatOverrides, anchorFlagMode, onDeleteAnchor, onAnchorDrag, onAnchorDragStart, gridMode, onBeatDrag, onClearBeatOverride, manualEditLocked = false, pendingSelection, previewRegion, onUserSeek, onUserRegion, previewControls }: PlayerPanelProps) {
+export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, beatOffset = 0, beatsPerBar = 4, barGroupSize, subBeatDivision, beatGroupSize, gridThickness = 1, onBufferReady, onReady, onTimeUpdate, onViewChange, seekRef, playRef, pauseRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef, onScrollChange, onPlayingChange, playbackRate = 1, accent = DEFAULT_PLAYER_ACCENT, onGridOffsetChange, onGridOffsetDragStart, showBarNumbers = false, anchors, beatOverrides, anchorFlagMode, onDeleteAnchor, onAnchorDrag, onAnchorDragStart, gridMode, onBeatDrag, onClearBeatOverride, manualEditLocked = false, pendingSelection, previewRegion, onUserSeek, onUserRegion, previewControls }: PlayerPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Tracks the inner anchor-row div whose width = waveformWidth. Passed to
   // AnchorFlagOverlay so its drag hook maps clientX → time across the full
@@ -507,6 +513,20 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       if (wsScrollRef) wsScrollRef.current = null;
     };
   }, [url]);
+
+  // Apply the playback-speed multiplier at the source. Re-runs when the rate
+  // changes and once the player becomes ready (so a non-default rate selected
+  // before load still takes hold). `preservePitch=true` keeps the song's
+  // pitch intact when slowed — half-speed without the chipmunk/anchor drop.
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws || !isReady) return;
+    try {
+      ws.setPlaybackRate(playbackRate > 0 ? playbackRate : 1, true);
+    } catch (err) {
+      console.warn('[PlayerPanel] setPlaybackRate failed', err);
+    }
+  }, [playbackRate, isReady]);
 
   // Fit zoom = container fills duration (WaveSurfer's default)
   const fitZoom = containerWidth > 0 && duration > 0 ? containerWidth / duration : 0;
@@ -920,14 +940,19 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     if (e.button !== 0) return;
     const t = timeAtClientX(e.clientX, e.currentTarget.getBoundingClientRect());
     dragSelRef.current = { time: t, x: e.clientX };
-    setDragSel({ s: t, e: t });
+    // Don't paint a selection yet — a plain click should only move the cursor.
+    // The teal region appears once the drag passes the 6px commit threshold.
     e.preventDefault();
   }, [timeAtClientX]);
 
   const handleSelectMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragSelRef.current) return;
     const t = timeAtClientX(e.clientX, e.currentTarget.getBoundingClientRect());
-    setDragSel({ s: dragSelRef.current.time, e: t });
+    if (Math.abs(e.clientX - dragSelRef.current.x) > 6) {
+      setDragSel({ s: dragSelRef.current.time, e: t });
+    } else {
+      setDragSel(null);
+    }
   }, [timeAtClientX]);
 
   const handleSelectMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>) => {

@@ -44,7 +44,7 @@ export function pairwiseBoundaryF1(
   return { precision, recall, f1, hits, refCount: refSorted.length, estCount: estSorted.length };
 }
 
-/** Boundary times from a manual/eye annotation (section start times). */
+/** Boundary times from a manual annotation (section start times). */
 export function manualBoundaries(ann: ManualAnnotation | null | undefined): number[] {
   if (!ann?.sections?.length) return [];
   return ann.sections.map((s) => s.time).filter((t) => Number.isFinite(t));

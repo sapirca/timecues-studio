@@ -27,7 +27,6 @@ type Tab = 'annotators' | 'agreement' | 'members';
 
 const SOURCE_TONE = {
   manual: 'text-amber-300',
-  eye: 'text-cyan-300',
   autoGuess: 'text-violet-300',
 } as const;
 
@@ -124,15 +123,14 @@ function AnnotatorsTab({
   tiersByEmail: Record<string, AccessTier>;
 }) {
   const totals = useMemo(() => {
-    let manual = 0, eye = 0, autoGuess = 0, custom = 0, time = 0;
+    let manual = 0, autoGuess = 0, custom = 0, time = 0;
     for (const a of data.annotators) {
       manual += a.manual.count;
-      eye += a.eye.count;
       autoGuess += a.autoGuess.count;
       custom += a.custom.count;
       time += a.totalTimeSeconds;
     }
-    return { manual, eye, autoGuess, custom, time, annotators: data.annotators.length };
+    return { manual, autoGuess, custom, time, annotators: data.annotators.length };
   }, [data.annotators]);
 
   if (data.annotators.length === 0) {
@@ -152,7 +150,6 @@ function AnnotatorsTab({
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <Stat label="Annotators" value={totals.annotators.toString()} />
           <Stat label="Boundaries" value={totals.manual.toString()} tone="text-amber-300" />
-          <Stat label="Eye" value={totals.eye.toString()} tone="text-cyan-300" />
           <Stat label="Auto-guess" value={totals.autoGuess.toString()} tone="text-violet-300" />
           <Stat label="Custom" value={totals.custom.toString()} tone="text-emerald-300" />
           <Stat label="Time logged" value={fmtDuration(totals.time)} />
@@ -205,9 +202,8 @@ function AnnotatorCard({ a, isMe, tier }: { a: TeamStatsAnnotator; isMe: boolean
         </div>
       </header>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <SourceCell label="Boundaries" stats={a.manual} tone={SOURCE_TONE.manual} />
-        <SourceCell label="Eye" stats={a.eye} tone={SOURCE_TONE.eye} />
         <SourceCell label="Auto-guess" stats={a.autoGuess} tone={SOURCE_TONE.autoGuess} />
       </div>
 
@@ -530,7 +526,7 @@ function MembersTab({ currentAnnotatorId }: { currentAnnotatorId: string | null 
         title="Remove user"
         description={
           pendingRemove
-            ? `This permanently deletes ${pendingRemove.email}'s membership AND every annotation they have ever saved (manual, eye, auto-guess, and per-script custom) plus their saved profile. There is no undo.`
+            ? `This permanently deletes ${pendingRemove.email}'s membership AND every annotation they have ever saved (manual, auto-guess, and per-script custom) plus their saved profile. There is no undo.`
             : undefined
         }
         confirmWord="DELETE_USER"

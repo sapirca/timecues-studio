@@ -46,7 +46,11 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
 LABEL_MAX = 80
 # `loop` and `pattern` validate fine here but are filtered out of the registry
 # response by custom_server when the experimentalLoopsAndPatterns flag is off.
-ALLOWED_OUTPUT_KIND = {"boundary", "cue", "span", "loop", "pattern"}
+ALLOWED_OUTPUT_KIND = {"boundary", "cue", "span", "loop", "pattern", "lyrics"}
+# Demucs stem a detector reads from, surfaced so the UI can label a layer with
+# its source stem and light it up while that stem is auditioned. "mix" means the
+# whole track (no single stem). Optional — None when the detector declares none.
+ALLOWED_STEM = {"vocals", "drums", "bass", "other", "guitar", "piano", "mix"}
 # Output kinds gated by the experimentalLoopsAndPatterns UI flag. The server
 # filters these from the registry response when the flag is off, mirroring the
 # annotation-tab gating in the web app.
@@ -348,6 +352,15 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
     description = str(getattr(cls, "description", "") or "")
     version     = str(getattr(cls, "version", "") or "0.1")
 
+    # Optional source stem. Reject unknown values rather than silently dropping
+    # them, so a typo surfaces the same way a bad output_kind would.
+    stem = getattr(cls, "stem", None)
+    if stem is not None and stem not in ALLOWED_STEM:
+        errors.append(_err(
+            "stem", stem,
+            f"must be one of {sorted(ALLOWED_STEM)} (or omitted).",
+        ))
+
     status = "ok" if not errors else "validation_error"
     return RegistryEntry(
         name=name if isinstance(name, str) and name else path.stem,
@@ -359,6 +372,7 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
         is_annotation=is_annotation,
         description=description,
         version=version,
+        stem=stem if stem in ALLOWED_STEM else None,
         errors=errors,
     )
 

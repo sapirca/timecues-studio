@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Demucs v4 stem separator (htdemucs model).
+"""Demucs v4 stem separator (htdemucs_6s model).
 
-Separates audio files into 4 stems: vocals, drums, bass, other.
+Separates audio files into 6 stems: vocals, drums, bass, other, guitar, piano.
+The 6-source model splits the old single `other` stem into guitar + piano +
+a thinner `other` (synths / leads / pads / FX), so melodic content that used
+to be lumped together is now selectable on its own.
 Writes WAV files to public/stems/<slug>/ and a manifest.json consumed by the Inspector UI.
 
 Audio is loaded via librosa (no ffmpeg needed). To stay within the ~2GB
@@ -23,6 +26,8 @@ Cache location (served statically by Vite and used by the web app):
     web-app/public/stems/<slug>/drums.wav
     web-app/public/stems/<slug>/bass.wav
     web-app/public/stems/<slug>/other.wav
+    web-app/public/stems/<slug>/guitar.wav
+    web-app/public/stems/<slug>/piano.wav
     web-app/public/stems/<slug>/manifest.json
 """
 
@@ -38,7 +43,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-MODEL_NAME = "htdemucs"
+MODEL_NAME = "htdemucs_6s"
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".ogg", ".m4a"}
 
 # Process at most this many seconds per chunk to stay within ~2 GB RAM.
@@ -110,7 +115,7 @@ def separate(audio_path: Path, output_dir: Path, force: bool = False) -> dict:
 
     model = get_model()
     sr = model.samplerate          # 44100
-    sources = model.sources        # ['drums', 'bass', 'other', 'vocals']
+    sources = model.sources        # ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano']
 
     print(f"  Separating: {audio_path.name}")
     t0 = time.time()

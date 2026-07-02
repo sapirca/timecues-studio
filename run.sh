@@ -312,12 +312,21 @@ else
   echo "Fetching JDCNet weights (~17 MB)…"
   mkdir -p .cache/jdcnet
   fetch_jdcnet_ok=1
+  # Upstream layout is NOT flat: the checkpoint lives under weights/, but the
+  # two normalization arrays sit at the repo ROOT. Map each file to its real
+  # path so we don't 404 the .npy files (which a blanket weights/ prefix does).
+  jdcnet_src() {
+    case "$1" in
+      *.hdf5) echo "weights/$1" ;;   # ResNet_joint_add_L(CE_G).hdf5 → weights/
+      *)      echo "$1" ;;           # x_data_*_total_31.npy → repo root
+    esac
+  }
   for f in \
       "ResNet_joint_add_L(CE_G).hdf5" \
       "x_data_mean_total_31.npy" \
       "x_data_std_total_31.npy"; do
     if [ ! -s ".cache/jdcnet/$f" ]; then
-      url="https://raw.githubusercontent.com/keums/melodyExtraction_JDC/master/weights/$f"
+      url="https://raw.githubusercontent.com/keums/melodyExtraction_JDC/master/$(jdcnet_src "$f")"
       if curl -fSL -o ".cache/jdcnet/$f" "$url" 2>/dev/null; then
         echo "  ✓ $f"
       else
@@ -643,41 +652,145 @@ fi
 # binary — used for the .cache/py311-cue/ venv that runs basic-pitch +
 # autochord on Python 3.11 while the rest of the stack uses the host
 # interpreter on 3.12+.
+# ── Output styling ─────────────────────────────────────────────────────────
+# Colors only when stdout is a real terminal (so piped/CI logs stay clean).
+if [ -t 1 ]; then
+  C_OK=$'\033[32m'; C_ERR=$'\033[31m'; C_WARN=$'\033[33m'
+  C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_OFF=$'\033[0m'
+else
+  C_OK=''; C_ERR=''; C_WARN=''; C_DIM=''; C_BOLD=''; C_OFF=''
+fi
+
+# Tallies for the end-of-launch summary.
+SERVER_TOTAL=0
+SERVER_FAILURES=()
+
 start_python_server() {
   local name="$1" script="$2" port="$3" log="$4"
   local py_bin="${5:-$PYTHON}"
+  local label="${name% server}"   # "MSAF server" -> "MSAF" (header says "servers")
+  SERVER_TOTAL=$((SERVER_TOTAL + 1))
 
-  echo "Starting $name on port $port..."
-
-  # Kill anything already holding the port
-  fuser -k "${port}/tcp" 2>/dev/null || lsof -ti "tcp:${port}" | xargs kill -9 2>/dev/null || true
+  # Kill anything already holding the port (race-guard; the pre-flight check
+  # already freed it on the same-ports path).
+  free_port "$port"
 
   nohup "$py_bin" "$script" > "$log" 2>&1 &
   local pid=$!
 
-  # Wait up to 5 s for the port to open
+  # Wait up to 5 s for the port to accept a connection.
   local i=0
   while [ $i -lt 10 ]; do
     sleep 0.5
     if (echo > /dev/tcp/localhost/"$port") 2>/dev/null; then
-      echo "  $name started (PID $pid) — port $port open. Logs: $log"
+      printf '  %s✓%s  %-12s %s:%-4s%s  pid %s\n' \
+        "$C_OK" "$C_OFF" "$label" "$C_DIM" "$port" "$C_OFF" "$pid"
       return 0
     fi
     i=$((i + 1))
   done
 
-  echo "  WARNING: $name (PID $pid) may not be listening on port $port after 5 s."
-  echo "  Check logs: $log"
-  tail -5 "$log" | sed 's/^/    /'
+  printf '  %s✗%s  %-12s %s:%-4s%s  %sfailed to start within 5s — logs: %s%s\n' \
+    "$C_ERR" "$C_OFF" "$label" "$C_DIM" "$port" "$C_OFF" "$C_ERR" "$log" "$C_OFF"
+  SERVER_FAILURES+=("$label (:$port) — last lines of $log:")
+  while IFS= read -r ln; do SERVER_FAILURES+=("      $ln"); done < <(tail -3 "$log" 2>/dev/null)
 }
 
+# ── Pre-flight: are any ports we need already in use? ──────────────────────
+# Every Python sidecar's start_python_server kills whatever holds its port,
+# and Vite runs with --strictPort (it crashes rather than hopping). Neither
+# is what you want when a previous ./run.sh (or the Docker stack) is still
+# up: don't silently kill someone else's process, and don't quietly relaunch
+# on a different port. Ask once, up front — kill-and-relaunch on the SAME
+# ports, or abort. Set TIMECUES_KILL_PORTS=1 to skip the prompt (CI / repeat
+# dev loops); leave it unset for the interactive ask.
+VITE_PORT="${VITE_PORT:-5174}"
+REQUIRED_PORTS="8001 8002 8003 8004 8005 8006 8009 8010 8011 8013 8014 8015 8016 8017 $VITE_PORT"
+
+port_listeners() {
+  # Space-separated PIDs LISTENing on the given TCP port (empty if free).
+  # lsof covers macOS + most Linux; ss is the modern-Linux fallback where
+  # lsof isn't installed. (Windows/Git-Bash has neither — ports read as
+  # free and the server bind fails loudly if one is actually taken.)
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -ti "tcp:${1}" -sTCP:LISTEN 2>/dev/null | sort -u | tr '\n' ' '
+  elif command -v ss >/dev/null 2>&1; then
+    ss -tlnpH "sport = :${1}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u | tr '\n' ' '
+  fi
+}
+
+free_port() {
+  # Kill whatever is LISTENing on the given TCP port. Prefer lsof (works on
+  # macOS + Linux); fall back to fuser only where lsof is absent. NOTE: BSD
+  # (macOS) fuser has no -k flag and prints its usage to *stdout*, so it's
+  # both useless and noisy here — hence lsof first, fuser fully silenced.
+  local p="$1" pids
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -ti "tcp:${p}" -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -n "$pids" ]; then
+      kill -9 $pids 2>/dev/null || true
+    fi
+  else
+    fuser -k "${p}/tcp" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+busy_ports=""
+busy_report=""
+for p in $REQUIRED_PORTS; do
+  pids="$(port_listeners "$p")"
+  if [ -n "$pids" ]; then
+    busy_ports="$busy_ports $p"
+    busy_report="${busy_report}    port ${p}: PID(s) ${pids}
+"
+  fi
+done
+
+if [ -n "$busy_ports" ]; then
+  echo
+  echo "${C_WARN}⚠  Some ports ./run.sh needs are already in use${C_OFF}"
+  echo "${C_DIM}   (most likely a previous ./run.sh is still running):${C_OFF}"
+  printf '%s' "$busy_report"
+  echo
+  if [ -n "${TIMECUES_KILL_PORTS:-}" ]; then
+    echo "${C_DIM}TIMECUES_KILL_PORTS set — killing those process(es) and relaunching on the same ports.${C_OFF}"
+    port_action="kill"
+  elif [ -r /dev/tty ]; then
+    printf "${C_BOLD}Kill them and relaunch on the same ports?${C_OFF} [${C_BOLD}k${C_OFF} = kill & relaunch / ${C_BOLD}a${C_OFF} = abort] "
+    read -r reply </dev/tty || reply=""
+    case "$reply" in
+      k|K|kill|y|Y|yes) port_action="kill" ;;
+      *)                port_action="abort" ;;
+    esac
+  else
+    echo "${C_ERR}Non-interactive shell and TIMECUES_KILL_PORTS is unset — aborting.${C_OFF}"
+    echo "Re-run with TIMECUES_KILL_PORTS=1 to kill and relaunch automatically."
+    exit 1
+  fi
+
+  if [ "$port_action" = "kill" ]; then
+    for p in $busy_ports; do
+      free_port "$p"
+    done
+    echo "${C_OK}✓  Freed ports:${busy_ports}${C_OFF} — continuing on the same ports."
+  else
+    echo "${C_ERR}Aborted${C_OFF} — left the existing services running. Free the ports (or stop the other ./run.sh) and try again."
+    exit 1
+  fi
+fi
+
+echo
+echo "${C_BOLD}─── Starting model servers ─────────────────────────────────────────${C_OFF}"
+echo "${C_DIM}    (each starts even if its model dep is missing — the UI then shows${C_OFF}"
+echo "${C_DIM}     'Deps missing' for that family; ✗ below means the process itself${C_OFF}"
+echo "${C_DIM}     didn't come up, see its log)${C_OFF}"
 start_python_server "mir_eval server"  tools/python/mir_eval_server.py  8001 /tmp/mir_eval_server.log
 start_python_server "MSAF server"      tools/python/msaf_server.py      8002 /tmp/msaf_server.log
-start_python_server "Ruptures server"  tools/python/ruptures_server.py  8003 /tmp/ruptures_server.log
+start_python_server "DSP server"       tools/python/dsp_server.py       8003 /tmp/dsp_server.log
 start_python_server "BPM server"       tools/python/bpm_server.py       8004 /tmp/bpm_server.log
 start_python_server "Custom server"    tools/python/custom_server.py    8005 /tmp/custom_server.log
 start_python_server "Stems server"     tools/python/stems_server.py     8006 /tmp/stems_server.log
-start_python_server "MIR server"       tools/python/mir_server.py       8007 /tmp/mir_server.log
 
 # ── Experimental MIR sidecars (8009-8017) ──────────────────────────────────
 # Every server's heavy imports are guarded by try/except, so the process
@@ -695,12 +808,22 @@ start_python_server "BeatNet server"     tools/python/beatnet_server.py     8010
 # string means "use the main interpreter". start_python_server's 5th
 # arg accepts that override.
 start_python_server "Pitch server"       tools/python/pitch_server.py       8011 /tmp/pitch_server.log       "${VENV_PY311_CUE_PY:-$PYTHON}"
-start_python_server "Loop server"        tools/python/loop_server.py        8012 /tmp/loop_server.log
 start_python_server "PANNs server"       tools/python/panns_server.py       8013 /tmp/panns_server.log
 start_python_server "Cue-extras server"  tools/python/cue_extras_server.py  8014 /tmp/cue_extras_server.log  "${VENV_PY311_CUE_PY:-$PYTHON}"
 start_python_server "Percussive server"  tools/python/percussive_server.py  8015 /tmp/percussive_server.log
 start_python_server "Lyrics server"      tools/python/lyrics_server.py      8016 /tmp/lyrics_server.log
 start_python_server "Pattern server"     tools/python/pattern_server.py     8017 /tmp/pattern_server.log
+
+# ── Model-server launch summary ────────────────────────────────────────────
+echo
+if [ ${#SERVER_FAILURES[@]} -eq 0 ]; then
+  echo "${C_OK}✓  All ${SERVER_TOTAL} model servers are up.${C_OFF}"
+else
+  ok=$((SERVER_TOTAL - $( printf '%s\n' "${SERVER_FAILURES[@]}" | grep -c ' — last lines of ' )))
+  echo "${C_WARN}⚠  ${ok}/${SERVER_TOTAL} model servers up — the rest failed to start:${C_OFF}"
+  printf '   %s\n' "${SERVER_FAILURES[@]}"
+  echo "${C_DIM}   The app still runs; detectors from a failed server are unavailable.${C_OFF}"
+fi
 
 # ── Vite dev server ────────────────────────────────────────────────────────
 cd web-app
@@ -710,6 +833,17 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
+# Dev Vite port. Defaults to 5174 (NOT Vite's usual 5173) on purpose: a
+# local Docker stack publishes 5173, so the dev server would collide with
+# it. 5174 keeps `./run.sh` and the container side by side. Override with
+# VITE_PORT=... if 5174 is also taken. --strictPort makes Vite fail loudly
+# instead of silently hopping to the next free port, so the URL is stable.
+VITE_PORT="${VITE_PORT:-5174}"
+echo
+echo "${C_BOLD}─── Starting the app ───────────────────────────────────────────────${C_OFF}"
+echo "  Open ${C_BOLD}http://localhost:${VITE_PORT}/${C_OFF}  ${C_DIM}(5173 is left free for the Docker stack)${C_OFF}"
+echo "  ${C_DIM}Ctrl-C here stops the dev server; the model servers keep running in the background.${C_OFF}"
+
 # TIMECUES_PYTHON propagates to the dev server so its /api/capabilities
 # probe inspects the exact same interpreter we installed into above.
-npm run dev
+npm run dev -- --port "$VITE_PORT" --strictPort

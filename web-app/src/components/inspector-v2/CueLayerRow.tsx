@@ -13,7 +13,7 @@ import { BeatGridOverlay } from './BeatGridOverlay';
 import { isOnGridLine, SNAP_INDICATOR_COLOR } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag } from '../../hooks/useTimelineDrag';
-import { PendingHighlightOverlay, type PendingSelection } from './AnnotationOverlays';
+import { PendingHighlightOverlay, RegionDragOverlay, type PendingSelection } from './AnnotationOverlays';
 import { ReviewControls, reviewBgFor, type ReviewStatus } from './ReviewControls';
 
 interface CueLayerRowProps {
@@ -31,6 +31,11 @@ interface CueLayerRowProps {
   /** Optional grid overlay for beat/bar lines under the ticks. */
   gridProps?: { bpm?: number; gridOffset?: number; beatsPerBar?: number; barGroupSize?: number | null; thickness?: number };
   pendingSelection?: PendingSelection | null;
+  /** Empty-space click → seek; empty-space drag → create a pending highlight.
+   *  Wired so highlight-selection works on this lane just like the signal rows. */
+  onSeek?: (time: number) => void;
+  onRegion?: (t1: number, t2: number) => void;
+  onRegionDragStart?: () => void;
   /** When present, this row is in detector-review mode: ticks become read-only
    *  and each one renders inline ✓/✗ controls. Keyed by cue id. */
   reviewState?: Record<string, ReviewStatus>;
@@ -44,6 +49,7 @@ export function CueLayerRow({
   onCueDrag, onCueDragStart,
   gridProps,
   pendingSelection,
+  onSeek, onRegion, onRegionDragStart,
   reviewState, onAccept, onReject,
 }: CueLayerRowProps) {
   const reviewMode = !!reviewState;
@@ -129,6 +135,12 @@ export function CueLayerRow({
         </span>
       )}
 
+      {/* Behind the ticks (z="") so they keep receiving their own mousedowns;
+          empty space between ticks falls through to seek / highlight-drag. */}
+      {onSeek && onRegion && (
+        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onRegion} onRegionDragStart={onRegionDragStart} z="" />
+      )}
+
       {placed.map(({ cue, leftPct }) => {
         const isFocused = cue.id === focusedItemId;
         const snapped = isOnGridLine(cue.time, gridProps?.bpm, gridProps?.gridOffset, gridProps?.beatsPerBar);
@@ -137,13 +149,16 @@ export function CueLayerRow({
         const titleText = reviewMode
           ? `${cue.label || '(unlabeled)'} @ ${fmtTime(cue.time)}${status ? ` · ${status}` : ' · pending review'}${cue.description ? '\n' + cue.description : ''}`
           : `${cue.label || '(unlabeled)'} @ ${fmtTime(cue.time)}${snapped ? ' · snapped to beat grid' : ''}${dragEnabled ? ' · drag to reposition · click to edit' : ''}${cue.description ? '\n' + cue.description : ''}`;
-        const onClickCue = reviewMode
-          ? undefined
-          : (e: React.MouseEvent) => {
-              e.stopPropagation();
-              if (didDragRef.current) { didDragRef.current = false; return; }
-              onCueClick?.(cue.id, { x: e.clientX, y: e.clientY });
-            };
+        // The tick is clickable in every mode: in review mode it opens the
+        // read-only info card (the ✓/✗ ReviewControls handle accept/reject and
+        // stop propagation, so they don't double-fire); otherwise it opens the
+        // editable card. Drag is disabled in review mode, so didDragRef stays
+        // false there.
+        const onClickCue = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (didDragRef.current) { didDragRef.current = false; return; }
+          onCueClick?.(cue.id, { x: e.clientX, y: e.clientY });
+        };
         const onMouseDownCue = dragEnabled
           ? (e: React.MouseEvent) => { didDragRef.current = false; startDrag({ id: cue.id }, e); }
           : undefined;
@@ -170,12 +185,11 @@ export function CueLayerRow({
             <button
               onClick={onClickCue}
               onMouseDown={onMouseDownCue}
-              disabled={reviewMode}
               // Translate by -50% so the tick is visually centred on its time.
               // The 8px-wide click target straddles the 2px-wide visible line,
               // giving generous hit area without obscuring neighbouring ticks.
               className={`absolute top-0 bottom-0 w-2 flex items-stretch justify-center group/cue ${
-                reviewMode ? 'cursor-default' : (dragEnabled ? 'cursor-ew-resize' : 'cursor-pointer')
+                reviewMode ? 'cursor-pointer' : (dragEnabled ? 'cursor-ew-resize' : 'cursor-pointer')
               }`}
               style={{ left: `${leftPct}%`, transform: 'translateX(-50%)' }}
               title={titleText}

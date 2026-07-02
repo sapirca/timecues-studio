@@ -25,7 +25,6 @@ guide in the same change set.
 independent:
 
 - **Enable Loops and Patterns** — schema-only today; UI in progress.
-- **Enable Eye annotation** — second-observer pass over the same sections.
 - **Enable SPAN-family detectors** — voicing / instrument-activity intervals
   via Silero-VAD, JDCNet, and PANNs (AudioSet-527 tagging).
 - **Enable CUE-family extras** — BeatNet beats / downbeats / meter,

@@ -28,28 +28,28 @@ import type {
   CustomSpanItem,
   CustomLoopItem,
   CustomPatternItem,
+  CustomLyricsItem,
 } from '../../types/customScript';
 import type { TempoAnchor } from '../../types/songInfo';
 import { AnnotationPointCard, type AnnotationCardKind } from './shared/AnnotationPointCard';
 import { useAnnotationPopover } from './shared/useAnnotationPopover';
-import {
-  newId,
-  type CueItem,
-  type SpanItem,
-  type LoopItem,
-  type PatternItem,
+import type {
+  CueItem,
+  SpanItem,
+  LoopItem,
+  PatternItem,
+  LyricsItem,
 } from '../../types/annotationLayer';
+import { convertDetectorItems, type ReviewableCategory } from './detectorConvert';
 
 export type DetectorReviewStatus = 'accepted' | 'rejected';
-
-type ReviewableCategory = 'cues' | 'spans' | 'loops' | 'patterns' | 'boundaries';
 
 interface Props {
   detectorName: string;
   detectorLabel: string;
   category: ReviewableCategory;
   /** Items from the detector envelope. Shape depends on `category`. */
-  items: (CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem)[];
+  items: (CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem | CustomLyricsItem)[];
   /** Map keyed by item-id (`${index}:${primaryTimeField}`) → decision. */
   reviewState: Record<string, DetectorReviewStatus>;
   onAccept: (itemId: string) => void;
@@ -61,8 +61,8 @@ interface Props {
    *  it to the song's AnnotationLayersDocument and persists. Omitted for
    *  boundaries (which don't have a manual-layer equivalent yet). */
   onCopyToManualLayer?: (params: {
-    type: 'cues' | 'spans' | 'loops' | 'patterns';
-    items: CueItem[] | SpanItem[] | LoopItem[] | PatternItem[];
+    type: 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
+    items: CueItem[] | SpanItem[] | LoopItem[] | PatternItem[] | LyricsItem[];
     layerName: string;
     importedFrom: string;
   }) => void;
@@ -89,13 +89,16 @@ interface Props {
 function itemKey(
   category: ReviewableCategory,
   index: number,
-  item: CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem | CustomBoundaryItem,
+  item: CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem | CustomBoundaryItem | CustomLyricsItem,
 ): string {
   if (category === 'cues') {
     return `${index}:${(item as CustomCueItem).time_ms}`;
   }
   if (category === 'boundaries') {
     return `${index}:${(item as CustomBoundaryItem).time_ms}`;
+  }
+  if (category === 'lyrics') {
+    return `${index}:${(item as CustomLyricsItem).time_ms}`;
   }
   // spans / loops / patterns all keyed by start_ms
   const start = (item as CustomSpanItem | CustomLoopItem | CustomPatternItem).start_ms;
@@ -104,7 +107,7 @@ function itemKey(
 
 /** Map review category → card kind. */
 const KIND_FROM_CATEGORY: Record<ReviewableCategory, AnnotationCardKind> = {
-  cues: 'cue', spans: 'span', loops: 'loop', patterns: 'pattern', boundaries: 'boundary',
+  cues: 'cue', spans: 'span', loops: 'loop', patterns: 'pattern', lyrics: 'lyrics', boundaries: 'boundary',
 };
 
 /** Neutral palette for detector-sourced cards (no layer to inherit from). */
@@ -143,11 +146,12 @@ export function DetectorOutputReview({
   // Mapping from review category → user-layer type. Boundaries have no
   // manual-layer equivalent (they live in ManualAnnotation, not the layers
   // doc), so the Copy buttons are hidden in that case.
-  const manualLayerType: 'cues' | 'spans' | 'loops' | 'patterns' | null =
+  const manualLayerType: 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics' | null =
     category === 'cues' ? 'cues'
     : category === 'spans' ? 'spans'
     : category === 'loops' ? 'loops'
     : category === 'patterns' ? 'patterns'
+    : category === 'lyrics' ? 'lyrics'
     : null;
 
   const canCopy = !!onCopyToManualLayer && manualLayerType !== null && items.length > 0;
@@ -296,7 +300,7 @@ export function DetectorOutputReview({
         const kind = KIND_FROM_CATEGORY[category];
         const id = popover.open!.itemId;
         const status = reviewState[id];
-        const { start, end, regionEnd, label, description } = detectorItemView(category, openItem.item);
+        const { start, end, label, description } = detectorItemView(category, openItem.item);
         const stopTime = end ?? start + 0.5;
         const itemIsPlaying = playerIsPlaying && playerTime >= start && playerTime < stopTime;
         return (
@@ -308,7 +312,7 @@ export function DetectorOutputReview({
             start={start}
             end={end}
             endEditable={false}
-            regionEnd={regionEnd}
+            rawOutput={openItem.item}
             label={label}
             description={description}
             bpm={bpm}
@@ -360,7 +364,7 @@ interface DetectorItemView {
 /** Normalise a detector item to the shape AnnotationPointCard consumes. */
 function detectorItemView(
   category: ReviewableCategory,
-  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem,
+  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem | CustomLyricsItem,
 ): DetectorItemView {
   if (category === 'cues') {
     const c = item as CustomCueItem;
@@ -368,6 +372,15 @@ function detectorItemView(
       start: c.time_ms / 1000,
       label: c.label ?? '',
       description: c.description ?? '',
+    };
+  }
+  if (category === 'lyrics') {
+    const l = item as CustomLyricsItem;
+    return {
+      start: l.time_ms / 1000,
+      ...(l.end_ms != null ? { end: l.end_ms / 1000 } : {}),
+      label: l.text ?? '',
+      description: l.kind,
     };
   }
   if (category === 'boundaries') {
@@ -414,52 +427,6 @@ function detectorItemView(
  *  All time fields are converted from ms (custom envelope) to seconds (layer
  *  doc). Per-item ids are minted fresh — the layer-doc id space is uuid, and
  *  the detector envelope's index-based keys would collide on a second copy. */
-function convertDetectorItems(
-  category: ReviewableCategory,
-  items: (CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem)[],
-): CueItem[] | SpanItem[] | LoopItem[] | PatternItem[] | null {
-  if (category === 'cues') {
-    return (items as CustomCueItem[]).map<CueItem>((c) => ({
-      id: newId(),
-      time: c.time_ms / 1000,
-      label: c.label ?? '',
-      description: c.description ?? undefined,
-      candidates: c.candidates && c.candidates.length > 0
-        ? c.candidates.map((ms) => ms / 1000)
-        : undefined,
-    }));
-  }
-  if (category === 'spans') {
-    return (items as CustomSpanItem[]).map<SpanItem>((s) => ({
-      id: newId(),
-      start: s.start_ms / 1000,
-      end: (s.start_ms + s.duration_ms) / 1000,
-      label: s.label ?? '',
-    }));
-  }
-  if (category === 'loops') {
-    return (items as CustomLoopItem[]).map<LoopItem>((l) => ({
-      id: newId(),
-      start: l.start_ms / 1000,
-      end: (l.start_ms + l.duration_ms) / 1000,
-      label: l.label ?? '',
-      snapZeroCross: l.snap_zero_cross ?? undefined,
-    }));
-  }
-  if (category === 'patterns') {
-    return (items as CustomPatternItem[]).map<PatternItem>((p) => ({
-      id: newId(),
-      start: p.start_ms / 1000,
-      end: (p.start_ms + p.duration_ms) / 1000,
-      label: p.label ?? '',
-      repeatCount: Math.max(1, Math.floor(p.repeat_count)),
-      highlightedBeats: p.highlighted_beats ?? [],
-      subbeatGrid: true,
-    }));
-  }
-  return null; // boundaries — no manual-layer equivalent
-}
-
 function ReviewChip({
   active, tone, title, onClick, children,
 }: {
@@ -488,9 +455,14 @@ function ReviewChip({
 
 function summarizeItem(
   category: ReviewableCategory,
-  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem,
+  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem | CustomLyricsItem,
 ): string {
   const fmt = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
+  if (category === 'lyrics') {
+    const l = item as CustomLyricsItem;
+    const endStr = l.end_ms != null ? ` → ${fmt(l.end_ms)}` : '';
+    return `${fmt(l.time_ms)}${endStr} — ${l.text} [${l.kind}]`;
+  }
   if (category === 'cues') {
     const c = item as CustomCueItem;
     const lbl = c.label ?? '(unlabeled)';

@@ -3,7 +3,6 @@ import { annotatorHeaders } from '../utils/annotatorHeaders';
 import { getIsDemo } from '../state/demoFlag';
 import {
   demoLoadManual, demoSaveManual, demoDeleteManual,
-  demoLoadEye, demoSaveEye, demoDeleteEye,
   demoLoadAutoGuess, demoSaveAutoGuess, demoDeleteAutoGuess,
   demoLoadAllStatuses,
 } from './demoStorage';
@@ -216,53 +215,6 @@ export async function saveAlgoClusteredData(slug: string, data: AlgoClusteredDat
   }
 }
 
-// ─── Eye ("By-Eye") Annotation API ───────────────────────────────────────────
-
-/** Load an existing eye annotation from the dev server. Returns null if not found. */
-export async function loadEyeAnnotation(slug: string): Promise<ManualAnnotation | null> {
-  if (getIsDemo()) return demoLoadEye(slug);
-  try {
-    const res = await fetch(`/api/eye-annotations/${encodeURIComponent(slug)}`, {
-      headers: annotatorHeaders(),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Save an eye annotation to the dev server. Returns true on success. */
-export async function saveEyeAnnotationToServer(slug: string, ann: ManualAnnotation): Promise<boolean> {
-  if (getIsDemo()) return demoSaveEye(slug, stripLegacyBpmFields(ann));
-  try {
-    const res = await fetch(`/api/eye-annotations/${encodeURIComponent(slug)}`, {
-      method: 'POST',
-      headers: annotatorHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(stripLegacyBpmFields(ann), null, 2),
-      keepalive: true,
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-/** Delete an eye annotation from the dev server. Returns true on success. */
-export async function deleteEyeAnnotation(slug: string): Promise<boolean> {
-  if (getIsDemo()) return demoDeleteEye(slug);
-  try {
-    const res = await fetch(`/api/eye-annotations/${encodeURIComponent(slug)}`, {
-      method: 'DELETE',
-      headers: annotatorHeaders(),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 /** Load statuses for all annotated songs. Returns a map of slug → status. */
 export async function loadAllStatuses(): Promise<Record<string, AnnotationStatus>> {
   if (getIsDemo()) return demoLoadAllStatuses();
@@ -282,7 +234,7 @@ export interface AnnotatorPresence {
   /** Annotator id (sanitized; matches the on-disk subdir name). */
   id: string;
   /** Which annotation types this annotator has saved for the song. */
-  has: { manual: boolean; eye: boolean; autoGuess: boolean };
+  has: { manual: boolean; autoGuess: boolean };
 }
 
 /** List all annotators who have annotated this song. Used

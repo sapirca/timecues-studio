@@ -15,8 +15,8 @@ Open source, multi-arch (amd64 / arm64), with a CI pipeline and a public live de
 
 - **Annotate.** Lay down section boundaries on a per-song waveform with
   keyboard-driven flow. Multiple layers per song — *manual* (reviewed,
-  source of truth), *eye* (quick by-eye pass over a spectrogram),
-  *auto-guess* (algorithm-clustered draft you tick through point-by-point).
+  source of truth), *auto-guess* (algorithm-clustered draft you tick
+  through point-by-point).
 - **Compare.** Toggle algorithm overlays. Each algorithm's boundary set
   gets its own color and a per-song F-measure / HitRate against the
   current manual layer.

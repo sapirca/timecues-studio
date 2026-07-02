@@ -21,7 +21,13 @@ ENV XDG_CACHE_HOME=/app/.cache
 # (Apache-2.0) so the default CC-BY-NC MMS_FA model is never downloaded.
 # Both detectors share this same sidecar — no separate image to keep build
 # space tight.
-RUN pip install --no-cache-dir openai-whisper ctc-forced-aligner
+#
+# ctc-forced-aligner MUST come from git: the PyPI name was taken over by an
+# unrelated package (deskpai.com) with an incompatible API, so a bare
+# `pip install ctc-forced-aligner` installs the wrong package and the server
+# fails at import. Keep this in sync with tools/requirements-experimental.txt.
+RUN pip install --no-cache-dir openai-whisper \
+    "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git"
 
 COPY tools/python/paths.py         /app/tools/python/paths.py
 COPY tools/python/lyrics_server.py /app/tools/python/lyrics_server.py

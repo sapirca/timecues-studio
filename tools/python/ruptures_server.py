@@ -469,6 +469,65 @@ def _song_status(slug: str) -> dict[str, str]:
     return status
 
 
+# ─── Route handlers ────────────────────────────────────────────────────────────
+# Shared by the standalone server below and the consolidated dsp_server.py.
+# Each returns (status_code, body) or None when the path isn't a ruptures route
+# (the caller then emits 404).
+
+def handle_get(full_path: str):
+    path = full_path.split("?")[0]
+    if path == "/api/ruptures/health":
+        return 200, {
+            "ok":         _LIBROSA_OK and _RUPTURES_OK,
+            "librosaOk":  _LIBROSA_OK,
+            "rupturesOk": _RUPTURES_OK,
+            "version":    "1.0.0",
+            "methods":    len(ALL_METHODS),
+        }
+    if path == "/api/ruptures/methods":
+        return 200, ALL_METHODS
+    if path == "/api/ruptures/songs":
+        songs = _load_manifest()
+        result = []
+        for s in songs:
+            slug = s.get("id", "")
+            result.append({
+                "slug":    slug,
+                "name":    s.get("name", slug),
+                "methods": _song_status(slug),
+            })
+        return 200, result
+    if path == "/api/ruptures/progress":
+        with _batch_lock:
+            return 200, dict(_batch)
+    return None
+
+
+def handle_post(full_path: str, body: dict):
+    path = full_path.split("?")[0]
+    if path == "/api/ruptures/run-all":
+        started = start_batch()
+        with _batch_lock:
+            return 200, {"started": started, "progress": dict(_batch)}
+    if path == "/api/ruptures/analyze":
+        slug   = safe_segment(str(body.get("slug", "")).strip())
+        suffix = str(body.get("suffix", "")).strip()
+        force  = bool(body.get("force", False))
+        if not slug:
+            return 400, {"error": "invalid or missing slug"}
+        if suffix not in _SUFFIX_TO_METHOD:
+            return 400, {"error": f"unknown suffix, valid: {list(_SUFFIX_TO_METHOD)}"}
+        try:
+            return 200, analyze(slug, suffix, force=force)
+        except FileNotFoundError as e:
+            return 404, {"error": str(e)}
+        except RuntimeError as e:
+            return 503, {"error": str(e)}
+        except Exception as e:
+            return 500, {"error": f"Analysis failed: {e}"}
+    return None
+
+
 # ─── HTTP handler ──────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
@@ -493,74 +552,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-
-        if path == "/api/ruptures/health":
-            self._send_json(200, {
-                "ok":         _LIBROSA_OK and _RUPTURES_OK,
-                "librosaOk":  _LIBROSA_OK,
-                "rupturesOk": _RUPTURES_OK,
-                "version":    "1.0.0",
-                "methods":    len(ALL_METHODS),
-            })
-
-        elif path == "/api/ruptures/methods":
-            self._send_json(200, ALL_METHODS)
-
-        elif path == "/api/ruptures/songs":
-            songs = _load_manifest()
-            result = []
-            for s in songs:
-                slug = s.get("id", "")
-                result.append({
-                    "slug":    slug,
-                    "name":    s.get("name", slug),
-                    "methods": _song_status(slug),
-                })
-            self._send_json(200, result)
-
-        elif path == "/api/ruptures/progress":
-            with _batch_lock:
-                self._send_json(200, dict(_batch))
-
-        else:
-            self._send_json(404, {"error": "not found"})
+        self._send_json(*(handle_get(self.path) or (404, {"error": "not found"})))
 
     def do_POST(self):
-        path   = self.path.split("?")[0]
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length)) if length else {}
         except json.JSONDecodeError as e:
             self._send_json(400, {"error": f"invalid JSON: {e}"}); return
-
-        if path == "/api/ruptures/run-all":
-            started = start_batch()
-            with _batch_lock:
-                self._send_json(200, {"started": started, "progress": dict(_batch)})
-
-        elif path == "/api/ruptures/analyze":
-            slug   = safe_segment(str(body.get("slug", "")).strip())
-            suffix = str(body.get("suffix", "")).strip()
-            force  = bool(body.get("force", False))
-
-            if not slug:
-                self._send_json(400, {"error": "invalid or missing slug"}); return
-            if suffix not in _SUFFIX_TO_METHOD:
-                self._send_json(400, {"error": f"unknown suffix, valid: {list(_SUFFIX_TO_METHOD)}"}); return
-
-            try:
-                result = analyze(slug, suffix, force=force)
-                self._send_json(200, result)
-            except FileNotFoundError as e:
-                self._send_json(404, {"error": str(e)})
-            except RuntimeError as e:
-                self._send_json(503, {"error": str(e)})
-            except Exception as e:
-                self._send_json(500, {"error": f"Analysis failed: {e}"})
-
-        else:
-            self._send_json(404, {"error": "not found"})
+        self._send_json(*(handle_post(self.path, body) or (404, {"error": "not found"})))
 
 
 def main():

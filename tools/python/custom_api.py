@@ -14,6 +14,7 @@ Quick usage
         output_kind = "boundary"        # or "cue"
         is_algorithm  = True
         is_annotation = False
+        stem        = "vocals"          # optional: source Demucs stem / "mix"
 
         def detect(self, ctx: DetectionContext) -> list[Boundary]:
             return [Boundary(time_ms=int(t * 1000)) for t in some_times]
@@ -33,7 +34,7 @@ import numpy as np
 # Re-export AudioFeatures so user scripts only need one import.
 from shared.models import AudioFeatures  # noqa: F401
 
-OutputKind = Literal["boundary", "cue", "span", "loop", "pattern"]
+OutputKind = Literal["boundary", "cue", "span", "loop", "pattern", "lyrics"]
 Importance = Literal["critical", "optional"]
 
 
@@ -252,13 +253,39 @@ class Loop:
 
 
 @dataclass
+class Lyrics:
+    """A word- or line-level lyric timestamp.
+
+    `time_ms` must be an int in [0, ctx.duration_ms]. `text` is required and
+    non-empty. `kind` is "word" (a single sung word) or "line" (a sung
+    line/phrase). `end_ms`, when set, marks the end of the word/line and must
+    be in [time_ms, ctx.duration_ms]; word-level entries from coarse models
+    may leave it None.
+
+    Mirrors the TypeScript ``LyricsItem`` (web-app/src/types/annotationLayer.ts):
+    seconds there, milliseconds here. Gated by the experimentalLyricsFamily
+    Settings flag on the UI side.
+    """
+
+    time_ms: int
+    text: str
+    kind: str = "word"  # "word" | "line"
+    end_ms: Optional[int] = None
+
+
+@dataclass
 class Pattern:
     """A short repeating motif that tiles across the track.
 
     `start_ms` + `duration_ms` describe ONE cycle; the renderer multiplies
     it `repeat_count` times. `highlighted_beats` carries 0-based step
-    indices within one cycle (0 .. beats_per_bar * 4 - 1, since the UI
-    uses 16th-note resolution) that are accented inside the pattern.
+    indices within one cycle that are accented inside the pattern.
+
+    `steps_per_cycle` declares how many sub-steps the cycle is divided into —
+    i.e. the index space of `highlighted_beats` (valid indices are
+    `0 .. steps_per_cycle - 1`). Set it so the grid reflects YOUR cycle, not
+    the song's bar: a 1-bar 4/4 cycle is 16 (16th-note resolution), a 2-beat
+    cycle is 8, etc. When omitted, the UI falls back to `beats_per_bar * 4`.
 
     Gated by the experimentalLoopsAndPatterns flag.
     """
@@ -268,6 +295,7 @@ class Pattern:
     label: Optional[str] = None
     repeat_count: int = 1
     highlighted_beats: Optional[list[int]] = None
+    steps_per_cycle: Optional[int] = None
 
 
 # ─── Detector base class ─────────────────────────────────────────────────────
@@ -285,7 +313,7 @@ class CustomDetector:
         Must match ^[a-z][a-z0-9_-]{0,30}$. Must be unique across the registry.
     label : str
         Human-readable name shown in the UI (1-80 chars).
-    output_kind : "boundary" | "cue" | "span" | "loop" | "pattern"
+    output_kind : "boundary" | "cue" | "span" | "loop" | "pattern" | "lyrics"
         Determines which dataclass detect() must return. `loop` and `pattern`
         are hidden from the registry when the `experimentalLoopsAndPatterns`
         Settings flag is off, mirroring the UI gating for those annotation
@@ -306,6 +334,13 @@ class CustomDetector:
     # Optional metadata
     description: str = ""
     version: str = "0.1"
+
+    # Optional: the Demucs stem this detector reads from — "vocals", "drums",
+    # "bass", "other", or "mix" for whole-track detectors. Surfaced to the UI so
+    # a layer's lane label can show its source stem (e.g. "Vocals presence
+    # (vocals)") instead of a generic "(curated)" tag, and so layers light up
+    # while that stem is auditioned. None leaves the label untouched.
+    stem: Optional[str] = None
 
     def detect(
         self, ctx: DetectionContext
@@ -356,6 +391,7 @@ class RegistryEntry:
     is_annotation: bool = False
     description: str = ""
     version: str = ""
+    stem: Optional[str] = None
     errors: list[ValidationError] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -369,6 +405,7 @@ class RegistryEntry:
             "is_annotation": self.is_annotation,
             "description": self.description,
             "version": self.version,
+            "stem": self.stem,
             "errors": [e.to_dict() for e in self.errors],
         }
 

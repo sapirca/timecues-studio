@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSettings } from '../context/SettingsContext';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
 import type { ManualAnnotation, AutoGuessManualAnnotation } from '../types/manualAnnotation';
 import {
@@ -9,30 +8,26 @@ import {
 } from '../utils/annotatorAgreement';
 import type { BoundarySource } from './inspector-v2/shared/tabConfig';
 
-/** The comparison panel picks among the three boundary sources. */
+/** The comparison panel picks among the boundary sources. */
 type AnnotationKind = BoundarySource;
 
 interface AllAnnotationsResponse {
   slug: string;
   manual: Record<string, ManualAnnotation>;
-  eye: Record<string, ManualAnnotation>;
   autoGuess: Record<string, AutoGuessManualAnnotation>;
 }
 
 const KIND_LABEL: Record<AnnotationKind, string> = {
   manual: 'Boundaries',
-  eye: 'Eye',
   autoGuess: 'Auto-guess',
 };
 
 const TOLERANCES = [0.5, 3] as const;
 
 export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
-  const { settings } = useSettings();
-  const eyeEnabled = settings.experimentalEyeAnnotation;
   const KINDS: AnnotationKind[] = useMemo(
-    () => (eyeEnabled ? ['manual', 'eye', 'autoGuess'] : ['manual', 'autoGuess']),
-    [eyeEnabled],
+    () => ['manual', 'autoGuess'],
+    [],
   );
   const [data, setData] = useState<AllAnnotationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -107,7 +102,6 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
 
   const totalAnnotators = new Set([
     ...Object.keys(data.manual),
-    ...(eyeEnabled ? Object.keys(data.eye) : []),
     ...Object.keys(data.autoGuess),
   ]).size;
 

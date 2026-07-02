@@ -32,7 +32,6 @@ const DEFAULT_ANNOTATIONS_ROOT = path.join(DEFAULT_DATA_ROOT, 'annotations')
 export const DATA_DIRS = {
   // Annotation folders (per-annotator subdirs: <dir>/<annotator>/<slug>.json)
   manualAnnotations:      path.join(ANNOTATIONS_ROOT, 'manual'),
-  eyeAnnotations:       path.join(ANNOTATIONS_ROOT, 'eye'),
   autoGuessAnnotations: path.join(ANNOTATIONS_ROOT, 'auto-guess'),
 
   // Custom-script annotations (per-script subdir + per-annotator subdir):
@@ -113,7 +112,6 @@ export const DATA_FILES = {
 // resolver below falls through cleanly.
 export const DEFAULT_DATA_DIRS = {
   manualAnnotations:      path.join(DEFAULT_ANNOTATIONS_ROOT, 'manual'),
-  eyeAnnotations:       path.join(DEFAULT_ANNOTATIONS_ROOT, 'eye'),
   autoGuessAnnotations: path.join(DEFAULT_ANNOTATIONS_ROOT, 'auto-guess'),
   songInfo:             path.join(DEFAULT_DATA_ROOT, 'song-info'),
   songs:                path.join(DEFAULT_DATA_ROOT, 'songs'),
@@ -129,7 +127,6 @@ export const DEFAULT_DATA_DIRS = {
 // without breaking the wire format.
 export const API_PATHS = {
   manualAnnotations:      '/api/manual-annotations',
-  eyeAnnotations:       '/api/eye-annotations',
   autoGuessAnnotations: '/api/auto-guess-annotations',
   annotationTimes:      '/api/annotation-times',
   songInfo:             '/api/song-info',

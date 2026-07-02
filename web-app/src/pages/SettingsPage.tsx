@@ -710,26 +710,13 @@ export function SettingsPage() {
 
           <Section
             title="Annotations — display"
-            hint="Which annotation layers are visible by default, and the time unit used by Manual/Eye editors."
+            hint="Which annotation layers are visible by default, and the time unit used by Manual editors."
           >
             <Toggle
               label="Show manual annotations"
               value={settings.defaultShowManual}
               onChange={(v) => update('defaultShowManual', v)}
             />
-            <div className="flex items-center gap-2 flex-wrap">
-              <Toggle
-                label="Show eye annotations"
-                value={settings.defaultShowEye}
-                onChange={(v) => update('defaultShowEye', v)}
-                disabled={!settings.experimentalEyeAnnotation}
-              />
-              {!settings.experimentalEyeAnnotation && (
-                <span className="text-[10px] text-slate-500">
-                  Enable Eye annotation under Experimental annotation types & models to use this.
-                </span>
-              )}
-            </div>
             <Toggle
               label="Show auto-guess annotations"
               value={settings.defaultShowAutoGuess}
@@ -752,7 +739,7 @@ export function SettingsPage() {
                 ))}
               </div>
               <p className="text-[11px] text-slate-500 mt-1.5">
-                Applies to manual + eye annotation editors when the song has a BPM set.
+                Applies to the manual annotation editor when the song has a BPM set.
               </p>
             </Field>
           </Section>
@@ -760,8 +747,8 @@ export function SettingsPage() {
           <Section
             title="Vocabularies & taxonomies"
             hint={isAdmin
-              ? "Section names (Manual/Eye), cue labels, and span labels. Admins: each field has 'Save as dataset default' to push the current value to every annotator."
-              : "Section names (Manual/Eye), cue labels, and span labels. Suggestions come from the dataset default set by an admin."}
+              ? "Section names (Manual), cue labels, and span labels. Admins: each field has 'Save as dataset default' to push the current value to every annotator."
+              : "Section names (Manual), cue labels, and span labels. Suggestions come from the dataset default set by an admin."}
             headerExtra={<OverrideBadge active={sectionVocabOverride} onReset={resetSectionVocabToDataset} />}
           >
             <Field label="Section vocabulary">
@@ -772,7 +759,7 @@ export function SettingsPage() {
                 </p>
               )}
               <p className="text-[11px] text-slate-500 mb-1.5">
-                Pick one or more genres — the dropdown vocabulary in Manual/Eye editors becomes
+                Pick one or more genres — the dropdown vocabulary in the Manual editor becomes
                 the union of their section names. Use Custom for a hand-edited list.
               </p>
               <div className="space-y-1.5">
@@ -850,7 +837,7 @@ export function SettingsPage() {
                       <div className="text-[10px] text-slate-500 font-mono">{normalizedCurrentVocabulary.length} names</div>
                     </div>
                     <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                      Use any comma- or newline-separated list, then apply it to the Manual and Eye dropdowns.
+                      Use any comma- or newline-separated list, then apply it to the Manual dropdown.
                     </div>
                   </button>
                   <div className="px-3 pb-3 space-y-2">
@@ -880,7 +867,7 @@ export function SettingsPage() {
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-1">
                       <p className="text-[11px] text-slate-500">
-                        Comma- or newline-separated section names shown in the Manual and Eye type dropdowns.
+                        Comma- or newline-separated section names shown in the Manual type dropdown.
                       </p>
                       <button
                         onClick={applySectionVocabulary}
@@ -1278,17 +1265,6 @@ export function SettingsPage() {
               that tile across the song. Backend supports both; the UI is still being built and
               won't show until this flag is on. Boundaries (Manual/Auto-guess), Cues, and Spans
               are always available — they don't need this flag.
-            </p>
-            <Toggle
-              label="Enable Eye annotation (second-observer pass)"
-              value={settings.experimentalEyeAnnotation}
-              onChange={(v) => update('experimentalEyeAnnotation', v)}
-            />
-            <p className="text-[11px] text-slate-500">
-              The <span className="font-medium text-slate-400">Eye</span> tab adds an independent
-              second pass over the same structural sections (separate from Manual). When off, the
-              Eye sub-tab under Boundaries, the Eye visibility checkbox, and the canvas overlay
-              are all hidden.
             </p>
             <Toggle
               label="Enable SPAN-family detectors (Silero-VAD, JDCNet)"

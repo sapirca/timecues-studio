@@ -1,3 +1,6 @@
+# Soft-deleted custom detectors (moved here by the UI delete; runtime only).
+tools/python/custom/.trash/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -64,6 +67,28 @@ archive/paper/*.out
 archive/paper/*.fls
 archive/paper/*.fdb_latexmk
 archive/paper/*.synctex.gz
+
+# Screencast artifacts — regenerable / destined for external hosting (YouTube,
+# Cloudflare). Keep the recorder tooling under archive/videos/capture/ tracked,
+# but not the heavy media or exploration scratch.
+archive/videos/recordings/
+archive/videos/capture/out/
+archive/videos/capture/_vo/
+archive/videos/capture/_voices/
+archive/videos/capture/frames/
+archive/videos/capture/sheet-*.jpg
+archive/videos/capture/check-*.jpg
+archive/videos/capture/ff*.jpg
+archive/videos/capture/contact-sheet.jpg
+archive/videos/capture/voice-samples/
+archive/videos/capture/narration-test*.mp3
+archive/videos/capture/_profile/
+
+# YouTube OAuth secret + cached token + video-id map — NEVER commit.
+archive/videos/*client_secret*.json
+archive/videos/client_secret.json
+archive/videos/.yt_token.pickle
+archive/videos/ids.json
 
 # Docker / local secrets — never commit these (use .env.example as template).
 .env

@@ -172,6 +172,14 @@ export function SongInfoBar({
     update('bpm', parseFloat(next.toFixed(2)));
   }, [update]);
 
+  // Halve / double the current BPM — handy when a detector locks onto the
+  // wrong octave (e.g. reports 140 for a 70-BPM song, or vice versa).
+  // Clamped to the valid BPM range so the resulting grid stays sane.
+  const halvedBpm = bpm != null ? parseFloat((bpm / 2).toFixed(2)) : null;
+  const doubledBpm = bpm != null ? parseFloat((bpm * 2).toFixed(2)) : null;
+  const canHalveBpm = !locked && halvedBpm != null && halvedBpm >= BPM_MIN;
+  const canDoubleBpm = !locked && doubledBpm != null && doubledBpm <= BPM_MAX;
+
   const containerClass = embedded
     ? 'space-y-4'
     : 'rounded-md border border-white/[0.06] bg-[#14171d]/80 p-4 space-y-4';
@@ -298,14 +306,9 @@ export function SongInfoBar({
                     </span>
                   )}
                 </button>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   {bpmDetectionStatus === 'running' && (
                     <span className="text-xs font-mono text-violet-400 animate-pulse">detecting…</span>
-                  )}
-                  {bpmDetectionStatus === 'error' && (
-                    <span className="text-xs font-mono text-amber-400" title={bpmDetectionError}>
-                      ⚠ {bpmDetectionError ?? 'detection failed'}
-                    </span>
                   )}
                   {onRerunBpmDetection && bpmDetectionStatus !== 'running' && (
                     <button
@@ -318,6 +321,12 @@ export function SongInfoBar({
                   )}
                 </div>
               </div>
+              {bpmDetectionStatus === 'error' && (
+                <div className="flex items-start gap-1 text-xs font-mono text-amber-400">
+                  <span aria-hidden="true" className="shrink-0">⚠</span>
+                  <span className="min-w-0 break-words">{bpmDetectionError ?? 'detection failed'}</span>
+                </div>
+              )}
               {autoDetectOpen && (
                 validSuggestions.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
@@ -347,36 +356,57 @@ export function SongInfoBar({
             </div>
           )}
 
-          {/* BPM + time signature share one row. In anchor modes only Time
-              Signature applies, so it spans the row alone. */}
-          <div className={`grid gap-4 ${anchored ? 'grid-cols-1' : 'grid-cols-2'}`}>
+          {/* BPM and time signature stack vertically — the time-signature
+              select stays narrow so it doesn't stretch across the row. */}
+          <div className="space-y-2.5">
             {!anchored && (
               <div className="space-y-1">
                 <label className={fieldLabelClass}>BPM</label>
-                <input
-                  type="number" min={BPM_MIN} max={BPM_MAX} step="0.01"
-                  value={bpmText}
-                  disabled={locked}
-                  onChange={(e) => {
-                    const text = e.target.value;
-                    setBpmText(text);
-                    if (text === '') { update('bpm', undefined); return; }
-                    const v = parseFloat(text);
-                    if (Number.isFinite(v) && v >= BPM_MIN && v <= BPM_MAX) update('bpm', v);
-                  }}
-                  onBlur={() => { if (bpmOutOfRange) setBpmText(bpm != null ? String(bpm) : ''); }}
-                  placeholder=""
-                  className={`${inputBaseClass} font-mono ${
-                    bpmOutOfRange ? 'border-red-500/40 focus:border-red-500/70 focus:ring-1 focus:ring-red-500/40'
-                      : bpmMissing ? 'border-amber-500/40 focus:border-amber-500/70 focus:ring-1 focus:ring-amber-500/40'
-                      : 'border-white/[0.08] focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50'
-                  }`}
-                />
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number" min={BPM_MIN} max={BPM_MAX} step="0.01"
+                    value={bpmText}
+                    disabled={locked}
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      setBpmText(text);
+                      if (text === '') { update('bpm', undefined); return; }
+                      const v = parseFloat(text);
+                      if (Number.isFinite(v) && v >= BPM_MIN && v <= BPM_MAX) update('bpm', v);
+                    }}
+                    onBlur={() => { if (bpmOutOfRange) setBpmText(bpm != null ? String(bpm) : ''); }}
+                    placeholder=""
+                    className={`${inputBaseClass} flex-1 min-w-0 font-mono ${
+                      bpmOutOfRange ? 'border-red-500/40 focus:border-red-500/70 focus:ring-1 focus:ring-red-500/40'
+                        : bpmMissing ? 'border-amber-500/40 focus:border-amber-500/70 focus:ring-1 focus:ring-amber-500/40'
+                        : 'border-white/[0.08] focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50'
+                    }`}
+                  />
+                  {/* Octave fixers: halve / double the BPM in one click. */}
+                  <button
+                    type="button"
+                    disabled={!canHalveBpm}
+                    onClick={() => { if (halvedBpm != null) applyBpm(halvedBpm); }}
+                    title={canHalveBpm ? `Halve the BPM → ${halvedBpm}` : 'Halving would drop below the minimum BPM'}
+                    className="shrink-0 px-2.5 py-2 rounded-md text-sm font-mono border border-white/[0.08] bg-white/[0.02] text-slate-200 hover:border-violet-500/40 hover:bg-violet-500/10 hover:text-violet-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ÷2
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canDoubleBpm}
+                    onClick={() => { if (doubledBpm != null) applyBpm(doubledBpm); }}
+                    title={canDoubleBpm ? `Double the BPM → ${doubledBpm}` : 'Doubling would exceed the maximum BPM'}
+                    className="shrink-0 px-2.5 py-2 rounded-md text-sm font-mono border border-white/[0.08] bg-white/[0.02] text-slate-200 hover:border-violet-500/40 hover:bg-violet-500/10 hover:text-violet-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ×2
+                  </button>
+                </div>
               </div>
             )}
             <div className="space-y-1">
               <label className={fieldLabelClass}>Time signature</label>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 max-w-[12rem]">
                 <select
                   value={COMMON_TIME_SIGNATURES.includes(timeSignature) ? timeSignature : '__custom__'}
                   disabled={locked}

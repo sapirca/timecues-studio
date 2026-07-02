@@ -61,9 +61,27 @@ export async function uploadDetector(name: string, code: string): Promise<Custom
   return body.detector as CustomRegistryEntry;
 }
 
-export async function deleteDetector(name: string): Promise<boolean> {
-  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  return res.ok;
+/**
+ * Soft-delete a detector. The server moves the `.py` into the in-app trash
+ * (`tools/python/custom/.trash/`) rather than unlinking it, and wipes the
+ * detector's cached algorithm results. Returns `{ message, trashed_to }` so
+ * the caller can tell the user where the source landed on disk.
+ */
+export async function deleteDetector(
+  name: string,
+): Promise<{ message: string; trashed_to: string }> {
+  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: annotatorHeaders(),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(body?.message ?? body?.error ?? `delete failed: ${res.status}`);
+  }
+  return {
+    message: body?.message ?? `"${name}" moved to the app trash.`,
+    trashed_to: body?.trashed_to ?? '',
+  };
 }
 
 /**

@@ -75,6 +75,12 @@ try:
 except Exception:
     _BASIC_PITCH_OK = False
 
+try:
+    from energy_gate import gate_note_events, load_mono
+    _ENERGY_GATE_OK = True
+except Exception:
+    _ENERGY_GATE_OK = False
+
 
 _NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -139,12 +145,21 @@ def detect_basic_pitch(audio_path: Path) -> dict:
             })
             if end_t > max_end:
                 max_end = end_t
+        # basic-pitch transcribes Demucs separation bleed in near-silent stems
+        # into spurious notes (its `amplitude` is note-salience, not loudness).
+        # Drop notes that fall in inaudible regions of the actual audio.
+        gated_out = 0
+        if _ENERGY_GATE_OK:
+            y, sr = load_mono(audio_path)
+            if y is not None:
+                notes, gated_out = gate_note_events(notes, y, sr)
         notes.sort(key=lambda n: n["time"])
         return {
             "algorithm": algo,
             "ok":        True,
             "notes":     notes,
             "duration":  max_end,
+            "gated_out": gated_out,
             "ms":        _time_ms(t0),
         }
     except Exception as e:
@@ -185,6 +200,7 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
         "stem":        stem or "mix",
         "duration":    result.get("duration", 0.0),
         "notes":       result.get("notes", []),
+        "gated_out":   result.get("gated_out", 0),
         "ok":          result.get("ok", False),
         "error":       result.get("error"),
         "ms":          result.get("ms", 0),

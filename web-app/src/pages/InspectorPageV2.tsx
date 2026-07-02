@@ -6,7 +6,6 @@ import type { LayerAudioConfig } from '../components/inspector-v2/LayerAudioCont
 import type { PlayerAccent } from '../components/PlayerPanel';
 import { VizControlBar } from '../components/inspector-v2/VizControlBar';
 import { ManualEditorPanel } from '../components/inspector-v2/ManualEditorPanel';
-import { EyeEditorPanel } from '../components/inspector-v2/EyeEditorPanel';
 import { CueEditorPanel } from '../components/inspector-v2/CueEditorPanel';
 import { CueEditPopover, useCueEditPopover } from '../components/inspector-v2/CueEditPopover';
 import { LoopEditorPanel } from '../components/inspector-v2/LoopEditorPanel';
@@ -15,11 +14,15 @@ import { SpanEditorPanel } from '../components/inspector-v2/SpanEditorPanel';
 import { SpanEditPopover, useSpanEditPopover } from '../components/inspector-v2/SpanEditPopover';
 import { LoopEditPopover, useLoopEditPopover } from '../components/inspector-v2/LoopEditPopover';
 import { PatternEditorPanel } from '../components/inspector-v2/PatternEditorPanel';
+import { LyricsEditorPanel } from '../components/inspector-v2/LyricsEditorPanel';
+import { LyricsEditPopover, useLyricsEditPopover } from '../components/inspector-v2/LyricsEditPopover';
+import { rawDetectorItem } from '../components/inspector-v2/shared/detectorRaw';
+import { KaraokePanel } from '../components/inspector-v2/KaraokePanel';
 import { PatternEditPopover, usePatternEditPopover } from '../components/inspector-v2/PatternEditPopover';
 import { UnifiedAnnotationListPanel, type UnifiedLayerSelection } from '../components/inspector-v2/UnifiedAnnotationListPanel';
 import { loadLayers, saveLayers, loadAllLayerStatuses, type SongLayerStatuses } from '../services/annotationLayers';
 import { emptyDocument as emptyLayersDoc, derivePillDisplay, pickDefaultLayerColor, newId, type AnnotationPillDisplay } from '../types/annotationLayer';
-import type { AnnotationLayer, AnnotationLayersDocument, CueItem, LoopItem, SpanItem, PatternItem } from '../types/annotationLayer';
+import type { AnnotationLayer, AnnotationLayersDocument, CueItem, LoopItem, SpanItem, PatternItem, LyricsItem } from '../types/annotationLayer';
 import {
   type AnnotationType,
   type BoundarySource,
@@ -39,15 +42,16 @@ import {
  *  sources fall through. AnnotationCategory and AnnotationType now coincide;
  *  this helper is the boundary equivalent. */
 const isBoundarySource = (s: SourceId): s is BoundarySource =>
-  s === 'manual' || s === 'eye' || s === 'autoGuess';
+  s === 'manual' || s === 'autoGuess';
 
 /** Per-source-or-type key for the annotation recording timer. Boundaries
- *  track time per source (manual/eye/autoGuess separately); layer types
+ *  track time per source (manual/autoGuess separately); layer types
  *  track time per type. */
-type TimerKey = BoundarySource | 'cues' | 'spans' | 'loops' | 'patterns';
+type TimerKey = BoundarySource | 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
 
 import { DetectorOutputReview } from '../components/inspector-v2/DetectorOutputReview';
 import type { DetectorReviewStatus } from '../components/inspector-v2/DetectorOutputReview';
+import { convertDetectorItems } from '../components/inspector-v2/detectorConvert';
 import {
   loadDetectorOutput,
   saveDetectorOutput,
@@ -79,17 +83,18 @@ import { ShortcutsHelpPanel } from '../components/inspector-v2/ShortcutsHelpPane
 import { useAnnotationShortcuts, type ShortcutDef } from '../hooks/useAnnotationShortcuts';
 import {
   AlgoInspectStage, buildAnnotationRows, type ToolState, type AlgorithmRow,
-  SPAN_ALGO_IDS, LOOP_ALGO_IDS, PITCH_ALGO_IDS, CUE_EXTRAS_ALGO_IDS,
+  SPAN_ALGO_IDS, PITCH_ALGO_IDS, CUE_EXTRAS_ALGO_IDS,
   PERCUSSIVE_ALGO_IDS, LYRICS_ALGO_IDS, PATTERN_ALGO_IDS,
 } from '../components/inspector-v2/AlgoInspectStage';
 import { EvaluationStage } from '../components/inspector-v2/EvaluationStage';
+import { InspectKindDropdown } from '../components/inspector-v2/InspectKindDropdown';
 import { ReferenceAnnotatorPicker } from '../components/inspector-v2/ReferenceAnnotatorPicker';
 import { GlobalEvalStage } from '../components/inspector-v2/GlobalEvalStage';
 import AutoGuessPanel from '../components/AutoGuessPanel';
 import { InfoBanner } from '../components/InfoBanner';
 import type { PendingSelection } from '../components/inspector-v2/AnnotationOverlays';
 import type { PreviewRegion } from '../components/inspector-v2/PreviewWindow';
-import { loadAnnotation, loadEyeAnnotation, loadAutoGuessAnnotation, saveAutoGuessAnnotation, saveAnnotation, loadAllStatuses, deleteAnnotation, deleteEyeAnnotation, deleteAutoGuessAnnotation } from '../services/manualAnnotations';
+import { loadAnnotation, loadAutoGuessAnnotation, saveAutoGuessAnnotation, saveAnnotation, loadAllStatuses, deleteAnnotation, deleteAutoGuessAnnotation } from '../services/manualAnnotations';
 import { fetchStorageStats, clearSongCaches, clearSongStems, deleteSongEverything, clearAllCaches, formatBytes, type StorageStatsResponse } from '../services/storageStats';
 import { DeleteConfirmDialog } from '../components/DeleteConfirmDialog';
 import { ClearScopeDialog, type ClearScope } from '../components/ClearScopeDialog';
@@ -107,13 +112,14 @@ import {
   listDetectors, getDetectorResult,
   loadCustomAnnotation, saveCustomAnnotation,
 } from '../services/customScripts';
-import type { CustomRegistryEntry, CustomResultEnvelope, CustomBoundaryItem, CustomSpanItem, CustomLoopItem, CustomPatternItem } from '../types/customScript';
+import type { CustomRegistryEntry, CustomResultEnvelope, CustomBoundaryItem, CustomSpanItem, CustomLoopItem, CustomPatternItem, CustomLyricsItem } from '../types/customScript';
 import { computeMIRFeatures } from '../services/mirAnalysis';
 import { useCapabilities } from '../hooks/useCapabilities';
+import { useDemucsStems, fetchStemManifest, stemSlugFromUrl, type StemManifest } from '../hooks/useDemucsStems';
 import { useAdmin } from '../hooks/useAdmin';
 import { useExperimentalAvailability } from '../hooks/useExperimentalAvailability';
 import { GPU_TOOLS_UNAVAILABLE_HINT } from '../services/capabilities';
-import type { ManualAnnotation, AutoGuessManualAnnotation, AutoGuessPoint, AnnotationStatus } from '../types/manualAnnotation';
+import type { ManualAnnotation, ManualSection, AutoGuessManualAnnotation, AutoGuessPoint, AnnotationStatus } from '../types/manualAnnotation';
 import type { SongInfo } from '../types/songInfo';
 import { makeEmptySongInfo, isGridReady, effectiveGridMode, effectiveAnchors, getActiveAnchorCount, getActiveBeatOverrideCount, isAnchorMode } from '../types/songInfo';
 import { beatsPerBarFromTimeSignature, snapTimeToGrid } from '../utils/beatGrid';
@@ -129,23 +135,38 @@ interface AudioEntry {
 
 // ─── Demucs stems ─────────────────────────────────────────────────────────────
 // Each song's manifest at /stems/<filename-stem>/manifest.json declares URLs
-// for the four Demucs sources. Picker swaps the player URL to one of these.
+// for the six Demucs sources (htdemucs_6s). Picker swaps the player URL to one
+// of these. `guitar` and `piano` are the 6-source split of the old `other`.
 
-export type StemSource = 'mix' | 'vocals' | 'drums' | 'bass' | 'other';
+export type StemSource = 'mix' | 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano';
+// What a run targets: the full mix, a single isolated stem, or 'all' — every
+// separated stem at once (stem-capable detectors fan out to one <algo>__<stem>
+// job per stem; boundary/custom detectors stay on the mix regardless).
+export type RunStemTarget = StemSource | 'all';
 
-interface StemManifest {
-  stems: Partial<Record<Exclude<StemSource, 'mix'>, string>>;
+// Canonical stem order — mirrors the SOURCE picker's button order (Full mix
+// first, then the htdemucs_6s stems). Detector-sourced layers default-sort by
+// the stem they were computed on so the lanes group the same way the SOURCE
+// row reads: mix → vocals → drums → bass → other → guitar → piano.
+const STEM_ORDER: StemSource[] = ['mix', 'vocals', 'drums', 'bass', 'other', 'guitar', 'piano'];
+const STEM_RANK: Record<string, number> = Object.fromEntries(STEM_ORDER.map((s, i) => [s, i]));
+/** Sort rank for a layer's source stem. Whole-track / stem-less detectors sort
+ *  with the mix (rank 0); user-authored layers (no stem) sort ahead of all
+ *  detectors so the user's own lanes stay on top. */
+function stemRank(stem?: string | null, fallback = 0): number {
+  return stem != null && stem in STEM_RANK ? STEM_RANK[stem] : fallback;
+}
+function byStemRank(a: { sourceStem?: string | null }, b: { sourceStem?: string | null }): number {
+  return stemRank(a.sourceStem) - stemRank(b.sourceStem);
 }
 
-// Derive the raw filename stem (no extension) from an /audio/<name>.mp3 URL.
-// Stems on disk live under that exact name — see web-app/public/stems/<stem>/.
-export function stemSlugFromUrl(url: string): string {
-  const last = url.split('/').pop() ?? url;
-  return decodeURIComponent(last).replace(/\.[^.]+$/, '');
-}
+// Demucs stem run/poll/manifest logic lives in the shared useDemucsStems hook
+// so the Playground reuses the exact same flow. Re-export stemSlugFromUrl here
+// because InspectorPageV2.test.tsx pins it as one of the page's pure helpers.
+export { stemSlugFromUrl };
 
 // Browser-side JSON download used by the marker panel's ↓ Export for Manual /
-// Eye / Auto-guess. Layer types route through their controller's exportJson,
+// Auto-guess. Layer types route through their controller's exportJson,
 // which already names files like `cues-all_layers-<slug>-<stamp>.json`.
 export function downloadJson(filename: string, payload: unknown): void {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -157,19 +178,6 @@ export function downloadJson(filename: string, payload: unknown): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-async function fetchStemManifest(audioUrl: string): Promise<StemManifest | null> {
-  const slug = stemSlugFromUrl(audioUrl);
-  try {
-    const res = await fetch(`/stems/${encodeURIComponent(slug)}/manifest.json`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || typeof data !== 'object' || !data.stems) return null;
-    return data as StemManifest;
-  } catch {
-    return null;
-  }
 }
 
 // Codespaces' public-port nginx proxy rejects POSTs whose body exceeds its
@@ -320,6 +328,19 @@ export function firstVisibleSong(files: AudioEntry[]): AudioEntry | null {
 type Stage = 'annotation' | 'algo' | 'eval' | 'global-eval';
 export type Feature = 'annotate' | 'inspect-song' | 'inspect-all' | 'prep';
 
+/** Examine-kind → the Algorithms-sidebar family chip key that produces it.
+ *  Switching the Examine dropdown auto-opens this family so the relevant
+ *  detectors are visible. Keys match the `sections[].key` values built in
+ *  renderRunOptionsPanel; boundaries map to the default MSAF family. */
+const ALGO_FAMILY_FOR_INSPECT_KIND: Record<AnnotationType, string> = {
+  boundaries: 'msaf',
+  cues:       'cue-extras',
+  spans:      'span',
+  loops:      'loop',
+  patterns:   'pattern',
+  lyrics:     'lyrics',
+};
+
 function isInspect(f: Feature | null): f is 'inspect-song' | 'inspect-all' {
   return f === 'inspect-song' || f === 'inspect-all';
 }
@@ -415,6 +436,59 @@ function accentFor(feature: Feature | null): FeatureAccent {
   return isInspect(feature) ? ACCENT_FUCHSIA : ACCENT_BLUE;
 }
 
+// One pill-chip row used by BOTH stem pickers — the Algorithms "Stem filter"
+// (single-select: narrows shown rows to one stem) and the Detectors "Show per
+// stem" (multi-toggle: show/hide every detector layer of a stem). They differ
+// only in selection logic, which lives in the parent via each chip's `active`
+// and `onClick`; the markup is shared so the two never drift apart.
+type StemChip = {
+  key: string;
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  count?: number | null;
+  title?: string;
+  onClick: () => void;
+};
+
+function StemChipGroup({ label, hint, accent, chips }: {
+  label: string;
+  hint: string;
+  accent: FeatureAccent;
+  chips: StemChip[];
+}) {
+  return (
+    <div className="rounded border border-white/[0.06] bg-white/[0.02] p-2">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{label}</span>
+        <span className="text-[9px] text-slate-600 normal-case tracking-normal">{hint}</span>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {chips.map((c) => (
+          <button
+            key={c.key}
+            disabled={c.disabled}
+            onClick={c.onClick}
+            title={c.title}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] capitalize tracking-wider transition-colors ${
+              c.disabled
+                ? 'text-slate-600 border-white/[0.06] opacity-50 cursor-not-allowed'
+                : c.active
+                  ? `${accent.pillBg} ${accent.primaryText} ${accent.tabBorderActive}`
+                  : 'text-slate-500 border-white/10 hover:text-slate-200'
+            }`}
+          >
+            {c.label}
+            {c.count != null && c.count > 0 && (
+              <span className={`font-mono tabular-nums text-[9px] ${c.active ? 'opacity-80' : 'opacity-60'}`}>{c.count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Waveform palette is a constant — high-contrast complementary pair (warm
 // orange peak halo + vibrant violet RMS body) regardless of mode. The
 // waveform is *data*; mode is signalled by chrome (tabs, buttons, labels)
@@ -455,8 +529,6 @@ const ALGO_ORDER = [
   // SPAN family (experimental — gated by `experimentalSpanFamily` further
   // down where the sidebar grid is rendered).
   'silero-vad', 'jdcnet-voicing', 'panns-cnn14',
-  // LOOP family (`experimentalLoopFamily`).
-  'chroma-autocorr',
   // CUE-family note-onset detector (`experimentalCueExtras`).
   'basic-pitch',
   // CUE-family extras (`experimentalCueExtras`): key, chords, onsets.
@@ -472,7 +544,6 @@ const ALGO_ORDER = [
 const ALLIN1_FOLD_IDS = new Set([0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`));
 const SPAN_TOOL_IDS  = new Set(['silero-vad', 'jdcnet-voicing']);
 const PANNS_TOOL_IDS = new Set(['panns-cnn14']);
-const LOOP_TOOL_IDS  = new Set(['chroma-autocorr']);
 const PITCH_TOOL_IDS = new Set(['basic-pitch']);
 const CUE_EXTRAS_TOOL_IDS = new Set(['librosa-key', 'autochord-chords', 'librosa-onsets']);
 const PERCUSSIVE_TOOL_IDS = new Set(['hpss-percussive']);
@@ -488,7 +559,6 @@ const ALGO_HINTS: Record<string, { tag: string; what: string }> = {
   'jdcnet-voicing':     { tag: 'singing',      what: 'Where someone is actually singing (voiced melody).' },
   'panns-cnn14':        { tag: 'sound type',   what: 'Tags the kind of sound playing (music, speech, applause…).' },
   'hpss-percussive':    { tag: 'drums',        what: 'Isolates the percussive / drum layer from the mix.' },
-  'chroma-autocorr':    { tag: 'repeats',      what: 'Finds repeated / looped musical regions.' },
   'basic-pitch':        { tag: 'notes',        what: 'Detects individual musical notes and when they start.' },
   'librosa-key':        { tag: 'key',          what: "Estimates the song's musical key (e.g. C major)." },
   'autochord-chords':   { tag: 'chords',       what: 'Recognizes the chord progression.' },
@@ -498,13 +568,51 @@ const ALGO_HINTS: Record<string, { tag: string; what: string }> = {
   'locomotif':          { tag: 'motifs',       what: 'Discovers recurring melodic / rhythmic patterns (motifs).' },
 };
 
+// Per-algorithm reference card shown behind the ⓘ on each algo lane: what the
+// model is, what it extracts, and its input / output. Keyed by BASE id — the
+// fold variants of All-In-One and every Ruptures method collapse to one entry
+// (see algoInfoFor). Mirrors the curated layers' ⓘ so an annotator can confirm
+// what an algorithm row actually is without leaving the canvas.
+export interface AlgoInfo { model: string; extracts: string; input: string; output: string; }
+const ALGO_INFO: Record<string, AlgoInfo> = {
+  'band-gradient':      { model: 'Spectral band-energy gradient (heuristic)', extracts: 'Section boundaries from large shifts in per-band energy', input: 'Full-mix audio', output: 'Section boundaries (structure)' },
+  'msaf-olda':          { model: 'MSAF · OLDA (Ordinal LDA — McFee & Ellis)', extracts: 'Structural section boundaries', input: 'Full-mix audio', output: 'Boundaries + section labels' },
+  'msaf-foote':         { model: 'MSAF · Foote novelty (self-similarity)', extracts: 'Section boundaries via a checkerboard novelty kernel', input: 'Full-mix audio', output: 'Section boundaries' },
+  'msaf-cnmf':          { model: 'MSAF · C-NMF (convex non-negative matrix factorization)', extracts: 'Repeated structural segments', input: 'Full-mix audio', output: 'Boundaries + segment labels' },
+  'msaf-sf':            { model: 'MSAF · SF (Structural Features — Serrà et al.)', extracts: 'Section boundaries from structural features', input: 'Full-mix audio', output: 'Section boundaries' },
+  'allin1':             { model: 'All-In-One (Kim & Nam) music-structure analyzer', extracts: 'Beats, downbeats & functional segments (intro / verse / chorus…)', input: 'Full-mix audio (Demucs stems used internally)', output: 'Beats, downbeats, segments + functional labels' },
+  'ruptures':           { model: 'ruptures · change-point detection (PELT / BinSeg / Window)', extracts: 'Change points in an audio-feature signal', input: 'Audio-feature series (e.g. chroma / MFCC)', output: 'Boundaries at detected change points' },
+  'silero-vad':         { model: 'Silero VAD (neural voice-activity detector)', extracts: 'Where voice / speech is present vs. silence', input: 'Audio — best on the vocals stem', output: 'Voice on/off spans' },
+  'jdcnet-voicing':     { model: 'JDCNet (joint detection & classification network)', extracts: 'Where a sung melody is actually voiced', input: 'Audio — vocals stem', output: 'Voicing spans' },
+  'panns-cnn14':        { model: 'PANNs CNN14 (AudioSet audio tagging)', extracts: 'What kind of sound is playing (music / speech / applause…)', input: 'Audio', output: 'Tagged sound-type spans / cues' },
+  'hpss-percussive':    { model: 'librosa HPSS (harmonic–percussive source separation)', extracts: 'The percussive / drum layer of the mix', input: 'Audio', output: 'Percussive spans' },
+  'basic-pitch':        { model: 'Spotify Basic Pitch (note transcription)', extracts: 'Individual musical notes and their onsets', input: 'Audio — best on a pitched stem', output: 'Note events (pitch + start / stop)' },
+  'librosa-key':        { model: 'librosa key estimation (Krumhansl–Schmuckler)', extracts: "The song's musical key", input: 'Audio (chroma)', output: 'Single global key (e.g. C major)' },
+  'autochord-chords':   { model: 'autochord (chord recognition)', extracts: 'The chord progression', input: 'Audio', output: 'Chord-labelled spans' },
+  'librosa-onsets':     { model: 'librosa onset detection (spectral flux)', extracts: 'Note / transient onset times', input: 'Audio', output: 'Onset cue markers (points)' },
+  'whisper-base':       { model: 'OpenAI Whisper (base) — speech recognition', extracts: 'Sung lyrics with rough word timing', input: 'Audio — vocals stem', output: 'Transcribed lyrics + detected language' },
+  'ctc-forced-aligner': { model: 'CTC forced aligner', extracts: 'Word-level alignment of your pasted reference lyrics', input: 'Audio + reference lyrics text', output: 'Word-aligned lyrics (timed)' },
+  'locomotif':          { model: 'LoCoMotif (motif discovery)', extracts: 'Recurring melodic / rhythmic motifs', input: 'Audio / features', output: 'Motif pattern spans' },
+};
+
+// Resolve the ALGO_INFO card for any overlay id: strip the per-stem suffix, then
+// collapse the All-In-One folds and the many Ruptures methods onto their single
+// shared entry. Returns undefined for ids with no reference card (e.g. custom
+// detectors), which simply get no ⓘ.
+function algoInfoFor(id: string): AlgoInfo | undefined {
+  let base = baseAlgoId(id);
+  if (base.startsWith('allin1')) base = 'allin1';
+  else if (base.startsWith('ruptures')) base = 'ruptures';
+  return ALGO_INFO[base];
+}
+
 // Detectors that can run against an isolated Demucs stem (vocals/drums/bass/
 // other) rather than the full mix — the CUE/SPAN/LOOP/PATTERN/LYRICS families.
 // Boundary detectors (MSAF, ruptures, all-in-one) and custom scripts stay
 // mix-only. A per-stem run is dispatched under the composite id "<algo>__<stem>"
 // (mirrors cache_name() in tools/python/paths.py).
 const STEM_CAPABLE_TOOL_IDS = new Set<string>([
-  ...SPAN_TOOL_IDS, ...PANNS_TOOL_IDS, ...LOOP_TOOL_IDS, ...PITCH_TOOL_IDS,
+  ...SPAN_TOOL_IDS, ...PANNS_TOOL_IDS, ...PITCH_TOOL_IDS,
   ...CUE_EXTRAS_TOOL_IDS, ...PERCUSSIVE_TOOL_IDS, ...LYRICS_TOOL_IDS, ...PATTERN_TOOL_IDS,
 ]);
 
@@ -516,6 +624,33 @@ function applyStemToSelection(sel: Set<string>, stem: string): Set<string> {
   const out = new Set<string>();
   for (const id of sel) out.add(STEM_CAPABLE_TOOL_IDS.has(id) ? `${id}__${stem}` : id);
   return out;
+}
+
+// "Run on: All stems" — fan every stem-capable detector out to one
+// "<algo>__<stem>" id per stem so a single run covers all separated stems at
+// once. Boundary/custom ids are mix-only and pass through a single time.
+function applyAllStemsToSelection(sel: Set<string>, stems: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const id of sel) {
+    if (STEM_CAPABLE_TOOL_IDS.has(id)) {
+      for (const s of stems) out.add(`${id}__${s}`);
+    } else {
+      out.add(id);
+    }
+  }
+  return out;
+}
+
+// Lane label for a detector-sourced layer: when the detector declares a source
+// stem, swap its trailing parenthetical tag (e.g. "(curated)", "(LoCoMotif)")
+// for that stem so the gutter reads "Vocals presence (vocals)" — telling the
+// annotator which stem each curated layer was built upon. Falls back to the raw
+// label when no stem is declared or the label has no trailing "(…)".
+function detectorLaneName(label: string, stem?: string | null): string {
+  const base = label || '';
+  if (!stem) return base;
+  const stripped = base.replace(/\s*\([^()]*\)\s*$/, '');
+  return `${stripped} (${stem})`;
 }
 
 // `null`  → the cache file truly doesn't exist (or fetch failed). UI treats
@@ -556,6 +691,9 @@ async function loadAlgoJson(
         // Surfaced as toolbar pills, so they must survive the cache-load path.
         key?: string | null;
         language?: string | null;
+        // LOOP family: which beat grid the detector aligned to
+        // ("song-info" | "allin1" | "librosa"). Surfaced as a lane badge.
+        grid_source?: string | null;
       };
       const sections =
         kind.kind === 'spans' ? (payload.spans ?? []).map((s) => ({
@@ -588,6 +726,7 @@ async function loadAlgoJson(
           elapsedSec: (payload.ms ?? 0) / 1000,
           ...(kind.kind === 'cues'  ? { key:      payload.key ?? null } : {}),
           ...(kind.kind === 'words' ? { language: payload.language ?? null } : {}),
+          ...(kind.kind === 'loops' ? { gridSource: payload.grid_source ?? null } : {}),
         },
       } as ToolResultData;
       const error = payload.ok === false
@@ -603,7 +742,6 @@ async function loadAlgoJson(
   const expBase = toolId.includes('__') ? toolId.slice(0, toolId.indexOf('__')) : toolId;
   if (SPAN_TOOL_IDS.has(expBase))       return readExperimental('span',       { kind: 'spans' });
   if (PANNS_TOOL_IDS.has(expBase))      return readExperimental('panns',      { kind: 'spans' });
-  if (LOOP_TOOL_IDS.has(expBase))       return readExperimental('loop',       { kind: 'loops' });
   if (PITCH_TOOL_IDS.has(expBase))      return readExperimental('pitch',      { kind: 'notes' });
   if (CUE_EXTRAS_TOOL_IDS.has(expBase)) return readExperimental('cue-extras', { kind: 'cues' });
   if (PERCUSSIVE_TOOL_IDS.has(expBase)) return readExperimental('percussive', { kind: 'spans' });
@@ -717,8 +855,6 @@ const ALGO_LABEL_COLORS: Record<string, string> = {
   'silero-vad':       '#c084fc',
   'jdcnet-voicing':   '#c084fc',
   'panns-cnn14':      '#c084fc',
-  // LOOP family — amber so the loop rows read distinctly from spans.
-  'chroma-autocorr':  '#fbbf24',
   // CUE-family note-onset detector — pink, distinct from boundary chips.
   'basic-pitch':      '#f472b6',
   // CUE-family extras — teal trio so key/chords/onsets cluster visually.
@@ -758,7 +894,7 @@ function rupturesLabelColor(suffix: string): string {
 type AlgoRenderKind = 'boundary' | 'span' | 'point';
 const POINT_ALGO_IDS = new Set<string>(CUE_EXTRAS_ALGO_IDS);
 const SPAN_RENDER_ALGO_IDS = new Set<string>([
-  ...SPAN_ALGO_IDS, ...LOOP_ALGO_IDS, ...PITCH_ALGO_IDS,
+  ...SPAN_ALGO_IDS, ...PITCH_ALGO_IDS,
   ...PERCUSSIVE_ALGO_IDS, ...LYRICS_ALGO_IDS, ...PATTERN_ALGO_IDS,
 ]);
 // Strip the per-stem suffix: "silero-vad__vocals" → "silero-vad". A bare id is
@@ -795,6 +931,15 @@ const CUSTOM_ANNOTATION_PALETTE: string[] = [
   '#ec4899', // pink
 ];
 
+// Distinct hue per Demucs stem, so per-stem overlay rows ("<algo>__<stem>") of
+// one family are easy to tell apart (vocals vs drums vs bass vs other).
+const STEM_OVERLAY_COLORS: Record<string, string> = {
+  vocals: '#22d3ee', // cyan
+  drums:  '#fb923c', // orange
+  bass:   '#a78bfa', // violet
+  other:  '#4ade80', // green
+};
+
 // Convert a CustomResultEnvelope of boundary items into the section shape the canvas expects.
 // Each detected boundary becomes the start of a section running up to the next boundary
 // (or end-of-track for the final one), matching how the built-in detectors are flattened.
@@ -804,10 +949,12 @@ function customEnvelopeToSections(
   env: CustomResultEnvelope,
   trackDuration: number,
   color: string,
-): { time: number; endTime: number; label: string; type: string; color: string }[] {
+): { time: number; endTime: number; label: string; type: string; color: string; raw?: unknown }[] {
   if (env.output_kind !== 'boundary') return [];
+  // Carry the original CustomBoundaryItem (importance, candidates, …) as `raw`
+  // so the algo Inspect card can show the detector's full emitted object.
   const items = (env.items as CustomBoundaryItem[])
-    .map((it) => ({ time: it.time_ms / 1000, label: it.label ?? '' }))
+    .map((it) => ({ time: it.time_ms / 1000, label: it.label ?? '', raw: it }))
     .sort((a, b) => a.time - b.time);
   return items.map((it, i) => ({
     time: it.time,
@@ -815,6 +962,7 @@ function customEnvelopeToSections(
     label: it.label || 'boundary',
     type: 'custom',
     color,
+    raw: it.raw,
   }));
 }
 
@@ -872,7 +1020,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // the player's selectedStemSource (which only swaps playback). 'mix' is the
   // full track; a stem runs the ticked CUE/SPAN/LOOP/lyrics detectors on that
   // isolated stem and caches them under "<algo>__<stem>".
-  const [runStemSource, setRunStemSource] = useState<StemSource>('mix');
+  const [runStemSource, setRunStemSource] = useState<RunStemTarget>('mix');
   const [songStatuses, setSongStatuses] = useState<Record<string, AnnotationStatus>>({});
   // Per-song user-created layer summaries (cues/spans/loops/patterns) for the
   // current annotator. Combined with `songStatuses` to drive the song-list's
@@ -1005,6 +1153,56 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     };
     const onUp = () => {
       setAnnotateSidebarResizing(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+  // ── Curated sidebar (annotate mode) — a SECOND right column, left of the
+  // Annotate sidebar, holding the per-stem show/hide filter for detector-sourced
+  // ("curated") layers. Mirrors the annotate sidebar's collapse/width/resize
+  // pattern; narrower max since the curated list is a thin column. ───────────
+  const CURATED_SIDEBAR_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
+  const CURATED_SIDEBAR_MAX_WIDTH = 400;
+  const CURATED_SIDEBAR_DEFAULT_WIDTH = 340;
+  const [curatedSidebarCollapsed, setCuratedSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('tc:curated-sidebar-collapsed');
+      return stored === '1';
+    } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('tc:curated-sidebar-collapsed', curatedSidebarCollapsed ? '1' : '0'); } catch {}
+  }, [curatedSidebarCollapsed]);
+  const [curatedSidebarWidth, setCuratedSidebarWidth] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem('tc:curated-sidebar-width');
+      const n = stored ? parseInt(stored, 10) : NaN;
+      if (Number.isFinite(n) && n >= CURATED_SIDEBAR_MIN_WIDTH && n <= CURATED_SIDEBAR_MAX_WIDTH) return n;
+    } catch {}
+    return CURATED_SIDEBAR_DEFAULT_WIDTH;
+  });
+  useEffect(() => {
+    try { localStorage.setItem('tc:curated-sidebar-width', String(curatedSidebarWidth)); } catch {}
+  }, [curatedSidebarWidth]);
+  const [curatedSidebarResizing, setCuratedSidebarResizing] = useState(false);
+  const startCuratedSidebarResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setCuratedSidebarResizing(true);
+    const startX = e.clientX;
+    const startW = curatedSidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      // Right-anchored sidebar: dragging LEFT (clientX decreases) widens.
+      const next = Math.min(CURATED_SIDEBAR_MAX_WIDTH, Math.max(CURATED_SIDEBAR_MIN_WIDTH, startW + (startX - ev.clientX)));
+      setCuratedSidebarWidth(next);
+    };
+    const onUp = () => {
+      setCuratedSidebarResizing(false);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       document.body.style.cursor = '';
@@ -1211,13 +1409,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const [, setElapsedTick] = useState(0);
 
   // ── Demucs stem job (per song, separate from runJob so stemming doesn't block the run-algo panel) ──
-  // progressPct + lastLine are parsed from Demucs's tqdm output on each poll
-  // tick so the StemSourcePicker pill can show "Stemming… 38% · 1:24" plus a
-  // subtitle with the current step instead of a silent "⏳ Stemming…".
-  // cancelMode echoes the server's view (set when /cancel or /kill is hit) so
-  // the pill can show "⌛ Cancelling…" / "⌛ Killing…" between request and
-  // subprocess exit.
-  const [demucsJob, setDemucsJob] = useState<{ slug: string; jobId: string; status: string; logs: string; startedAt: number; progressPct?: number; lastLine?: string; cancelMode?: 'soft' | 'hard' } | null>(null);
+  // The whole run/poll/cancel/kill lifecycle lives in useDemucsStems so the
+  // Playground reuses the identical flow. onComplete refreshes this page's
+  // stem manifest (which drives the SOURCE picker + per-stem audition) when the
+  // job finishes for the song that's still selected. progressPct + lastLine are
+  // parsed from Demucs's tqdm output on each poll tick so the StemSourcePicker
+  // pill can show "Stemming… 38% · 1:24" plus the current step; cancelMode
+  // echoes the server's view so the pill can show "⌛ Cancelling…" / "⌛ Killing…".
+  const {
+    job: demucsJob,
+    runStems: handleStemSong,
+    cancelStems: handleCancelStems,
+    killStems: handleKillStems,
+    dismissError: dismissDemucsError,
+  } = useDemucsStems({
+    onComplete: (audio, m) => {
+      if (selectedAudioRef.current?.id === audio.id) setStemManifest(m);
+    },
+  });
 
   // ── Run options ───────────────────────────────────────────────────────────
   const DEMUCS_MODELS = [
@@ -1289,6 +1498,43 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const [playerTime, setPlayerTime] = useState(0);
   const [playerIsPlaying, setPlayerIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
+  // Playback speed multiplier. Lives here (not in the player) so it survives
+  // header collapse/expand and is the single source the viz bar reads/writes;
+  // the slow-down itself is applied once at the WaveSurfer source, and every
+  // currentTime-driven viz (karaoke sweep, beat grid) follows automatically.
+  // Seeded from the user's saved default so the existing Settings preference
+  // actually drives playback instead of sitting unused.
+  const [playbackRate, setPlaybackRate] = useState(() => getCurrentSettings().defaultPlaybackRate ?? 1);
+  // ── Sticky slim transport ────────────────────────────────────────────────
+  // When the user scrolls the full waveform player up under the pinned header,
+  // collapse the header to a one-line title + play/stop controls so playback
+  // stays reachable (no waveform, no BPM) — a "slim" look on scroll.
+  const [headerCollapsed, setHeaderCollapsed] = useState(false);
+  const playerWrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Collapse once the player's top edge scrolls above a FIXED line at ~120px
+    // (72px app bar + the ~48px slim bar). Two things make this stable rather
+    // than flickery: (1) the threshold is a constant, not the live header
+    // height — a live height moves together with the player and glues them at
+    // the boundary; (2) crossing the line reflows the header, which jumps the
+    // player ~90px clear of the line, so it can never linger there to jitter.
+    // Capture-phase listening catches whichever element actually scrolls.
+    const COLLAPSE_AT = 120;
+    const update = () => {
+      const node = playerWrapRef.current;
+      setHeaderCollapsed(!!node && node.getBoundingClientRect().top < COLLAPSE_AT);
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [selectedAudio]);
+  // A pending copy-undo belongs to one song; drop it when the song changes so
+  // the banner can't revert an edit on a different track.
+  useEffect(() => { setLastCopyUndo(null); }, [selectedAudio]);
   const [vizSignalWidth, setVizSignalWidth] = useState(0);
   // Latest zoom multiplier from the WaveSurfer player (1 = fit, 2 = ×2 …).
   // Drives the auto-guess collapse/expand UI threshold.
@@ -1364,12 +1610,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // repeatCount copies on the canvas and carries a 4-beat chip set for the
   // tick scheduler in SharedVizPanel.
   const [focusedPattern, setFocusedPattern] = useState<{ layerId: string; itemId: string } | null>(null);
+  // Lyrics layers (word/line timestamps). Display + detector-review for now;
+  // the in-place editor panel is wired separately.
+  const [focusedLyrics, setFocusedLyrics] = useState<{ layerId: string; itemId: string } | null>(null);
   const patternPopover = usePatternEditPopover();
   useEffect(() => {
     if (patternPopover.open) {
       setFocusedPattern({ layerId: patternPopover.open.layerId, itemId: patternPopover.open.itemId });
     }
   }, [patternPopover.open]);
+  const lyricsPopover = useLyricsEditPopover();
+  useEffect(() => {
+    if (lyricsPopover.open) {
+      setFocusedLyrics({ layerId: lyricsPopover.open.layerId, itemId: lyricsPopover.open.itemId });
+    }
+  }, [lyricsPopover.open]);
 
   // ── Active ADD-target layer per multi-layer type ──────────────────────────
   // Set by clicking a layer card (or by picking from the ▾ next to ADD), and
@@ -1381,20 +1636,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const [selectedSpanLayerId, setSelectedSpanLayerId] = useState<string | null>(null);
   const [selectedLoopLayerId, setSelectedLoopLayerId] = useState<string | null>(null);
   const [selectedPatternLayerId, setSelectedPatternLayerId] = useState<string | null>(null);
+  const [selectedLyricsLayerId, setSelectedLyricsLayerId] = useState<string | null>(null);
   const manualAnnotationRef = useRef<ManualAnnotation | null>(null);
   useEffect(() => { manualAnnotationRef.current = manualAnnotation; }, [manualAnnotation]);
   const manualUndoStack = useRef<import('../types/manualAnnotation').ManualSection[][]>([]);
   const [canManualUndo, setCanManualUndo] = useState(false);
   const setSectionsRef = useRef<((sections: import('../types/manualAnnotation').ManualSection[]) => void) | null>(null);
   const openManualEditorRef = useRef<((idx: number | null, anchor?: { x: number; y: number }) => void) | null>(null);
-  const openEyeEditorRef = useRef<((idx: number | null, anchor?: { x: number; y: number }) => void) | null>(null);
-  const eyeAddPointRef = useRef<((time: number) => void) | null>(null);
-  const eyeSetPointTimeRef = useRef<((idx: number, time: number) => void) | null>(null);
   // Metronome tap-tempo imperative handle — wired through to the Tap button
   // in MetronomePanel. Used by the T shortcut in /prep. Tapping sets the
   // metronome's own tempo only; it does not write back to the song's grid.
   const metronomeTapRef = useRef<(() => void) | null>(null);
-  const [eyeAnnotation, setEyeAnnotation] = useState<ManualAnnotation | null>(null);
   const [autoGuessAnnotation, setAutoGuessAnnotation] = useState<AutoGuessManualAnnotation | null>(null);
   const [pendingAnnotationSelection, setPendingAnnotationSelection] = useState<PendingSelection | null>(null);
 
@@ -1407,7 +1659,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const [referenceAnnotatorId, setReferenceAnnotatorId] = useState<string | null>(null);
   const [externalRefData, setExternalRefData] = useState<{
     manual: ManualAnnotation | null;
-    eye: ManualAnnotation | null;
     autoGuess: AutoGuessManualAnnotation | null;
   } | null>(null);
 
@@ -1438,6 +1689,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Ref kept in sync so selectAudio (defined with empty deps) sees the current list.
   const customDetectorsRef = useRef<CustomRegistryEntry[]>([]);
   useEffect(() => { customDetectorsRef.current = customDetectors; }, [customDetectors]);
+  // Registry-race back-fill: the per-song loader reads customDetectorsRef at
+  // select time, but the registry (listDetectors) resolves asynchronously. On a
+  // fresh session the song often loads BEFORE the registry, leaving the ref
+  // empty so no curated detector results (overlays / Karaoke lyrics) ever load
+  // until the user re-selects a song. When the registry arrives, back-fill each
+  // ok detector's cached result for the currently-selected song. Idempotent:
+  // skips any result already in state, so it never clobbers a live run.
+  useEffect(() => {
+    const entry = selectedAudioRef.current;
+    if (!entry || customDetectors.length === 0) return;
+    for (const det of customDetectors) {
+      if (det.status !== 'ok') continue;
+      getDetectorResult(det.name, entry.id).then((env) => {
+        if (!env || selectedAudioRef.current?.id !== entry.id) return;
+        setCustomResults((prev) => (prev[det.name] ? prev : { ...prev, [det.name]: env }));
+      }).catch(() => {});
+    }
+  }, [customDetectors]);
   // Debounce per-detector saves so a quick burst of clicks coalesces.
   const customAnnotationSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -1465,6 +1734,23 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (props.feature && props.feature !== feature) setFeature(props.feature);
   }, [props.feature]);
   const [inspectSubStage, setInspectSubStage] = useState<'algo' | 'eval'>('algo');
+  // Top-level "what am I examining" kind for the inspect-song workspace. Drives
+  // the Evaluation tab's table and gates the boundaries-only Consensus Inspect
+  // tab — it is hidden for every non-boundary kind (see the sub-tab strip).
+  const [inspectKind, setInspectKind] = useState<AnnotationType>('boundaries');
+  // Switching the "Examine" kind also focuses the right-hand Algorithms
+  // sidebar on the family that *produces* that kind, so the detectors you'd
+  // run for the examined annotation are immediately visible (the sidebar
+  // itself now stays mounted for every kind — see the algo-sidebar gate).
+  const handleInspectKindChange = useCallback((k: AnnotationType) => {
+    setInspectKind(k);
+    const family = ALGO_FAMILY_FOR_INSPECT_KIND[k];
+    if (family) setExpandedAlgoTypes((prev) => (prev.has(family) ? prev : new Set(prev).add(family)));
+  }, []);
+  // Consensus Inspect ('algo') only exists for boundaries; every other kind
+  // collapses to the Evaluation tab regardless of which sub-tab was last open.
+  const effectiveInspectSubStage: 'algo' | 'eval' =
+    inspectKind === 'boundaries' ? inspectSubStage : 'eval';
 
   // Derived mode/stage values for legacy code paths.
   // mode = null when no feature is chosen so the landing screen renders alone.
@@ -1476,7 +1762,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                                   null;
   const activeStage: Stage =
     feature === 'annotate'     ? 'annotation' :
-    feature === 'inspect-song' ? inspectSubStage :
+    feature === 'inspect-song' ? effectiveInspectSubStage :
     feature === 'inspect-all'  ? 'global-eval' :
                                   'annotation';
 
@@ -1485,7 +1771,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // Per-category "source" — the value the AnnotationSourcePicker reflects for
   // the currently-active top-tab. For boundaries the source distinguishes
-  // Manual / Eye / Auto-guess (rendered by separate panels); for non-boundary
+  // Manual / Auto-guess (rendered by separate panels); for non-boundary
   // categories the picker only writes here.
   //
   // `'autoGuess'` for non-boundary categories renders a "coming soon" banner —
@@ -1498,12 +1784,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     spans:      'manual',
     loops:      'manual',
     patterns:   'manual',
+    lyrics:     'manual',
   });
+
+  /** Records the most recent "copy algorithm output → Manual" action so it can
+   *  be reverted with a single click. The copy is otherwise only undoable via
+   *  the page-level Ctrl+Z stack (layers) or the Manual panel stack
+   *  (boundaries), neither of which is discoverable right after the click.
+   *  Cleared on undo, on dismiss, or when the song changes. */
+  const [lastCopyUndo, setLastCopyUndo] = useState<
+    | { kind: 'layer'; layerId: string; label: string; prevSource: SourceId; type: AnnotationCategory }
+    | { kind: 'boundaries'; label: string; prevSource: SourceId; prevAnnotation: ManualAnnotation | null }
+    | null
+  >(null);
 
   /** The current boundary source as a `BoundarySource`. Returns `null` when
    *  the picker has a `detector:<name>` selection — in that case the source
    *  override block (DetectorOutputReview) renders instead of the per-source
-   *  Manual/Eye/Auto-guess panels. */
+   *  Manual/Auto-guess panels. */
   const activeBoundarySource: BoundarySource | null = isBoundarySource(activeSourceByType.boundaries)
     ? activeSourceByType.boundaries
     : null;
@@ -1601,7 +1899,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // ── Viz toggles ───────────────────────────────────────────────────────────
   const [showManual, setShowManual]             = useState(() => getCurrentSettings().defaultShowManual);
-  const [showEye, setShowEye]               = useState(() => getCurrentSettings().defaultShowEye);
   const [showAutoGuess, setShowAutoGuess]   = useState(() => getCurrentSettings().defaultShowAutoGuess);
   const [showSignalOverlays, setShowSignalOverlays] = useState(() => getCurrentSettings().defaultShowSignalOverlays);
   const [minConsensus, setMinConsensus]     = useState(2);
@@ -1638,6 +1935,28 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setCaptureGlobalHScrollState(v);
     try { window.localStorage.setItem('tc.captureGlobalHScroll', v ? '1' : '0'); } catch { /* ignore quota */ }
   }, []);
+  // Hard-suppress the browser's two-finger swipe-back/forward at the compositor
+  // level while capture is on. The viz/waveform wheel listeners call
+  // preventDefault(), but on macOS Chrome/Safari history-swipe is driven on the
+  // compositor thread and ignores wheel preventDefault() — so a left-swipe over
+  // anything *outside* those containers (e.g. the algo-inspect rows) still
+  // navigates back. overscroll-behavior-x:none on the root is the only reliable
+  // cure. Scoped to documentElement + body so flipping the toggle off restores
+  // native history-swipe.
+  useEffect(() => {
+    const root = document.documentElement;
+    const { body } = document;
+    const prevRoot = root.style.overscrollBehaviorX;
+    const prevBody = body.style.overscrollBehaviorX;
+    if (captureGlobalHScroll) {
+      root.style.overscrollBehaviorX = 'none';
+      body.style.overscrollBehaviorX = 'none';
+    }
+    return () => {
+      root.style.overscrollBehaviorX = prevRoot;
+      body.style.overscrollBehaviorX = prevBody;
+    };
+  }, [captureGlobalHScroll]);
   // Beat-grid line width multiplier (Misc dropdown). Scales every grid line
   // uniformly; persisted across sessions. Clamped to the slider's [0.5, 10].
   const [gridLineThickness, setGridLineThicknessState] = useState<number>(() => {
@@ -1654,6 +1973,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }, []);
   // Algo overlays
   const [selectedAlgoOverlays, setSelectedAlgoOverlays] = useState<Set<string>>(new Set());
+  // Single-select stem sub-filter for Algorithm Inspect. It composes with the
+  // family chips: the chips choose WHICH algorithms are shown, the stem filter
+  // then narrows those to one stem's rows. 'mix' (default) = full-mix rows only
+  // — the clean default, matching the old behavior where opening a chip showed
+  // full-mix rows; a stem name = each selected algorithm's <stem> variant; 'all'
+  // = full-mix rows plus every per-stem variant of a selected algorithm (the
+  // opt-in "everything" view). The base (mix) row carries the chip selection;
+  // the stem filter decides which variants ride along. Replaces the old
+  // multi-toggle "Show per stem" + per-family "Stem layers" controls.
+  const [inspectStemFilter, setInspectStemFilter] = useState<StemSource | 'all'>('mix');
   const [mirTolerance, setMirTolerance]     = useState(0.5);
   // Row order — fixed rows only; algo IDs are inserted/removed dynamically
   const [rowOrder, setRowOrder] = useState<VizRowId[]>(DEFAULT_FIXED_ROW_ORDER);
@@ -1678,10 +2007,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }, [beatGridUnitOptions, beatGridUnit]);
 
   // ── Annotation timer (per source-or-type) ─────────────────────────────────
-  // Boundaries track time per source (manual/eye/autoGuess); layer types
+  // Boundaries track time per source (manual/autoGuess); layer types
   // track time per type. See [[TimerKey]] for the union.
   const [annotationTimesSaved, setAnnotationTimesSaved] = useState<Record<TimerKey, number>>(
-    { manual: 0, eye: 0, autoGuess: 0, cues: 0, spans: 0, loops: 0, patterns: 0 },
+    { manual: 0, autoGuess: 0, cues: 0, spans: 0, loops: 0, patterns: 0, lyrics: 0 },
   );                                                                   // persisted seconds for current song, per key
   const annotationSessionStartRef = useRef<number | null>(null);       // ms timestamp when current session started
   const annotationSessionTypeRef  = useRef<TimerKey | null>(null);     // which key the current session belongs to
@@ -1724,19 +2053,19 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // emits a capabilities snapshot via onCapabilitiesChange. The page selects
   // the active type's snapshot + controller to drive the shared toolbar.
   const manualPanelRef = useRef<AnnotationPanelController>(null);
-  const eyePanelRef = useRef<AnnotationPanelController>(null);
   const autoGuessPanelRef = useRef<AnnotationPanelController>(null);
   const cuesPanelRef = useRef<AnnotationPanelController>(null);
   const spansPanelRef = useRef<AnnotationPanelController>(null);
   const loopsPanelRef = useRef<AnnotationPanelController>(null);
   const patternsPanelRef = useRef<AnnotationPanelController>(null);
+  const lyricsPanelRef = useRef<AnnotationPanelController>(null);
   const [manualCaps, setManualCaps] = useState<AnnotationPanelCapabilities | null>(null);
-  const [eyeCaps, setEyeCaps] = useState<AnnotationPanelCapabilities | null>(null);
   const [autoGuessCaps, setAutoGuessCaps] = useState<AnnotationPanelCapabilities | null>(null);
   const [cuesCaps, setCuesCaps] = useState<AnnotationPanelCapabilities | null>(null);
   const [spansCaps, setSpansCaps] = useState<AnnotationPanelCapabilities | null>(null);
   const [loopsCaps, setLoopsCaps] = useState<AnnotationPanelCapabilities | null>(null);
   const [patternsCaps, setPatternsCaps] = useState<AnnotationPanelCapabilities | null>(null);
+  const [lyricsCaps, setLyricsCaps] = useState<AnnotationPanelCapabilities | null>(null);
   // Layers-doc save indicator state (the page owns the debounced saveLayers).
   // Cues/Spans/Loops/Patterns all surface this same indicator in their
   // capability snapshot since they share the cueLayersDoc.
@@ -1752,6 +2081,37 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const { annotator } = useAnnotator();
   const { isDemo } = useDemo();
   const { settings } = useSettings();
+
+  // Kinds the inspect-song "Examine" picker offers. Mirrors EvaluationStage's
+  // visible-tabs logic: boundaries always, the experimental families only when
+  // a song is selected (their tables need a slug). When this collapses to just
+  // boundaries the picker hides itself and the workspace looks unchanged.
+  const inspectKindOptions = useMemo<AnnotationType[]>(() => {
+    const out: AnnotationType[] = ['boundaries'];
+    if (selectedAudio) {
+      if (settings.experimentalCueExtras)     out.push('cues');
+      if (settings.experimentalSpanFamily)    out.push('spans');
+      if (settings.experimentalLoopFamily)    out.push('loops');
+      if (settings.experimentalPatternFamily) out.push('patterns');
+      if (settings.experimentalLyricsFamily)  out.push('lyrics');
+    }
+    return out;
+  }, [
+    selectedAudio,
+    settings.experimentalCueExtras,
+    settings.experimentalSpanFamily,
+    settings.experimentalLoopFamily,
+    settings.experimentalPatternFamily,
+    settings.experimentalLyricsFamily,
+  ]);
+
+  // Snap the examined kind back to boundaries if it vanishes (flag flipped off
+  // or song deselected) so a stale non-boundary kind can't strand the UI on a
+  // hidden tab.
+  useEffect(() => {
+    if (!inspectKindOptions.includes(inspectKind)) setInspectKind('boundaries');
+  }, [inspectKindOptions, inspectKind]);
+
   // Whether each experimental family's sidecar is part of the running image.
   // Gates the inspector run-sidebar sections below so a persisted-on flag whose
   // sidecar later disappears doesn't leak un-runnable "RUN MISSING" rows.
@@ -1769,10 +2129,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // saveLayers debounce persists the change. No server-side endpoint to
     // call from here.
     if (activeAnnotationType === 'cues' || activeAnnotationType === 'spans'
-        || activeAnnotationType === 'loops' || activeAnnotationType === 'patterns') {
-      const ctl = activeAnnotationType === 'cues'  ? cuesPanelRef.current
-                : activeAnnotationType === 'spans' ? spansPanelRef.current
-                : activeAnnotationType === 'loops' ? loopsPanelRef.current
+        || activeAnnotationType === 'loops' || activeAnnotationType === 'patterns'
+        || activeAnnotationType === 'lyrics') {
+      const ctl = activeAnnotationType === 'cues'   ? cuesPanelRef.current
+                : activeAnnotationType === 'spans'  ? spansPanelRef.current
+                : activeAnnotationType === 'loops'  ? loopsPanelRef.current
+                : activeAnnotationType === 'lyrics' ? lyricsPanelRef.current
                 : patternsPanelRef.current;
       ctl?.deleteAll?.();
       setPanelReloadKey((k) => k + 1);
@@ -1783,9 +2145,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (src === 'manual') {
       await deleteAnnotation(id);
       setManualAnnotation(null);
-    } else if (src === 'eye') {
-      await deleteEyeAnnotation(id);
-      setEyeAnnotation(null);
     } else if (src === 'autoGuess') {
       await deleteAutoGuessAnnotation(id);
       setAutoGuessAnnotation(null);
@@ -1805,8 +2164,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       if (src === 'manual') {
         next.reviewed = false;
         next.ready_for_review = undefined;
-      } else if (src === 'eye') {
-        next.eye_status = undefined;
       } else {
         next.auto_guess_status = undefined;
       }
@@ -1815,7 +2172,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setPanelReloadKey((k) => k + 1);
   }, [selectedAudio, activeAnnotationType, activeBoundarySource]);
 
-  // Wipe every annotation (Manual, Eye, Auto-guess + all user-created cue/
+  // Wipe every annotation (Manual, Auto-guess + all user-created cue/
   // span/loop/pattern layers) for the current song. Triggered by the
   // ✕ Delete-all button in the Annotation section header next to Export.
   const performDeleteAllForSong = useCallback(async () => {
@@ -1823,13 +2180,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const id = selectedAudio.id;
     await Promise.allSettled([
       deleteAnnotation(id),
-      deleteEyeAnnotation(id),
       deleteAutoGuessAnnotation(id),
     ]);
     setManualAnnotation(null);
-    setEyeAnnotation(null);
     setAutoGuessAnnotation(null);
-    // Whole-song wipe — the rest of the deletion (Manual/Eye/Auto-guess) is
+    // Whole-song wipe — the rest of the deletion (Manual/Auto-guess) is
     // not undoable, so undoing only the layers slice would be misleading.
     cueLayersDocCtl.reset(emptyLayersDoc(id));
     setSongStatuses((prev) => {
@@ -1838,7 +2193,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       const next = { ...existing };
       next.reviewed = false;
       next.ready_for_review = undefined;
-      next.eye_status = undefined;
       next.auto_guess_status = undefined;
       return { ...prev, [id]: next };
     });
@@ -1865,10 +2219,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // changes.
   const pendingAnnotationSelectionRef = useRef<PendingSelection | null>(null);
   useEffect(() => { pendingAnnotationSelectionRef.current = pendingAnnotationSelection; }, [pendingAnnotationSelection]);
-  // Mirror Eye + Auto-guess annotations so [ / ] can navigate their points
+  // Mirror Auto-guess annotations so [ / ] can navigate their points
   // without rebinding when the data changes.
-  const eyeAnnotationRef = useRef<ManualAnnotation | null>(null);
-  useEffect(() => { eyeAnnotationRef.current = eyeAnnotation; }, [eyeAnnotation]);
   const autoGuessAnnotationRef = useRef<AutoGuessManualAnnotation | null>(null);
   useEffect(() => { autoGuessAnnotationRef.current = autoGuessAnnotation; }, [autoGuessAnnotation]);
 
@@ -1919,7 +2271,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return () => { cancelled = true; };
   }, [audioFiles]);
 
-  // ── Sync current song status when manual/eye/auto-guess annotation loads/changes ──────
+  // ── Sync current song status when manual/auto-guess annotation loads/changes ──────
   useEffect(() => {
     if (!selectedAudio) return;
     setSongStatuses((prev) => {
@@ -1931,12 +2283,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           slug: selectedAudio.id,
           reviewed: manualAnnotation?.reviewed ?? existing?.reviewed ?? false,
           ready_for_review: manualAnnotation?.ready_for_review ?? existing?.ready_for_review,
-          eye_status: eyeAnnotation?.eye_status ?? existing?.eye_status,
           auto_guess_status: autoGuessAnnotation?.auto_guess_status ?? existing?.auto_guess_status,
         },
       };
     });
-  }, [selectedAudio, manualAnnotation, eyeAnnotation, autoGuessAnnotation]);
+  }, [selectedAudio, manualAnnotation, autoGuessAnnotation]);
 
   // ── Select audio — eagerly load all annotations + algo JSONs ─────────────
   const selectAudio = useCallback((entry: AudioEntry) => {
@@ -2010,7 +2361,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }
     manualUndoStack.current = [];
     setCanManualUndo(false);
-    setEyeAnnotation(null);
     setAutoGuessAnnotation(null);
     setSongInfo(null);
     setBpmDetection(null);
@@ -2034,7 +2384,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       // stems that actually exist are probed (no blind 404 sweep), and absent
       // composites are silently dropped — same contract as the mix loaders.
       if (!m) return;
-      for (const stem of ['vocals', 'drums', 'bass', 'other'] as const) {
+      // All six htdemucs_6s stems — guitar/piano are real stems under the 6s
+      // model, so their per-stem runs (e.g. Chroma loops on guitar) must load
+      // too. The `m.stems[stem]` guard below skips any a 4-stem song lacks.
+      for (const stem of ['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'] as const) {
         if (!m.stems[stem]) continue;
         for (const base of STEM_CAPABLE_TOOL_IDS) {
           const composite = `${base}__${stem}`;
@@ -2051,7 +2404,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
 
     // Load persisted per-type annotation times for the new song
-    setAnnotationTimesSaved({ manual: 0, eye: 0, autoGuess: 0, cues: 0, spans: 0, loops: 0, patterns: 0 });
+    setAnnotationTimesSaved({ manual: 0, autoGuess: 0, cues: 0, spans: 0, loops: 0, patterns: 0, lyrics: 0 });
     annotationSessionStartRef.current = null;
     annotationSessionTypeRef.current = null;
     {
@@ -2063,12 +2416,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         if (data?.perType) {
           setAnnotationTimesSaved({
             manual:      Number(data.perType.manual)      || 0,
-            eye:       Number(data.perType.eye)       || 0,
             autoGuess: Number(data.perType.autoGuess) || 0,
             cues:      Number(data.perType.cues)      || 0,
             spans:     Number(data.perType.spans)     || 0,
             loops:     Number(data.perType.loops)     || 0,
             patterns:  Number(data.perType.patterns)  || 0,
+            lyrics:    Number(data.perType.lyrics)    || 0,
           });
         }
       })
@@ -2076,7 +2429,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }
 
     loadAnnotation(entry.id).then((ann) => { if (ann) setManualAnnotation(ann); });
-    loadEyeAnnotation(entry.id).then((ann) => { if (ann) setEyeAnnotation(ann); });
     loadAutoGuessAnnotation(entry.id).then((ann) => { if (ann) setAutoGuessAnnotation(ann); });
     loadLayers(entry.id).then((doc) => {
       cueLayersJustLoadedRef.current = doc;
@@ -2587,6 +2939,38 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }));
       setCustomRunning((prev) => { const next = new Set(prev); custom.forEach((n) => next.delete(n)); return next; });
     }
+    // Cascade: a lyrics algorithm (whisper / ctc-forced-aligner) only writes the
+    // raw sidecar cache. The editable Lyrics layer + karaoke come from the
+    // curated_lyrics detector, which READS that cache and prefers ctc over
+    // whisper. Without this, running ctc leaves the layer showing the previous
+    // (Whisper) result. Force-refresh curated_lyrics so the new alignment shows.
+    const ranLyricsAlgo = builtins.some((id) => {
+      const base = id.split('__')[0];
+      return base === 'whisper-base' || base === 'ctc-forced-aligner';
+    });
+    const hasCuratedLyrics = customDetectorsRef.current.some(
+      (d) => d.name === 'curated_lyrics' && d.status === 'ok',
+    );
+    if (ranLyricsAlgo && hasCuratedLyrics) {
+      setCustomRunning((prev) => new Set(prev).add('curated_lyrics'));
+      try {
+        let result = await runDetectorWithConflictCheck('curated_lyrics', audio.id, { force: true });
+        if (result.status === 'conflict') {
+          const ok = window.confirm(
+            'Re-aligning will overwrite your edited "Lyrics (curated)" output. Continue?',
+          );
+          if (ok) {
+            result = await runDetectorWithConflictCheck('curated_lyrics', audio.id, {
+              force: true, confirmOverwrite: true,
+            });
+          }
+        }
+        if (result.status === 'ok' && selectedAudioRef.current?.id === audio.id) {
+          setCustomResults((prev) => ({ ...prev, curated_lyrics: result.envelope }));
+        }
+      } catch { /* leave the stale curated result */ }
+      setCustomRunning((prev) => { const next = new Set(prev); next.delete('curated_lyrics'); return next; });
+    }
   }, [selectedAlgorithms, demucsModel, splitAlgorithmSelection]);
 
   // Batch: fire the same per-song run sequentially across the entire dataset.
@@ -2624,16 +3008,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       return;
     }
     // Stem-capable detectors target runStemSource; boundary/custom stay on the
-    // mix. A no-op when runStemSource === 'mix'.
-    const sel = applyStemToSelection(selectedAlgorithms, runStemSource);
+    // mix. 'all' fans them out to every separated stem; a single stem targets
+    // just that one; 'mix' is a no-op.
+    const runStems = stemManifest
+      ? (['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'] as const).filter((s) => stemManifest.stems[s])
+      : [];
+    const sel = runStemSource === 'all'
+      ? applyAllStemsToSelection(selectedAlgorithms, runStems)
+      : applyStemToSelection(selectedAlgorithms, runStemSource);
     const label = runStemSource === 'mix'
       ? `▶ ${selectedAudio.name}`
-      : `▶ ${selectedAudio.name} · ${runStemSource}`;
+      : runStemSource === 'all'
+        ? `▶ ${selectedAudio.name} · all stems`
+        : `▶ ${selectedAudio.name} · ${runStemSource}`;
     await runAlgorithmsForOneSong(selectedAudio, label, sel);
     if (selectedAudioRef.current?.id === selectedAudio.id) {
       selectAudio(selectedAudio);
     }
-  }, [selectedAudio, runJob, selectedAlgorithms, runStemSource, runAlgorithmsForOneSong, selectAudio]);
+  }, [selectedAudio, runJob, selectedAlgorithms, runStemSource, stemManifest, runAlgorithmsForOneSong, selectAudio]);
 
   // Default the run-picker selection to the not-yet-cached ("missing") detectors
   // for the current song + the given stem, so the footer "Run" computes only the
@@ -2643,10 +3035,20 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // is a Demucs stem (not 'mix'), only the stem-capable families are seeded —
   // boundary detectors and custom scripts are mix-only — and "done" is tested
   // against the composite <id>__<stem> cache key.
-  const seedMissingForStem = useCallback((stem: StemSource) => {
+  const seedMissingForStem = useCallback((stem: RunStemTarget) => {
     const missing = new Set<string>();
     const stemMode = stem !== 'mix';
+    // For 'all', a stem-capable detector counts as done only when every
+    // separated stem already has its cache — otherwise the run should fill the
+    // gaps. Single-stem mode checks just that one stem's composite cache key.
+    const allStems = stem === 'all' && stemManifest
+      ? (['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'] as const).filter((s) => stemManifest.stems[s])
+      : [];
     const isDone = (id: string) => {
+      if (stem === 'all') {
+        if (!STEM_CAPABLE_TOOL_IDS.has(id) || allStems.length === 0) return true;
+        return allStems.every((s) => toolStates[`${id}__${s}`]?.status === 'done');
+      }
       const key = stemMode && STEM_CAPABLE_TOOL_IDS.has(id) ? `${id}__${stem}` : id;
       return toolStates[key]?.status === 'done';
     };
@@ -2657,27 +3059,26 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       RUPTURES_METHODS.forEach((m) => { if (!rupturesResults[m.suffix]) missing.add(`ruptures-${m.suffix}`); });
     }
     if (settings.experimentalSpanFamily && expAvail.spanFamily) ['silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive'].forEach(addIfMissing);
-    if (settings.experimentalLoopFamily && expAvail.loopFamily) ['chroma-autocorr'].forEach(addIfMissing);
     if (settings.experimentalCueExtras && expAvail.cueExtras) ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'].forEach(addIfMissing);
     if (settings.experimentalLyricsFamily && expAvail.lyricsFamily) ['whisper-base', 'ctc-forced-aligner'].forEach(addIfMissing);
     if (settings.experimentalPatternFamily && expAvail.patternFamily) ['locomotif'].forEach(addIfMissing);
     if (!stemMode) {
-      customDetectors.filter((d) => d.is_algorithm && d.status === 'ok').forEach((d) => {
+      customDetectors.filter((d) => d.is_algorithm && !d.is_annotation && d.status === 'ok').forEach((d) => {
         if (customRunning.has(d.name)) return;
         const env = customResults[d.name];
         if (!env || env.fatal) missing.add(`custom:${d.name}`);
       });
     }
     setSelectedAlgorithms(missing);
-  }, [toolStates, gpuCaps, rupturesResults, settings, expAvail, customDetectors, customRunning, customResults]);
+  }, [toolStates, gpuCaps, rupturesResults, settings, expAvail, customDetectors, customRunning, customResults, stemManifest]);
 
   const openRunPickerWithMissing = useCallback(() => {
     seedMissingForStem(runStemSource);
     setRunPickerOpen(true);
   }, [seedMissingForStem, runStemSource]);
 
-  // Switch the run-picker stem and re-seed the missing selection for it.
-  const handleRunStemChange = useCallback((stem: StemSource) => {
+  // Switch the run-picker stem target and re-seed the missing selection for it.
+  const handleRunStemChange = useCallback((stem: RunStemTarget) => {
     setRunStemSource(stem);
     seedMissingForStem(stem);
   }, [seedMissingForStem]);
@@ -2697,192 +3098,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       selectAudio(selectedAudio);
     }
   }, [selectedAudio, runJob, runAlgorithmsForOneSong, selectAudio]);
-
-  // Per-song Demucs stem separation. Lives in the Dataset Prep sidebar row
-  // (next to ⌫). Always runs htdemucs — the Demucs-model dropdown in the
-  // header only applies to algorithm runs (the separator script is hardcoded
-  // to htdemucs upstream). If stems are already cached for this song, we
-  // confirm before overwriting them.
-  const handleStemSong = useCallback(async (audio: AudioEntry) => {
-    if (demucsJob?.status === 'running') {
-      alert('A Demucs stem job is already running. Wait for it to finish before starting another.');
-      return;
-    }
-    // Surface a client-side error as the persistent red pill AND console.
-    // Every catch in this function routes through fail() so nothing fails
-    // silently — the user can always inspect what went wrong via the pill's
-    // modal or by filtering devtools for "[stems]".
-    const fail = (where: string, err: unknown, extra?: string) => {
-      const msg = err instanceof Error
-        ? `${err.name}: ${err.message}${err.stack ? '\n' + err.stack : ''}`
-        : err == null ? '' : String(err);
-      console.error(`[stems] ${where}`, err, extra ?? '');
-      const body = [`[client] ${where}`, msg, extra].filter(Boolean).join('\n');
-      setDemucsJob({
-        slug: audio.id,
-        jobId: '(client-error)',
-        status: 'error',
-        logs: body,
-        startedAt: Date.now(),
-      });
-    };
-    try {
-      const existing = await fetchStemManifest(audio.url).catch((e) => {
-        console.warn('[stems] pre-check fetchStemManifest failed (continuing):', e);
-        return null;
-      });
-      if (existing) {
-        const ok = confirm(
-          `Stems for "${audio.name}" already exist.\n` +
-          `Re-running Demucs will overwrite them. Continue?`,
-        );
-        if (!ok) return;
-      }
-      let res: Response;
-      try {
-        res = await fetch(`/api/run-demucs/${encodeURIComponent(audio.id)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ force: !!existing }),
-        });
-      } catch (e) {
-        fail('POST /api/run-demucs network error', e);
-        return;
-      }
-      const rawBody = await res.text().catch((e) => {
-        console.error('[stems] response.text() failed:', e);
-        return '';
-      });
-      if (!res.ok) {
-        fail('POST /api/run-demucs returned non-OK', null, `HTTP ${res.status}\n${rawBody.slice(0, 600)}`);
-        return;
-      }
-      let data: { jobId?: string } = {};
-      try { data = JSON.parse(rawBody); }
-      catch (e) { console.error('[stems] start response JSON parse failed:', e, { body: rawBody }); }
-      if (!data.jobId) {
-        fail('start response missing jobId', null, `body: ${rawBody.slice(0, 600)}`);
-        return;
-      }
-      const jobId: string = data.jobId;
-      console.log('[stems] job started', { jobId, slug: audio.id });
-      setDemucsJob({ slug: audio.id, jobId, status: 'running', logs: '', startedAt: Date.now() });
-      let lastLogsLen = 0;
-      let lastStatus: { status: string; logs: string } = { status: 'running', logs: '' };
-      while (true) {
-        await new Promise((r) => setTimeout(r, 2000));
-        // Per-poll fetch + JSON parse can fail independently (network blip,
-        // server restart, malformed body). Catch each separately and log
-        // with the actual error so the user can tell flaky polling apart
-        // from a genuine Demucs failure.
-        let status: { status: string; logs: string };
-        try {
-          const statusRes = await fetch(`/api/run-demucs/status/${encodeURIComponent(jobId)}`);
-          if (!statusRes.ok) {
-            const body = await statusRes.text().catch(() => '');
-            console.error('[stems] status poll non-OK', { httpStatus: statusRes.status, body: body.slice(0, 400) });
-            status = { status: 'error', logs: `[client] status poll returned HTTP ${statusRes.status}\n${body.slice(0, 400)}` };
-          } else {
-            status = await statusRes.json();
-          }
-        } catch (e) {
-          console.error('[stems] status poll failed:', e);
-          status = { status: 'error', logs: `[client] status poll failed: ${e instanceof Error ? e.message : String(e)}` };
-        }
-        lastStatus = status;
-        // Stream new log output to the devtools console as it arrives so the
-        // user can debug stuck/failing jobs without docker logs access.
-        const logs: string = status.logs ?? '';
-        if (logs.length > lastLogsLen) {
-          const delta = logs.slice(lastLogsLen);
-          console.log('[stems]', delta.replace(/\n+$/, ''));
-          lastLogsLen = logs.length;
-        }
-        // Parse Demucs's tqdm output for the running pill. tqdm overwrites
-        // the same line with \r so we split on both \r and \n and take the
-        // rightmost non-empty token as the "current step" subtitle. The
-        // rightmost \d+% inside that token is the progress bar percentage.
-        const tokens = logs.split(/[\r\n]+/);
-        let lastLine: string | undefined;
-        for (let i = tokens.length - 1; i >= 0; i--) {
-          const t = tokens[i].trim();
-          if (t.length > 0) { lastLine = t.slice(0, 140); break; }
-        }
-        const pctMatch = lastLine?.match(/(\d{1,3})%/);
-        const progressPct = pctMatch
-          ? Math.min(100, Math.max(0, parseInt(pctMatch[1], 10)))
-          : undefined;
-        const cancelMode = (status as { cancelMode?: 'soft' | 'hard' }).cancelMode;
-        setDemucsJob((prev) => prev && prev.jobId === jobId
-          ? { ...prev, status: status.status, logs, progressPct, lastLine, cancelMode }
-          : prev);
-        if (status.status !== 'running') break;
-      }
-      // Terminal status: log to console; the persistent red "Stems failed —
-      // view log" pill in StemSourcePicker now surfaces failure (with a
-      // click-to-open modal showing the log tail), so we no longer fire an
-      // alert() that the user might miss or dismiss.
-      if (lastStatus.status === 'error') {
-        console.error(`[stems] job ${jobId} failed:\n${lastStatus.logs || '(no logs returned)'}`);
-      } else if (lastStatus.status === 'cancelled') {
-        console.warn(`[stems] job ${jobId} cancelled`);
-      } else if (lastStatus.status === 'done') {
-        console.log(`[stems] job ${jobId} done`);
-      }
-      if (selectedAudioRef.current?.id === audio.id) {
-        const m = await fetchStemManifest(audio.url).catch((e) => {
-          // Job succeeded but the picker won't refresh — log loudly so the
-          // user knows why "Vocals/Drums/Bass/Other" stay greyed out.
-          console.error('[stems] post-job fetchStemManifest failed:', e);
-          return null;
-        });
-        setStemManifest(m);
-      }
-    } catch (e) {
-      // Catch-all so nothing slips into an unhandled rejection. If we land
-      // here the error pill + modal will tell the user what happened.
-      fail('handleStemSong unexpected throw', e);
-    }
-  }, [demucsJob]);
-
-  // Soft cancel: SIGINT the demucs subprocess. Demucs cleans up between
-  // chunks, then the polling loop sees status='cancelled' and the pill
-  // returns to idle. Optimistically set cancelMode='soft' so the pill flips
-  // to "⌛ Cancelling…" without waiting for the next poll tick.
-  const handleCancelStems = useCallback(async () => {
-    if (!demucsJob || demucsJob.status !== 'running') return;
-    setDemucsJob((prev) => prev ? { ...prev, cancelMode: 'soft' } : prev);
-    try {
-      const res = await fetch(`/api/run-demucs/cancel/${encodeURIComponent(demucsJob.jobId)}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        console.error('[stems] cancel returned non-OK', { status: res.status, body: body.slice(0, 400) });
-      } else {
-        console.log('[stems] cancel requested', { jobId: demucsJob.jobId });
-      }
-    } catch (e) {
-      console.error('[stems] cancel request failed:', e);
-    }
-  }, [demucsJob]);
-
-  // Hard kill: SIGKILL the whole subprocess group. GPU/CPU work stops
-  // immediately. Same optimistic UX as cancel: pill flips to "⌛ Killing…"
-  // until the polling loop confirms status='cancelled'.
-  const handleKillStems = useCallback(async () => {
-    if (!demucsJob || demucsJob.status !== 'running') return;
-    setDemucsJob((prev) => prev ? { ...prev, cancelMode: 'hard' } : prev);
-    try {
-      const res = await fetch(`/api/run-demucs/kill/${encodeURIComponent(demucsJob.jobId)}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        console.error('[stems] kill returned non-OK', { status: res.status, body: body.slice(0, 400) });
-      } else {
-        console.log('[stems] kill requested', { jobId: demucsJob.jobId });
-      }
-    } catch (e) {
-      console.error('[stems] kill request failed:', e);
-    }
-  }, [demucsJob]);
 
   const handleStopJob = useCallback(async () => {
     if (!runJob || runJob.status !== 'running') return;
@@ -2918,7 +3133,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       headers: annotatorHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ perType: {
         manual:      Math.round(perKey.manual),
-        eye:       Math.round(perKey.eye),
         autoGuess: Math.round(perKey.autoGuess),
       }}),
     }).catch(() => null);
@@ -2992,12 +3206,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     : 0;
   const annotationTimesTotal: Record<TimerKey, number> = {
     manual:      annotationTimesSaved.manual      + (annotationSessionTypeRef.current === 'manual'      ? liveSessionSecs : 0),
-    eye:       annotationTimesSaved.eye       + (annotationSessionTypeRef.current === 'eye'       ? liveSessionSecs : 0),
     autoGuess: annotationTimesSaved.autoGuess + (annotationSessionTypeRef.current === 'autoGuess' ? liveSessionSecs : 0),
     cues:      annotationTimesSaved.cues      + (annotationSessionTypeRef.current === 'cues'      ? liveSessionSecs : 0),
     spans:     annotationTimesSaved.spans     + (annotationSessionTypeRef.current === 'spans'     ? liveSessionSecs : 0),
     loops:     annotationTimesSaved.loops     + (annotationSessionTypeRef.current === 'loops'     ? liveSessionSecs : 0),
     patterns:  annotationTimesSaved.patterns  + (annotationSessionTypeRef.current === 'patterns'  ? liveSessionSecs : 0),
+    lyrics:    annotationTimesSaved.lyrics    + (annotationSessionTypeRef.current === 'lyrics'    ? liveSessionSecs : 0),
   };
 
   function fmtAnnotationTime(secs: number): string {
@@ -3180,7 +3394,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // ── Viz click routing ─────────────────────────────────────────────────────
   // Preview-play on drag is the default everywhere (prep, algo, eval, annotation).
-  // Only the Eye annotation mode suppresses it — that's a silent-by-design mode.
   // Pending "+ Add" pill is wired only to the annotation feature, since the
   // other stages have no annotation editor to receive it.
   const isAnnotateFeature = feature === 'annotate';
@@ -3201,7 +3414,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
     if (!isAnnotateFeature) return;
 
-    // Boundaries (Manual/Eye): with nothing to deselect, a click (re)anchors
+    // Boundaries (Manual): with nothing to deselect, a click (re)anchors
     // the t1-only pending pill at the cursor — point-by-point authoring.
     if (supportsClickPending(activeAnnotationType, activeBoundarySource ?? undefined)) {
       setPendingAnnotationSelection({ t1: time, t2: null });
@@ -3209,17 +3422,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }, [isAnnotateFeature, activeAnnotationType, activeBoundarySource, previewRegion]);
 
   const handleVizRegion = useCallback((t1: number, t2: number) => {
-    const isEye = isAnnotateFeature && activeAnnotationType === 'boundaries' && activeBoundarySource === 'eye';
     const supportsPending = isAnnotateFeature && supportsRangePending(activeAnnotationType, activeBoundarySource ?? undefined);
     if (supportsPending) setPendingAnnotationSelection({ t1, t2 });
-    if (isEye) {
-      // Eye is a silent annotation mode — seek to the start but don't auto-play the region.
-      seekRef.current?.(t1);
-    } else {
-      // Loop-annotation mode loops the highlighted selection by default.
-      const defaultLoop = isAnnotateFeature && activeAnnotationType === 'loops';
-      openPreviewRegion(t1, t2, defaultLoop);
-    }
+    // Loop-annotation mode loops the highlighted selection by default.
+    const defaultLoop = isAnnotateFeature && activeAnnotationType === 'loops';
+    openPreviewRegion(t1, t2, defaultLoop);
   }, [isAnnotateFeature, activeAnnotationType, activeBoundarySource, openPreviewRegion]);
 
   const pushManualSnapshot = useCallback(() => {
@@ -3312,13 +3519,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     patchItemById(layerId, itemId, { start: newStart, end: newEnd });
   }, [patchItemById]);
 
-  // Eye ghost-marker drag. The panel routes its own undo via the coalesceKey
-  // inside setPointTimeAt so a continuous drag is one undo entry — no need
-  // for a separate snapshot here.
-  const handleEyeMarkerDrag = useCallback((idx: number, time: number) => {
-    eyeSetPointTimeRef.current?.(idx, time);
-  }, []);
-
   // ── Unified-sidebar per-row mutation handlers ─────────────────────────────
   // Wire the X delete + critical star toggle that UnifiedAnnotationListPanel
   // renders on every editable row. Dispatch by (layerId, sectionType):
@@ -3408,10 +3608,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (sectionType === 'spans')    setSelectedSpanLayerId((id) => (id === layerId ? null : id));
     if (sectionType === 'loops')    setSelectedLoopLayerId((id) => (id === layerId ? null : id));
     if (sectionType === 'patterns') setSelectedPatternLayerId((id) => (id === layerId ? null : id));
+    if (sectionType === 'lyrics')   setSelectedLyricsLayerId((id) => (id === layerId ? null : id));
     setFocusedCue((f) => (f?.layerId === layerId ? null : f));
     setFocusedSpan((f) => (f?.layerId === layerId ? null : f));
     setFocusedLoop((f) => (f?.layerId === layerId ? null : f));
     setFocusedPattern((f) => (f?.layerId === layerId ? null : f));
+    setFocusedLyrics((f) => (f?.layerId === layerId ? null : f));
   }, [pushManualSnapshot, setCueLayersDoc]);
 
   // Inline rename of a typed user layer from the sidebar card header. Boundary
@@ -3473,13 +3675,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const boundarySrc = activeSourceByType.boundaries;
     const boundaryId: string | null =
       boundarySrc === 'manual'    ? 'boundaries:Manual'
-      : boundarySrc === 'eye'       ? 'boundaries:Eye'
       : boundarySrc === 'autoGuess' ? 'boundaries:autoGuess'
       : boundarySrc.startsWith('detector:')
         ? `boundaries:${boundarySrc}`
         : null;
     const pickLayerId = (
-      type: 'cues' | 'spans' | 'loops' | 'patterns',
+      type: 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics',
       userLayerId: string | null,
       detectorPrefix: string,
     ): string | null => {
@@ -3495,8 +3696,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       spans:    pickLayerId('spans',    selectedSpanLayerId,    'detector-span'),
       loops:    pickLayerId('loops',    selectedLoopLayerId,    'detector-loop'),
       patterns: pickLayerId('patterns', selectedPatternLayerId, 'detector-pattern'),
+      lyrics:   pickLayerId('lyrics',   selectedLyricsLayerId,  'detector-lyrics'),
     };
-  }, [activeSourceByType, selectedCueLayerId, selectedSpanLayerId, selectedLoopLayerId, selectedPatternLayerId]);
+  }, [activeSourceByType, selectedCueLayerId, selectedSpanLayerId, selectedLoopLayerId, selectedPatternLayerId, selectedLyricsLayerId]);
 
   const handleUnifiedSelectLayer = useCallback((
     type: AnnotationType,
@@ -3513,6 +3715,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       else if (type === 'spans')    setSelectedSpanLayerId(selection.id);
       else if (type === 'loops')    setSelectedLoopLayerId(selection.id);
       else if (type === 'patterns') setSelectedPatternLayerId(selection.id);
+      else if (type === 'lyrics')   setSelectedLyricsLayerId(selection.id);
     }
     // Mirror TabGroup's onChange: drop the violet pending pill when the new
     // (type, source) pair can't consume it.
@@ -3532,13 +3735,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (activeAnnotationTypeRef.current === 'boundaries') {
       switch (activeBoundarySourceRef.current) {
         case 'manual':    return manualPanelRef.current;
-        case 'eye':       return eyePanelRef.current;
         case 'autoGuess': return autoGuessPanelRef.current;
         default:          return null;
       }
     }
     switch (activeAnnotationTypeRef.current) {
       case 'cues':      return cuesPanelRef.current;
+      case 'lyrics':    return lyricsPanelRef.current;
       case 'spans':     return spansPanelRef.current;
       case 'loops':     return loopsPanelRef.current;
       case 'patterns':  return patternsPanelRef.current;
@@ -3546,16 +3749,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }
   }, []);
 
-  // Mark cue at the playhead. Manual/Eye keep the existing page-level paths so
+  // Mark cue at the playhead. Manual keeps the existing page-level path so
   // the page-level manualUndoStack (Ctrl+Z) stays consistent; every other type
   // delegates to its panel's `addAtPlayhead`.
   const handleMarkCueAtPlayhead = useCallback(() => {
     const type = activeAnnotationTypeRef.current;
     const source = activeBoundarySourceRef.current;
-    if (type === 'boundaries' && source === 'eye') {
-      eyeAddPointRef.current?.(playerTimeRef.current);
-      return;
-    }
     if (type === 'boundaries' && source === 'manual') {
       const current = manualAnnotationRef.current;
       if (!current || !setSectionsRef.current) {
@@ -3580,7 +3779,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // Split: bisect the section the playhead currently sits inside.
   const handleSplitCueAtPlayhead = useCallback(() => {
-    if (activeAnnotationTypeRef.current === 'boundaries' && activeBoundarySourceRef.current === 'eye') return;
     const current = manualAnnotationRef.current;
     if (!current || !setSectionsRef.current) return;
     const t = playerTimeRef.current;
@@ -3613,10 +3811,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // Auto-guess points are algorithm-generated; users review (✓/✗/@), they
     // don't delete. No-op so accidental Delete presses don't disturb data.
     if (type === 'boundaries' && source === 'autoGuess') return;
-    // Eye / Spans / Loops / Patterns delegate to the panel's `deleteFocused`,
+    // Spans / Loops / Patterns delegate to the panel's `deleteFocused`,
     // which knows the per-type item semantics. Same path as Cues' fallback.
-    if ((type === 'boundaries' && source === 'eye')
-        || type === 'spans' || type === 'loops' || type === 'patterns') {
+    if (type === 'spans' || type === 'loops' || type === 'patterns') {
       activePanelRef()?.deleteFocused?.();
       return;
     }
@@ -3699,15 +3896,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }
 
   // Pick the right sorted list of times to navigate based on the active type.
-  // Manual + Eye sections, Auto-guess points, or layer-type items.
+  // Manual sections, Auto-guess points, or layer-type items.
   function collectNavTimes(): number[] {
     const type = activeAnnotationTypeRef.current;
     const source = activeBoundarySourceRef.current;
     if (type === 'boundaries' && source === 'manual') {
       return (manualAnnotationRef.current?.sections ?? []).map((s) => s.time);
-    }
-    if (type === 'boundaries' && source === 'eye') {
-      return (eyeAnnotationRef.current?.sections ?? []).map((s) => s.time);
     }
     if (type === 'boundaries' && source === 'autoGuess') {
       return (autoGuessAnnotationRef.current?.points ?? []).map((p) => p.time);
@@ -3834,9 +4028,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // only appear when the experimental flag is on.
   const visibleAnnotationTypes = useMemo<AnnotationType[]>(
     () => TAB_CONFIG
-      .filter((t) => t.experimental !== 'loopsAndPatterns' || settings.experimentalLoopsAndPatterns)
+      .filter((t) => {
+        if (t.experimental === 'loopsAndPatterns') return settings.experimentalLoopsAndPatterns;
+        if (t.experimental === 'lyrics') return settings.experimentalLyricsFamily;
+        return true;
+      })
       .map((t) => t.id),
-    [settings.experimentalLoopsAndPatterns],
+    [settings.experimentalLoopsAndPatterns, settings.experimentalLyricsFamily],
   );
   const selectAnnotationTypeChip = useCallback((type: AnnotationType) => {
     setActiveAnnotationType(type);
@@ -3969,7 +4167,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     },
 
     // Annotation — context-aware verbs dispatch to whichever tab is active
-    // (Manual, Eye, Cues, Spans, Loops, Patterns). Auto-guess is algorithm-driven
+    // (Manual, Cues, Spans, Loops, Patterns). Auto-guess is algorithm-driven
     // and ignores most of these.
     {
       group: 'Annotation',
@@ -4017,7 +4215,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       group: 'Annotation',
       display: 'Enter',
       description: 'Confirm the highlighted drag-selection on every tab '
-        + '(Manual + Eye boundaries, Cues, Spans, Loops, Patterns) — turns '
+        + '(Manual boundaries, Cues, Spans, Loops, Patterns) — turns '
         + 'the highlight into one or two new items.',
       match: (e) => e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
         && !!pendingAnnotationSelectionRef.current
@@ -4029,7 +4227,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // brand-new item and draws a flag on the viz; O completes the add by
     // committing a fresh span / loop / pattern with [stashed, playhead] and
     // zoom-to-fits the new range. Guarded to Spans / Loops / Patterns since
-    // only interval-typed tabs support intervals; Manual / Eye / Cues use
+    // only interval-typed tabs support intervals; Manual / Cues use
     // point-based shortcuts (M, S) instead. O is gated on having a Mark In
     // stashed — otherwise the keystroke is a no-op (matches the button's
     // disabled state with the "Click Mark In first" hint).
@@ -4056,25 +4254,23 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Annotation',
       display: 'Ctrl + Z',
-      description: 'Undo last edit. Manual / Eye use their panel undo stack; '
+      description: 'Undo last edit. Manual uses its panel undo stack; '
         + 'Cues / Spans / Loops / Patterns share a page-level stack on the layers document.',
       match: (e) => (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey,
       run:   (e) => {
         e.preventDefault();
         const type = activeAnnotationTypeRef.current;
-        const source = activeBoundarySourceRef.current;
         if (type === 'cues' || type === 'spans' || type === 'loops' || type === 'patterns') {
           cueLayersDocCtl.undo();
           return;
         }
-        if (type === 'boundaries' && source === 'eye') activePanelRef()?.undo?.();
-        else handleManualUndo();
+        handleManualUndo();
       },
     },
     {
       group: 'Annotation',
       display: 'Shift + Ctrl + Z',
-      description: 'Redo last undone edit. Manual / Eye redo is handled by their own panel '
+      description: 'Redo last undone edit. Manual redo is handled by its own panel '
         + 'window listener; this shortcut covers Cues / Spans / Loops / Patterns.',
       match: (e) => (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey,
       run:   (e) => {
@@ -4083,7 +4279,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           e.preventDefault();
           cueLayersDocCtl.redo();
         }
-        // Manual & Eye: leave it to the panel's own keydown listener so we
+        // Manual: leave it to the panel's own keydown listener so we
         // don't double-fire redo on the same keystroke.
       },
     },
@@ -4249,26 +4445,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         return {
           id: `ruptures-${m.suffix}`,
           label: res.algoName,
-          sections: res.sections.map((s) => ({ time: s.time, endTime: s.endTime, label: s.label, type: s.type })),
+          sections: res.sections.map((s) => ({ time: s.time, endTime: s.endTime, label: s.label, type: s.type, raw: s })),
         };
       });
-    // Custom detectors flagged is_algorithm. Only boundary detectors flow into algo rows;
-    // 'cue' kinds carry duration semantics that don't map to the boundary-detection canvas.
-    // Each detector gets its own palette entry so its sections are immediately
-    // distinguishable from neighboring rows (and from MSAF/allin1/CPD groups above).
-    const eligibleCustom = customDetectors.filter((d) => d.status === 'ok' && d.is_algorithm && d.output_kind === 'boundary');
-    const custom: AlgorithmRow[] = eligibleCustom.flatMap((d, i) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = CUSTOM_ANNOTATION_PALETTE[i % CUSTOM_ANNOTATION_PALETTE.length];
-      return [{
-        id: `custom:${d.name}`,
-        label: d.label || d.name,
-        sections: customEnvelopeToSections(env, duration, color),
-      }];
-    });
-    return [...regular, ...ruptures, ...custom];
-  }, [toolStates, rupturesResults, customDetectors, customResults, duration]);
+    // Custom detectors are curators, not algorithm-family rows. Every one
+    // surfaces through the Curated sidebar instead — boundary curators as
+    // `detectorBoundaryOverlays`, the cue/span/loop/pattern/lyrics ones as
+    // detector-sourced layers. Keeping them out of this list also keeps a
+    // consensus-of-algorithms curator (e.g. phrases-msaf) from being folded
+    // back into the auto-guess consensus pool it was derived from.
+    return [...regular, ...ruptures];
+  }, [toolStates, rupturesResults]);
 
   // Single-value detector outputs surfaced as always-visible toolbar pills:
   // librosa-key's global key and whisper-base's detected language. Whisper still
@@ -4291,8 +4478,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const customAlgoColors = useMemo(() => {
     const m: Record<string, string> = {};
     customDetectors
-      .filter((d) => d.status === 'ok' && d.is_algorithm && d.output_kind === 'boundary')
+      .filter((d) => d.status === 'ok' && d.is_algorithm && !d.is_annotation && d.output_kind === 'boundary')
       .forEach((d, i) => { m[d.name] = CUSTOM_ANNOTATION_PALETTE[i % CUSTOM_ANNOTATION_PALETTE.length]; });
+    return m;
+  }, [customDetectors]);
+
+  // Global detector-name → palette colour across EVERY curated/custom layer of
+  // any kind (boundary/cue/span/loop/pattern/lyrics). Indexing globally (sorted
+  // by name for stability) keeps a span layer and a cue layer from colliding on
+  // the same hue — without it each kind restarts the palette at rose.
+  const detectorColorByName = useMemo(() => {
+    const m: Record<string, string> = {};
+    customDetectors
+      .filter((d) => d.status === 'ok' && d.is_annotation)
+      .map((d) => d.name)
+      .sort((a, b) => a.localeCompare(b))
+      .forEach((name, i) => { m[name] = CUSTOM_ANNOTATION_PALETTE[i % CUSTOM_ANNOTATION_PALETTE.length]; });
     return m;
   }, [customDetectors]);
 
@@ -4300,8 +4501,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const algoLabelColor = useCallback((id: string): string => {
     if (id.startsWith('ruptures-')) return rupturesLabelColor(id.slice('ruptures-'.length));
     if (id.startsWith('custom:')) return customAlgoColors[id.slice('custom:'.length)] ?? '#fbbf24';
-    // Per-stem layers share their base detector's hue (stems are distinguished
-    // by the row label, e.g. "silero-vad · vocals").
+    // Per-stem overlay rows ("<algo>__<stem>") get a stem-specific hue so the
+    // four stems of one family are visually distinct, not one shared colour.
+    const us = id.indexOf('__');
+    if (us !== -1) return STEM_OVERLAY_COLORS[id.slice(us + 2)] ?? ALGO_LABEL_COLORS[baseAlgoId(id)] ?? '#94a3b8';
     return ALGO_LABEL_COLORS[baseAlgoId(id)] ?? '#94a3b8';
   }, [customAlgoColors]);
 
@@ -4316,7 +4519,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Each row gets a distinct color from CUSTOM_ANNOTATION_PALETTE so the strips
   // are visually distinguishable across detectors.
   const customAnnotationRows = useMemo(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'boundary');
+    // Pure-annotation boundary detectors (is_annotation, NOT is_algorithm) get
+    // the ✓/✗ review strip. is_algorithm boundary curators (e.g. phrases-msaf)
+    // are read-only curated layers instead — see detectorBoundaryLayers.
+    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && !d.is_algorithm && d.output_kind === 'boundary');
     return eligible.flatMap((d, paletteIdx) => {
       const env = customResults[d.name];
       if (!env || env.fatal) return [];
@@ -4336,8 +4542,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           status: ov.status ?? 'pending',
         };
       });
-      const color = CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      return [{ rowId: `custom-annotation:${d.name}`, detectorName: d.name, label: d.label || d.name, color, points }];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      return [{ rowId: `custom-annotation:${d.name}`, detectorName: d.name, label: detectorLaneName(d.label || d.name, d.stem), color, points }];
     });
   }, [customDetectors, customResults, customAnnotationOverrides]);
 
@@ -4352,7 +4558,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return eligible.flatMap((d, paletteIdx) => {
       const env = customResults[d.name];
       if (!env || env.fatal) return [];
-      const color = CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
       const items = env.items as Array<{ time_ms: number; label: string | null; description?: string | null; intensity?: number | null; candidates?: number[] | null }>;
       const cueItems: CueItem[] = items.map((it, i) => ({
         id: `${d.name}:${i}:${it.time_ms}`,
@@ -4365,7 +4571,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }));
       return [{
         id: `detector-cue:${d.name}`,
-        name: d.label || d.name,
+        name: detectorLaneName(d.label || d.name, d.stem),
+        sourceStem: d.stem ?? undefined,
+        sourceDescription: d.description || undefined,
         type: 'cues' as const,
         visible: true,
         color,
@@ -4374,7 +4582,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         readOnly: true,
         source: `detector:${d.name}` as const,
       }];
-    });
+    }).sort(byStemRank);
   }, [customDetectors, customResults]);
 
   // ── Detector-sourced Span/Loop/Pattern layers ─────────────────────────────
@@ -4387,7 +4595,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return eligible.flatMap((d, paletteIdx) => {
       const env = customResults[d.name];
       if (!env || env.fatal) return [];
-      const color = CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
       const items = env.items as CustomSpanItem[];
       const spanItems: SpanItem[] = items.map((it, i) => ({
         id: `${d.name}:${i}:${it.start_ms}`,
@@ -4397,7 +4605,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }));
       return [{
         id: `detector-span:${d.name}`,
-        name: d.label || d.name,
+        name: detectorLaneName(d.label || d.name, d.stem),
+        sourceStem: d.stem ?? undefined,
+        sourceDescription: d.description || undefined,
         type: 'spans' as const,
         visible: true,
         color,
@@ -4406,7 +4616,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         readOnly: true,
         source: `detector:${d.name}` as const,
       }];
-    });
+    }).sort(byStemRank);
   }, [customDetectors, customResults]);
 
   const detectorLoopLayers = useMemo<AnnotationLayer<'loops'>[]>(() => {
@@ -4414,7 +4624,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return eligible.flatMap((d, paletteIdx) => {
       const env = customResults[d.name];
       if (!env || env.fatal) return [];
-      const color = CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
       const items = env.items as CustomLoopItem[];
       const loopItems: LoopItem[] = items.map((it, i) => ({
         id: `${d.name}:${i}:${it.start_ms}`,
@@ -4425,7 +4635,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }));
       return [{
         id: `detector-loop:${d.name}`,
-        name: d.label || d.name,
+        name: detectorLaneName(d.label || d.name, d.stem),
+        sourceStem: d.stem ?? undefined,
+        sourceDescription: d.description || undefined,
         type: 'loops' as const,
         visible: true,
         color,
@@ -4434,7 +4646,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         readOnly: true,
         source: `detector:${d.name}` as const,
       }];
-    });
+    }).sort(byStemRank);
   }, [customDetectors, customResults]);
 
   const detectorPatternLayers = useMemo<AnnotationLayer<'patterns'>[]>(() => {
@@ -4442,7 +4654,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return eligible.flatMap((d, paletteIdx) => {
       const env = customResults[d.name];
       if (!env || env.fatal) return [];
-      const color = CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
       const items = env.items as CustomPatternItem[];
       const patternItems: PatternItem[] = items.map((it, i) => ({
         id: `${d.name}:${i}:${it.start_ms}`,
@@ -4451,11 +4663,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         label: it.label ?? '',
         repeatCount: Math.max(1, Math.floor(it.repeat_count ?? 1)),
         highlightedBeats: it.highlighted_beats ?? [],
+        stepsPerCycle: it.steps_per_cycle ?? undefined,
         subbeatGrid: true,
       }));
       return [{
         id: `detector-pattern:${d.name}`,
-        name: d.label || d.name,
+        name: detectorLaneName(d.label || d.name, d.stem),
+        sourceStem: d.stem ?? undefined,
+        sourceDescription: d.description || undefined,
         type: 'patterns' as const,
         visible: true,
         color,
@@ -4464,8 +4679,131 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         readOnly: true,
         source: `detector:${d.name}` as const,
       }];
-    });
+    }).sort(byStemRank);
   }, [customDetectors, customResults]);
+
+  const detectorLyricsLayers = useMemo<AnnotationLayer<'lyrics'>[]>(() => {
+    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'lyrics');
+    return eligible.flatMap((d, paletteIdx) => {
+      const env = customResults[d.name];
+      if (!env || env.fatal) return [];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      const items = env.items as CustomLyricsItem[];
+      const lyricsItems: LyricsItem[] = items.map((it, i) => ({
+        id: `${d.name}:${i}:${it.time_ms}`,
+        time: it.time_ms / 1000,
+        text: it.text ?? '',
+        kind: it.kind,
+        ...(it.end_ms != null ? { end: it.end_ms / 1000 } : {}),
+      }));
+      return [{
+        id: `detector-lyrics:${d.name}`,
+        name: detectorLaneName(d.label || d.name, d.stem),
+        sourceStem: d.stem ?? undefined,
+        sourceDescription: d.description || undefined,
+        type: 'lyrics' as const,
+        visible: true,
+        color,
+        snap: 'off' as const,
+        items: lyricsItems,
+        readOnly: true,
+        source: `detector:${d.name}` as const,
+      }];
+    }).sort(byStemRank);
+  }, [customDetectors, customResults]);
+
+  // Which custom-annotation rows are currently hidden in the Annotations
+  // dropdown. Custom detectors are hidden by default — a sync effect below
+  // pre-adds every newly discovered detectorName so it stays off the canvas
+  // until the user opts in by checking it in the dropdown. Declared here (ahead
+  // of the detector-layer memos below) because those memos read it during render.
+  const [hiddenCustomAnnotations, setHiddenCustomAnnotations] = useState<Set<string>>(() => new Set());
+
+  // ── Detector-sourced Boundary layers (is_algorithm boundary curators) ──────
+  // Boundaries have no AnnotationLayer abstraction, so a boundary curator
+  // (e.g. curated_phrases_msaf) renders as a read-only section-block overlay
+  // — but it is listed and toggled in the Curated sidebar via the shared
+  // `hiddenCustomAnnotations` set, exactly like every other curator. The
+  // is_algorithm flag is what makes it a boundary-overlay curator; the
+  // is_annotation flag is what lists it among the Annotator's curated layers.
+  const detectorBoundaryLayers = useMemo(() => {
+    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_algorithm && d.output_kind === 'boundary');
+    return eligible.flatMap((d, paletteIdx) => {
+      const env = customResults[d.name];
+      if (!env || env.fatal) return [];
+      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
+      return [{
+        id: `detector-boundary:${d.name}`,
+        detectorName: d.name,
+        name: detectorLaneName(d.label || d.name, d.stem),
+        stem: (d.stem ?? 'mix') as string,
+        color,
+        sections: customEnvelopeToSections(env, duration, color),
+      }];
+    });
+  }, [customDetectors, customResults, duration]);
+
+  // Boundary curators as algo-overlay-shaped section blocks, filtered by the
+  // shared visibility set. Passed to SharedVizPanel in BOTH workspaces so a
+  // boundary curator draws once per view (Inspect = its is_algorithm surface,
+  // Annotator = its is_annotation surface), never twice.
+  const detectorBoundaryOverlays = useMemo(() => {
+    return detectorBoundaryLayers
+      .filter((l) => !hiddenCustomAnnotations.has(l.detectorName))
+      .map((l) => ({ id: l.id, label: l.name, labelColor: l.color, sections: l.sections }));
+  }, [detectorBoundaryLayers, hiddenCustomAnnotations]);
+
+  // Curated (detector-sourced) layers across every kind, grouped by the Demucs
+  // stem they were built on. Powers the Curated sidebar's per-stem show/hide
+  // chips + grouped list. Visibility is driven by the shared
+  // `hiddenCustomAnnotations` set (keyed by detector name), so toggling here
+  // propagates to both the canvas and the annotation list.
+  const curatedLayersByStem = useMemo(() => {
+    const all = [
+      ...detectorCueLayers, ...detectorSpanLayers, ...detectorLoopLayers,
+      ...detectorPatternLayers, ...detectorLyricsLayers,
+    ];
+    const rows = all.map((l) => ({
+      id: l.id,
+      name: l.name,
+      color: l.color,
+      detectorName: l.source!.slice('detector:'.length),
+      stem: (l.sourceStem ?? 'mix') as string,
+    }));
+    const boundaryRows = detectorBoundaryLayers.map((l) => ({
+      id: l.id,
+      name: l.name,
+      color: l.color,
+      detectorName: l.detectorName,
+      stem: l.stem,
+    }));
+    const allRows = [...boundaryRows, ...rows];
+    const byStem = new Map<string, typeof allRows>();
+    for (const r of allRows) {
+      if (!byStem.has(r.stem)) byStem.set(r.stem, []);
+      byStem.get(r.stem)!.push(r);
+    }
+    const stems = [...byStem.keys()].sort((a, b) => stemRank(a) - stemRank(b));
+    return { rows: allRows, byStem, stems };
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorPatternLayers, detectorLyricsLayers, detectorBoundaryLayers]);
+
+  // Stem rank for every detector-sourced layer, keyed by the viz row id
+  // (`<kind>-layer:<id>`). Drives the default stacking order of the lanes so
+  // they read in SOURCE order (mix → vocals → drums → bass → other → guitar →
+  // piano). User-authored layer rows are absent from this map and keep their
+  // own positions; only detector lanes are reordered.
+  const layerStemRank = useMemo<Map<string, number>>(() => {
+    const m = new Map<string, number>();
+    const add = (layers: AnnotationLayer[], prefix: string) => {
+      for (const l of layers) m.set(`${prefix}:${l.id}`, stemRank(l.sourceStem));
+    };
+    add(detectorCueLayers, 'cue-layer');
+    add(detectorSpanLayers, 'span-layer');
+    add(detectorLoopLayers, 'loop-layer');
+    add(detectorPatternLayers, 'pattern-layer');
+    add(detectorLyricsLayers, 'lyrics-layer');
+    return m;
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorPatternLayers, detectorLyricsLayers]);
 
   // Per-layer accept/reject map for detector cue/span/loop/pattern layers,
   // keyed as `detectorLayerReview[layer.id][item.id]`. The layer's item.id is
@@ -4501,8 +4839,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     wire(detectorSpanLayers);
     wire(detectorLoopLayers);
     wire(detectorPatternLayers);
+    wire(detectorLyricsLayers);
     return out;
-  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorPatternLayers, detectorOutputDocs]);
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorPatternLayers, detectorLyricsLayers, detectorOutputDocs]);
 
   // Translate a (layerId, itemId) click on a detector layer back to the
   // (detectorName, reviewKey) pair that applyDetectorReview expects. layer.id
@@ -4521,11 +4860,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     void applyDetectorReview(detName, reviewKey, status);
   }, [applyDetectorReview]);
 
-  // Which custom-annotation rows are currently hidden in the Annotations
-  // dropdown. Custom detectors are hidden by default — a sync effect below
-  // pre-adds every newly discovered detectorName so it stays off the canvas
-  // until the user opts in by checking it in the dropdown.
-  const [hiddenCustomAnnotations, setHiddenCustomAnnotations] = useState<Set<string>>(() => new Set());
   const toggleCustomAnnotationVisible = useCallback((detectorName: string) => {
     setHiddenCustomAnnotations((prev) => {
       const next = new Set(prev);
@@ -4650,36 +4984,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, []);
 
-  // ── Eye mode isolation ────────────────────────────────────────────────────
-  const isEyeMode = activeStage === 'annotation'
-    && activeAnnotationType === 'boundaries' && activeBoundarySource === 'eye';
-
-  // Pause when entering eye mode
+  // If a loops/patterns top-level tab is active while its experimental flag is
+  // off (e.g. user disabled the flag or restored session state from before the
+  // flag existed), bounce back to Boundaries so we never render a hidden tab.
   useEffect(() => {
-    if (isEyeMode) pauseRef.current?.();
-  }, [isEyeMode]);
-
-  // If the active source is Eye and its experimental flag is off (e.g. user
-  // disabled the flag or restored session state from before the flag
-  // existed), bounce the source back to Manual so we never render an editor
-  // whose source is hidden from the picker. Similarly for the loops/patterns
-  // top-level tabs.
-  useEffect(() => {
-    const eyeGatedOff = activeAnnotationType === 'boundaries'
-      && activeBoundarySource === 'eye'
-      && !settings.experimentalEyeAnnotation;
-    if (eyeGatedOff) {
-      setActiveSourceByType((prev) => ({ ...prev, boundaries: 'manual' }));
-    }
     const loopsGatedOff = (activeAnnotationType === 'loops' || activeAnnotationType === 'patterns')
       && !settings.experimentalLoopsAndPatterns;
     if (loopsGatedOff) setActiveAnnotationType('boundaries');
-  }, [activeAnnotationType, activeBoundarySource, settings.experimentalEyeAnnotation, settings.experimentalLoopsAndPatterns]);
-
-  // Block playback while eye mode is active
-  useEffect(() => {
-    if (isEyeMode && playerIsPlaying) pauseRef.current?.();
-  }, [isEyeMode, playerIsPlaying]);
+  }, [activeAnnotationType, settings.experimentalLoopsAndPatterns]);
 
   // ── Song info change handler (debounced save) ────────────────────────────
   const handleSongInfoChange = useCallback((next: SongInfo) => {
@@ -4848,7 +5160,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const beatsPerBar = beatsPerBarFromTimeSignature(songInfo?.timeSignature);
 
   const manualSections    = manualAnnotation?.sections ?? [];
-  const eyeSections     = eyeAnnotation?.sections ?? [];
   const autoGuessSections = useMemo(() =>
     (autoGuessAnnotation?.points ?? [])
       .filter((p) => p.status !== 'incorrect')
@@ -4880,7 +5191,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         return r.json() as Promise<{
           slug: string;
           manual: Record<string, ManualAnnotation>;
-          eye: Record<string, ManualAnnotation>;
           autoGuess: Record<string, AutoGuessManualAnnotation>;
         }>;
       })
@@ -4889,7 +5199,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         if (selectedAudioRef.current?.id !== slug) return;
         setExternalRefData({
           manual: data.manual[targetId] ?? null,
-          eye: data.eye[targetId] ?? null,
           autoGuess: data.autoGuess[targetId] ?? null,
         });
       })
@@ -4908,9 +5217,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const refManualSections = useExternalRef
     ? (externalRefData!.manual?.sections ?? [])
     : manualSections;
-  const refEyeSections = useExternalRef
-    ? (externalRefData!.eye?.sections ?? [])
-    : eyeSections;
   const refAutoGuessSections = useMemo(() => {
     if (!useExternalRef) return autoGuessSections;
     return (externalRefData!.autoGuess?.points ?? [])
@@ -4944,10 +5250,37 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // so it's intentionally absent from the algo overlay list to avoid a
   // duplicate row on the canvas.
   const algoOverlays = useMemo(() => {
+    const matchesStem = (id: string): boolean => {
+      const cut = id.indexOf('__');
+      const stem = cut === -1 ? 'mix' : id.slice(cut + 2);
+      // A row is "on" when its own id is selected, or (for a per-stem variant)
+      // its base mix row is selected — the family chip selects the base, the
+      // stem variant rides along without needing its own checkbox.
+      const on = stem === 'mix'
+        ? selectedAlgoOverlays.has(id)
+        : selectedAlgoOverlays.has(id) || selectedAlgoOverlays.has(baseAlgoId(id));
+      if (!on) return false;
+      if (inspectStemFilter === 'all') return true;            // mix rows + every selected algo's stem variants
+      if (inspectStemFilter === 'mix') return stem === 'mix';  // full-mix rows only
+      return stem === inspectStemFilter;                       // one stem's rows only
+    };
     return annotationRows
-      .filter((r) => selectedAlgoOverlays.has(r.id))
-      .map((r) => ({ id: r.id, label: r.label, labelColor: algoLabelColor(r.id), renderKind: algoRenderKind(r.id), sections: r.sections }));
-  }, [annotationRows, selectedAlgoOverlays, algoLabelColor]);
+      .filter((r) => matchesStem(r.id))
+      .map((r) => ({ id: r.id, label: r.label, labelColor: algoLabelColor(r.id), renderKind: algoRenderKind(r.id), sections: r.sections, info: algoInfoFor(r.id), gridSource: r.gridSource }));
+  }, [annotationRows, selectedAlgoOverlays, algoLabelColor, inspectStemFilter]);
+
+  // Snap the stem filter back to 'all' when the chosen stem has no rows (e.g.
+  // after switching to a song that was never split, or whose per-stem results
+  // aren't cached) — otherwise the filter would silently hide every overlay
+  // with no visible control to clear it (its chip row is gated on stem rows).
+  useEffect(() => {
+    if (inspectStemFilter === 'all' || inspectStemFilter === 'mix') return;
+    const has = annotationRows.some((r) => {
+      const i = r.id.indexOf('__');
+      return i !== -1 && r.id.slice(i + 2) === inspectStemFilter;
+    });
+    if (!has) setInspectStemFilter('mix');
+  }, [annotationRows, inspectStemFilter]);
 
   const algoOptions = useMemo(() => {
     return annotationRows.map((r) => ({ id: r.id, label: r.label }));
@@ -5058,6 +5391,28 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     () => cueLayersDoc?.layers.filter((l): l is AnnotationLayer<'patterns'> => l.type === 'patterns') ?? [],
     [cueLayersDoc],
   );
+  const lyricsLayers = useMemo(
+    () => cueLayersDoc?.layers.filter((l): l is AnnotationLayer<'lyrics'> => l.type === 'lyrics') ?? [],
+    [cueLayersDoc],
+  );
+  // The lyrics layer the Karaoke panel follows: the focused one, else the
+  // selected one, else the first visible layer that actually has words.
+  const karaokeLyrics = useMemo(() => {
+    if (feature === 'prep' || !settings.experimentalLyricsFamily) return null;
+    const all = [
+      ...lyricsLayers,
+      ...detectorLyricsLayers.filter((l) => !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length))),
+    ];
+    if (!all.length) return null;
+    const byId = (id?: string | null) => (id ? all.find((l) => l.id === id) : undefined);
+    const layer =
+      byId(focusedLyrics?.layerId) ||
+      byId(selectedLyricsLayerId) ||
+      all.find((l) => l.visible && l.items.length) ||
+      all[0];
+    if (!layer || !layer.items.length) return null;
+    return { items: layer.items, title: layer.name, color: layer.color };
+  }, [feature, settings.experimentalLyricsFamily, lyricsLayers, detectorLyricsLayers, hiddenCustomAnnotations, focusedLyrics, selectedLyricsLayerId]);
   const prevCueLayerIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const visible = [
@@ -5155,6 +5510,57 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, [patternLayers, detectorPatternLayers]);
 
+  // Same row sync for Lyrics layers (user + detector-sourced).
+  const prevLyricsLayerIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const visible = [
+      ...lyricsLayers.map((l) => `lyrics-layer:${l.id}`),
+      ...detectorLyricsLayers.map((l) => `lyrics-layer:${l.id}`),
+    ];
+    const currentIds = new Set(visible);
+    const prev = prevLyricsLayerIdsRef.current;
+    const added = visible.filter((id) => !prev.has(id));
+    const removed = [...prev].filter((id) => !currentIds.has(id));
+    prevLyricsLayerIdsRef.current = currentIds;
+    if (!added.length && !removed.length) return;
+    setRowOrder((order) => {
+      let next = order.filter((id) => !removed.includes(id));
+      for (const id of added) {
+        const anchor = next.indexOf('autoGuess');
+        const insertAt = anchor >= 0 ? anchor + 1 : 0;
+        next.splice(insertAt, 0, id);
+      }
+      return next;
+    });
+  }, [lyricsLayers, detectorLyricsLayers]);
+
+  // Default-sort detector lanes by stem. The row-sync effects above append each
+  // freshly-cached detector lane right after 'autoGuess' in load order, which is
+  // roughly registry order and mixes stems. Here we re-sort just the
+  // detector-lane rows (those present in layerStemRank) into SOURCE order
+  // (mix → vocals → drums → bass → other → guitar → piano), writing them back
+  // into the slots they already occupy so fixed rows, algo overlays and
+  // user-authored lanes stay put. Skipped once the user hand-drags a row
+  // (hasCustomRowOrder) so their manual order is never clobbered.
+  useEffect(() => {
+    if (hasCustomRowOrder) return;
+    setRowOrder((order) => {
+      const slots: number[] = [];
+      const ids: VizRowId[] = [];
+      order.forEach((id, i) => {
+        if (layerStemRank.has(id)) { slots.push(i); ids.push(id); }
+      });
+      if (ids.length < 2) return order;
+      const sorted = ids
+        .map((id, i) => ({ id, i, rank: layerStemRank.get(id)! }))
+        .sort((a, b) => a.rank - b.rank || a.i - b.i)
+        .map((e) => e.id);
+      if (sorted.every((id, k) => id === ids[k])) return order;
+      const next = order.slice();
+      slots.forEach((slot, k) => { next[slot] = sorted[k]; });
+      return next;
+    });
+  }, [rowOrder, layerStemRank, hasCustomRowOrder]);
 
   // Mirror the algoOverlays sync for custom-annotation rows. Each is_annotation
   // detector gets its own row inserted just after 'autoGuess' so review surfaces
@@ -5227,7 +5633,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const availableStemSources = useMemo<StemSource[]>(() => {
     const out: StemSource[] = ['mix'];
     if (!stemManifest) return out;
-    for (const s of ['vocals', 'drums', 'bass', 'other'] as const) {
+    for (const s of ['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'] as const) {
       if (stemManifest.stems[s]) out.push(s);
     }
     return out;
@@ -5269,7 +5675,20 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     for (const s of runJob?.sections ?? []) {
       for (const e of s.errors ?? []) runErrors.set(e.id, e.message);
     }
-    const renderStatusPill = (id: string, cached: boolean) => {
+    const renderStatusPill = (id: string, cached: boolean, mixOnly?: boolean) => {
+      // Under an active per-stem filter, detectors that only run on the full
+      // mix (MSAF, ruptures, all-in-one, custom) have no output for the chosen
+      // stem at all — say so instead of a misleading "cached"/"missing".
+      if (mixOnly) {
+        return (
+          <span
+            className="text-slate-600 text-[9px] uppercase tracking-wider cursor-help"
+            title={`Runs on the full mix only — no per-stem output, so nothing shows under the ${inspectStemFilter} stem filter.`}
+          >
+            mix only
+          </span>
+        );
+      }
       // Prefer the transient runJob error (most recent attempt), then fall
       // back to the persistent toolStates error — that's how a "failed" pill
       // survives a page reload when the sidecar wrote an ok=false cache file
@@ -5291,73 +5710,119 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }
       return <span className="text-slate-600 text-[9px] uppercase tracking-wider">missing</span>;
     };
+    // Per-stem overlay rows (id "<algo>__<stem>"), grouped so each family's
+    // stems render under that family's chip rather than in one shared list.
+    const stemOf = (id: string) => { const i = id.indexOf('__'); return i === -1 ? '' : id.slice(i + 2); };
+    const stemRowsAll = annotationRows.filter((r) => r.id.includes('__'));
+    // Always show all six Demucs stems as chips so the per-stem reality is
+    // visible — a song split with the 6-stem model has guitar/piano even when
+    // no algorithm has been run on them yet. Stems with no per-stem result
+    // render disabled (greyed) rather than being dropped from the strip.
+    const availableStems = ['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'];
+    // When the stem filter picks a single stem (visibility mode only), a row's
+    // "available" state is its <id>__<stem> variant, not the full mix. Null when
+    // the filter is 'All' / 'Full mix', which leaves the plain mix behaviour.
+    const stemFilter = isVis && inspectStemFilter !== 'all' && inspectStemFilter !== 'mix'
+      ? inspectStemFilter : null;
+    const stemHasResult = (baseId: string) =>
+      stemRowsAll.some((r) => r.id === `${baseId}__${stemFilter}`);
+    // Resolve a detector row's {cached, disabled, pill} under the active stem
+    // filter. `mixCached` is the row's own full-mix cache flag (each family
+    // computes it differently); `stemCapable` is whether the detector can target
+    // an isolated stem at all. With no stem filter this is the plain mix
+    // behaviour; with one, stem-incapable detectors read "mix only" and
+    // stem-capable ones reflect their per-stem variant.
+    const stemRowState = (id: string, mixCached: boolean, stemCapable: boolean) => {
+      if (!stemFilter) return { cached: mixCached, disabled: isVis && !mixCached, pill: renderStatusPill(id, mixCached) };
+      if (!stemCapable) return { cached: false, disabled: true, pill: renderStatusPill(id, false, true) };
+      const has = stemHasResult(id);
+      return { cached: has, disabled: !has, pill: renderStatusPill(`${id}__${stemFilter}`, has) };
+    };
+    // Per-family granular stem checkboxes are retired: per-stem display is now
+    // driven by the single-select stem filter at the top of the visibility
+    // sidebar, which composes with the family chips (chip = which algorithms,
+    // stem filter = which stem).
     return (
     <div className={`rounded-md border ${accent.panelBorder} bg-[#14171d]/80 p-3 space-y-3 text-xs`}>
       {/* Demucs model — a run parameter, so it belongs in the run picker, not
           the visibility sidebar. */}
       {!isVis && (
       <div
-        className="flex items-center gap-2"
+        className="flex flex-col gap-1 min-w-0"
         title={gpuCaps.demucs ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}
       >
-        <span className={`text-[10px] uppercase tracking-wider shrink-0 ${gpuCaps.demucs ? 'text-slate-500' : 'text-slate-600'}`}>Demucs model</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`text-[10px] uppercase tracking-wider shrink-0 ${gpuCaps.demucs ? 'text-slate-500' : 'text-slate-600'}`}>Demucs model</span>
+          {!gpuCaps.demucs && (
+            <span className="text-[9px] uppercase tracking-wider text-amber-400/80">Demucs profile needed</span>
+          )}
+        </div>
         <select
           value={demucsModel}
           onChange={(e) => setDemucsModel(e.target.value)}
           disabled={!gpuCaps.demucs}
-          className="bg-[#0a0b0d] border border-white/[0.08] text-slate-200 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full min-w-0 truncate bg-[#0a0b0d] border border-white/[0.08] text-slate-200 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {DEMUCS_MODELS.map((m) => (
             <option key={m.id} value={m.id}>{m.label}</option>
           ))}
         </select>
-        <span className="text-slate-600 text-[10px]">(used by All-In-One for stem separation)</span>
-        {!gpuCaps.demucs && (
-          <span className="text-[9px] uppercase tracking-wider text-amber-400/80 ml-1">Demucs profile needed</span>
-        )}
+        <span className="text-slate-600 text-[10px] leading-snug">Used by All-In-One for stem separation.</span>
       </div>
       )}
 
-      {/* Per-stem layers. Each cached (detector, stem) result is its own
-          toggleable overlay so the user can stack e.g. "silero-vad · vocals"
-          and "silero-vad · other" on the waveform at once — independent of the
-          stem chosen in the player. Only shown in the visibility sidebar and
-          only when per-stem results exist. */}
-      {isVis && (() => {
-        const stemRows = annotationRows.filter((r) => r.id.includes('__'));
-        if (stemRows.length === 0) return null;
-        const allShown = stemRows.every((r) => selectedAlgoOverlays.has(r.id));
+      {/* Stem sub-filter. Single-select: it narrows the algorithms the family
+          chips have turned on to ONE stem's rows. 'All' = no narrowing; 'Full
+          mix' = mix rows only; a stem = each shown algorithm's <stem> variant.
+          Composes with the chips ("chips pick the algorithms → stem filter
+          picks the stem"). Visibility sidebar only, and only once per-stem
+          results exist (otherwise every row is a mix row and the filter is a
+          no-op). */}
+      {isVis && stemRowsAll.length > 0 && (() => {
+        const stemHasRows = (s: string) => stemRowsAll.some((r) => stemOf(r.id) === s);
+        // A per-stem row is "selected" when its own id is ticked, or — the usual
+        // case — its base mix row is (the family chip selects the base, the stem
+        // variant rides along). Mirrors the timeline's matchesStem so the badge
+        // counts exactly the rows the chips would show on that stem.
+        const rowSelected = (r: { id: string }) =>
+          selectedAlgoOverlays.has(r.id) || selectedAlgoOverlays.has(baseAlgoId(r.id));
+        const stemSelectedCount = (s: string) =>
+          stemRowsAll.filter((r) => stemOf(r.id) === s && rowSelected(r)).length;
+        const allSelected = stemRowsAll.filter(rowSelected).length;
+        const options: Array<{ key: StemSource | 'all'; label: string; enabled: boolean; count: number | null; title: string }> = [
+          { key: 'all', label: 'All', enabled: true, count: allSelected, title: 'Show every selected algorithm on every stem it has run on.' },
+          { key: 'mix', label: 'Full mix', enabled: true, count: null, title: 'Show only the full-mix rows of the selected algorithms.' },
+          ...availableStems.map((s) => {
+            const has = stemHasRows(s);
+            const n = stemSelectedCount(s);
+            return {
+              key: s as StemSource,
+              label: s,
+              enabled: has,
+              count: n,
+              title: !has
+                ? `No algorithm has a per-stem result for ${s} yet — run one on the ${s} stem to populate it.`
+                : n > 0
+                  ? `${n} selected algorithm${n === 1 ? '' : 's'} ${n === 1 ? 'has' : 'have'} a ${s}-stem result — click to show just those rows.`
+                  : `No selected algorithm has a ${s}-stem result yet — tick one in its family chip, then this shows its ${s} row.`,
+            };
+          }),
+        ];
         return (
-          <div className="rounded border border-white/[0.06] bg-white/[0.02] p-2">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">Stem layers</span>
-              <button
-                onClick={() => setSelectedAlgoOverlays((prev) => {
-                  const n = new Set(prev);
-                  if (allShown) stemRows.forEach((r) => n.delete(r.id));
-                  else stemRows.forEach((r) => n.add(r.id));
-                  return n;
-                })}
-                className="text-[9px] uppercase tracking-wider text-slate-500 hover:text-slate-200 transition-colors"
-              >
-                {allShown ? 'Hide all' : 'Show all'}
-              </button>
-            </div>
-            <div className="flex flex-col gap-1">
-              {stemRows.map((r) => (
-                <label key={r.id} className="flex items-center gap-1.5 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={selectedAlgoOverlays.has(r.id)}
-                    onChange={() => toggleAlgoOverlay(r.id)}
-                    className={accent.checkbox}
-                  />
-                  <span className="inline-block w-2 h-2 rounded-sm shrink-0" style={{ background: algoLabelColor(r.id) }} />
-                  <span className="text-[11px] text-slate-300 truncate">{r.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+          <StemChipGroup
+            label="Stem filter"
+            hint="narrows the chips’ rows"
+            accent={accent}
+            chips={options.map((o) => ({
+              key: o.key,
+              label: o.label,
+              active: inspectStemFilter === o.key,
+              disabled: !o.enabled,
+              count: o.count,
+              title: o.title,
+              onClick: () => setInspectStemFilter(o.key),
+            }))}
+          />
         );
       })()}
 
@@ -5372,6 +5837,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           experimental: boolean;
           total: number;
           cached: number;
+          // Every algo id in the family (run-mode select-all) and just the
+          // cached subset (vis-mode "show all" — only cached rows can show).
+          // Clicking a chip selects all of these; collapsing deselects them.
+          ids: string[];
+          visIds: string[];
           render: () => ReactNode;
         };
         const sections: AlgoSection[] = [];
@@ -5491,6 +5961,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           sections.push({
             key: 'msaf', label: 'MSAF', experimental: false,
             total: ids.length, cached: ids.length - missing.length,
+            ids, visIds: ids.filter((id) => toolStates[id]?.status === 'done'),
             render: () => (
               <>
                 {sectionHeader('MSAF', 'text-cyan-300/80', null, actionCluster({
@@ -5507,14 +5978,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 }))}
                 <div className={algoRowsCls}>
                   {ids.map((id) => {
-                    const cached = toolStates[id]?.status === 'done';
+                    const { disabled, pill } = stemRowState(id, toolStates[id]?.status === 'done', STEM_CAPABLE_TOOL_IDS.has(id));
                     const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                     const label = id.replace('msaf-', '').toUpperCase();
                     return (
-                      <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-                        <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
+                      <label key={id} className={`flex items-center gap-1.5 select-none ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                        <input type="checkbox" checked={checked} disabled={disabled} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
-                        {renderStatusPill(id, cached)}
+                        {pill}
                       </label>
                     );
                   })}
@@ -5532,6 +6003,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           sections.push({
             key: 'allin1', label: 'All-In-One', experimental: false,
             total: ids.length, cached: ids.length - missing.length,
+            ids, visIds: ids.filter((id) => toolStates[id]?.status === 'done'),
             render: () => (
               <div title={gpuCaps.allin1 ? undefined : GPU_TOOLS_UNAVAILABLE_HINT}>
                 {sectionHeader(
@@ -5556,10 +6028,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 )}
                 <div className={algoRowsCls}>
                   {ids.map((id) => {
-                    const cached = toolStates[id]?.status === 'done';
+                    // All-In-One is full-mix only; the stem state handles the
+                    // visibility-mode cache + "mix only" pill, run mode stays
+                    // gated by the gpu profile.
+                    const stem = stemRowState(id, toolStates[id]?.status === 'done', STEM_CAPABLE_TOOL_IDS.has(id));
                     const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
-                    // Run mode is gated by the gpu profile; visibility only by cache.
-                    const rowDisabled = isVis ? !cached : !gpuCaps.allin1;
+                    const rowDisabled = isVis ? stem.disabled : !gpuCaps.allin1;
                     const label = id === 'allin1' ? 'Ensemble' : `fold${id.replace('allin1-fold', '')}`;
                     return (
                       <label
@@ -5569,7 +6043,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       >
                         <input type="checkbox" checked={checked} disabled={rowDisabled} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{label}</span>
-                        {renderStatusPill(id, cached)}
+                        {stem.pill}
                       </label>
                     );
                   })}
@@ -5588,6 +6062,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           sections.push({
             key: 'ruptures', label: 'Ruptures (CPD)', experimental: false,
             total: RUPTURES_METHODS.length, cached: RUPTURES_METHODS.length - missing.length,
+            ids: RUPTURES_METHODS.map((m) => `ruptures-${m.suffix}`),
+            visIds: RUPTURES_METHODS.filter((m) => rupturesResults[m.suffix]).map((m) => `ruptures-${m.suffix}`),
             render: () => (
               <>
                 {sectionHeader('Ruptures (CPD)', 'text-cyan-300/80', null, actionCluster({
@@ -5605,13 +6081,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <div className={algoRowsCls}>
                   {RUPTURES_METHODS.map((m) => {
                     const id = `ruptures-${m.suffix}`;
-                    const cached = !!rupturesResults[m.suffix];
+                    const { disabled, pill } = stemRowState(id, !!rupturesResults[m.suffix], STEM_CAPABLE_TOOL_IDS.has(id));
                     const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                     return (
-                      <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-                        <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
+                      <label key={id} className={`flex items-center gap-1.5 select-none ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                        <input type="checkbox" checked={checked} disabled={disabled} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{m.search}·{m.model}</span>
-                        {renderStatusPill(id, cached)}
+                        {pill}
                       </label>
                     );
                   })}
@@ -5637,6 +6113,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           sections.push({
             key, label: title, experimental: true,
             total: ids.length, cached: ids.length - missing.length,
+            ids: [...ids], visIds: ids.filter((id) => toolStates[id]?.status === 'done'),
             render: () => (
               <>
                 {sectionHeader(
@@ -5659,14 +6136,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 {desc && <div className="mb-1.5 text-[10px] leading-snug text-slate-500">{desc}</div>}
                 <div className={algoRowsCls}>
                   {ids.map((id) => {
-                    const cached = toolStates[id]?.status === 'done';
+                    const { disabled, pill } = stemRowState(id, toolStates[id]?.status === 'done', STEM_CAPABLE_TOOL_IDS.has(id));
                     const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
                     return (
-                      <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-                        <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
+                      <label key={id} className={`flex items-center gap-1.5 select-none ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                        <input type="checkbox" checked={checked} disabled={disabled} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
                         <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{labels[id] ?? id}</span>
                         {algoHint(id)}
-                        {renderStatusPill(id, cached)}
+                        {pill}
                       </label>
                     );
                   })}
@@ -5682,13 +6159,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           { 'silero-vad': 'Silero-VAD', 'jdcnet-voicing': 'JDCNet', 'panns-cnn14': 'PANNs CNN14', 'hpss-percussive': 'HPSS percussive' },
           undefined,
           'Time-region detectors: where voice, sound types, and drums occur.',
-        );
-        if (settings.experimentalLoopFamily && expAvail.loopFamily) pushFamily(
-          'loop', 'LOOP',
-          ['chroma-autocorr'],
-          { 'chroma-autocorr': 'Chroma loops' },
-          undefined,
-          'Finds repeated / looped sections of the track.',
         );
         if (settings.experimentalCueExtras && expAvail.cueExtras) pushFamily(
           'cue-extras', 'CUE extras',
@@ -5712,79 +6182,51 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           'Discovers recurring melodic / rhythmic patterns (motifs).',
         );
 
-        // ── Custom detectors flagged is_algorithm. Skipped entirely when no
-        // detectors are registered, or none have is_algorithm=True. ─────────
-        {
-          const algos = customDetectors.filter((d) => d.is_algorithm && d.status === 'ok');
-          if (algos.length > 0) {
-            // Missing = flagged + no successful cached envelope + not running.
-            // We re-run "fatal" envelopes too: a missing dep that's since been
-            // installed should get a fresh shot on "Run missing".
-            const missing = algos.filter((d) => {
-              if (customRunning.has(d.name)) return false;
-              const env = customResults[d.name];
-              return !env || !!env.fatal;
-            });
-            const canRunMissing = !!selectedAudio && missing.length > 0;
-            sections.push({
-              key: 'custom', label: 'Custom', experimental: false,
-              total: algos.length,
-              cached: algos.filter((d) => { const env = customResults[d.name]; return !!env && !env.fatal; }).length,
-              render: () => (
-                <>
-                  {sectionHeader('Custom', 'text-cyan-300/80', null, actionCluster({
-                    missing: missing.map((d) => d.name), canRunMissing, amber: true,
-                    visIds: algos.filter((d) => { const e = customResults[d.name]; return !!e && !e.fatal; }).map((d) => `custom:${d.name}`),
-                    onRun: () => { if (!selectedAudio || missing.length === 0) return; handleRunMissingForSection(missing.map((d) => `custom:${d.name}`)); },
-                    onSelectAll: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); algos.forEach((d) => next.add(`custom:${d.name}`)); return next; }),
-                    onNone: () => setSelectedAlgorithms((prev) => { const next = new Set(prev); algos.forEach((d) => next.delete(`custom:${d.name}`)); return next; }),
-                    runTitle: !selectedAudio
-                      ? 'Select a song first.'
-                      : missing.length === 0
-                        ? 'Every custom algorithm already has a cached result for this song.'
-                        : `Run ${missing.length} custom detector${missing.length === 1 ? '' : 's'} that have no cached result yet for "${selectedAudio.name}".`,
-                  }))}
-                  <div className={algoRowsCls}>
-                    {algos.map((d) => {
-                      const id = `custom:${d.name}`;
-                      const env = customResults[d.name];
-                      const cached = !!env && !env.fatal;
-                      const fatalMessage = env?.fatal
-                        ? `${env.fatal.type ?? 'error'}: ${env.fatal.message ?? ''}`.trim()
-                          + (env.fatal.suggested_install ? `\n\nTry: ${env.fatal.suggested_install}` : '')
-                        : null;
-                      const checked = isVis ? selectedAlgoOverlays.has(id) : selectedAlgorithms.has(id);
-                      const running = customRunning.has(d.name);
-                      return (
-                        <label key={id} className={`flex items-center gap-1.5 select-none ${isVis && !cached ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`} title={d.description || d.label || d.name}>
-                          <input type="checkbox" checked={checked} disabled={isVis && !cached} onChange={() => (isVis ? toggleAlgoOverlay(id) : toggleAlgorithm(id))} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
-                          <span className={`font-mono ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{d.label || d.name}</span>
-                          {running
-                            ? <span className="text-amber-300 text-[9px] uppercase tracking-wider inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />running</span>
-                            : fatalMessage
-                              ? <span className="text-red-400 text-[9px] uppercase tracking-wider cursor-help" title={`Failed: ${fatalMessage}`}>failed</span>
-                              : cached
-                                ? <span className="text-emerald-500/80 text-[9px] uppercase tracking-wider">cached</span>
-                                : <span className="text-slate-600 text-[9px] uppercase tracking-wider">missing</span>}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </>
-              ),
-            });
-          }
-        }
+        // ── Custom detectors are NOT shown here. Every custom detector is a
+        // curator and now lives in its own Curated sidebar (both Annotator and
+        // Algorithm Inspect), not mixed into the algorithm families. The lone
+        // boundary curator (curated_phrases_msaf, is_annotation=False) is wired
+        // to the same selectedAlgoOverlays path from that sidebar; the
+        // is_annotation curators surface as per-stem curated layers there. ────
 
         if (sections.length === 0) return null;
         // Every chip the user has toggled open, in panel order. Several can be
         // expanded at once; each renders its own framed family below the chips.
         const expanded = sections.filter((s) => expandedAlgoTypes.has(s.key));
+        // Clicking a family chip both expands/collapses it AND bulk-selects its
+        // algos: open → select every algo in the family ("show all"), collapse →
+        // deselect them all (don't show them). In visibility mode only cached
+        // rows can show, so opening adds just `visIds`; collapsing clears the
+        // full `ids` set so nothing lingers selected/visible.
+        const onChipToggle = (s: AlgoSection) => {
+          const willOpen = !expandedAlgoTypes.has(s.key);
+          toggleAlgoType(s.key);
+          const apply = isVis ? setSelectedAlgoOverlays : setSelectedAlgorithms;
+          apply((prev) => {
+            const next = new Set(prev);
+            if (willOpen) (isVis ? s.visIds : s.ids).forEach((id) => next.add(id));
+            else s.ids.forEach((id) => next.delete(id));
+            return next;
+          });
+        };
         return (
           <div className="space-y-1.5">
             <nav aria-label="Algorithm families" className={stacked ? 'grid grid-cols-2 gap-1' : 'grid grid-cols-4 gap-1'}>
               {sections.map((s) => {
                 const open = expandedAlgoTypes.has(s.key);
+                // Under an active stem filter, the chip's "available" count is
+                // how many of the family's detectors have a result for that stem
+                // — zero for full-mix-only families (MSAF, ruptures, all-in-one,
+                // custom), so the card reads honestly before it's even opened.
+                const stemCapableFamily = s.ids.some((id) => STEM_CAPABLE_TOOL_IDS.has(baseAlgoId(id)));
+                const layerCount = stemFilter
+                  ? (stemCapableFamily ? s.ids.filter((id) => stemHasResult(id)).length : 0)
+                  : s.cached;
+                const title = stemFilter
+                  ? (stemCapableFamily
+                      ? `${layerCount} of ${s.total} have a ${inspectStemFilter}-stem result — click to ${open ? 'collapse' : 'expand'}`
+                      : `${s.label} runs on the full mix only — no ${inspectStemFilter}-stem output`)
+                  : `${s.cached} of ${s.total} cached — click to ${open ? 'collapse + deselect all' : 'expand + select all'}`;
                 return (
                   <AnnotationTypeChip
                     key={s.key}
@@ -5792,9 +6234,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     active={open}
                     experimental={s.experimental}
                     count={s.total}
-                    layerCount={s.cached}
-                    title={`${s.cached} of ${s.total} cached — click to ${open ? 'collapse' : 'expand'}`}
-                    onClick={() => toggleAlgoType(s.key)}
+                    layerCount={layerCount}
+                    title={title}
+                    onClick={() => onChipToggle(s)}
                   />
                 );
               })}
@@ -5823,6 +6265,163 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     </div>
     );
   };
+
+  // The viz control bar (zoom / signals / annotation-layer pickers / grid …)
+  // is rendered in two places: full under the big title, and `compact` inline
+  // in the slim sticky transport once the player scrolls away. Both share this
+  // identical prop wiring, so it lives in one closure to avoid drift.
+  const renderVizControlBar = (compactBar: boolean) => (
+    <VizControlBar
+      compact={compactBar}
+      showAnnotations={feature !== 'prep'}
+      showManual={showManual}           onToggleManual={setShowManual}
+      showAutoGuess={showAutoGuess} onToggleAutoGuess={setShowAutoGuess}
+      showSignalOverlays={showSignalOverlays} onToggleSignalOverlays={setShowSignalOverlays}
+      minConsensus={minConsensus}   onMinConsensusChange={setMinConsensus}
+      totalAlgos={annotationRows.length || undefined}
+      showWaveform={showWaveform}   onToggleWaveform={setShowWaveform}
+      showEQ={showEQ}               onToggleEQ={setShowEQ}
+      showSpectrogram={showSpectrogram} onToggleSpectrogram={setShowSpectrogram}
+      showCepstrogram={showCepstrogram} onToggleCepstrogram={setShowCepstrogram}
+      showChroma={showChroma}       onToggleChroma={setShowChroma}
+      showTempogram={showTempogram} onToggleTempogram={setShowTempogram}
+      showSsm={showSsm}             onToggleSsm={setShowSsm}
+      showEnergy={showEnergy}       onToggleEnergy={setShowEnergy}
+      showBrightness={showBrightness} onToggleBrightness={setShowBrightness}
+      showNovelty={showNovelty}     onToggleNovelty={setShowNovelty}
+      showOnsets={showOnsets}       onToggleOnsets={setShowOnsets}
+      showFlux={showFlux}           onToggleFlux={setShowFlux}
+      showBeatGrid={showBeatGrid}   onToggleBeatGrid={setShowBeatGrid}
+      beatGridUnit={beatGridUnit}   onBeatGridUnitChange={setBeatGridUnit}
+      beatGridUnitOptions={beatGridUnitOptions}
+      gridMode={effectiveGridMode(songInfo)}
+      anchorCount={getActiveAnchorCount(songInfo)}
+      overrideCount={getActiveBeatOverrideCount(songInfo)}
+      bpm={bpm}
+      beatsPerBar={beatsPerBar}
+      timeSignature={songInfo?.timeSignature ?? '4/4'}
+      snapToGrid={snapToGrid}       onToggleSnapToGrid={setSnapToGrid}
+      showSnap={feature === 'annotate'}
+      captureGlobalHScroll={captureGlobalHScroll}
+      onToggleCaptureGlobalHScroll={setCaptureGlobalHScroll}
+      gridLineThickness={gridLineThickness}
+      onGridLineThicknessChange={setGridLineThickness}
+      zoomFactor={vizZoomFactor}
+      atMaxZoom={vizAtMaxZoom}
+      onZoomIn={() => zoomInRef.current?.()}
+      onZoomOut={() => zoomOutRef.current?.()}
+      onZoomReset={() => zoomResetRef.current?.()}
+      playbackRate={playbackRate}
+      onPlaybackRateChange={setPlaybackRate}
+      algoOptions={algoOptions}
+      selectedAlgos={selectedAlgoOverlays}
+      onToggleAlgo={toggleAlgoOverlay}
+      // Overlay visibility now lives in the inspect sidebar's per-row
+      // checkboxes; the viz-bar Algos dropdown is retired.
+      showAlgos={false}
+      singleInfoDetections={isInspect(feature) ? singleInfoDetections : undefined}
+      customAnnotationOptions={customAnnotationRows.map((r) => ({ id: r.detectorName, label: r.label, color: r.color }))}
+      hiddenCustomAnnotations={hiddenCustomAnnotations}
+      onToggleCustomAnnotation={toggleCustomAnnotationVisible}
+      cueLayerOptions={[
+        ...(cueLayers ?? []).map((l) => ({
+          id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
+        })),
+        ...detectorCueLayers.map((l) => ({
+          id: l.id,
+          label: `${l.name} (detector)`,
+          color: l.color,
+          visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
+          count: l.items.length,
+        })),
+      ]}
+      onToggleCueLayerVisibility={(layerId) => {
+        // Detector layer? Piggy-back on the shared "hide custom detector" Set
+        // so toggling here matches the existing detector visibility model.
+        const detector = detectorCueLayers.find((l) => l.id === layerId);
+        if (detector) {
+          toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
+          return;
+        }
+        // Visibility is canvas metadata, not an annotation edit —
+        // keep it out of the undo history so ⌘Z doesn't surprise
+        // the user by toggling a checkbox back on/off.
+        setCueLayersDoc((d) => d && ({
+          ...d,
+          layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
+        }), { skipHistory: true });
+      }}
+      spanLayerOptions={[
+        ...spanLayers.map((l) => ({
+          id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
+        })),
+        ...detectorSpanLayers.map((l) => ({
+          id: l.id,
+          label: `${l.name} (detector)`,
+          color: l.color,
+          visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
+          count: l.items.length,
+        })),
+      ]}
+      onToggleSpanLayerVisibility={(layerId) => {
+        const detector = detectorSpanLayers.find((l) => l.id === layerId);
+        if (detector) {
+          toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
+          return;
+        }
+        setCueLayersDoc((d) => d && ({
+          ...d,
+          layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
+        }), { skipHistory: true });
+      }}
+      loopLayerOptions={settings.experimentalLoopsAndPatterns ? [
+        ...loopLayers.map((l) => ({
+          id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
+        })),
+        ...detectorLoopLayers.map((l) => ({
+          id: l.id,
+          label: `${l.name} (detector)`,
+          color: l.color,
+          visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
+          count: l.items.length,
+        })),
+      ] : undefined}
+      onToggleLoopLayerVisibility={(layerId) => {
+        const detector = detectorLoopLayers.find((l) => l.id === layerId);
+        if (detector) {
+          toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
+          return;
+        }
+        setCueLayersDoc((d) => d && ({
+          ...d,
+          layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
+        }), { skipHistory: true });
+      }}
+      patternLayerOptions={settings.experimentalLoopsAndPatterns ? [
+        ...patternLayers.map((l) => ({
+          id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
+        })),
+        ...detectorPatternLayers.map((l) => ({
+          id: l.id,
+          label: `${l.name} (detector)`,
+          color: l.color,
+          visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
+          count: l.items.length,
+        })),
+      ] : undefined}
+      onTogglePatternLayerVisibility={(layerId) => {
+        const detector = detectorPatternLayers.find((l) => l.id === layerId);
+        if (detector) {
+          toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
+          return;
+        }
+        setCueLayersDoc((d) => d && ({
+          ...d,
+          layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
+        }), { skipHistory: true });
+      }}
+    />
+  );
 
   return (
     <div className={`min-h-screen text-slate-200 transition-colors duration-300 ${pageBg}`}>
@@ -5875,14 +6474,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
         {/* ── Left sidebar — song list (collapsible) ───────────────────── */}
         {(mode === 'song' || mode === 'prep') && sidebarCollapsed && (
-          <button
-            onClick={() => setSidebarCollapsed(false)}
-            title="Show songs"
-            className="fixed left-0 top-[72px] z-[60] flex items-center gap-1.5 pl-2.5 pr-3 py-2 rounded-r-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-l-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pl-3.5 transition-all shadow-lg shadow-black/40"
-          >
-            <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Songs</span>
-            <span className="text-xl leading-none font-bold">›</span>
-          </button>
+          // In-layout rail (not a floating tab): occupies its own slim column
+          // at the start of the flex row, so it can never overlap the song title.
+          <aside className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-r border-white/[0.10] bg-[#14171d]/80 backdrop-blur-sm">
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              title="Show songs"
+              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
+            >
+              <span className="text-xl leading-none font-bold">›</span>
+              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Songs</span>
+            </button>
+          </aside>
         )}
         {(mode === 'song' || mode === 'prep') && !sidebarCollapsed && (
           <aside
@@ -6020,7 +6623,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     const hasBpm = typeof songInfoForRow?.bpm === 'number' && songInfoForRow.bpm > 0;
                     const isSelected = selectedAudio?.id === a.id;
                     const songStorage = storageStats?.perSong.find((s) => s.slug === a.id);
-                    // Per-song annotation tracks aggregated from manual + eye +
+                    // Per-song annotation tracks aggregated from manual +
                     // auto-guess (built-in tracks, scoped to current annotator)
                     // and user-created layers (cues/spans/loops/patterns). The
                     // sidebar collapses these into ONE overall indicator dot
@@ -6029,16 +6632,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     // misleading. The full breakdown lives in a click-to-open
                     // popover below.
                     const layerSummary = songLayerStatuses[a.id];
-                    type TrackKind = 'manual' | 'eye' | 'autoGuess' | 'cues' | 'spans' | 'loops' | 'patterns';
+                    type TrackKind = 'manual' | 'autoGuess' | 'cues' | 'spans' | 'loops' | 'patterns';
                     // Tracks are split into two groups: manual (user-authored —
-                    // Boundaries, By-eye, Cues/Spans/Loops/Patterns/Lyrics) and
+                    // Boundaries, Cues/Spans/Loops/Patterns/Lyrics) and
                     // auto (algorithm-produced — Auto-guess + custom detectors).
                     // Only manual tracks gate the green ✓ on the per-song
                     // indicator; auto tracks are listed below a divider in the
                     // popover for reference but don't block "all reviewed".
                     interface Track { kind: TrackKind; label: string; state: AnnotationPillDisplay; detail?: string; color: string; group: 'manual' | 'auto'; }
                     const tracks: Track[] = [];
-                    // Manual/Eye/Auto-guess + every layer type share the same
+                    // Manual/Auto-guess + every layer type share the same
                     // (hasItems × stage) → display rule via `derivePillDisplay`.
                     // A track only appears here once it has at least one item —
                     // the popover never lists "Not started" rows because there
@@ -6051,16 +6654,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         state: derivePillDisplay(true, status.reviewed ? 'reviewed' : (status.ready_for_review ? 'ready_for_review' : 'in_progress')),
                         detail: `${status.sections_count} section${status.sections_count === 1 ? '' : 's'}`,
                         color: 'amber',
-                        group: 'manual',
-                      });
-                    }
-                    if (settings.experimentalEyeAnnotation && status && (status.eye_sections_count ?? 0) > 0) {
-                      tracks.push({
-                        kind: 'eye',
-                        label: 'By-eye',
-                        state: derivePillDisplay(true, status.eye_status === 'done' ? 'reviewed' : 'in_progress'),
-                        detail: `${status.eye_sections_count} section${status.eye_sections_count === 1 ? '' : 's'}`,
-                        color: 'cyan',
                         group: 'manual',
                       });
                     }
@@ -6242,7 +6835,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                                 </div>
                                 {tracks.length === 0 ? (
                                   <div className="px-3 py-2 text-slate-500">
-                                    Start by adding boundaries, cues, or by-eye markers in the editor.
+                                    Start by adding boundaries or cues in the editor.
                                   </div>
                                 ) : (() => {
                                   const renderRow = (t: Track) => {
@@ -6695,6 +7288,67 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {selectedAudio && (
           <>
             <div className="sticky top-[72px] z-50 -mx-4 px-4 py-2 bg-[#0a0b0d]/95 backdrop-blur space-y-2">
+              {/* Slim transport — shown once the waveform player scrolls up
+                  under the header. One-line title + play/stop + time only;
+                  the waveform and BPM tag fall away for a compact look. */}
+              {headerCollapsed && (() => {
+                const explicitTitle = songInfo?.title?.trim();
+                let title = explicitTitle || (selectedAudio.name ?? '');
+                let artist = explicitTitle ? (songInfo?.artist?.trim() || undefined) : undefined;
+                if (!explicitTitle) {
+                  const name = selectedAudio.name ?? '';
+                  const idx = name.indexOf(' — ');
+                  if (idx > 0) {
+                    artist = name.slice(0, idx).trim() || undefined;
+                    title = name.slice(idx + 3).trim();
+                  }
+                }
+                const fmt = (s: number) => {
+                  if (!isFinite(s) || s < 0) s = 0;
+                  const m = Math.floor(s / 60);
+                  const ss = Math.floor(s % 60).toString().padStart(2, '0');
+                  return `${m}:${ss}`;
+                };
+                return (
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={handleTogglePlay}
+                        aria-label={playerIsPlaying ? 'Pause' : 'Play'}
+                        title={playerIsPlaying ? 'Pause (Space)' : 'Play (Space)'}
+                        className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors text-slate-100 ${playerAccent.playBtn}`}
+                      >
+                        {playerIsPlaying ? (
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21" /></svg>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => { pauseRef.current?.(); seekRef.current?.(0); }}
+                        aria-label="Stop"
+                        title="Stop (return to start)"
+                        className="w-7 h-7 rounded flex items-center justify-center transition-colors bg-white/[0.04] hover:bg-white/[0.10] text-slate-300"
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5" /></svg>
+                      </button>
+                    </div>
+                    <span className="font-mono text-[11px] text-slate-300 tabular-nums shrink-0">
+                      {fmt(playerTime)}<span className="text-slate-600 mx-0.5">/</span><span className="text-slate-500">{fmt(duration)}</span>
+                    </span>
+                    <span className="text-sm font-semibold text-white truncate min-w-0">
+                      {title}
+                      {artist && <span className="font-normal text-slate-500"> · {artist}</span>}
+                    </span>
+                    {/* Slim versions of the viz controls (zoom / signals /
+                        annotation layers / grid …) ride along on the right. */}
+                    <div className="ml-auto shrink-0">
+                      {renderVizControlBar(true)}
+                    </div>
+                  </div>
+                );
+              })()}
+              {!headerCollapsed && (<>
               <div className="flex items-center justify-between gap-3">
                 {/* Material-style title block: the song title reads big and
                     bold; the artist drops to a smaller, greyed subtitle line
@@ -6726,161 +7380,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               </div>
               <div className="flex flex-wrap items-start gap-2">
                 <div className="flex-1 min-w-0">
-                  <VizControlBar
-                  showAnnotations={feature !== 'prep'}
-                  showManual={showManual}           onToggleManual={setShowManual}
-                  showEye={showEye}             onToggleEye={setShowEye}
-                  eyeEnabled={settings.experimentalEyeAnnotation}
-                  showAutoGuess={showAutoGuess} onToggleAutoGuess={setShowAutoGuess}
-                  showSignalOverlays={showSignalOverlays} onToggleSignalOverlays={setShowSignalOverlays}
-                  minConsensus={minConsensus}   onMinConsensusChange={setMinConsensus}
-                  totalAlgos={annotationRows.length || undefined}
-                  showWaveform={showWaveform}   onToggleWaveform={setShowWaveform}
-                  showEQ={showEQ}               onToggleEQ={setShowEQ}
-                  showSpectrogram={showSpectrogram} onToggleSpectrogram={setShowSpectrogram}
-                  showCepstrogram={showCepstrogram} onToggleCepstrogram={setShowCepstrogram}
-                  showChroma={showChroma}       onToggleChroma={setShowChroma}
-                  showTempogram={showTempogram} onToggleTempogram={setShowTempogram}
-                  showSsm={showSsm}             onToggleSsm={setShowSsm}
-                  showEnergy={showEnergy}       onToggleEnergy={setShowEnergy}
-                  showBrightness={showBrightness} onToggleBrightness={setShowBrightness}
-                  showNovelty={showNovelty}     onToggleNovelty={setShowNovelty}
-                  showOnsets={showOnsets}       onToggleOnsets={setShowOnsets}
-                  showFlux={showFlux}           onToggleFlux={setShowFlux}
-                  showBeatGrid={showBeatGrid}   onToggleBeatGrid={setShowBeatGrid}
-                  beatGridUnit={beatGridUnit}   onBeatGridUnitChange={setBeatGridUnit}
-                  beatGridUnitOptions={beatGridUnitOptions}
-                  gridMode={effectiveGridMode(songInfo)}
-                  anchorCount={getActiveAnchorCount(songInfo)}
-                  overrideCount={getActiveBeatOverrideCount(songInfo)}
-                  bpm={bpm}
-                  beatsPerBar={beatsPerBar}
-                  timeSignature={songInfo?.timeSignature ?? '4/4'}
-                  snapToGrid={snapToGrid}       onToggleSnapToGrid={setSnapToGrid}
-                  showSnap={feature === 'annotate'}
-                  captureGlobalHScroll={captureGlobalHScroll}
-                  onToggleCaptureGlobalHScroll={setCaptureGlobalHScroll}
-                  gridLineThickness={gridLineThickness}
-                  onGridLineThicknessChange={setGridLineThickness}
-                  zoomFactor={vizZoomFactor}
-                  atMaxZoom={vizAtMaxZoom}
-                  onZoomIn={() => zoomInRef.current?.()}
-                  onZoomOut={() => zoomOutRef.current?.()}
-                  onZoomReset={() => zoomResetRef.current?.()}
-                  algoOptions={algoOptions}
-                  selectedAlgos={selectedAlgoOverlays}
-                  onToggleAlgo={toggleAlgoOverlay}
-                  // Overlay visibility now lives in the inspect sidebar's per-row
-                  // checkboxes; the viz-bar Algos dropdown is retired.
-                  showAlgos={false}
-                  singleInfoDetections={isInspect(feature) ? singleInfoDetections : undefined}
-                  customAnnotationOptions={customAnnotationRows.map((r) => ({ id: r.detectorName, label: r.label, color: r.color }))}
-                  hiddenCustomAnnotations={hiddenCustomAnnotations}
-                  onToggleCustomAnnotation={toggleCustomAnnotationVisible}
-                  cueLayerOptions={[
-                    ...(cueLayers ?? []).map((l) => ({
-                      id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
-                    })),
-                    ...detectorCueLayers.map((l) => ({
-                      id: l.id,
-                      label: `${l.name} (detector)`,
-                      color: l.color,
-                      visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
-                      count: l.items.length,
-                    })),
-                  ]}
-                  onToggleCueLayerVisibility={(layerId) => {
-                    // Detector layer? Piggy-back on the shared "hide custom detector" Set
-                    // so toggling here matches the existing detector visibility model.
-                    const detector = detectorCueLayers.find((l) => l.id === layerId);
-                    if (detector) {
-                      toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
-                      return;
-                    }
-                    // Visibility is canvas metadata, not an annotation edit —
-                    // keep it out of the undo history so ⌘Z doesn't surprise
-                    // the user by toggling a checkbox back on/off.
-                    setCueLayersDoc((d) => d && ({
-                      ...d,
-                      layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
-                    }), { skipHistory: true });
-                  }}
-                  spanLayerOptions={[
-                    ...spanLayers.map((l) => ({
-                      id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
-                    })),
-                    ...detectorSpanLayers.map((l) => ({
-                      id: l.id,
-                      label: `${l.name} (detector)`,
-                      color: l.color,
-                      visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
-                      count: l.items.length,
-                    })),
-                  ]}
-                  onToggleSpanLayerVisibility={(layerId) => {
-                    const detector = detectorSpanLayers.find((l) => l.id === layerId);
-                    if (detector) {
-                      toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
-                      return;
-                    }
-                    setCueLayersDoc((d) => d && ({
-                      ...d,
-                      layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
-                    }), { skipHistory: true });
-                  }}
-                  loopLayerOptions={settings.experimentalLoopsAndPatterns ? [
-                    ...loopLayers.map((l) => ({
-                      id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
-                    })),
-                    ...detectorLoopLayers.map((l) => ({
-                      id: l.id,
-                      label: `${l.name} (detector)`,
-                      color: l.color,
-                      visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
-                      count: l.items.length,
-                    })),
-                  ] : undefined}
-                  onToggleLoopLayerVisibility={(layerId) => {
-                    const detector = detectorLoopLayers.find((l) => l.id === layerId);
-                    if (detector) {
-                      toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
-                      return;
-                    }
-                    setCueLayersDoc((d) => d && ({
-                      ...d,
-                      layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
-                    }), { skipHistory: true });
-                  }}
-                  patternLayerOptions={settings.experimentalLoopsAndPatterns ? [
-                    ...patternLayers.map((l) => ({
-                      id: l.id, label: l.name, color: l.color, visible: l.visible, count: l.items.length,
-                    })),
-                    ...detectorPatternLayers.map((l) => ({
-                      id: l.id,
-                      label: `${l.name} (detector)`,
-                      color: l.color,
-                      visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
-                      count: l.items.length,
-                    })),
-                  ] : undefined}
-                  onTogglePatternLayerVisibility={(layerId) => {
-                    const detector = detectorPatternLayers.find((l) => l.id === layerId);
-                    if (detector) {
-                      toggleCustomAnnotationVisible(detector.source!.slice('detector:'.length));
-                      return;
-                    }
-                    setCueLayersDoc((d) => d && ({
-                      ...d,
-                      layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
-                    }), { skipHistory: true });
-                  }}
-                  />
+                  {renderVizControlBar(false)}
                 </div>
               </div>
+              </>)}
             </div>
 
             {/* Run options panel — opens below the control bar when ⚙ is on */}
             {feature === 'prep' && runOptionsScope === 'song' && renderRunOptionsPanel(false)}
+            <div ref={playerWrapRef}>
             <SharedVizPanel
               playerUrl={playerUrl}
               trackName={selectedAudio.name}
@@ -6937,17 +7445,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 ? (demucsJob.logs.length > 1500 ? '…\n' + demucsJob.logs.slice(-1500) : demucsJob.logs)
                 : undefined}
               onDismissStemsError={demucsJob?.slug === selectedAudio?.id && demucsJob?.status === 'error'
-                ? () => setDemucsJob(null)
+                ? dismissDemucsError
                 : undefined}
               onGridOffsetChange={handleGridOffsetDrag}
               showBarNumbers={showBeatGrid}
               manualSections={feature === 'prep' ? [] : refManualSections}
-              eyeSections={feature === 'prep' || !settings.experimentalEyeAnnotation ? [] : refEyeSections}
               autoGuessPoints={feature === 'prep' ? [] : (refAutoGuessPoints ?? displayAutoGuessPoints)}
               pendingSelection={isAnnotateFeature && supportsPending(activeAnnotationType, activeBoundarySource ?? undefined) ? pendingAnnotationSelection : null}
-              showManual={feature === 'prep' ? false : (isEyeMode ? false : showManual)}
-              showEye={feature === 'prep' || !settings.experimentalEyeAnnotation ? false : showEye}
-              showAutoGuess={feature === 'prep' ? false : (isEyeMode ? false : showAutoGuess)}
+              showManual={feature === 'prep' ? false : showManual}
+              showAutoGuess={feature === 'prep' ? false : showAutoGuess}
               showSignalOverlays={showSignalOverlays}
               showWaveform={showWaveform}
               showEQ={showEQ}
@@ -6963,9 +7469,19 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               showNovelty={showNovelty}
               showOnsets={showOnsets}
               showFlux={showFlux}
-              algoOverlays={isInspect(feature) ? algoOverlays : []}
+              algoOverlays={feature === 'prep' ? [] : [
+                // Algorithm-family overlays only exist in Inspect; boundary
+                // curators (driven by the shared curated-visibility set) draw in
+                // both workspaces — Inspect via is_algorithm, Annotator via
+                // is_annotation. Each draws once per view.
+                ...(isInspect(feature) ? algoOverlays : []),
+                ...detectorBoundaryOverlays,
+              ]}
               cueLayers={feature === 'prep' ? [] : [
                 ...(cueLayers ?? []),
+                // Curated (detector-sourced) layers render in BOTH the Annotator
+                // and Algorithm Inspect — the one Detectors sidebar lists them in
+                // both and the shared visibility set filters them here.
                 ...detectorCueLayers.filter((l) => !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length))),
               ]}
               focusedCue={focusedCue}
@@ -7009,6 +7525,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               onPatternClick={(layerId, itemId, anchor) => patternPopover.openAt(layerId, itemId, anchor)}
               onPatternEdgeDrag={feature === 'prep' ? undefined : handlePatternEdgeDrag}
               onPatternMove={feature === 'prep' ? undefined : handlePatternMove}
+              lyricsLayers={feature === 'prep' || !settings.experimentalLyricsFamily ? [] : [
+                ...lyricsLayers,
+                ...detectorLyricsLayers.filter((l) => !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length))),
+              ]}
+              focusedLyrics={focusedLyrics}
+              onLyricsClick={(layerId, itemId, anchor) => {
+                setFocusedLyrics({ layerId, itemId });
+                lyricsPopover.openAt(layerId, itemId, anchor);
+              }}
+              onLyricsSeek={(t) => seekRef.current?.(t)}
               activeAnnotationType={activeAnnotationType}
               selectedLayerIdByType={selectedLayerIdByType}
               onSelectLayer={isAnnotateFeature ? handleUnifiedSelectLayer : undefined}
@@ -7018,15 +7544,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               onManualBoundaryChange={handleManualBoundaryChange}
               onManualBoundaryDragStart={handleManualBoundaryDragStart}
               onManualMarkerDrag={feature === 'prep' ? undefined : handleManualBoundaryChange}
-              onEyeMarkerDrag={feature === 'prep' ? undefined : handleEyeMarkerDrag}
               onManualSectionClick={(idx, anchor) => openManualEditorRef.current?.(idx, anchor)}
-              onEyeSectionClick={(idx, anchor) => openEyeEditorRef.current?.(idx, anchor)}
               onManualUndo={handleManualUndo}
               canManualUndo={canManualUndo}
               onMarkCorrect={(id) => updateAutoGuessPoint(id, { status: 'correct' })}
               onMarkIncorrect={(id) => updateAutoGuessPoint(id, { status: 'incorrect' })}
               onMarkPending={(id) => updateAutoGuessPoint(id, { status: 'pending' })}
-              customAnnotationRows={feature === 'prep' ? [] : customAnnotationRows}
+              customAnnotationRows={isAnnotateFeature ? customAnnotationRows : []}
               hiddenCustomAnnotations={hiddenCustomAnnotations}
               onCustomAnnotationMarkCorrect={(det, id) => updateCustomAnnotationOverride(det, id, { status: 'correct' })}
               onCustomAnnotationMarkIncorrect={(det, id) => updateCustomAnnotationOverride(det, id, { status: 'incorrect' })}
@@ -7048,6 +7572,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               onBufferReady={(buf) => { setAudioBuffer(buf); setDuration(buf.duration); }}
               onTimeUpdate={setPlayerTime}
               onPlayingChange={setPlayerIsPlaying}
+              playbackRate={playbackRate}
               onScrollChange={handleScrollChange}
               onViewChange={handleViewChange}
               vizScrollContainerRef={vizScrollContainerRef}
@@ -7057,7 +7582,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               playerIsPlaying={playerIsPlaying}
               onSeekAndPlay={handleSeekAndPlay}
               onPause={handlePause}
-              previewRegion={isEyeMode ? null : previewRegion}
+              previewRegion={previewRegion}
               onPreviewRegionChange={handlePreviewRegionChange}
               onPreviewPlay={handlePreviewPlay}
               onPreviewPause={handlePreviewPause}
@@ -7076,6 +7601,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               hidePlaybackIcon={feature !== 'annotate'}
               hideTimeDisplay={feature === 'prep'}
             />
+            </div>
+            {/* Karaoke view — readable, playback-synced complement to the dense
+                lyrics canvas row. Only on the Lyrics tab so it doesn't displace
+                other tabs' review cards. */}
+            {activeAnnotationType === 'lyrics' && karaokeLyrics && (
+              <div className="mt-2">
+                <KaraokePanel
+                  items={karaokeLyrics.items}
+                  currentTime={playerTime}
+                  onSeek={(t) => seekRef.current?.(t)}
+                  title={karaokeLyrics.title}
+                  color={karaokeLyrics.color}
+                />
+              </div>
+            )}
           </>
         )}
 
@@ -7083,15 +7623,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {feature === 'inspect-song' && (
           <div className="flex items-center justify-between gap-4 border-b border-white/[0.05]">
             <div className="flex items-center gap-4">
-              {([
-                ['algo', 'Consensus Inspect'],
-                ['eval', 'Evaluation'],
-              ] as ['algo' | 'eval', string][]).map(([sub, label]) => (
+              <InspectKindDropdown
+                value={inspectKind}
+                options={inspectKindOptions}
+                onChange={handleInspectKindChange}
+              />
+              {(([
+                // Consensus Inspect aggregates boundaries only — it's omitted
+                // for every other examined kind, leaving just Evaluation.
+                ...(inspectKind === 'boundaries' ? [['algo', 'Consensus Inspect'] as const] : []),
+                ['eval', 'Evaluation'] as const,
+              ]) as readonly (readonly ['algo' | 'eval', string])[]).map(([sub, label]) => (
                 <button
                   key={sub}
                   onClick={() => setInspectSubStage(sub)}
                   className={`px-1 py-1 text-lg sm:text-xl font-semibold tracking-tight transition-colors border-b-2 -mb-px ${
-                    inspectSubStage === sub
+                    effectiveInspectSubStage === sub
                       ? `${accent.tabBorderActive} ${accent.tabTextActive}`
                       : 'border-transparent text-slate-500 hover:text-slate-300'
                   }`}
@@ -7161,12 +7708,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               {/* Annotation stage */}
               {activeStage === 'annotation' && (
                 <div className="space-y-3">
-                  {isEyeMode && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-cyan-500/20 bg-cyan-500/5 text-[11px] text-cyan-300">
-                      <span className="tc-led tc-led-mute !bg-cyan-400 !shadow-[0_0_6px_rgba(34,211,238,0.65)]" />
-                      <span>Eye mode — audio disabled · Manual and Auto-guess annotations hidden</span>
-                    </div>
-                  )}
                   {/* DataPrep Song details + Metronome live in the right-edge
                       prep sidebar (see the `feature === 'prep'` aside near the
                       Annotate / Algo sidebars), keeping the grid controls
@@ -7180,7 +7721,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       {(() => {
                         const src = activeSourceByType[activeAnnotationType];
                         const label = src === 'manual' ? 'Manual'
-                          : src === 'eye' ? 'Eye'
                           : src === 'autoGuess' ? 'Auto-guess'
                           : typeof src === 'string' && src.startsWith('detector:')
                             ? (customDetectors.find((d) => d.name === src.slice('detector:'.length))?.label ?? src.slice('detector:'.length))
@@ -7189,18 +7729,152 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       })()}
                     </span>
                   </div>
+                  {/* One-click revert for the most recent algorithm→Manual copy.
+                      Lives here (outside the source-gated copy button below) so
+                      it survives the copy flipping the source back to Manual,
+                      which unmounts that button. Only shown for the matching
+                      annotation type. */}
+                  {lastCopyUndo
+                    && (lastCopyUndo.kind === 'boundaries'
+                      ? activeAnnotationType === 'boundaries'
+                      : lastCopyUndo.type === activeAnnotationType) && (
+                    <div className="mb-2 flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-amber-400/30 bg-amber-500/[0.08] text-[12px] text-amber-100">
+                      <span className="truncate">
+                        Copied “{lastCopyUndo.label}” into your Manual annotation.
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const u = lastCopyUndo;
+                            if (u.kind === 'layer') {
+                              setCueLayersDoc((d) => (d
+                                ? { ...d, layers: d.layers.filter((l) => l.id !== u.layerId) }
+                                : d));
+                              setActiveSourceByType((m) => ({ ...m, [u.type]: u.prevSource }));
+                            } else {
+                              const slug = selectedAudio.id;
+                              const restored: ManualAnnotation = u.prevAnnotation
+                                ?? { song: slug, annotated_at: new Date().toISOString(), reviewed: false, sections: [] };
+                              setManualAnnotation(restored);
+                              void saveAnnotation(slug, restored);
+                              setActiveSourceByType((m) => ({ ...m, boundaries: u.prevSource }));
+                            }
+                            setLastCopyUndo(null);
+                          }}
+                          className="px-2.5 py-1 rounded border border-amber-400/40 bg-amber-500/15 text-amber-100 font-semibold hover:bg-amber-500/25"
+                        >
+                          Undo copy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLastCopyUndo(null)}
+                          title="Dismiss"
+                          className="px-1.5 py-1 rounded text-amber-200/70 hover:text-amber-100 hover:bg-amber-500/15"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {/* Big "transfer algorithm output → my annotation" button. Same
+                      control for every annotation type: when a detector source is
+                      active it copies that algorithm's whole output into something
+                      editable — boundary detectors land as Manual boundary
+                      sections, every other kind lands as a new Manual layer — then
+                      flips the source back to Manual so the copy is selected. */}
+                  {(() => {
+                    const src = activeSourceByType[activeAnnotationType];
+                    if (typeof src !== 'string' || !src.startsWith('detector:')) return null;
+                    const detectorName = src.slice('detector:'.length);
+                    const det = customDetectors.find((d) => d.name === detectorName);
+                    const envelope = customResults[detectorName];
+                    const doc = detectorOutputDocs[detectorName];
+                    const items = (doc ?? envelope)?.items ?? [];
+                    const typeLabel = TAB_CONFIG.find((t) => t.id === activeAnnotationType)?.label ?? activeAnnotationType;
+                    const detLabel = det?.label ?? detectorName;
+                    const disabled = items.length === 0 || !selectedAudio;
+                    const target = activeAnnotationType === 'boundaries'
+                      ? 'Manual boundary sections'
+                      : `a Manual ${typeLabel} layer`;
+                    const copy = () => {
+                      if (items.length === 0 || !selectedAudio) return;
+                      const importedFrom = detLabel;
+                      if (activeAnnotationType === 'boundaries') {
+                        const sections: ManualSection[] = (items as CustomBoundaryItem[]).map((b) => ({
+                          time: b.time_ms / 1000,
+                          type: 'section',
+                          label: b.label ?? '',
+                          ...(b.importance ? { importance: b.importance } : {}),
+                          ...(b.candidates && b.candidates.length > 0
+                            ? { candidates: b.candidates.map((ms) => ms / 1000) }
+                            : {}),
+                        }));
+                        const slug = selectedAudio.id;
+                        const existing = manualAnnotationRef.current;
+                        const merged: ManualAnnotation = existing
+                          ? {
+                              ...existing,
+                              sections: [...existing.sections, ...sections].sort((a, b) => a.time - b.time),
+                              annotated_at: new Date().toISOString(),
+                            }
+                          : { song: slug, annotated_at: new Date().toISOString(), reviewed: false, sections };
+                        setManualAnnotation(merged);
+                        void saveAnnotation(slug, merged);
+                        setActiveSourceByType((m) => ({ ...m, boundaries: 'manual' }));
+                        setLastCopyUndo({ kind: 'boundaries', label: importedFrom, prevSource: src, prevAnnotation: existing });
+                      } else {
+                        const converted = convertDetectorItems(activeAnnotationType, items);
+                        if (!converted) return;
+                        const layerType = activeAnnotationType as 'cues' | 'spans' | 'loops' | 'patterns' | 'lyrics';
+                        const newLayerId = newId();
+                        setCueLayersDoc((d) => {
+                          if (!d) return d;
+                          const color = pickDefaultLayerColor(d.layers);
+                          const layer: AnnotationLayer = {
+                            id: newLayerId,
+                            name: importedFrom,
+                            type: layerType,
+                            visible: true,
+                            color,
+                            snap: layerType === 'loops' || layerType === 'patterns' ? 'bar' : 'beat',
+                            items: converted as never,
+                            source: 'user',
+                            importedFrom,
+                          };
+                          return { ...d, layers: [...d.layers, layer] };
+                        });
+                        setActiveSourceByType((m) => ({ ...m, [activeAnnotationType]: 'manual' }));
+                        setLastCopyUndo({ kind: 'layer', layerId: newLayerId, label: importedFrom, prevSource: src, type: activeAnnotationType });
+                      }
+                    };
+                    return (
+                      <button
+                        type="button"
+                        onClick={copy}
+                        disabled={disabled}
+                        title={disabled
+                          ? `${detLabel} hasn't produced any ${typeLabel} output for this song yet — run it from the Detectors panel first`
+                          : `Copy all ${items.length} ${typeLabel} item${items.length === 1 ? '' : 's'} from ${detLabel} into ${target} you can edit`}
+                        className="w-full mb-2 px-3 py-2.5 rounded-md border border-emerald-400/30 bg-emerald-500/[0.08] text-emerald-200 text-[13px] font-semibold hover:bg-emerald-500/[0.16] disabled:opacity-40 disabled:hover:bg-emerald-500/[0.08] flex items-center justify-center gap-2"
+                      >
+                        <span aria-hidden>⬇</span>
+                        Copy “{detLabel}” → {target}
+                      </button>
+                    );
+                  })()}
                   {(() => {
                     // Source-override block: when the AnnotationSourcePicker is on
                     // a non-Manual source for a non-boundary category, render
                     // either the "Auto-guess coming soon" banner or the read-only
                     // detector review with ✓/✗ chips instead of the manual editor.
-                    // For boundaries the per-source panels (Manual / Eye / Auto-guess)
+                    // For boundaries the per-source panels (Manual / Auto-guess)
                     // mount below; only detector:<X> on boundaries falls into the
                     // detector branch.
                     const category: AnnotationCategory = activeAnnotationType;
                     const source = activeSourceByType[category];
                     if (source === 'manual') return null;
-                    if (source === 'eye' || source === 'autoGuess') {
+                    if (source === 'autoGuess') {
                       if (category === 'boundaries') return null;
                       return (
                         <div className="p-4 rounded border border-fuchsia-400/20 bg-fuchsia-500/[0.04] text-[12px] text-slate-300">
@@ -7218,14 +7892,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       const det = customDetectors.find((d) => d.name === detectorName);
                       const envelope = customResults[detectorName];
                       const doc = detectorOutputDocs[detectorName];
-                      if (category === 'boundaries') {
-                        return (
-                          <div className="p-4 rounded border border-white/[0.06] bg-white/[0.02] text-[12px] text-slate-400">
-                            Boundary detector review is rendered inside the Auto-guess clusters today —
-                            switch to the Auto-guess source and use the per-source approve/reject controls.
-                          </div>
-                        );
-                      }
                       if (!envelope) {
                         return (
                           <div className="p-4 rounded border border-white/[0.06] bg-white/[0.02] text-[12px] text-slate-400">
@@ -7246,18 +7912,19 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                           onAccept={(id) => void applyDetectorReview(detectorName, id, 'accepted')}
                           onReject={(id) => void applyDetectorReview(detectorName, id, 'rejected')}
                           onResetReview={doc ? () => void resetDetectorReview(detectorName) : undefined}
-                          onCopyToManualLayer={({ type, items, layerName, importedFrom }) => {
+                          onCopyToManualLayer={category === 'boundaries' ? undefined : ({ type, items, layerName, importedFrom }) => {
                             // Build the new layer in the parent so it can read
                             // the existing layer set to pick a non-clashing
                             // color. `source: 'user'` keeps the layer grouped
                             // under Manual (not under the detector); the new
                             // `importedFrom` field carries the provenance
                             // without changing merge/visibility semantics.
+                            const newLayerId = newId();
                             setCueLayersDoc((d) => {
                               if (!d) return d;
                               const color = pickDefaultLayerColor(d.layers);
                               const layer: AnnotationLayer = {
-                                id: newId(),
+                                id: newLayerId,
                                 name: layerName,
                                 type,
                                 visible: true,
@@ -7269,6 +7936,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                               };
                               return { ...d, layers: [...d.layers, layer] };
                             });
+                            setLastCopyUndo({ kind: 'layer', layerId: newLayerId, label: layerName, prevSource: source, type: category });
                           }}
                           onSeekAndPlay={handleSeekAndPlay}
                           onPause={handlePause}
@@ -7306,27 +7974,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       onPause={handlePause}
                       isPlaying={playerIsPlaying}
                       reloadKey={panelReloadKey}
-                    />
-                  )}
-                  {activeAnnotationType === 'boundaries' && activeBoundarySource === 'eye' && (
-                    <EyeEditorPanel
-                      ref={eyePanelRef}
-                      onCapabilitiesChange={setEyeCaps}
-                      songId={selectedAudio.id}
-                      currentTime={playerTime}
-                      duration={duration}
-                      songInfo={songInfo}
-                      pendingSelection={pendingAnnotationSelection}
-                      onClearPendingSelection={() => setPendingAnnotationSelection(null)}
-                      onAnnotationChange={setEyeAnnotation}
-                      snapToGrid={snapToGrid}
-                      openEditorRef={openEyeEditorRef}
-                      addPointAtRef={eyeAddPointRef}
-                      setPointTimeRef={eyeSetPointTimeRef}
-                      reloadKey={panelReloadKey}
-                      onSeekAndPlay={handleSeekAndPlay}
-                      onPause={handlePause}
-                      playerIsPlaying={playerIsPlaying}
                     />
                   )}
                   {activeAnnotationType === 'boundaries' && activeBoundarySource === 'autoGuess' && (
@@ -7471,6 +8118,29 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       }}
                     />
                   )}
+                  {activeAnnotationType === 'lyrics' && activeSourceByType.lyrics === 'manual' && settings.experimentalLyricsFamily && (
+                    <LyricsEditorPanel
+                      ref={lyricsPanelRef}
+                      onCapabilitiesChange={setLyricsCaps}
+                      saveStatus={layersDocSaveStatus}
+                      currentTime={playerTime}
+                      duration={duration}
+                      doc={cueLayersDoc ?? emptyLayersDoc(selectedAudio.id)}
+                      onDocChange={setCueLayersDoc}
+                      grid={bpm ? { bpm, beatsPerBar, gridOffsetSec: beatOffset ?? 0 } : null}
+                      snapToGrid={snapToGrid}
+                      focusedLyrics={focusedLyrics}
+                      onFocusLyrics={setFocusedLyrics}
+                      selectedLayerId={selectedLyricsLayerId}
+                      onSelectLayer={setSelectedLyricsLayerId}
+                      onSeek={(t) => seekRef.current?.(t)}
+                      pendingSelection={pendingAnnotationSelection}
+                      onClearPendingSelection={() => {
+                        setPendingAnnotationSelection(null);
+                        if (previewRegionRef.current) handlePreviewDismiss();
+                      }}
+                    />
+                  )}
                   </div>
                   )}
                 </div>
@@ -7481,9 +8151,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <AlgoInspectStage
                   annotationRows={annotationRows}
                   manualSections={refManualSections}
-                  eyeSections={refEyeSections}
                   autoGuessSections={refAutoGuessSections}
-                  eyeEnabled={settings.experimentalEyeAnnotation}
+                  showAutoGuess={showAutoGuess}
                   duration={duration}
                   tolerance={mirTolerance}
                   onToleranceChange={setMirTolerance}
@@ -7506,12 +8175,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <EvaluationStage
                   annotationRows={annotationRows}
                   manualSections={refManualSections}
-                  eyeSections={refEyeSections}
-                  eyeEnabled={settings.experimentalEyeAnnotation}
                   duration={duration}
                   tolerance={mirTolerance}
                   onToleranceChange={setMirTolerance}
                   selectedAudio={selectedAudio ? { id: selectedAudio.id, name: selectedAudio.name } : null}
+                  kind={inspectKind}
+                  onKindChange={setInspectKind}
                 />
               )}
 
@@ -7523,6 +8192,128 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         ) : null}
         </div>
 
+        {/* ── Right sidebar #1 — Curated (detector-sourced) layers ──
+             A SECOND right column, sitting LEFT of the Annotate / Algorithms
+             sidebar. ONE sidebar, shown in both workspaces, with per-flag
+             content: in the Annotator it lists the is_annotation curated layers
+             grouped by stem; in Algorithm Inspect it lists the is_algorithm
+             boundary curators. A both-flagged curator (e.g. curated_phrases_msaf)
+             appears in each. Visibility is the shared `hiddenCustomAnnotations`
+             set (keyed by detector name), so a curator toggles the same way
+             everywhere — driving both the timeline canvas and the annotation
+             list. Collapses to a hover tab. */}
+        {selectedAudio && (feature === 'annotate' || feature === 'inspect-song') && curatedLayersByStem.rows.length > 0 && (() => {
+          const accent = accentFor(feature);
+          const allCuratedNames = curatedLayersByStem.rows.map((r) => r.detectorName);
+          const namesForStem = (s: string) => (curatedLayersByStem.byStem.get(s) ?? []).map((r) => r.detectorName);
+          const isStemShown = (names: string[]) => names.length > 0 && names.every((n) => !hiddenCustomAnnotations.has(n));
+          const allShown = isStemShown(allCuratedNames);
+          // "None" is lit when every curated layer is hidden — the symmetric
+          // one-click clear next to "All", so the user can drop to zero visible
+          // layers without unchecking each box.
+          const noneShown = allCuratedNames.every((n) => hiddenCustomAnnotations.has(n));
+          // Inverse polarity vs the inspect "SHOW PER STEM" block: visibility is
+          // a HIDDEN set, so "show" deletes names and "hide" adds them.
+          const setShown = (names: string[], show: boolean) => setHiddenCustomAnnotations((prev) => {
+            const n = new Set(prev);
+            if (show) names.forEach((nm) => n.delete(nm)); else names.forEach((nm) => n.add(nm));
+            return n;
+          });
+          if (curatedSidebarCollapsed) {
+            // In-layout rail (not a floating tab): occupies its own slim column
+            // in the flex row, so it can never overlap the sibling panel.
+            return (
+              <aside className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+                <button
+                  onClick={() => setCuratedSidebarCollapsed(false)}
+                  title="Show detector layers"
+                  className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
+                >
+                  <span className="text-xl leading-none font-bold">‹</span>
+                  <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Detectors</span>
+                </button>
+              </aside>
+            );
+          }
+          return (
+            <aside
+              style={{ width: curatedSidebarWidth }}
+              className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
+            >
+              <div
+                onMouseDown={startCuratedSidebarResize}
+                onDoubleClick={() => setCuratedSidebarWidth(CURATED_SIDEBAR_DEFAULT_WIDTH)}
+                title="Drag to resize · double-click to reset"
+                className={`absolute top-0 left-0 h-full w-1.5 -ml-0.5 cursor-col-resize z-20 group ${curatedSidebarResizing ? 'bg-sky-500/40' : 'hover:bg-sky-500/30'} transition-colors`}
+              >
+                <div className={`absolute top-0 left-0 h-full w-px ${curatedSidebarResizing ? 'bg-sky-400' : 'bg-transparent group-hover:bg-sky-400/60'}`} />
+              </div>
+              <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.05] shrink-0">
+                <span className="text-[13px] uppercase tracking-[0.18em] text-slate-100 font-bold">Detectors</span>
+                <button
+                  onClick={() => setCuratedSidebarCollapsed(true)}
+                  title="Hide detector layers"
+                  className="text-slate-500 hover:text-slate-200 transition-colors text-xl leading-none px-1"
+                >
+                  ›
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+                {/* One-click per-stem show/hide for every detector layer of a stem. */}
+                {curatedLayersByStem.stems.length > 0 && (
+                  <StemChipGroup
+                    label="Show per stem"
+                    hint="all detectors at once"
+                    accent={accent}
+                    chips={[
+                      { key: '__all', label: 'All', active: allShown, onClick: () => setShown(allCuratedNames, !allShown) },
+                      {
+                        key: '__none',
+                        label: 'None',
+                        active: noneShown,
+                        title: 'Hide every detector layer on the timeline and the annotation list',
+                        onClick: () => setShown(allCuratedNames, false),
+                      },
+                      ...curatedLayersByStem.stems.map((s) => {
+                        const names = namesForStem(s);
+                        const shown = isStemShown(names);
+                        return {
+                          key: s,
+                          label: s,
+                          active: shown,
+                          title: `${shown ? 'Hide' : 'Show'} every detector ${s} layer on the timeline and the annotation list`,
+                          onClick: () => setShown(names, !shown),
+                        };
+                      }),
+                    ]}
+                  />
+                )}
+                {/* Curated layers grouped by stem; each row toggles a single
+                    detector layer via the shared hiddenCustomAnnotations set. */}
+                {curatedLayersByStem.stems.map((s) => (
+                  <div key={s} className="space-y-1">
+                    <div className="text-[9px] uppercase tracking-[0.16em] text-slate-500 capitalize">{s}</div>
+                    <div className="flex flex-col gap-1">
+                      {(curatedLayersByStem.byStem.get(s) ?? []).map((r) => (
+                        <label key={r.id} className="flex items-center gap-1.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={!hiddenCustomAnnotations.has(r.detectorName)}
+                            onChange={() => toggleCustomAnnotationVisible(r.detectorName)}
+                            className={accent.checkbox}
+                          />
+                          <span className="inline-block w-2 h-2 rounded-sm shrink-0" style={{ background: r.color }} />
+                          <span className="text-[11px] text-slate-300 truncate">{r.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          );
+        })()}
+
         {/* ── Right sidebar — annotation toolbar (collapsible) ────────────────────
              Holds the per-marker config (Source / Status / Save / Import / Export /
              Undo / Redo / Split / Delete) plus the tabs and Add-pending pill that
@@ -7531,14 +8322,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
              to a hover tab on the right edge; ShortcutsHelpPanel (also fixed-right
              at z-50) overlays this sidebar when the user presses `?`. */}
         {feature === 'annotate' && selectedAudio && annotateSidebarCollapsed && (
-          <button
-            onClick={() => setAnnotateSidebarCollapsed(false)}
-            title="Show annotation tools"
-            className="fixed right-0 top-[72px] z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
-          >
-            <span className="text-xl leading-none font-bold">‹</span>
-            <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Annotate</span>
-          </button>
+          // In-layout rail (not a floating tab): its own slim column in the flex
+          // row, so it never overlaps the Curated panel when that one is open.
+          <aside className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+            <button
+              onClick={() => setAnnotateSidebarCollapsed(false)}
+              title="Show annotation tools"
+              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
+            >
+              <span className="text-xl leading-none font-bold">‹</span>
+              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Annotate</span>
+            </button>
+          </aside>
         )}
         {feature === 'annotate' && selectedAudio && !annotateSidebarCollapsed && (
           <aside
@@ -7584,7 +8379,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         type="button"
                         role="menuitem"
                         onClick={() => { setAnnotateMenuOpen(false); setDeleteAllForSongOpen(true); }}
-                        title={`Delete every annotation (Manual, Eye, Auto-guess, Cues, Spans, Loops, Patterns) for "${selectedAudio.name}"`}
+                        title={`Delete every annotation (Manual, Auto-guess, Cues, Spans, Loops, Patterns) for "${selectedAudio.name}"`}
                         className="w-full text-left px-3 py-1.5 text-[11px] text-red-300 hover:bg-red-500/15 transition-colors"
                       >
                         ✕ Delete all annotations
@@ -7608,8 +8403,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 let accent: 'violet' | 'cyan' | 'emerald' | 'fuchsia' = 'violet';
                 if (activeAnnotationType === 'boundaries' && activeBoundarySource === 'manual') {
                   ref = manualPanelRef;      caps = manualCaps;      accent = 'violet';
-                } else if (activeAnnotationType === 'boundaries' && activeBoundarySource === 'eye') {
-                  ref = eyePanelRef;         caps = eyeCaps;         accent = 'cyan';
                 } else if (activeAnnotationType === 'boundaries' && activeBoundarySource === 'autoGuess') {
                   ref = autoGuessPanelRef;   caps = autoGuessCaps;   accent = 'violet';
                 } else if (activeAnnotationType === 'cues') {
@@ -7620,6 +8413,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   ref = loopsPanelRef;       caps = loopsCaps;       accent = 'fuchsia';
                 } else if (activeAnnotationType === 'patterns') {
                   ref = patternsPanelRef;    caps = patternsCaps;    accent = 'fuchsia';
+                } else if (activeAnnotationType === 'lyrics') {
+                  ref = lyricsPanelRef;      caps = lyricsCaps;      accent = 'cyan';
                 }
                 // The unified all-annotations list always renders. Its
                 // `actionsSlot` carries the per-type edit panel, which slots in
@@ -7629,15 +8424,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 const renderList = (actionsSlot: React.ReactNode) => (
                   <UnifiedAnnotationListPanel
                     cueLayersDoc={cueLayersDoc}
-                    detectorCueLayers={detectorCueLayers}
-                    detectorSpanLayers={detectorSpanLayers}
-                    detectorLoopLayers={detectorLoopLayers}
-                    detectorPatternLayers={detectorPatternLayers}
                     manualAnnotation={manualAnnotation}
-                    eyeAnnotation={eyeAnnotation}
                     autoGuessAnnotation={autoGuessAnnotation}
-                    customDetectors={customDetectors}
-                    customResults={customResults}
                     activeAnnotationType={activeAnnotationType}
                     onSelectType={(next) => {
                       setActiveAnnotationType(next);
@@ -7656,6 +8444,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     onFocusLoop={setFocusedLoop}
                     focusedPattern={focusedPattern}
                     onFocusPattern={setFocusedPattern}
+                    focusedLyrics={focusedLyrics}
+                    onFocusLyrics={setFocusedLyrics}
                     onItemDelete={handleUnifiedItemDelete}
                     onItemToggleImportance={handleUnifiedItemToggleImportance}
                     onDeleteLayer={handleUnifiedLayerDelete}
@@ -7664,13 +8454,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     selectedLayerIdByType={selectedLayerIdByType}
                     onSelectLayer={handleUnifiedSelectLayer}
                     experimentalLoopsAndPatterns={settings.experimentalLoopsAndPatterns}
-                    experimentalEyeAnnotation={settings.experimentalEyeAnnotation}
+                    experimentalLyricsFamily={settings.experimentalLyricsFamily}
                     actionsSlot={actionsSlot}
                   />
                 );
                 if (!ref) return renderList(null);
                 const layerType = activeAnnotationType === 'cues' || activeAnnotationType === 'spans'
-                  || activeAnnotationType === 'loops' || activeAnnotationType === 'patterns';
+                  || activeAnnotationType === 'loops' || activeAnnotationType === 'patterns'
+                  || activeAnnotationType === 'lyrics';
                 // For layer types, the per-source editor only mounts when source ===
                 // 'manual'. If we still showed `caps` from a previous Manual mount,
                 // the marker panel would render an Add/Status/Export chip whose click
@@ -7693,7 +8484,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 // Single-click export for the active marker only. Layer types
                 // (cues/spans/loops/patterns) own a JSON-only export via their
                 // controller — filenames already carry `all_layers`. Manual /
-                // Eye / Auto-guess get a direct JSON download here so the
+                // Auto-guess get a direct JSON download here so the
                 // marker panel's `↓ Export` never opens a modal; the full
                 // multi-scope Export Manager stays in the section header.
                 const onExport: (() => void) | undefined = (() => {
@@ -7707,13 +8498,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       downloadJson(`manual-${selectedAudio.id}-${stamp}.json`, manualAnnotation);
                     };
                   }
-                  if (activeAnnotationType === 'boundaries' && activeBoundarySource === 'eye') {
-                    return () => {
-                      if (!eyeAnnotation) return;
-                      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-                      downloadJson(`eye-${selectedAudio.id}-${stamp}.json`, eyeAnnotation);
-                    };
-                  }
                   if (activeAnnotationType === 'boundaries' && activeBoundarySource === 'autoGuess') {
                     return () => {
                       if (!autoGuessAnnotation) return;
@@ -7724,9 +8508,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   return undefined;
                 })();
 
-                // Source picker options for the active category — Manual + (Eye on
-                // boundaries when experimental) + Auto-guess (real on boundaries,
-                // stub elsewhere) + one entry per matching custom detector.
+                // Source picker options for the active category — Manual +
+                // Auto-guess (real on boundaries, stub elsewhere) + one entry
+                // per matching custom detector.
                 const matchingDetectors = customDetectors.filter((det) =>
                   det.is_annotation
                   && det.status === 'ok'
@@ -7734,9 +8518,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 );
                 const sourceOptions: SourceOption[] = [
                   { id: 'manual', label: 'Manual' },
-                  ...(category === 'boundaries' && settings.experimentalEyeAnnotation
-                    ? [{ id: 'eye' as SourceId, label: 'Eye', experimental: true }]
-                    : []),
                   { id: 'autoGuess', label: 'Auto-guess', comingSoon: category !== 'boundaries' },
                   ...matchingDetectors.map<SourceOption>((det) => ({
                     id: `detector:${det.name}` as SourceId,
@@ -7748,7 +8529,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 const sourceValue = activeSourceByType[category];
 
                 // Recording timer. Per-type time tracking: boundary sources key
-                // on the active source (Manual / Eye / Auto-guess); the layer
+                // on the active source (Manual / Auto-guess); the layer
                 // types (cues/spans/loops/patterns) key on the type itself.
                 // `annotationTimesTotal` carries a running total for every key,
                 // so the timer follows whichever type is currently active.
@@ -7935,7 +8716,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                             } : undefined}
                             layerPicker={(() => {
                               // Layer-typed panels (cues/spans/loops/patterns) expose a picker —
-                              // Manual/Eye/Auto-guess have no per-type layers, so omit.
+                              // Manual/Auto-guess have no per-type layers, so omit.
                               if (activeAnnotationType === 'cues') {
                                 return {
                                   options: (cueLayers ?? []).map((l) => ({ id: l.id, name: l.name, color: l.color })),
@@ -8027,7 +8808,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                           // annotation type. Enabled for layer-typed panels
                           // (cues/spans/loops/patterns) which expose `addLayer`
                           // via the controller; rendered disabled with a tooltip
-                          // on the Boundary sources (manual/eye/autoGuess) where
+                          // on the Boundary sources (manual/autoGuess) where
                           // the data model is still single-doc per source.
                           <button
                             type="button"
@@ -8062,17 +8843,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
              Selection is shared with Dataset Prep's ⚙ Batch algorithm options
              so it stays the single source of truth. Collapses to a hover tab
              on the right edge, same geometry as the Annotate sidebar. */}
-        {feature === 'inspect-song' && activeStage === 'algo' && selectedAudio && algoSidebarCollapsed && (
-          <button
-            onClick={() => setAlgoSidebarCollapsed(false)}
-            title="Show algorithms panel"
-            className="fixed right-0 top-[72px] z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
-          >
-            <span className="text-xl leading-none font-bold">‹</span>
-            <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Algorithms</span>
-          </button>
+        {feature === 'inspect-song' && selectedAudio && algoSidebarCollapsed && (
+          // In-layout rail (not a floating tab): occupies its own slim column
+          // in the flex row, so it can never overlap the sibling panel.
+          <aside className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+            <button
+              onClick={() => setAlgoSidebarCollapsed(false)}
+              title="Show algorithms panel"
+              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
+            >
+              <span className="text-xl leading-none font-bold">‹</span>
+              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Algorithms</span>
+            </button>
+          </aside>
         )}
-        {feature === 'inspect-song' && activeStage === 'algo' && selectedAudio && !algoSidebarCollapsed && (() => {
+        {feature === 'inspect-song' && selectedAudio && !algoSidebarCollapsed && (() => {
           const isRunning = runJob?.status === 'running';
           const noneSelected = selectedAlgorithms.size === 0;
           const runDisabled = isRunning || noneSelected;
@@ -8122,48 +8907,97 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 {renderRunOptionsPanel(true, 'visibility')}
               </div>
               {runPickerOpen && createPortal(
+                <>
+                  {/* Dimming scrim — signals a distinct "run/compute" mode so it
+                      isn't mistaken for the inline visibility sidebar, which uses
+                      the same chip panel. Click anywhere to dismiss. */}
+                  <div
+                    className="fixed inset-0 z-[999] bg-black/50 backdrop-blur-[1px]"
+                    onClick={() => setRunPickerOpen(false)}
+                    aria-hidden="true"
+                  />
                 <div
                   ref={runPickerRef}
                   role="dialog"
                   aria-label="Run algorithms"
-                  className="fixed z-[1000] rounded-lg border border-violet-500/30 bg-[#14171d] shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
+                  className="fixed z-[1000] rounded-lg border-2 border-violet-500/60 ring-2 ring-violet-500/20 bg-[#14171d] shadow-2xl shadow-violet-950/50 flex flex-col overflow-hidden"
                   style={{ top: runPickerPos.top, left: runPickerPos.left, width: runPickerPos.width, maxHeight: `calc(100vh - ${runPickerPos.top}px - 12px)` }}
                 >
-                  <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.06] shrink-0">
-                    <span className="text-[10px] uppercase tracking-[0.18em] text-violet-300/90 font-semibold">Run algorithms · choose what to compute</span>
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 bg-violet-500/15 border-b-2 border-violet-500/40 shrink-0">
+                    <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-violet-200 font-semibold">
+                      <span aria-hidden="true">▶</span>
+                      Run mode · choose what to compute
+                    </span>
                     <button
                       onClick={() => setRunPickerOpen(false)}
                       title="Close"
-                      className="text-slate-500 hover:text-slate-200 transition-colors text-lg leading-none px-1"
+                      className="text-violet-300/70 hover:text-violet-100 transition-colors text-lg leading-none px-1"
                     >
                       ×
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-3">
+                    {availableStemSources.length <= 1 && feature === 'prep' && selectedAudio && !isDemo && (() => {
+                      // Per-stem runs need separated Demucs stems first. Without a
+                      // cached manifest the "Run on" pills below never appear, so the
+                      // whole per-stem capability is invisible. Surface it here with a
+                      // one-click path to separation instead of silently hiding it.
+                      const stemming = demucsJob?.slug === selectedAudio.id && demucsJob?.status === 'running';
+                      return (
+                        <div className="mb-3 pb-3 border-b border-white/[0.06]">
+                          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1.5">
+                            Run on
+                          </div>
+                          <p className="text-[10px] leading-snug text-slate-500 mb-1.5">
+                            Detectors run on the <span className="text-slate-300">full mix</span>. To run CUE / SPAN / LOOP / lyrics
+                            detectors on an isolated <span className="text-slate-300">vocals / drums / bass</span> stem, separate the
+                            song into stems first — then per-stem pills appear here.
+                          </p>
+                          <button
+                            onClick={() => { if (!stemming) handleStemSong(selectedAudio); }}
+                            disabled={stemming}
+                            title="Run Demucs source separation for this song. Once it finishes, per-stem run options appear here."
+                            className="px-2 py-1 rounded text-[10px] border transition-colors disabled:opacity-60 disabled:cursor-not-allowed border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 hover:border-violet-500/60 hover:text-violet-100"
+                          >
+                            {stemming
+                              ? `⏳ Separating stems…${demucsJob?.progressPct != null ? ` ${Math.round(demucsJob.progressPct)}%` : ''}`
+                              : '✂ Separate stems (Demucs)'}
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {availableStemSources.length > 1 && (
                       <div className="mb-3 pb-3 border-b border-white/[0.06]">
                         <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1.5">
                           Run on
                         </div>
                         <div className="flex flex-wrap gap-1">
-                          {availableStemSources.map((s) => {
+                          {([...availableStemSources, 'all'] as RunStemTarget[]).map((s) => {
                             const active = runStemSource === s;
                             return (
                               <button
                                 key={s}
                                 onClick={() => handleRunStemChange(s)}
+                                title={s === 'all'
+                                  ? 'Run every stem-capable detector on all separated stems at once (one job per stem).'
+                                  : s === 'mix' ? 'Run on the full mix.' : `Run stem-capable detectors on the ${s} stem only.`}
                                 className={`px-2 py-1 rounded text-[10px] capitalize border transition-colors ${
                                   active
                                     ? 'border-violet-500/60 bg-violet-500/20 text-violet-100'
                                     : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200 hover:border-white/20'
                                 }`}
                               >
-                                {s === 'mix' ? 'Full mix' : s}
+                                {s === 'mix' ? 'Full mix' : s === 'all' ? 'All stems' : s}
                               </button>
                             );
                           })}
                         </div>
-                        {runStemSource !== 'mix' && (
+                        {runStemSource === 'all' ? (
+                          <p className="mt-1.5 text-[10px] leading-snug text-slate-500">
+                            CUE / SPAN / LOOP / lyrics detectors run on <span className="text-slate-300">every separated stem</span>
+                            {' '}(one cached result per stem). Boundary detectors always use the full mix.
+                          </p>
+                        ) : runStemSource !== 'mix' && (
                           <p className="mt-1.5 text-[10px] leading-snug text-slate-500">
                             CUE / SPAN / LOOP / lyrics detectors run on the <span className="text-slate-300">{runStemSource}</span> stem
                             (cached separately). Boundary detectors always use the full mix.
@@ -8185,7 +9019,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       {`▶ Run ${selectedAlgorithms.size || ''} algorithm${selectedAlgorithms.size === 1 ? '' : 's'} for this song`}
                     </button>
                   </div>
-                </div>,
+                </div>
+                </>,
                 document.body,
               )}
             </aside>
@@ -8196,14 +9031,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             Mirrors the Annotate / Algo asides: the grid / tempo controls live
             here beside the waveform instead of stacked below it. */}
         {feature === 'prep' && activeStage === 'annotation' && selectedAudio && prepSidebarCollapsed && (
-          <button
-            onClick={() => setPrepSidebarCollapsed(false)}
-            title="Show song setup panel"
-            className="fixed right-0 top-[72px] z-30 flex items-center gap-1.5 pl-3 pr-2.5 py-2 rounded-l-lg bg-[#1a1f28]/95 backdrop-blur-sm border border-r-0 border-white/15 text-slate-200 hover:text-white hover:bg-[#222833] hover:border-white/25 hover:pr-3.5 transition-all shadow-lg shadow-black/40"
-          >
-            <span className="text-xl leading-none font-bold">‹</span>
-            <span className="text-[11px] uppercase tracking-[0.18em] font-semibold">Song setup</span>
-          </button>
+          // In-layout rail (not a floating tab): occupies its own slim column
+          // in the flex row, so it can never overlap the sibling panel.
+          <aside className="shrink-0 sticky top-[72px] self-start h-[calc(100vh-72px)] border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+            <button
+              onClick={() => setPrepSidebarCollapsed(false)}
+              title="Show song setup panel"
+              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
+            >
+              <span className="text-xl leading-none font-bold">‹</span>
+              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Song setup</span>
+            </button>
+          </aside>
         )}
         {feature === 'prep' && activeStage === 'annotation' && selectedAudio && !prepSidebarCollapsed && (
           <aside
@@ -8323,7 +9162,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       />
 
       {selectedAudio && (() => {
-        const typeLabels: Record<AnnotationType, string> = { boundaries: 'Boundaries', cues: 'Cues', spans: 'Spans', loops: 'Loops', patterns: 'Patterns' };
+        const typeLabels: Record<AnnotationType, string> = { boundaries: 'Boundaries', cues: 'Cues', spans: 'Spans', loops: 'Loops', patterns: 'Patterns', lyrics: 'Lyrics' };
         return (
           <DeleteConfirmDialog
             open={deleteActiveOpen}
@@ -8340,7 +9179,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           open={deleteAllForSongOpen}
           onOpenChange={setDeleteAllForSongOpen}
           title={`Delete ALL annotations for "${selectedAudio.name}"?`}
-          description={`Every annotation for this song — Manual, Eye, Auto-guess, and all user-created Cues / Spans / Loops / Patterns layers — will be permanently removed. Other songs are not touched. This cannot be undone.`}
+          description={`Every annotation for this song — Manual, Auto-guess, and all user-created Cues / Spans / Loops / Patterns layers — will be permanently removed. Other songs are not touched. This cannot be undone.`}
           confirmWord="DELETE_ALL"
           onConfirm={performDeleteAllForSong}
         />
@@ -8368,7 +9207,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         currentSong={selectedAudio ? { id: selectedAudio.id, name: selectedAudio.name, url: selectedAudio.url } : null}
         allSongs={audioFiles.map((f) => ({ id: f.id, name: f.name, url: f.url }))}
         manualAnnotation={manualAnnotation}
-        eyeAnnotation={eyeAnnotation}
         autoGuessAnnotation={autoGuessAnnotation}
         layersDocument={cueLayersDoc}
         // /prep is the only place where multi-song / bucket controls make
@@ -8514,6 +9352,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             layer={layer}
             cue={cue}
             readOnly={isReadOnly}
+            rawOutput={isReadOnly ? rawDetectorItem(layer.source, cue.id, customResults) : undefined}
             popoverRef={cuePopover.popoverRef}
             positionStyle={cuePopover.positionStyle}
             onChange={onChange}
@@ -8533,10 +9372,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
       {/* Floating Span edit popover (opened by clicking a band on a span-layer row). */}
       {spanPopover.open && (() => {
-        const layer = cueLayersDoc?.layers.find((l) => l.id === spanPopover.open!.layerId) as AnnotationLayer<'spans'> | undefined;
+        const userLayer = cueLayersDoc?.layers.find((l) => l.id === spanPopover.open!.layerId) as AnnotationLayer<'spans'> | undefined;
+        const detLayer  = detectorSpanLayers.find((l) => l.id === spanPopover.open!.layerId);
+        const layer = userLayer ?? detLayer;
         const span = layer?.items.find((it) => it.id === spanPopover.open!.itemId);
         if (!layer || !span) return null;
-        const onChange = (patch: Partial<SpanItem>) => {
+        const isReadOnly = layer.readOnly === true;
+        const onChange = isReadOnly ? () => {} : (patch: Partial<SpanItem>) => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -8546,7 +9388,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ),
           }));
         };
-        const onDelete = () => {
+        const onDelete = isReadOnly ? () => {} : () => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -8559,6 +9401,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <SpanEditPopover
             layer={layer}
             span={span}
+            readOnly={isReadOnly}
+            rawOutput={isReadOnly ? rawDetectorItem(layer.source, span.id, customResults) : undefined}
             popoverRef={spanPopover.popoverRef}
             positionStyle={spanPopover.positionStyle}
             onChange={onChange}
@@ -8578,10 +9422,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
       {/* Floating Loop edit popover (opened by clicking a band on a loop-layer row). */}
       {loopPopover.open && (() => {
-        const layer = cueLayersDoc?.layers.find((l) => l.id === loopPopover.open!.layerId) as AnnotationLayer<'loops'> | undefined;
+        const userLayer = cueLayersDoc?.layers.find((l) => l.id === loopPopover.open!.layerId) as AnnotationLayer<'loops'> | undefined;
+        const detLayer  = detectorLoopLayers.find((l) => l.id === loopPopover.open!.layerId);
+        const layer = userLayer ?? detLayer;
         const loop = layer?.items.find((it) => it.id === loopPopover.open!.itemId);
         if (!layer || !loop) return null;
-        const onChange = (patch: Partial<LoopItem>) => {
+        const isReadOnly = layer.readOnly === true;
+        const onChange = isReadOnly ? () => {} : (patch: Partial<LoopItem>) => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -8591,7 +9438,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ),
           }));
         };
-        const onDelete = () => {
+        const onDelete = isReadOnly ? () => {} : () => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -8604,6 +9451,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <LoopEditPopover
             layer={layer}
             loop={loop}
+            readOnly={isReadOnly}
+            rawOutput={isReadOnly ? rawDetectorItem(layer.source, loop.id, customResults) : undefined}
             popoverRef={loopPopover.popoverRef}
             positionStyle={loopPopover.positionStyle}
             onChange={onChange}
@@ -8623,10 +9472,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
       {/* Floating Pattern edit popover (opened by clicking a tile on a pattern-layer row). */}
       {patternPopover.open && (() => {
-        const layer = cueLayersDoc?.layers.find((l) => l.id === patternPopover.open!.layerId) as AnnotationLayer<'patterns'> | undefined;
+        const userLayer = cueLayersDoc?.layers.find((l) => l.id === patternPopover.open!.layerId) as AnnotationLayer<'patterns'> | undefined;
+        const detLayer  = detectorPatternLayers.find((l) => l.id === patternPopover.open!.layerId);
+        const layer = userLayer ?? detLayer;
         const pattern = layer?.items.find((it) => it.id === patternPopover.open!.itemId);
         if (!layer || !pattern) return null;
-        const onChange = (patch: Partial<PatternItem>) => {
+        const isReadOnly = layer.readOnly === true;
+        const onChange = isReadOnly ? () => {} : (patch: Partial<PatternItem>) => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -8636,7 +9488,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ),
           }));
         };
-        const onDelete = () => {
+        const onDelete = isReadOnly ? () => {} : () => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -8652,6 +9504,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           <PatternEditPopover
             layer={layer}
             pattern={pattern}
+            readOnly={isReadOnly}
+            rawOutput={isReadOnly ? rawDetectorItem(layer.source, pattern.id, customResults) : undefined}
             beatsPerBar={beatsPerBar}
             popoverRef={patternPopover.popoverRef}
             positionStyle={patternPopover.positionStyle}
@@ -8663,6 +9517,59 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             isPlaying={patternIsPlaying}
             bpm={bpm}
             gridOffset={songInfo?.gridOffset ?? 0}
+            anchors={effectiveAnchors(songInfo)}
+            currentTime={playerTime}
+          />
+        );
+      })()}
+
+      {/* Floating Lyrics info/edit popover (opened by clicking a word/line on a
+          lyrics-layer row). Resolves from user layers (editable) and detector-
+          sourced layers (read-only), like the Cue popover. */}
+      {lyricsPopover.open && (() => {
+        const userLayer = cueLayersDoc?.layers.find((l) => l.id === lyricsPopover.open!.layerId) as AnnotationLayer<'lyrics'> | undefined;
+        const detLayer  = detectorLyricsLayers.find((l) => l.id === lyricsPopover.open!.layerId);
+        const layer = userLayer ?? detLayer;
+        const item = layer?.items.find((it) => it.id === lyricsPopover.open!.itemId);
+        if (!layer || !item) return null;
+        const isReadOnly = layer.readOnly === true;
+        const onChange = isReadOnly ? () => {} : (patch: Partial<LyricsItem>) => {
+          setCueLayersDoc((d) => d && ({
+            ...d,
+            layers: d.layers.map((l) =>
+              l.id === layer.id
+                ? { ...l, items: l.items.map((it) => (it.id === item.id ? ({ ...it, ...patch } as typeof it) : it)) }
+                : l,
+            ),
+          }));
+        };
+        const onDelete = isReadOnly ? () => {} : () => {
+          setCueLayersDoc((d) => d && ({
+            ...d,
+            layers: d.layers.map((l) =>
+              l.id === layer.id ? { ...l, items: l.items.filter((it) => it.id !== item.id) } : l,
+            ),
+          }));
+        };
+        const previewEnd = item.kind === 'line' && item.end !== undefined ? item.end : item.time + 0.5;
+        const lyricIsPlaying = playerIsPlaying && playerTime >= item.time && playerTime < previewEnd;
+        return (
+          <LyricsEditPopover
+            layer={layer}
+            item={item}
+            readOnly={isReadOnly}
+            rawOutput={isReadOnly ? rawDetectorItem(layer.source, item.id, customResults) : undefined}
+            popoverRef={lyricsPopover.popoverRef}
+            positionStyle={lyricsPopover.positionStyle}
+            onChange={onChange}
+            onDelete={onDelete}
+            onClose={lyricsPopover.close}
+            onPlay={() => handleSeekAndPlay(item.time, previewEnd)}
+            onStop={handlePause}
+            isPlaying={lyricIsPlaying}
+            bpm={bpm}
+            gridOffset={songInfo?.gridOffset ?? 0}
+            beatsPerBar={beatsPerBar}
             anchors={effectiveAnchors(songInfo)}
             currentTime={playerTime}
           />

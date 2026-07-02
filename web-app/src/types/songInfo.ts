@@ -1,4 +1,4 @@
-// Per-song info that applies across all annotation types (manual / eye / auto-guess).
+// Per-song info that applies across all annotation types (manual / auto-guess).
 // Stored at /api/song-info/<slug> (file: ../song-info/<slug>.json).
 //
 // BPM is required to start any beat-aware annotation; the others have defaults

@@ -41,9 +41,6 @@ export const EXPERIMENTAL_ALGOS: Record<string, ExperimentalAlgoInfo[]> = {
     { id: 'autochord-chords', name: 'autochord (chord recognition)', description: 'Chroma-template chord recognition.' },
     { id: 'librosa-onsets', name: 'librosa onsets', description: 'Onset detection.' },
   ],
-  loop: [
-    { id: 'chroma-autocorr', name: 'chroma autocorrelation', description: 'Loop/repeat-region finder.' },
-  ],
   lyrics: [
     { id: 'whisper-base', name: 'Whisper-base', description: 'Vocal transcription (Whisper base).' },
     { id: 'ctc-forced-aligner', name: 'CTC forced aligner', description: 'Force-aligns the reference lyrics (Lyrics text panel) against the audio with wav2vec2-base-960h.' },

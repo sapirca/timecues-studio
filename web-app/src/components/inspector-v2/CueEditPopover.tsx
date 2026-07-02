@@ -13,6 +13,7 @@ import type { AnnotationLayer, CueItem } from '../../types/annotationLayer';
 import type { TempoAnchor } from '../../types/songInfo';
 import { useSettings } from '../../context/SettingsContext';
 import { AnnotationPointCard } from './shared/AnnotationPointCard';
+import { detectorBadgeLabel } from './shared/detectorBadge';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
 
 export type CueAnchor = PopoverAnchor;
@@ -27,6 +28,9 @@ interface CueEditPopoverProps {
   /** When true, inputs are disabled and the Delete button is hidden.
    *  Used for detector-sourced layers where edits don't make sense. */
   readOnly?: boolean;
+  /** Raw detector output for this cue — shown as a collapsible JSON block on
+   *  read-only cards. */
+  rawOutput?: unknown;
   popoverRef: React.RefObject<HTMLDivElement | null>;
   positionStyle: CSSProperties;
   onChange: (patch: Partial<CueItem>) => void;
@@ -47,7 +51,7 @@ interface CueEditPopoverProps {
 }
 
 export function CueEditPopover({
-  layer, cue, readOnly = false, popoverRef, positionStyle,
+  layer, cue, readOnly = false, rawOutput, popoverRef, positionStyle,
   onChange, onDelete, onClose,
   onPlay, onStop, isPlaying,
   bpm, gridOffset, beatsPerBar, anchors, currentTime,
@@ -59,7 +63,8 @@ export function CueEditPopover({
       kind="cue"
       layerName={layer.name}
       layerColor={layer.color}
-      badge={readOnly ? 'detector' : undefined}
+      badge={readOnly ? detectorBadgeLabel(layer.source) : undefined}
+      rawOutput={rawOutput}
       start={cue.time}
       label={cue.label}
       labelPlaceholder={suggestions && suggestions.length > 0 ? suggestions.slice(0, 3).join(', ') : 'short label'}

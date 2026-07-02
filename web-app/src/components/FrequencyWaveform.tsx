@@ -372,8 +372,8 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
       return;
     }
     dragRef.current = { time: t, x: e.clientX };
-    const ts = snap(t);
-    setSelection({ s: ts, e: ts });
+    // A plain click should only seek — defer the teal selection box until the
+    // drag passes the same 6px threshold the commit uses below.
     onRegionDragStart?.();
     e.preventDefault();
   }, [effectiveDuration, timeAt, beatOffset, onGridOffsetChange, onGridOffsetDragStart, onRegionDragStart, snap]);
@@ -386,7 +386,11 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
       return;
     }
     if (!dragRef.current || effectiveDuration <= 0) return;
-    setSelection({ s: snap(dragRef.current.time), e: snap(timeAt(e)) });
+    if (Math.abs(e.clientX - dragRef.current.x) > 6) {
+      setSelection({ s: snap(dragRef.current.time), e: snap(timeAt(e)) });
+    } else {
+      setSelection(null);
+    }
   }, [effectiveDuration, timeAt, onGridOffsetChange, snap]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>) => {

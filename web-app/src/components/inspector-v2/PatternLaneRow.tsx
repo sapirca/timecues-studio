@@ -14,12 +14,12 @@
  */
 
 import { useMemo, useRef } from 'react';
-import { PATTERN_SUBBEATS_PER_BEAT, patternStepsPerCycle, type PatternItem } from '../../types/annotationLayer';
+import { PATTERN_SUBBEATS_PER_BEAT, resolvePatternSteps, type PatternItem } from '../../types/annotationLayer';
 import { BeatGridOverlay } from './BeatGridOverlay';
 import { isOnGridLine } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag, createEdgeItemClamp, useBodyMoveDrag } from '../../hooks/useTimelineDrag';
-import { PendingHighlightOverlay, type PendingSelection } from './AnnotationOverlays';
+import { PendingHighlightOverlay, RegionDragOverlay, type PendingSelection } from './AnnotationOverlays';
 import { ReviewControls, reviewBgFor, type ReviewStatus } from './ReviewControls';
 
 const LANE_HEIGHT_PX = 14;
@@ -44,6 +44,10 @@ interface PatternLaneRowProps {
   onPatternMoveStart?: (itemId: string) => void;
   gridProps?: { bpm?: number; gridOffset?: number; beatsPerBar?: number; barGroupSize?: number | null; anchors?: readonly import('../../types/songInfo').TempoAnchor[]; beatOverrides?: Readonly<Record<string, number>>; thickness?: number };
   pendingSelection?: PendingSelection | null;
+  /** Empty-space click → seek; empty-space drag → create a pending highlight. */
+  onSeek?: (time: number) => void;
+  onRegion?: (t1: number, t2: number) => void;
+  onRegionDragStart?: () => void;
   /** Detector-review mode. When set, patterns become read-only and render inline ✓/✗ on the first tile. */
   reviewState?: Record<string, ReviewStatus>;
   onAccept?: (itemId: string) => void;
@@ -61,6 +65,8 @@ interface PlacedTile {
   label: string;
   description?: string;
   highlightedBeats: number[];
+  /** Declared sub-steps in the cycle (detector-provided); undefined ⇒ fallback. */
+  stepsPerCycle?: number;
   lane: number;
 }
 
@@ -80,6 +86,7 @@ function expandToTiles(items: PatternItem[]): PlacedTile[] {
         label: it.label,
         description: it.description,
         highlightedBeats: it.highlightedBeats,
+        stepsPerCycle: it.stepsPerCycle,
       });
     }
   }
@@ -104,6 +111,7 @@ export function PatternLaneRow({
   onPatternMove, onPatternMoveStart,
   gridProps,
   pendingSelection,
+  onSeek, onRegion, onRegionDragStart,
   reviewState, onAccept, onReject,
 }: PatternLaneRowProps) {
   const reviewMode = !!reviewState;
@@ -163,6 +171,11 @@ export function PatternLaneRow({
         </span>
       )}
 
+      {/* Behind the tiles (z="") — empty space falls through to seek / highlight-drag. */}
+      {onSeek && onRegion && (
+        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onRegion} onRegionDragStart={onRegionDragStart} z="" />
+      )}
+
       {placed.map((tile) => {
         const left  = duration > 0 ? (tile.start / duration) * 100 : 0;
         const width = Math.max(0.5, duration > 0 ? ((tile.end - tile.start) / duration) * 100 : 0);
@@ -187,16 +200,16 @@ export function PatternLaneRow({
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (reviewMode) return;
                 if (wasDraggedRef.current) {
                   wasDraggedRef.current = false;
                   return;
                 }
+                // Opens the info card in every mode — read-only for detector
+                // layers (review mode); ✓/✗ controls stop propagation.
                 onPatternClick?.(tile.itemId, { x: e.clientX, y: e.clientY });
               }}
-              disabled={reviewMode}
               className={`absolute flex items-stretch overflow-hidden rounded-sm ${
-                reviewMode ? 'cursor-default' : (tileMoveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
+                reviewMode ? 'cursor-pointer' : (tileMoveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
               }`}
               style={{
                 left: `${left}%`,
@@ -216,7 +229,7 @@ export function PatternLaneRow({
               {endSnapped && !reviewMode && <SnapTick style={{ top: 0, right: 0 }} title="Pattern cycle boundary is on the beat grid" />}
               <ChipStrip
                 color={tileColor}
-                beatsPerBar={gridProps?.beatsPerBar ?? 4}
+                steps={resolvePatternSteps(tile, gridProps?.beatsPerBar ?? 4)}
                 highlighted={tile.highlightedBeats}
                 label={tile.isFirst ? tile.label : ''}
               />
@@ -270,11 +283,10 @@ export function PatternLaneRow({
  *  small gap every PATTERN_SUBBEATS_PER_BEAT marks beat boundaries so the
  *  pulse stays readable at small tile widths. The label, when present, sits
  *  on the left and truncates. */
-function ChipStrip({ color, beatsPerBar, highlighted, label }: {
-  color: string; beatsPerBar: number; highlighted: number[]; label: string;
+function ChipStrip({ color, steps, highlighted, label }: {
+  color: string; steps: number; highlighted: number[]; label: string;
 }) {
   const hSet = new Set(highlighted);
-  const steps = patternStepsPerCycle(beatsPerBar);
   return (
     <span className="flex items-stretch w-full h-full pointer-events-none select-none">
       {label && (

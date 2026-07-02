@@ -12,7 +12,6 @@ interface DownloadMenuProps {
   songSlug: string | null;
   songName?: string | null;
   manualAnnotation: ManualAnnotation | null;
-  eyeAnnotation: ManualAnnotation | null;
   autoGuessAnnotation: AutoGuessManualAnnotation | null;
   /** User-created cues/spans/loops/patterns layers for the current song.
    *  Already loaded by the parent — passed in to avoid a redundant fetch. */
@@ -21,7 +20,7 @@ interface DownloadMenuProps {
 
 export function DownloadMenu({
   songSlug, songName,
-  manualAnnotation, eyeAnnotation, autoGuessAnnotation,
+  manualAnnotation, autoGuessAnnotation,
   layersDocument,
 }: DownloadMenuProps) {
   const [open, setOpen] = useState(false);
@@ -42,7 +41,6 @@ export function DownloadMenu({
         currentSong={songSlug ? { id: songSlug, name: songName ?? songSlug } : null}
         allSongs={[]}
         manualAnnotation={manualAnnotation}
-        eyeAnnotation={eyeAnnotation}
         autoGuessAnnotation={autoGuessAnnotation}
         layersDocument={layersDocument}
         presentation="single"

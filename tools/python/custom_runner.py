@@ -23,14 +23,15 @@ only needs one parser:
     {
       "name": "custom_1",
       "slug": "...",
-      "output_kind": "boundary" | "cue" | "span" | "loop" | "pattern",
+      "output_kind": "boundary" | "cue" | "span" | "loop" | "pattern" | "lyrics",
       "ran_at": "ISO-8601",
       "duration_ms": int,
       "items": [
         {time_ms, ...}                               # boundary | cue
         | {start_ms, duration_ms, label, intensity}  # span
         | {start_ms, duration_ms, label, snap_zero_cross}            # loop
-        | {start_ms, duration_ms, label, repeat_count, highlighted_beats}  # pattern
+        | {start_ms, duration_ms, label, repeat_count, highlighted_beats, steps_per_cycle}  # pattern
+        | {time_ms, end_ms, text, kind}              # lyrics
       ],
       "errors": [ {index, field, value, message}, ... ],
       "stats": { "accepted": int, "rejected": int },
@@ -69,6 +70,7 @@ from custom_api import (  # noqa: E402
     Cue,
     DetectionContext,
     Loop,
+    Lyrics,
     Pattern,
     Span,
     TempoAnchor,
@@ -76,7 +78,13 @@ from custom_api import (  # noqa: E402
     _safe_repr,
 )
 from custom_loader import load_detector, missing_module_hint  # noqa: E402
-from paths import CUSTOM_RESULTS_DIR, REPO_ROOT, SONGS_DIR, find_audio  # noqa: E402
+from paths import (  # noqa: E402
+    CUSTOM_RESULTS_DIR,
+    DEFAULT_CUSTOM_RESULTS_DIR,
+    REPO_ROOT,
+    SONGS_DIR,
+    find_audio,
+)
 
 # Optional deps live behind narrow try/excepts so the server can still start
 # (and report load errors) on a machine that doesn't have librosa installed.
@@ -178,18 +186,27 @@ def run(name: str, slug: str, *, force: bool = False) -> dict:
 
 
 def get_cached(name: str, slug: str) -> Optional[dict]:
-    """Return the cached envelope or None. Never raises."""
-    p = result_path(name, slug)
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text())
-    except Exception:
-        return None
+    """Return the cached envelope or None. Never raises.
+
+    Reads the writable cache first, then falls back to the read-only
+    data-default seed shipped in the image — so the demo corpus's curated
+    outputs render on a fresh data dir that has never run the detector."""
+    safe = slug.replace("/", "_")
+    for base in (CUSTOM_RESULTS_DIR, DEFAULT_CUSTOM_RESULTS_DIR):
+        p = base / name / f"{safe}.json"
+        if not p.exists():
+            continue
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return None
+    return None
 
 
 def result_path(name: str, slug: str) -> Path:
-    """Where the algorithm-mode envelope for `name`/`slug` lives on disk."""
+    """Where the algorithm-mode envelope for `name`/`slug` is WRITTEN on disk
+    (the writable cache; reads also consult the data-default seed — see
+    get_cached)."""
     safe = slug.replace("/", "_")
     return CUSTOM_RESULTS_DIR / name / f"{safe}.json"
 
@@ -439,6 +456,12 @@ def _validate_items(
     elif output_kind == "pattern":
         for i, item in enumerate(raw):
             ok, err = _validate_pattern(i, item, duration_ms)
+            if ok is not None:
+                accepted.append(ok)
+            errors.extend(err)
+    elif output_kind == "lyrics":
+        for i, item in enumerate(raw):
+            ok, err = _validate_lyrics(i, item, duration_ms)
             if ok is not None:
                 accepted.append(ok)
             errors.extend(err)
@@ -813,6 +836,27 @@ def _validate_pattern(
                     ))
                     break
 
+    spc = item.steps_per_cycle
+    if spc is not None:
+        if not _is_int(spc):
+            errs.append(ValidationError(
+                index=i, field="steps_per_cycle", value=_safe_repr(spc),
+                message=f"steps_per_cycle must be an int or None, got {type(spc).__name__}.",
+            ))
+        elif spc < 1:
+            errs.append(ValidationError(
+                index=i, field="steps_per_cycle", value=spc,
+                message="steps_per_cycle must be >= 1.",
+            ))
+        elif isinstance(hb, list) and hb and all(_is_int(s) for s in hb) and max(hb) >= spc:
+            errs.append(ValidationError(
+                index=i, field="steps_per_cycle", value=spc,
+                message=(
+                    f"steps_per_cycle ({spc}) must be > every highlighted_beats "
+                    f"index (max {max(hb)}) — indices are 0-based within the cycle."
+                ),
+            ))
+
     if errs:
         return None, errs
 
@@ -822,6 +866,69 @@ def _validate_pattern(
         "label":             item.label,
         "repeat_count":      int(item.repeat_count),
         "highlighted_beats": [int(x) for x in (item.highlighted_beats or [])] or None,
+        "steps_per_cycle":   int(item.steps_per_cycle) if item.steps_per_cycle is not None else None,
+    }, []
+
+
+def _validate_lyrics(
+    i: int,
+    item: Any,
+    duration_ms: int,
+) -> tuple[Optional[dict], list[ValidationError]]:
+    """Validate Lyrics: a word/line timestamp with required text."""
+    if not isinstance(item, Lyrics):
+        return None, [ValidationError(
+            index=i, field=None, value=_safe_repr(item),
+            message=f"item must be a Lyrics instance, got {type(item).__name__}.",
+        )]
+
+    errs: list[ValidationError] = []
+
+    t = item.time_ms
+    if not _is_int(t):
+        errs.append(ValidationError(
+            index=i, field="time_ms", value=_safe_repr(t),
+            message=f"time_ms must be an int, got {type(t).__name__}.",
+        ))
+    elif t < 0 or t > duration_ms:
+        errs.append(ValidationError(
+            index=i, field="time_ms", value=t,
+            message=f"time_ms ({t}) must be in [0, {duration_ms}].",
+        ))
+
+    if not isinstance(item.text, str) or not item.text.strip():
+        errs.append(ValidationError(
+            index=i, field="text", value=_safe_repr(item.text),
+            message="text must be a non-empty string.",
+        ))
+
+    if item.kind not in ("word", "line"):
+        errs.append(ValidationError(
+            index=i, field="kind", value=_safe_repr(item.kind),
+            message="kind must be 'word' or 'line'.",
+        ))
+
+    e = item.end_ms
+    if e is not None:
+        if not _is_int(e):
+            errs.append(ValidationError(
+                index=i, field="end_ms", value=_safe_repr(e),
+                message=f"end_ms must be an int or None, got {type(e).__name__}.",
+            ))
+        elif _is_int(t) and (e < t or e > duration_ms):
+            errs.append(ValidationError(
+                index=i, field="end_ms", value=e,
+                message=f"end_ms ({e}) must be in [time_ms, {duration_ms}].",
+            ))
+
+    if errs:
+        return None, errs
+
+    return {
+        "time_ms": int(item.time_ms),
+        "text":    item.text,
+        "kind":    item.kind,
+        "end_ms":  int(item.end_ms) if item.end_ms is not None else None,
     }, []
 
 

@@ -18,7 +18,6 @@ export interface TeamStatsCustomStats {
 export interface TeamStatsAnnotator {
   id: string;
   manual: TeamStatsSourceStats;
-  eye: TeamStatsSourceStats;
   autoGuess: TeamStatsSourceStats;
   custom: TeamStatsCustomStats;
   totalTimeSeconds: number;
