@@ -45,6 +45,18 @@ from pathlib import Path
 import mir_eval
 import mir_eval.onset
 import mir_eval.segment
+
+
+def _beat_eval():
+    """Import beat_eval lazily.
+
+    It pulls librosa (for audio duration), which this server otherwise does
+    not need — paying that import cost at boot would slow every start for one
+    endpoint. Cached by sys.modules after the first call.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import beat_eval
+    return beat_eval
 import numpy as np
 
 try:
@@ -65,9 +77,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import (  # noqa: E402
     ANALYSIS_DIR,
     REPO_ROOT,
-    MANUAL_ANNOTATIONS_DIR as ANNOTATIONS_DIR,
+    ANNOTATION_LAYERS_DIR as ANNOTATIONS_DIR,
     AUTO_GUESS_ANNOTATIONS_DIR as AUTO_GUESS_DIR,
 )
+from server_common import cors_headers  # noqa: E402
 
 # Multi-annotator storage: annotations live at `<dir>/<annotator_id>/<slug>.json`.
 
@@ -105,15 +118,6 @@ ALGO_FILES = {
 }
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
-
-def _cors_headers():
-    return {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    }
-
 
 def _segs_to_intervals_labels(segments):
     """Convert [{time, endTime, label}] → (np.ndarray Nx2, list[str])."""
@@ -270,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code: int, body: dict):
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors_headers().items():
+        for k, v in cors_headers(with_content_type=True).items():
             self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -278,9 +282,52 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        for k, v in _cors_headers().items():
+        for k, v in cors_headers(with_content_type=True).items():
             self.send_header(k, v)
         self.end_headers()
+
+    def _handle_grid_score(self):
+        """Score the grid the curator is LOOKING AT against every tracker.
+
+        The grid comes in the request body rather than being read from disk,
+        so this scores unsaved edits: drag the downbeat and the numbers move.
+        Reading song-info instead would always be one autosave behind, which
+        is precisely wrong for a control whose job is immediate feedback.
+
+        Lives on the mir_eval server rather than beside the trackers because
+        mir_eval is here and this image always runs — a curator should be
+        able to check a grid without the experimental profile being up. With
+        no cached tracker output it answers ok:false with a reason, which the
+        UI shows instead of a score.
+        """
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except json.JSONDecodeError as e:
+            self._send_json(400, {"error": f"invalid JSON: {e}"}); return
+
+        slug = str(body.get("slug", "")).strip()
+        if not slug:
+            self._send_json(400, {"error": "slug is required"}); return
+
+        # Accept a SongInfo-shaped grid; fall back to the stored one when the
+        # caller sends only a slug (the CLI-equivalent path).
+        info = body.get("grid")
+        if not isinstance(info, dict):
+            info = _beat_eval()._song_info(slug)
+            if info is None:
+                self._send_json(404, {"error": f"no song-info for {slug}"}); return
+
+        duration = body.get("duration")
+        try:
+            duration = float(duration) if duration is not None else None
+        except (TypeError, ValueError):
+            duration = None
+
+        try:
+            self._send_json(200, _beat_eval().score_grid(slug, info, duration))
+        except Exception as e:
+            self._send_json(500, {"error": f"{type(e).__name__}: {e}"})
 
     def do_GET(self):
         if self.path == "/api/mir-eval/health":
@@ -302,6 +349,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/mir-eval/pairs":
             self._handle_pairs()
+            return
+        if self.path == "/api/mir-eval/grid-score":
+            self._handle_grid_score()
             return
         if self.path != "/api/mir-eval":
             self._send_json(404, {"error": "not found"})
@@ -346,17 +396,37 @@ class Handler(BaseHTTPRequestHandler):
 
 # ─── Batch helpers ────────────────────────────────────────────────────────────
 
+def _boundary_layers(doc: dict) -> list[dict]:
+    """Every boundaries layer in an annotation-layers document, in doc order."""
+    layers = doc.get("layers")
+    if not isinstance(layers, list):
+        return []
+    return [l for l in layers if isinstance(l, dict) and l.get("type") == "boundaries"]
+
+
 def _load_manual_segs(ann_path: Path):
-    data = json.loads(ann_path.read_text())
-    sections = data.get("sections", [])
-    if not sections:
+    """Reference segments from the FIRST boundaries layer of a layers document.
+
+    A song may carry several boundary layers (a second reading of the same
+    structure); the first one is the reference, matching the order the canvas
+    draws them in.
+    """
+    doc = json.loads(ann_path.read_text())
+    layers = _boundary_layers(doc)
+    if not layers:
         return [], 0.0
-    track_duration = sections[-1]["time"] + 60.0
+    items = sorted(
+        (i for i in layers[0].get("items") or [] if isinstance(i, dict)),
+        key=lambda i: float(i.get("time", 0.0)),
+    )
+    if not items:
+        return [], 0.0
+    track_duration = float(items[-1]["time"]) + 60.0
     segs = []
-    for i, s in enumerate(sections):
+    for i, s in enumerate(items):
         segs.append({
             "time":    float(s["time"]),
-            "endTime": float(sections[i + 1]["time"]) if i + 1 < len(sections) else track_duration,
+            "endTime": float(items[i + 1]["time"]) if i + 1 < len(items) else track_duration,
             "label":   s.get("type", s.get("label", f"seg{i}")),
         })
     return segs, track_duration
@@ -434,17 +504,18 @@ def _handle_batch(self):
             if ref_segs:
                 reviewed_songs.append((slug, ref_segs, track_dur))
     else:
-        # Use songs with reviewed: true in manual manual annotations
+        # Use songs whose boundaries layer is marked reviewed
         for slug in _list_own_slugs(ANNOTATIONS_DIR, annotator_id):
             f = _resolve_ann_file(ANNOTATIONS_DIR, annotator_id, slug)
             if f is None:
                 continue
             try:
                 data = json.loads(f.read_text())
-                if data.get("reviewed"):
-                    ref_segs, track_dur = _load_manual_segs(f)
-                    if ref_segs:
-                        reviewed_songs.append((slug, ref_segs, track_dur))
+                if (data.get("statusByType") or {}).get("boundaries") != "reviewed":
+                    continue
+                ref_segs, track_dur = _load_manual_segs(f)
+                if ref_segs:
+                    reviewed_songs.append((slug, ref_segs, track_dur))
             except Exception:
                 pass
 

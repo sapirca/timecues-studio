@@ -16,14 +16,26 @@ reference. This README is for someone wiring up or maintaining the system.
 |---|---|---|
 | `README.md` (this file) | Human / repo reader | Architecture overview, run/verify recipe, where things live. |
 | [`CLAUDE.md`](./CLAUDE.md) | Detector author (human or LLM) | The contract. Every input/output field, every bound, every validation rule, two worked examples. |
-| [`template.py`](./template.py) | Detector author | Copy-paste starter; also registered as a runnable detector named `template` so you can see one end-to-end. |
-| [`example_energy.py`](./example_energy.py) | Detector author | Working boundary detector based on energy-curve jumps; registered as `example_energy`. |
 | `__init__.py` | (mechanical) | Empty — keeps Python happy. |
 | `<your_name>.py` | You | The actual user-authored detector(s). |
 
-Every `.py` file in this folder is auto-registered. The loader skips only
-`__init__.py` and dotfiles. Duplicate `name` values across files are flagged
-on every conflicting file.
+The shipped examples live next door in
+[`../custom-default/`](../custom-default/), the same split as `data/` and
+`data-default/`:
+
+| File | Purpose |
+|---|---|
+| [`template.py`](../custom-default/template.py) | Copy-paste starter; also registered as a runnable detector named `template` so you can see one end-to-end. |
+| [`example_energy.py`](../custom-default/example_energy.py) | Working boundary detector based on energy-curve jumps; registered as `example_energy`. |
+| `example_*.py` | One worked example per other output kind (cues, spans, loops, patterns). |
+
+This folder is gitignored apart from this README, `CLAUDE.md` and
+`__init__.py`: detectors you write here stay on your disk and out of git.
+Every `.py` file in either folder is auto-registered. The loader skips only
+`__init__.py` and dotfiles. A file here with the same filename as a shipped
+example replaces it — that is what saving an edited example from the `/custom`
+page does, since the app never writes into `custom-default/`. Duplicate `name`
+values across files are flagged on every conflicting file.
 
 ---
 
@@ -31,7 +43,7 @@ on every conflicting file.
 
 ```bash
 # 1. Copy the template (or write one from scratch).
-cp tools/python/custom/template.py tools/python/custom/my_detector.py
+cp tools/python/custom-default/template.py tools/python/custom/my_detector.py
 $EDITOR tools/python/custom/my_detector.py
 
 # 2. Start the dev server (auto-spawns the Python custom server on :8005).
@@ -87,6 +99,7 @@ loading, feature extraction, persistence — happens around it.
 | Where | What |
 |---|---|
 | `tools/python/custom/<name>.py` | User-authored detector source. |
+| `tools/python/custom-default/<name>.py` | Shipped examples + `template.py` (read-only from the app). |
 | `tools/python/custom_api.py` | Frozen public types. Users import only from here. |
 | `tools/python/custom_loader.py` | Discovery + load-time validation. |
 | `tools/python/custom_runner.py` | Run + run-time validation + persistence. |
@@ -152,8 +165,9 @@ curl -s -X POST "http://localhost:8005/api/custom-scripts/run/example_energy?slu
 
 (`example_energy` is shipped pre-registered, so you can run it without copying.
 The `template` detector is also registered — useful for sanity-checking the
-pipeline end-to-end. Both can be deleted from the `/custom` page when you no
-longer need them.)
+pipeline end-to-end. Neither can be deleted from the `/custom` page — they
+live in `custom-default/` — but an edited copy you saved can, which brings the
+shipped one back.)
 
 ---
 

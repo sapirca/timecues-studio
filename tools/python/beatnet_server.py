@@ -19,7 +19,9 @@ Endpoints
 ---------
   GET  /api/beatnet/health           → server up + dep availability
   GET  /api/beatnet/detect/:slug     → cached result, or null
-  POST /api/beatnet/detect           { slug, force? } — run BeatNet
+  POST /api/beatnet/detect           { slug, force?, start?, end? } — run
+                                     BeatNet over the song, or over just
+                                     the [start, end) seconds given.
 
 Output schema
 -------------
@@ -55,7 +57,7 @@ import json
 import sys
 import warnings
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -65,6 +67,10 @@ PORT = 8010
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import find_audio, BEATNET_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
+from server_common import (  # noqa: E402
+    cached_result, cors_headers, now_iso, parse_range, shift_times, time_ms,
+    trimmed_audio,
+)
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +81,14 @@ try:
     _NUMPY_OK = True
 except ImportError:
     _NUMPY_OK = False
+
+# BeatNet imports pyaudio at module load even though only its realtime mode
+# uses it. We run it offline exclusively, so stub pyaudio out when the host
+# has no portaudio — otherwise the detector is unavailable on any machine
+# without that system library. No-op where real pyaudio is installed.
+from pyaudio_shim import apply_pyaudio_shim  # noqa: E402
+
+apply_pyaudio_shim()
 
 try:
     # BeatNet pulls in madmom + torch transitively. We import lazily inside
@@ -89,14 +103,6 @@ except Exception:
 # Process-wide model cache. Loading takes a few seconds; keep the estimator
 # alive between requests.
 _beatnet_estimator = None
-
-
-def _time_ms(t0_ms: float) -> int:
-    return int((datetime.now().timestamp() * 1000) - t0_ms)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _infer_meter(beat_labels: list[int]) -> str | None:
@@ -180,20 +186,42 @@ def detect_beatnet(audio_path: Path) -> dict:
             "beat_times": times,
             "downbeats":  downbeats,
             "meter":      meter,
-            "ms":         _time_ms(t0),
+            "ms":         time_ms(t0),
         }
     except Exception as e:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def detect(slug: str, force: bool = False) -> dict:
+def detect(slug: str, force: bool = False, span: "tuple[float, float] | None" = None) -> dict:
+    """Run BeatNet over `slug`, or over just the `[start, end)` window given.
+
+    The ranged form is what DataPrep's Mapped grid mode asks for: a segment
+    exists precisely because the count restarts there, so the meter that
+    matters is the one inside its own bounds, not the song-wide mode. Ranged
+    results are not cached — see the same note in bpm_server.detect_all.
+    """
     cache_path = CACHE_DIR / f"{slug}.json"
-    if cache_path.exists() and not force:
-        return json.loads(cache_path.read_text())
+    if span is None:
+        hit = cached_result(cache_path, force)
+        if hit is not None:
+            return hit
 
     audio_path = find_audio(slug)
     if audio_path is None:
         raise FileNotFoundError(f"audio not found for slug: {slug}")
+
+    if span:
+        # BeatNet takes a path, so the range has to become a real file.
+        with trimmed_audio(audio_path, *span) as ranged_path:
+            result = shift_times(detect_beatnet(ranged_path), span[0])
+        return {
+            "slug":        slug,
+            "audio_file":  audio_path.name,
+            "duration":    float(span[1] - span[0]),
+            "range":       {"start": span[0], "end": span[1]},
+            "result":      result,
+            "computed_at": now_iso(),
+        }
 
     result = detect_beatnet(audio_path)
     # Best-effort duration via librosa if BeatNet didn't return one; mostly
@@ -210,7 +238,7 @@ def detect(slug: str, force: bool = False) -> dict:
         "audio_file":  audio_path.name,
         "duration":    duration,
         "result":      result,
-        "computed_at": _now_iso(),
+        "computed_at": now_iso(),
     }
     try:
         cache_path.write_text(json.dumps(payload, indent=2))
@@ -221,14 +249,6 @@ def detect(slug: str, force: bool = False) -> dict:
 
 # ─── HTTP handler ───────────────────────────────────────────────────────────
 
-def _cors():
-    return {
-        "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    }
-
-
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         code = str(args[1]) if len(args) > 1 else "???"
@@ -238,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body):
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -247,7 +267,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.end_headers()
 
@@ -289,7 +309,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "slug is required"})
                 return
             try:
-                self._send(200, detect(slug, force=force))
+                span = parse_range(body)
+            except ValueError as e:
+                self._send(400, {"error": str(e)}); return
+            try:
+                self._send(200, detect(slug, force=force, span=span))
             except FileNotFoundError as e:
                 self._send(404, {"error": str(e)})
             except Exception as e:

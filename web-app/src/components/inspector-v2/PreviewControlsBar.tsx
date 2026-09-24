@@ -51,6 +51,7 @@ export function PreviewControlsBar({ isPlaying, loop, onPlay, onPause, onLoopTog
     <div
       className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-gray-900/95 border border-teal-700/60 shadow-lg whitespace-nowrap pointer-events-auto"
       style={{ cursor: 'default' }}
+      onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >

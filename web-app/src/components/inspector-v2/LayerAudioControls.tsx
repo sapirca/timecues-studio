@@ -13,12 +13,32 @@ export const DEFAULT_LAYER_AUDIO: LayerAudioConfig = {
   pan: 0,
 };
 
+// One AudioContext for every test pip this page ever plays, built on the first
+// press. Each press used to construct its own and close it on a 200 ms timer,
+// so a handful of presses inside that window held a handful of open contexts —
+// and Chrome refuses to construct more than a few per document, after which the
+// Test button throws instead of making a sound. One context also means one
+// audio output thread instead of one per press, and nothing left for the
+// collector to chase.
+let pipCtx: AudioContext | null = null;
+
+function ensurePipCtx(): AudioContext | null {
+  if (pipCtx && pipCtx.state !== 'closed') return pipCtx;
+  const Ctor: typeof AudioContext | undefined =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) return null;
+  pipCtx = new Ctor();
+  return pipCtx;
+}
+
 /** Plays one short pip at the user's current settings — for the "Test" button. */
 function playTestPip(gain: number, pan: number, freq: number) {
-  const Ctor: typeof AudioContext =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const ctx = new Ctor();
+  const ctx = ensurePipCtx();
+  if (!ctx) return;
+  // The press is a user gesture, which is the only place a suspended context
+  // may be resumed under the autoplay policy.
+  if (ctx.state === 'suspended') void ctx.resume();
   const startAt = ctx.currentTime + 0.02;
   const osc = ctx.createOscillator();
   osc.type = 'square';
@@ -32,7 +52,15 @@ function playTestPip(gain: number, pan: number, freq: number) {
   osc.connect(env).connect(panner).connect(ctx.destination);
   osc.start(startAt);
   osc.stop(startAt + 0.07);
-  setTimeout(() => void ctx.close(), 200);
+  // The context is shared and stays open, so the pip's own nodes are what has
+  // to be released: an OscillatorNode that has ended is inert, but it and the
+  // gain/panner behind it stay reachable from the graph until they are
+  // disconnected.
+  osc.onended = () => {
+    osc.disconnect();
+    env.disconnect();
+    panner.disconnect();
+  };
 }
 
 /**
@@ -62,14 +90,16 @@ export function LayerAudioControls({
 
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => {
+    const onDoc = (e: PointerEvent) => {
       const target = e.target as Node;
       if (ref.current && !ref.current.contains(target) && popoverRef.current && !popoverRef.current.contains(target)) {
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    document.addEventListener('pointerdown', onDoc);
+    return () => document.removeEventListener('pointerdown', onDoc);
   }, [open]);
 
   // Position the portal-rendered popover just below the trigger, in viewport coords.
@@ -123,6 +153,7 @@ export function LayerAudioControls({
           ref={popoverRef}
           className="fixed z-[1000] bg-gray-900 border border-gray-700 rounded shadow-lg p-3 w-60"
           style={{ top: popoverPos.top, left: popoverPos.left }}
+          onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >

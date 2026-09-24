@@ -1,0 +1,419 @@
+{
+  "slug": "edm-at-midnight",
+  "audio_file": "vocals.wav",
+  "algorithm": "librosa-onsets",
+  "stem": "vocals",
+  "duration": 166.87501133786847,
+  "cues": [
+    {
+      "time": 15.023310657596372,
+      "label": "onset",
+      "confidence": 0.6509504914283752
+    },
+    {
+      "time": 16.439727891156462,
+      "label": "onset",
+      "confidence": 0.18908484280109406
+    },
+    {
+      "time": 18.320544217687075,
+      "label": "onset",
+      "confidence": 0.32315343618392944
+    },
+    {
+      "time": 20.201360544217685,
+      "label": "onset",
+      "confidence": 0.3600422143936157
+    },
+    {
+      "time": 22.058956916099774,
+      "label": "onset",
+      "confidence": 0.5520302057266235
+    },
+    {
+      "time": 24.055873015873015,
+      "label": "onset",
+      "confidence": 0.23830731213092804
+    },
+    {
+      "time": 28.026485260770976,
+      "label": "onset",
+      "confidence": 1.0
+    },
+    {
+      "time": 28.560544217687074,
+      "label": "onset",
+      "confidence": 0.10360688716173172
+    },
+    {
+      "time": 29.860861678004536,
+      "label": "onset",
+      "confidence": 0.24046330153942108
+    },
+    {
+      "time": 33.90113378684807,
+      "label": "onset",
+      "confidence": 0.20178470015525818
+    },
+    {
+      "time": 34.853151927437644,
+      "label": "onset",
+      "confidence": 0.14973057806491852
+    },
+    {
+      "time": 35.80517006802721,
+      "label": "onset",
+      "confidence": 0.16949355602264404
+    },
+    {
+      "time": 35.9677097505669,
+      "label": "onset",
+      "confidence": 0.18219681084156036
+    },
+    {
+      "time": 36.73396825396826,
+      "label": "onset",
+      "confidence": 0.23261761665344238
+    },
+    {
+      "time": 37.2215873015873,
+      "label": "onset",
+      "confidence": 0.16832773387432098
+    },
+    {
+      "time": 38.35936507936508,
+      "label": "onset",
+      "confidence": 0.15042024850845337
+    },
+    {
+      "time": 38.59156462585034,
+      "label": "onset",
+      "confidence": 0.12546934187412262
+    },
+    {
+      "time": 41.28507936507936,
+      "label": "onset",
+      "confidence": 0.3950006067752838
+    },
+    {
+      "time": 41.40117913832199,
+      "label": "onset",
+      "confidence": 0.18495601415634155
+    },
+    {
+      "time": 41.54049886621315,
+      "label": "onset",
+      "confidence": 0.1448899209499359
+    },
+    {
+      "time": 42.30675736961451,
+      "label": "onset",
+      "confidence": 0.18878647685050964
+    },
+    {
+      "time": 97.12907029478458,
+      "label": "onset",
+      "confidence": 0.2055758386850357
+    },
+    {
+      "time": 97.87210884353742,
+      "label": "onset",
+      "confidence": 0.29406508803367615
+    },
+    {
+      "time": 98.94022675736962,
+      "label": "onset",
+      "confidence": 0.19556266069412231
+    },
+    {
+      "time": 99.75292517006802,
+      "label": "onset",
+      "confidence": 0.3102791905403137
+    },
+    {
+      "time": 100.12444444444445,
+      "label": "onset",
+      "confidence": 0.20859137177467346
+    },
+    {
+      "time": 101.03002267573696,
+      "label": "onset",
+      "confidence": 0.3032466769218445
+    },
+    {
+      "time": 101.63374149659865,
+      "label": "onset",
+      "confidence": 0.31474554538726807
+    },
+    {
+      "time": 102.35356009070294,
+      "label": "onset",
+      "confidence": 0.17454877495765686
+    },
+    {
+      "time": 103.49133786848073,
+      "label": "onset",
+      "confidence": 0.23356574773788452
+    },
+    {
+      "time": 104.21115646258504,
+      "label": "onset",
+      "confidence": 0.2813366949558258
+    },
+    {
+      "time": 104.6291156462585,
+      "label": "onset",
+      "confidence": 0.28739163279533386
+    },
+    {
+      "time": 104.88453514739228,
+      "label": "onset",
+      "confidence": 0.20707929134368896
+    },
+    {
+      "time": 105.39537414965986,
+      "label": "onset",
+      "confidence": 0.34987688064575195
+    },
+    {
+      "time": 105.76689342403628,
+      "label": "onset",
+      "confidence": 0.12086834758520126
+    },
+    {
+      "time": 106.0455328798186,
+      "label": "onset",
+      "confidence": 0.33999550342559814
+    },
+    {
+      "time": 106.11519274376417,
+      "label": "onset",
+      "confidence": 0.26678332686424255
+    },
+    {
+      "time": 107.04399092970522,
+      "label": "onset",
+      "confidence": 0.14598535001277924
+    },
+    {
+      "time": 107.25297052154195,
+      "label": "onset",
+      "confidence": 0.2734934091567993
+    },
+    {
+      "time": 107.97278911564626,
+      "label": "onset",
+      "confidence": 0.21732643246650696
+    },
+    {
+      "time": 108.32108843537415,
+      "label": "onset",
+      "confidence": 0.21272654831409454
+    },
+    {
+      "time": 109.15700680272109,
+      "label": "onset",
+      "confidence": 0.171493262052536
+    },
+    {
+      "time": 109.83038548752835,
+      "label": "onset",
+      "confidence": 0.18951372802257538
+    },
+    {
+      "time": 110.3180045351474,
+      "label": "onset",
+      "confidence": 0.2459525316953659
+    },
+    {
+      "time": 110.78240362811792,
+      "label": "onset",
+      "confidence": 0.16323670744895935
+    },
+    {
+      "time": 110.99138321995464,
+      "label": "onset",
+      "confidence": 0.28709879517555237
+    },
+    {
+      "time": 111.71120181405895,
+      "label": "onset",
+      "confidence": 0.22484123706817627
+    },
+    {
+      "time": 111.94340136054421,
+      "label": "onset",
+      "confidence": 0.17221789062023163
+    },
+    {
+      "time": 112.89541950113379,
+      "label": "onset",
+      "confidence": 0.14900840818881989
+    },
+    {
+      "time": 113.12761904761905,
+      "label": "onset",
+      "confidence": 0.16500771045684814
+    },
+    {
+      "time": 113.38303854875284,
+      "label": "onset",
+      "confidence": 0.17761781811714172
+    },
+    {
+      "time": 113.59201814058957,
+      "label": "onset",
+      "confidence": 0.15033455193042755
+    },
+    {
+      "time": 114.0564172335601,
+      "label": "onset",
+      "confidence": 0.19045060873031616
+    },
+    {
+      "time": 117.33043083900226,
+      "label": "onset",
+      "confidence": 0.198939248919487
+    },
+    {
+      "time": 117.4465306122449,
+      "label": "onset",
+      "confidence": 0.1555742770433426
+    },
+    {
+      "time": 117.81804988662131,
+      "label": "onset",
+      "confidence": 0.14365750551223755
+    },
+    {
+      "time": 120.27936507936508,
+      "label": "onset",
+      "confidence": 0.19887298345565796
+    },
+    {
+      "time": 120.7437641723356,
+      "label": "onset",
+      "confidence": 0.4293312728404999
+    },
+    {
+      "time": 121.1849433106576,
+      "label": "onset",
+      "confidence": 0.2026968151330948
+    },
+    {
+      "time": 123.01931972789116,
+      "label": "onset",
+      "confidence": 0.19749145209789276
+    },
+    {
+      "time": 149.55972789115646,
+      "label": "onset",
+      "confidence": 0.24205544590950012
+    },
+    {
+      "time": 151.9049433106576,
+      "label": "onset",
+      "confidence": 0.20194843411445618
+    },
+    {
+      "time": 152.276462585034,
+      "label": "onset",
+      "confidence": 0.2283182293176651
+    },
+    {
+      "time": 152.6247619047619,
+      "label": "onset",
+      "confidence": 0.2047267109155655
+    },
+    {
+      "time": 152.97306122448978,
+      "label": "onset",
+      "confidence": 0.3336300551891327
+    },
+    {
+      "time": 153.20526077097506,
+      "label": "onset",
+      "confidence": 0.13631419837474823
+    },
+    {
+      "time": 153.3213605442177,
+      "label": "onset",
+      "confidence": 0.2294803112745285
+    },
+    {
+      "time": 154.1340589569161,
+      "label": "onset",
+      "confidence": 0.17687956988811493
+    },
+    {
+      "time": 154.5055782312925,
+      "label": "onset",
+      "confidence": 0.15735824406147003
+    },
+    {
+      "time": 154.85387755102042,
+      "label": "onset",
+      "confidence": 0.20568791031837463
+    },
+    {
+      "time": 155.2021768707483,
+      "label": "onset",
+      "confidence": 0.18991805613040924
+    },
+    {
+      "time": 155.7362358276644,
+      "label": "onset",
+      "confidence": 0.16708137094974518
+    },
+    {
+      "time": 156.0148752834467,
+      "label": "onset",
+      "confidence": 0.23083333671092987
+    },
+    {
+      "time": 156.38639455782314,
+      "label": "onset",
+      "confidence": 0.13420146703720093
+    },
+    {
+      "time": 156.71147392290248,
+      "label": "onset",
+      "confidence": 0.2108665108680725
+    },
+    {
+      "time": 157.89569160997732,
+      "label": "onset",
+      "confidence": 0.22455215454101562
+    },
+    {
+      "time": 158.61551020408163,
+      "label": "onset",
+      "confidence": 0.17430317401885986
+    },
+    {
+      "time": 159.77650793650793,
+      "label": "onset",
+      "confidence": 0.17945243418216705
+    },
+    {
+      "time": 160.47310657596373,
+      "label": "onset",
+      "confidence": 0.22343774139881134
+    },
+    {
+      "time": 162.35392290249433,
+      "label": "onset",
+      "confidence": 0.16829577088356018
+    },
+    {
+      "time": 163.28272108843538,
+      "label": "onset",
+      "confidence": 0.14827419817447662
+    }
+  ],
+  "gated_out": 11,
+  "ok": true,
+  "error": null,
+  "ms": 169,
+  "computed_at": "2026-06-28T12:52:09+00:00"
+}

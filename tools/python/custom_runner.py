@@ -23,16 +23,19 @@ only needs one parser:
     {
       "name": "custom_1",
       "slug": "...",
-      "output_kind": "boundary" | "cue" | "span" | "loop" | "pattern",
+      "output_kind": "boundary" | "cue" | "span" | "loop" | "pattern" | "lyrics",
       "ran_at": "ISO-8601",
       "duration_ms": int,
       "items": [
         {time_ms, ...}                               # boundary | cue
+                                                     #   (cue may add velocity, level_db, color, note, decay_ms, importance)
         | {start_ms, duration_ms, label, intensity}  # span
         | {start_ms, duration_ms, label, snap_zero_cross}            # loop
-        | {start_ms, duration_ms, label, repeat_count, highlighted_beats}  # pattern
+        | {start_ms, duration_ms, label, repeat_count, highlighted_beats, spans, steps_per_cycle}  # pattern
+        | {time_ms, end_ms, text, kind}              # lyrics
       ],
       "errors": [ {index, field, value, message}, ... ],
+      "notes":  [ {code, message}, ... ],     # caveats; the run still succeeded
       "stats": { "accepted": int, "rejected": int },
       "fatal": null | { "type": str, "message": str, "traceback": str }
     }
@@ -43,6 +46,7 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import os
+import re
 import signal
 import sys
 import threading
@@ -69,14 +73,21 @@ from custom_api import (  # noqa: E402
     Cue,
     DetectionContext,
     Loop,
+    Lyrics,
     Pattern,
     Span,
-    TempoAnchor,
     ValidationError,
     _safe_repr,
 )
 from custom_loader import load_detector, missing_module_hint  # noqa: E402
-from paths import CUSTOM_RESULTS_DIR, REPO_ROOT, SONGS_DIR, find_audio  # noqa: E402
+from server_common import cached_result  # noqa: E402
+from paths import (  # noqa: E402
+    CUSTOM_RESULTS_DIR,
+    DEFAULT_CUSTOM_RESULTS_DIR,
+    REPO_ROOT,
+    SONGS_DIR,
+    find_audio,
+)
 
 # Optional deps live behind narrow try/excepts so the server can still start
 # (and report load errors) on a machine that doesn't have librosa installed.
@@ -108,11 +119,9 @@ _AUDIO_EXTS = (".mp3", ".wav", ".flac", ".ogg", ".m4a")
 def run(name: str, slug: str, *, force: bool = False) -> dict:
     """Run detector `name` on song `slug`, persist, return the envelope."""
     cache_path = result_path(name, slug)
-    if cache_path.exists() and not force:
-        try:
-            return json.loads(cache_path.read_text())
-        except Exception:
-            pass  # corrupt cache → re-run
+    hit = cached_result(cache_path, force, failed=lambda env: bool(env.get("fatal")))
+    if hit is not None:
+        return hit
 
     envelope = _empty_envelope(name, slug)
 
@@ -162,7 +171,13 @@ def run(name: str, slug: str, *, force: bool = False) -> dict:
     # the sidecar. See _run_detect_isolated().
     kind, payload = _run_detect_isolated(detector, ctx)
     if kind == "ok":
-        raw_items = payload
+        # A bare list is the pre-notes shape; still accepted so a caller that
+        # drives _run_detect_isolated directly is not broken by this.
+        if isinstance(payload, dict):
+            raw_items = payload.get("items")
+            envelope["notes"] = list(payload.get("notes") or [])
+        else:
+            raw_items = payload
     else:
         envelope["fatal"] = _fatal_from_isolation(kind, payload)
         _persist(envelope, cache_path)
@@ -178,18 +193,27 @@ def run(name: str, slug: str, *, force: bool = False) -> dict:
 
 
 def get_cached(name: str, slug: str) -> Optional[dict]:
-    """Return the cached envelope or None. Never raises."""
-    p = result_path(name, slug)
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text())
-    except Exception:
-        return None
+    """Return the cached envelope or None. Never raises.
+
+    Reads the writable cache first, then falls back to the read-only
+    data-default seed shipped in the image — so the demo corpus's curated
+    outputs render on a fresh data dir that has never run the detector."""
+    safe = slug.replace("/", "_")
+    for base in (CUSTOM_RESULTS_DIR, DEFAULT_CUSTOM_RESULTS_DIR):
+        p = base / name / f"{safe}.json"
+        if not p.exists():
+            continue
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return None
+    return None
 
 
 def result_path(name: str, slug: str) -> Path:
-    """Where the algorithm-mode envelope for `name`/`slug` lives on disk."""
+    """Where the algorithm-mode envelope for `name`/`slug` is WRITTEN on disk
+    (the writable cache; reads also consult the data-default seed — see
+    get_cached)."""
     safe = slug.replace("/", "_")
     return CUSTOM_RESULTS_DIR / name / f"{safe}.json"
 
@@ -258,7 +282,9 @@ def _child_entry(detector: Any, ctx: Any, conn: Any) -> None:
 
     try:
         items = detector.detect(ctx)
-        conn.send(("ok", items))
+        # ctx lives in this child's copy of memory; anything warn() recorded is
+        # lost unless it travels back with the items.
+        conn.send(("ok", {"items": items, "notes": list(getattr(ctx, "notes", []))}))
     except BaseException as exc:
         conn.send(("error", {
             "type":      type(exc).__name__,
@@ -289,7 +315,8 @@ def _run_detect_isolated(detector: Any, ctx: Any) -> tuple[str, Any]:
     """
     if not _HAS_FORK:
         try:
-            return ("ok", detector.detect(ctx))
+            items = detector.detect(ctx)
+            return ("ok", {"items": items, "notes": list(getattr(ctx, "notes", []))})
         except BaseException as exc:
             return ("error", {
                 "type":      type(exc).__name__,
@@ -442,6 +469,12 @@ def _validate_items(
             if ok is not None:
                 accepted.append(ok)
             errors.extend(err)
+    elif output_kind == "lyrics":
+        for i, item in enumerate(raw):
+            ok, err = _validate_lyrics(i, item, duration_ms)
+            if ok is not None:
+                accepted.append(ok)
+            errors.extend(err)
     else:  # should be impossible (loader rejects others)
         errors.append(ValidationError(
             index=None,
@@ -583,6 +616,47 @@ def _validate_cue(
                     ))
                     break
 
+    # The struck-hit fields. getattr: a detector may build its Cue against an
+    # older custom_api that has none of them.
+    velocity = getattr(item, "velocity", None)
+    if velocity is not None and (not _is_int(velocity) or not 1 <= velocity <= 127):
+        errs.append(ValidationError(
+            index=i, field="velocity", value=_safe_repr(velocity),
+            message="velocity must be an int in [1, 127] or None.",
+        ))
+    level_db = getattr(item, "level_db", None)
+    if level_db is not None and (
+            not isinstance(level_db, (int, float, np.floating)) or isinstance(level_db, bool)
+            or not np.isfinite(level_db) or level_db > 0):
+        errs.append(ValidationError(
+            index=i, field="level_db", value=_safe_repr(level_db),
+            message="level_db must be a finite float <= 0 or None.",
+        ))
+    color = getattr(item, "color", None)
+    if color is not None and not (isinstance(color, str) and _HEX_COLOR_RE.match(color)):
+        errs.append(ValidationError(
+            index=i, field="color", value=_safe_repr(color),
+            message='color must be a "#rrggbb" string or None.',
+        ))
+    note = getattr(item, "note", None)
+    if note is not None and (not _is_int(note) or not 0 <= note <= 127):
+        errs.append(ValidationError(
+            index=i, field="note", value=_safe_repr(note),
+            message="note must be an int MIDI note number in [0, 127] or None.",
+        ))
+    decay_ms = getattr(item, "decay_ms", None)
+    if decay_ms is not None and (not _is_int(decay_ms) or decay_ms <= 0):
+        errs.append(ValidationError(
+            index=i, field="decay_ms", value=_safe_repr(decay_ms),
+            message="decay_ms must be an int > 0 or None.",
+        ))
+    importance = getattr(item, "importance", None)
+    if importance is not None and importance not in ("critical", "optional"):
+        errs.append(ValidationError(
+            index=i, field="importance", value=_safe_repr(importance),
+            message="importance must be 'critical', 'optional', or None.",
+        ))
+
     if errs:
         return None, errs
 
@@ -592,6 +666,14 @@ def _validate_cue(
         "description": item.description,
         "intensity":   float(item.intensity) if item.intensity is not None else None,
         "candidates":  [int(c) for c in (item.candidates or [])] or None,
+        # Only when set, so a cue detector that never strikes anything keeps
+        # the envelope it always had.
+        **({"velocity": int(velocity)} if velocity is not None else {}),
+        **({"level_db": float(level_db)} if level_db is not None else {}),
+        **({"color": color.lower()} if color is not None else {}),
+        **({"note": int(note)} if note is not None else {}),
+        **({"decay_ms": int(decay_ms)} if decay_ms is not None else {}),
+        **({"importance": importance} if importance is not None else {}),
     }, []
 
 
@@ -813,6 +895,174 @@ def _validate_pattern(
                     ))
                     break
 
+    spc = item.steps_per_cycle
+    if spc is not None:
+        if not _is_int(spc):
+            errs.append(ValidationError(
+                index=i, field="steps_per_cycle", value=_safe_repr(spc),
+                message=f"steps_per_cycle must be an int or None, got {type(spc).__name__}.",
+            ))
+        elif spc < 1:
+            errs.append(ValidationError(
+                index=i, field="steps_per_cycle", value=spc,
+                message="steps_per_cycle must be >= 1.",
+            ))
+        elif isinstance(hb, list) and hb and all(_is_int(s) for s in hb) and max(hb) >= spc:
+            errs.append(ValidationError(
+                index=i, field="steps_per_cycle", value=spc,
+                message=(
+                    f"steps_per_cycle ({spc}) must be > every highlighted_beats "
+                    f"index (max {max(hb)}) — indices are 0-based within the cycle."
+                ),
+            ))
+
+    # spans: held runs [start_step, length], length >= 2, in-bounds, and
+    # disjoint both from each other and from highlighted_beats.
+    sp = item.spans
+    clean_spans: list[list[int]] = []
+    if sp is not None:
+        tick_set = set(hb) if isinstance(hb, list) and all(_is_int(x) for x in hb) else set()
+        covered: set[int] = set()
+        if not isinstance(sp, list):
+            errs.append(ValidationError(
+                index=i, field="spans", value=_safe_repr(sp),
+                message=f"spans must be list[[start, length]] or None, got {type(sp).__name__}.",
+            ))
+        else:
+            for j, entry in enumerate(sp):
+                if not (isinstance(entry, (list, tuple)) and len(entry) == 2
+                        and _is_int(entry[0]) and _is_int(entry[1])):
+                    errs.append(ValidationError(
+                        index=i, field=f"spans[{j}]", value=_safe_repr(entry),
+                        message="each span must be [start_step, length] with int entries.",
+                    ))
+                    break
+                start, length = int(entry[0]), int(entry[1])
+                if start < 0 or length < 2:
+                    errs.append(ValidationError(
+                        index=i, field=f"spans[{j}]", value=_safe_repr(entry),
+                        message="span start must be >= 0 and length must be >= 2.",
+                    ))
+                    break
+                if spc is not None and _is_int(spc) and start + length > spc:
+                    errs.append(ValidationError(
+                        index=i, field=f"spans[{j}]", value=_safe_repr(entry),
+                        message=f"span [{start}, {length}] runs past steps_per_cycle ({spc}).",
+                    ))
+                    break
+                run = set(range(start, start + length))
+                if run & covered or run & tick_set:
+                    errs.append(ValidationError(
+                        index=i, field=f"spans[{j}]", value=_safe_repr(entry),
+                        message="spans must not overlap each other or highlighted_beats.",
+                    ))
+                    break
+                covered |= run
+                clean_spans.append([start, length])
+
+    # Multi-row content. Validated against the SAME step index space as the
+    # single-row fields, so a row cannot describe a step the cycle doesn't have
+    # — a silently out-of-range step would draw nothing and look like a bug in
+    # the grid rather than in the detector.
+    # `steps_per_cycle` is optional (the UI falls back to beats_per_bar * 4),
+    # so the upper bound is only enforced when the detector declared one.
+    row_limit = spc if (_is_int(spc) and spc >= 1) else None
+
+    clean_rows: list[dict] = []
+    if item.rows is not None:
+        if not isinstance(item.rows, (list, tuple)):
+            errs.append(ValidationError(
+                index=i, field="rows", value=_safe_repr(item.rows),
+                message="rows must be a list of PatternRow.",
+            ))
+        else:
+            for j, row in enumerate(item.rows):
+                name = getattr(row, "row", None)
+                steps_list = getattr(row, "highlighted_beats", None)
+                if not isinstance(name, str):
+                    errs.append(ValidationError(
+                        index=i, field=f"rows[{j}].row", value=_safe_repr(name),
+                        message="row must be a string naming the line (e.g. \"kick\").",
+                    ))
+                    continue
+                if not isinstance(steps_list, (list, tuple)):
+                    errs.append(ValidationError(
+                        index=i, field=f"rows[{j}].highlighted_beats", value=_safe_repr(steps_list),
+                        message="highlighted_beats must be a list of step indices.",
+                    ))
+                    continue
+                bad = [
+                    x for x in steps_list
+                    if not _is_int(x) or x < 0 or (row_limit is not None and x >= row_limit)
+                ]
+                if bad:
+                    upper = f"[0, {row_limit - 1}]" if row_limit is not None else "[0, ...)"
+                    errs.append(ValidationError(
+                        index=i, field=f"rows[{j}].highlighted_beats", value=_safe_repr(bad[:5]),
+                        message=f"step indices must be ints in {upper}.",
+                    ))
+                    continue
+                accents = getattr(row, "accents", None)
+                clean_accents: Optional[list[int]] = None
+                if accents is not None:
+                    if not isinstance(accents, (list, tuple)):
+                        errs.append(ValidationError(
+                            index=i, field=f"rows[{j}].accents", value=_safe_repr(accents),
+                            message="accents must be a list of velocities (1-127).",
+                        ))
+                        continue
+                    if len(accents) > len(steps_list):
+                        errs.append(ValidationError(
+                            index=i, field=f"rows[{j}].accents", value=len(accents),
+                            message=(f"accents ({len(accents)}) is positional against "
+                                     f"highlighted_beats ({len(steps_list)}); it cannot be longer."),
+                        ))
+                        continue
+                    clean_accents = [max(1, min(127, int(v))) for v in accents if _is_int(v)]
+                    if len(clean_accents) != len(accents):
+                        errs.append(ValidationError(
+                            index=i, field=f"rows[{j}].accents", value=_safe_repr(accents[:5]),
+                            message="accents must be ints.",
+                        ))
+                        continue
+                clean_rows.append({
+                    "row": name,
+                    "highlighted_beats": [int(x) for x in steps_list],
+                    **({"accents": clean_accents} if clean_accents is not None else {}),
+                })
+
+    clean_occurrences: list[dict] = []
+    if item.occurrences is not None:
+        if not isinstance(item.occurrences, (list, tuple)):
+            errs.append(ValidationError(
+                index=i, field="occurrences", value=_safe_repr(item.occurrences),
+                message="occurrences must be a list of PatternOccurrence.",
+            ))
+        else:
+            for j, occ in enumerate(item.occurrences):
+                dev = getattr(occ, "deviation", 0.0)
+                if not isinstance(dev, (int, float)) or isinstance(dev, bool) or not (0.0 <= float(dev) <= 1.0):
+                    errs.append(ValidationError(
+                        index=i, field=f"occurrences[{j}].deviation", value=_safe_repr(dev),
+                        message="deviation must be a number in [0, 1] (0 = played exactly).",
+                    ))
+                    continue
+                clean_occurrences.append({
+                    "index": int(getattr(occ, "index", j)),
+                    "start_ms": int(getattr(occ, "start_ms", 0)),
+                    "deviation": round(float(dev), 4),
+                    "added": list(getattr(occ, "added", None) or []),
+                    "missing": list(getattr(occ, "missing", None) or []),
+                    "relabelled": list(getattr(occ, "relabelled", None) or []),
+                })
+
+    motif = getattr(item, "motif", None)
+    if motif is not None and not isinstance(motif, str):
+        errs.append(ValidationError(
+            index=i, field="motif", value=_safe_repr(motif),
+            message=f"motif must be a str or None, got {type(motif).__name__}.",
+        ))
+
     if errs:
         return None, errs
 
@@ -820,9 +1070,87 @@ def _validate_pattern(
         "start_ms":          int(item.start_ms),
         "duration_ms":       int(item.duration_ms),
         "label":             item.label,
+        **({"motif": motif} if motif else {}),
         "repeat_count":      int(item.repeat_count),
         "highlighted_beats": [int(x) for x in (item.highlighted_beats or [])] or None,
+        "spans":             clean_spans or None,
+        "steps_per_cycle":   int(item.steps_per_cycle) if item.steps_per_cycle is not None else None,
+        **({"rows": clean_rows} if clean_rows else {}),
+        **({"occurrences": clean_occurrences} if clean_occurrences else {}),
     }, []
+
+
+def _validate_lyrics(
+    i: int,
+    item: Any,
+    duration_ms: int,
+) -> tuple[Optional[dict], list[ValidationError]]:
+    """Validate Lyrics: a word/line timestamp with required text."""
+    if not isinstance(item, Lyrics):
+        return None, [ValidationError(
+            index=i, field=None, value=_safe_repr(item),
+            message=f"item must be a Lyrics instance, got {type(item).__name__}.",
+        )]
+
+    errs: list[ValidationError] = []
+
+    t = item.time_ms
+    if not _is_int(t):
+        errs.append(ValidationError(
+            index=i, field="time_ms", value=_safe_repr(t),
+            message=f"time_ms must be an int, got {type(t).__name__}.",
+        ))
+    elif t < 0 or t > duration_ms:
+        errs.append(ValidationError(
+            index=i, field="time_ms", value=t,
+            message=f"time_ms ({t}) must be in [0, {duration_ms}].",
+        ))
+
+    if not isinstance(item.text, str) or not item.text.strip():
+        errs.append(ValidationError(
+            index=i, field="text", value=_safe_repr(item.text),
+            message="text must be a non-empty string.",
+        ))
+
+    if item.kind not in ("word", "line"):
+        errs.append(ValidationError(
+            index=i, field="kind", value=_safe_repr(item.kind),
+            message="kind must be 'word' or 'line'.",
+        ))
+
+    e = item.end_ms
+    if e is not None:
+        if not _is_int(e):
+            errs.append(ValidationError(
+                index=i, field="end_ms", value=_safe_repr(e),
+                message=f"end_ms must be an int or None, got {type(e).__name__}.",
+            ))
+        elif _is_int(t) and (e < t or e > duration_ms):
+            errs.append(ValidationError(
+                index=i, field="end_ms", value=e,
+                message=f"end_ms ({e}) must be in [time_ms, {duration_ms}].",
+            ))
+
+    src = item.source
+    if src is not None and not isinstance(src, str):
+        errs.append(ValidationError(
+            index=i, field="source", value=_safe_repr(src),
+            message=f"source must be a str or None, got {type(src).__name__}.",
+        ))
+
+    if errs:
+        return None, errs
+
+    return {
+        "time_ms": int(item.time_ms),
+        "text":    item.text,
+        "kind":    item.kind,
+        "end_ms":  int(item.end_ms) if item.end_ms is not None else None,
+        "source":  item.source,
+    }, []
+
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _is_int(v: Any) -> bool:
@@ -894,19 +1222,8 @@ def _build_context(audio_path: Path, slug: str) -> DetectionContext:
     time_signature = str(song_info.get("timeSignature") or "4/4")
     grid_offset_ms = int(round(float(song_info.get("gridOffset") or 0.0) * 1000))
     grid_mode = song_info.get("gridMode") or "static"
-    if grid_mode not in ("static", "dynamic", "manual"):
+    if grid_mode not in ("static", "mapped", "manual"):
         grid_mode = "static"
-    raw_anchors = song_info.get("tempoAnchors") or []
-    parsed_anchors: list[TempoAnchor] = []
-    for a in raw_anchors:
-        try:
-            ts = float(a.get("timestamp"))
-            bp = float(a.get("bpm"))
-            if ts >= 0 and bp > 0:
-                parsed_anchors.append(TempoAnchor(timestamp_ms=int(round(ts * 1000)), bpm=bp))
-        except (TypeError, AttributeError, ValueError):
-            continue
-    parsed_anchors.sort(key=lambda x: x.timestamp_ms)
 
     return DetectionContext(
         audio=audio.y,
@@ -918,11 +1235,11 @@ def _build_context(audio_path: Path, slug: str) -> DetectionContext:
         tension_curve=np.asarray(tension, dtype=np.float32),
         bpm=bpm_value,
         beat_times_ms=beat_times_ms,
+        slug=slug,
         grid_offset_ms=grid_offset_ms,
         time_signature=time_signature,
         beats_per_bar=_parse_beats_per_bar(time_signature),
         grid_mode=grid_mode,
-        tempo_anchors=tuple(parsed_anchors),
     )
 
 
@@ -1017,6 +1334,7 @@ def _empty_envelope(name: str, slug: str) -> dict:
         "duration_ms":  0,
         "items":        [],
         "errors":       [],
+        "notes":        [],
         "stats":        {"accepted": 0, "rejected": 0},
         "fatal":        None,
     }

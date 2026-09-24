@@ -2,10 +2,20 @@
 // cue_extras_server (proxied at /api/cue-extras). Experimental: gated by
 // `experimentalCueExtras`.
 
+import { createDetectionClient } from './detectionClient';
+
 export interface CueExtrasCue {
   time: number;
   label: string;
   confidence: number | null;
+  /** How hard this drum was struck, 1-127, against the hardest hit of the
+   *  SAME drum in the track — so a full-force hi-hat is 127 even though it is
+   *  far quieter than any kick. Set only by `drum-transients`. */
+  velocity?: number;
+  /** The hit's actual level against the loudest hit anywhere in the track, in
+   *  dB (always <= 0). Unlike `velocity` this IS comparable across
+   *  instruments. Set only by `drum-transients`. */
+  levelDb?: number;
 }
 
 export interface CueExtrasDetectionResult {
@@ -29,47 +39,8 @@ export interface CueExtrasAlgorithmInfo {
   available: boolean;
 }
 
-export async function listCueExtrasAlgorithms(): Promise<CueExtrasAlgorithmInfo[] | null> {
-  try {
-    const res = await fetch('/api/cue-extras/algorithms');
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data) ? data as CueExtrasAlgorithmInfo[] : null;
-  } catch { return null; }
-}
+const client = createDetectionClient<CueExtrasAlgorithmInfo, CueExtrasDetectionResult>('cue-extras', 'cues');
 
-export async function loadCachedCueExtras(slug: string, algo: string): Promise<CueExtrasDetectionResult | null> {
-  try {
-    const res = await fetch(`/api/cue-extras/detect/${encodeURIComponent(slug)}/${encodeURIComponent(algo)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return (data && typeof data === 'object' && 'cues' in data) ? data as CueExtrasDetectionResult : null;
-  } catch { return null; }
-}
-
-export async function runCueExtrasDetection(slug: string, algo: string, force = false): Promise<CueExtrasDetectionResult | null> {
-  try {
-    const res = await fetch('/api/cue-extras/detect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug, algo, force }),
-    });
-    if (!res.ok) return null;
-    return await res.json() as CueExtrasDetectionResult;
-  } catch { return null; }
-}
-
-export async function initializeCueExtrasAlgorithm(algo: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const res = await fetch('/api/cue-extras/initialize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ algo }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data?.error ?? `HTTP ${res.status}` };
-    return { ok: !!data?.ok, error: data?.error };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
-}
+export const listCueExtrasAlgorithms = client.listAlgorithms;
+export const loadCachedCueExtras = client.loadCached;
+export const initializeCueExtrasAlgorithm = client.initializeAlgorithm;

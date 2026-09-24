@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
         "mir_eval>=0.7.0"
 
 COPY tools/python/paths.py            /app/tools/python/paths.py
+COPY tools/python/server_common.py    /app/tools/python/server_common.py
 COPY tools/python/mir_eval_server.py  /app/tools/python/mir_eval_server.py
 
 EXPOSE 8001

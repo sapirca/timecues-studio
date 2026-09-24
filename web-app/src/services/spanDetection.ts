@@ -10,6 +10,8 @@
 // Server start (manual, requires torch + torchaudio + librosa locally):
 //   python tools/python/span_server.py
 
+import { createDetectionClient } from './detectionClient';
+
 export interface SpanItemResult {
   /** Start time of the span in seconds. */
   start: number;
@@ -43,67 +45,22 @@ export interface SpanAlgorithmInfo {
   available: boolean;
 }
 
+const client = createDetectionClient<SpanAlgorithmInfo, SpanDetectionResult>('span', 'spans');
+
 /** List the detectors the SPAN server is willing to run. Returns null if the
  *  server isn't reachable (which is the expected state when the experimental
  *  profile isn't running — don't treat it as an error). */
-export async function listSpanAlgorithms(): Promise<SpanAlgorithmInfo[] | null> {
-  try {
-    const res = await fetch('/api/span/algorithms');
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data) ? data as SpanAlgorithmInfo[] : null;
-  } catch {
-    return null;
-  }
-}
+export const listSpanAlgorithms = client.listAlgorithms;
 
 /** Read a cached SPAN detection. Returns null if no cache exists or the
  *  server is unreachable. */
-export async function loadCachedSpan(slug: string, algo: string): Promise<SpanDetectionResult | null> {
-  try {
-    const res = await fetch(`/api/span/detect/${encodeURIComponent(slug)}/${encodeURIComponent(algo)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return (data && typeof data === 'object' && 'spans' in data) ? data as SpanDetectionResult : null;
-  } catch {
-    return null;
-  }
-}
+export const loadCachedSpan = client.loadCached;
 
 /** Warm a SPAN detector's weights without running detection. Drives the
  *  "Initialize models" experimental settings panel. Returns the server's
  *  `{ok, error?}` envelope so the UI can show why initialization failed
  *  (e.g. torch missing in the container). */
-export async function initializeSpanAlgorithm(algo: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const res = await fetch('/api/span/initialize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ algo }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data?.error ?? `HTTP ${res.status}` };
-    return { ok: !!data?.ok, error: data?.error };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
-}
+export const initializeSpanAlgorithm = client.initializeAlgorithm;
 
 /** Run one SPAN-family detector on the song. `force=true` skips the cache. */
-export async function runSpanDetection(
-  slug: string,
-  algo: string,
-  force = false,
-): Promise<SpanDetectionResult | null> {
-  try {
-    const res = await fetch('/api/span/detect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug, algo, force }),
-    });
-    if (!res.ok) return null;
-    return await res.json() as SpanDetectionResult;
-  } catch {
-    return null;
-  }
-}
+export const runSpanDetection = client.runDetection;

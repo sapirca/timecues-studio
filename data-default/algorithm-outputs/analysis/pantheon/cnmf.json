@@ -1,0 +1,76 @@
+{
+  "algorithm": "cnmf",
+  "algoName": "CNMF (Non-negative Matrix Factorization)",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 0.325,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.2152,
+      "centroid": 0.877
+    },
+    {
+      "time": 0.325,
+      "endTime": 43.05,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8349,
+      "centroid": 0.6952
+    },
+    {
+      "time": 43.05,
+      "endTime": 85.496,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9668,
+      "centroid": 1.0
+    },
+    {
+      "time": 85.496,
+      "endTime": 105.326,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8673,
+      "centroid": 0.5145
+    },
+    {
+      "time": 105.326,
+      "endTime": 129.103,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.9859
+    },
+    {
+      "time": 129.103,
+      "endTime": 192.401,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.892,
+      "centroid": 0.8967
+    },
+    {
+      "time": 192.401,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    0.325,
+    43.05,
+    85.496,
+    105.326,
+    129.103,
+    192.401,
+    192.409
+  ],
+  "computedAt": 1780118823,
+  "elapsedSec": 6.74
+}

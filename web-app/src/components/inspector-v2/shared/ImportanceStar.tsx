@@ -12,7 +12,7 @@ interface ImportanceStarProps {
  *  critical (default), ☆ muted when optional. Click toggles between the two. */
 export function ImportanceStar({ importance, onToggle, size = 'md', title }: ImportanceStarProps) {
   const isCritical = importance !== 'optional';
-  const dims = size === 'sm' ? 'w-5 h-5 text-[10px]' : 'w-6 h-6 text-[12px]';
+  const dims = size === 'sm' ? 'shrink-0 w-5 h-5 text-[10px]' : 'shrink-0 w-6 h-6 text-[12px]';
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onToggle(); }}

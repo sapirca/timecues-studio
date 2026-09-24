@@ -7,6 +7,7 @@ import { AnnotatorBadge } from '../components/AnnotatorBadge';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { loadDatasetConfig } from '../services/datasetConfig';
 import { fetchAdminStatus } from '../services/admin';
+import { IS_STATIC_DEMO, MAIN_APP_URL } from '../state/staticDemo';
 import type { AccessTier } from '../types/datasetConfig';
 
 interface CorpusSummary {
@@ -125,14 +126,32 @@ export function LandingPage() {
         rightSlot={annotator ? <AnnotatorBadge inline /> : null}
       />
 
-      <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-5xl space-y-10">
+      <main className="flex-1 flex items-center justify-center px-4 py-8 sm:p-6">
+        <div className="w-full max-w-5xl min-w-0 space-y-8 sm:space-y-10">
           <div className="text-center space-y-2">
             <h1 className="text-2xl font-medium text-slate-100">Where to start?</h1>
             <p className="text-[12px] text-slate-500">
-              {realAnnotator
-                ? `Signed in as ${realAnnotator.displayName}.`
-                : 'Try it anonymously, or sign in to work on a real corpus.'}
+              {IS_STATIC_DEMO ? (
+                <>
+                  Always-on public mirror — explore the sample songs, no install.
+                  {MAIN_APP_URL && (
+                    <>
+                      {' '}The full app (sign-in, your own corpus) lives{' '}
+                      <a
+                        href={MAIN_APP_URL}
+                        className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+                      >
+                        here
+                      </a>
+                      .
+                    </>
+                  )}
+                </>
+              ) : realAnnotator ? (
+                `Signed in as ${realAnnotator.displayName}.`
+              ) : (
+                'Try it anonymously, or sign in to work on a real corpus.'
+              )}
             </p>
           </div>
 
@@ -153,7 +172,22 @@ export function LandingPage() {
               cta="Try the demo →"
               onClick={() => navigate('/demo')}
             />
-            {summary?.isBootstrap ? (
+            {/* The second card needs the backend (sign-in / admin bootstrap),
+                so on the static mirror it's replaced by an outbound link to the
+                full app when one is configured, and otherwise omitted. */}
+            {IS_STATIC_DEMO ? (
+              MAIN_APP_URL && (
+                <EntryCard
+                  accent="cyan"
+                  led="!bg-cyan-400 !shadow-[0_0_8px_rgba(34,211,238,0.55)]"
+                  eyebrow="Full app"
+                  title="Sign in & work on a corpus"
+                  body="The complete app — Google sign-in, your own annotator namespace, detectors, and saving — runs on the main server."
+                  cta="Open the full app →"
+                  onClick={() => { window.location.href = MAIN_APP_URL; }}
+                />
+              )
+            ) : summary?.isBootstrap ? (
               <EntryCard
                 accent="emerald"
                 led="!bg-emerald-400 !shadow-[0_0_8px_rgba(52,211,153,0.55)]"
@@ -179,7 +213,7 @@ export function LandingPage() {
       </main>
 
       {COMMIT_SHORT && (
-        <footer className="px-6 py-3 text-center font-mono text-[10px] text-slate-600">
+        <footer className="px-4 sm:px-6 py-3 text-center font-mono text-[11px] sm:text-[10px] text-slate-600 break-words">
           <a
             href={`https://github.com/sapirca/timecues-studio/commit/${COMMIT_SHA}`}
             target="_blank"
@@ -259,15 +293,15 @@ function EntryCard({
   return (
     <button
       onClick={onClick}
-      className={`group text-left rounded-lg border border-white/[0.06] bg-[#14171d] hover:bg-[#1b1f27] transition-colors p-6 space-y-3 ${ACCENT_BORDER[accent]}`}
+      className={`group text-left rounded-lg border border-white/[0.06] bg-[#14171d] hover:bg-[#1b1f27] transition-colors p-5 sm:p-6 space-y-3 ${ACCENT_BORDER[accent]}`}
     >
       <div className="flex items-center gap-2">
         <span className={`tc-led tc-led-mute group-hover:${led} transition-all`} />
-        <span className={`text-[10px] uppercase tracking-[0.18em] ${ACCENT_EYEBROW[accent]}`}>{eyebrow}</span>
+        <span className={`text-[11px] sm:text-[10px] uppercase tracking-[0.18em] ${ACCENT_EYEBROW[accent]}`}>{eyebrow}</span>
       </div>
       <h2 className="text-lg font-medium text-slate-100">{title}</h2>
       <p className="text-[12px] text-slate-400 leading-relaxed">{body}</p>
-      <p className="text-[11px] text-slate-500 group-hover:text-slate-300 transition-colors pt-1">{cta}</p>
+      <p className="text-[12px] sm:text-[11px] text-slate-500 group-hover:text-slate-300 transition-colors pt-1">{cta}</p>
     </button>
   );
 }

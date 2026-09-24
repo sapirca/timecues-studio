@@ -4,24 +4,23 @@
  */
 
 import { useState } from 'react';
-import type { ManualAnnotation, AutoGuessManualAnnotation } from '../../types/manualAnnotation';
+import type { AutoGuessManualAnnotation } from '../../types/autoGuess';
 import type { AnnotationLayersDocument } from '../../types/annotationLayer';
 import { ExportManagerModal } from './ExportManagerModal';
 
 interface DownloadMenuProps {
   songSlug: string | null;
   songName?: string | null;
-  manualAnnotation: ManualAnnotation | null;
-  eyeAnnotation: ManualAnnotation | null;
   autoGuessAnnotation: AutoGuessManualAnnotation | null;
-  /** User-created cues/spans/loops/patterns layers for the current song.
-   *  Already loaded by the parent — passed in to avoid a redundant fetch. */
+  /** Every layer the curator authored for this song — boundaries, cues,
+   *  spans, loops. Already loaded by the parent, passed in to avoid
+   *  a redundant fetch. */
   layersDocument?: AnnotationLayersDocument | null;
 }
 
 export function DownloadMenu({
   songSlug, songName,
-  manualAnnotation, eyeAnnotation, autoGuessAnnotation,
+  autoGuessAnnotation,
   layersDocument,
 }: DownloadMenuProps) {
   const [open, setOpen] = useState(false);
@@ -41,8 +40,6 @@ export function DownloadMenu({
         onOpenChange={setOpen}
         currentSong={songSlug ? { id: songSlug, name: songName ?? songSlug } : null}
         allSongs={[]}
-        manualAnnotation={manualAnnotation}
-        eyeAnnotation={eyeAnnotation}
         autoGuessAnnotation={autoGuessAnnotation}
         layersDocument={layersDocument}
         presentation="single"

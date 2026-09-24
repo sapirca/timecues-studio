@@ -10,6 +10,10 @@ export default defineConfig({
     environment: 'jsdom',
     globals: false,
     setupFiles: ['./vitest.setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // server/ holds the Node-side helpers the dev-server plugins import
+    // (shared-song storage, edit leases, the per-song git repo). They are
+    // plain fs/child_process modules with no Vite dependency, so they test
+    // here rather than needing a server harness of their own.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'server/**/*.{test,spec}.ts'],
   },
 });

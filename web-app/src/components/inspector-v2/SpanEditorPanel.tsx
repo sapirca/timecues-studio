@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useId, useImperativeHandle, useMemo, forwardRef, type ForwardedRef } from 'react';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import type {
   AnnotationLayer,
   AnnotationLayersDocument,
@@ -23,12 +24,16 @@ import {
   setLayerStatus,
 } from '../../types/annotationLayer';
 import { snapToBeat, type BarGrid } from '../../utils/barSnap';
+import { resolvePointAddTime } from './boundaryInsert';
 import type { PendingSelection } from './AnnotationOverlays';
 import { useSettings } from '../../context/SettingsContext';
+import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { SpanItemCard } from './SpanItemCard';
 import { AddItemAtEndCard } from './ItemCard';
 import { LayerModePicker } from './LayerModePicker';
+import { formatBeatTime } from '../../utils/beatTimeFormat';
 
 interface SpanEditorPanelProps {
   currentTime: number;
@@ -37,6 +42,13 @@ interface SpanEditorPanelProps {
   onDocChange: (next: AnnotationLayersDocument) => void;
   grid: Partial<BarGrid> | null;
   snapToGrid?: boolean;
+  /** The page's grid-aware snapper, used for every add / snap-to-playhead
+   *  time. It honours the GRID unit the user picked (1/2 beat, triplets,
+   *  bars…), per-beat overrides and tempo segments, and returns the time
+   *  untouched while Snap and Grid Lock are both off — the same rule a drag
+   *  on the canvas already followed. Optional: without it these paths fall
+   *  back to whole-beat snapping, which is what they all used to do. */
+  snapTime?: (t: number) => number;
   focusedSpan?: { layerId: string; itemId: string } | null;
   onFocusSpan?: (selection: { layerId: string; itemId: string } | null) => void;
   selectedLayerId?: string | null;
@@ -45,28 +57,55 @@ interface SpanEditorPanelProps {
   onClearPendingSelection?: () => void;
   onCapabilitiesChange?: (caps: AnnotationPanelCapabilities) => void;
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
-}
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+  /** Fired when an add was refused because a span with these exact edges is
+   *  already in the target layer — carries the line the page shows as a
+   *  notice. See shared/duplicateItem.ts. */
+  onDuplicateSkipped?: (message: string) => void;
+  gridLock?: boolean;
+  /** Reader for the LIVE media clock (the page's `liveSongTime`). Placing a
+   *  span against `currentTime` puts its start where the playhead was a render
+   *  ago; see `markTime`. Optional — falls back to the prop without it. */
+  getSongTime?: () => number | null;
 }
 
 function SpanEditorPanelInner(
   {
     currentTime, duration, doc, onDocChange, grid,
-    snapToGrid = false,
+    snapToGrid = false, snapTime,
+    gridLock = false,
     focusedSpan, onFocusSpan,
     selectedLayerId = null, onSelectLayer,
     pendingSelection, onClearPendingSelection,
     onCapabilitiesChange,
     saveStatus = 'idle',
+    onDuplicateSkipped,
+    getSongTime,
   }: SpanEditorPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
   const { settings } = useSettings();
+  // Where a span placed *right now* starts. Called at the moment of the add,
+  // never captured: `currentTime` is the media clock one rAF, one setState and
+  // one inspector re-render later, which is a marker dropped behind the beat
+  // the annotator was listening to. `atTime` is the caller's own reading (the
+  // M shortcut's, taken at the keydown) when it has one.
+  const markTime = useCallback(
+    (atTime?: number) => resolvePointAddTime({
+      live: atTime ?? getSongTime?.(),
+      fallback: currentTime,
+    }),
+    [getSongTime, currentTime],
+  );
+
+  // Where an add actually lands. Delegates to the page's `snapTime` so a mark
+  // placed from the keyboard ends up on the same lines as one dragged on the
+  // canvas; the whole-beat fallback is only for mounts that inject no snapper.
+  const snapAdd = useCallback(
+    (t: number) => (snapTime
+      ? snapTime(t)
+      : (snapToGrid && grid?.bpm ? snapToBeat(t, grid as BarGrid) : t)),
+    [snapTime, snapToGrid, grid],
+  );
   const taxonomyId = useId();
   const showTaxonomy = settings.spanTaxonomyEnabled && settings.spanTaxonomy.length > 0;
   const spanLayers = useMemo(
@@ -130,14 +169,16 @@ function SpanEditorPanelInner(
   function snapStartToPlayhead(layerId: string, itemId: string) {
     const item = spanLayers.find((l) => l.id === layerId)?.items.find((i) => i.id === itemId);
     if (!item) return;
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
+    const raw = markTime();
+    const t = snapAdd(raw);
     patchItem(layerId, itemId, { start: Math.min(t, item.end - 0.05) });
   }
 
   function snapEndToPlayhead(layerId: string, itemId: string) {
     const item = spanLayers.find((l) => l.id === layerId)?.items.find((i) => i.id === itemId);
     if (!item) return;
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
+    const raw = markTime();
+    const t = snapAdd(raw);
     patchItem(layerId, itemId, { end: Math.max(t, item.start + 0.05) });
   }
 
@@ -162,13 +203,25 @@ function SpanEditorPanelInner(
     return { layers, targetId };
   }, [doc.layers, spanLayers, selectedLayerId, activeLayer, focusedSpan]);
 
-  const confirmPendingForLayer = useCallback((forcedLayerId: string | null) => {
-    if (!pendingSpan) return;
-    const start = Math.max(0, pendingSpan.start);
-    const end   = Math.min(duration > 0 ? duration : pendingSpan.end, pendingSpan.end);
-    if (end - start < 0.05) { onClearPendingSelection?.(); return; }
-    const item = newSpanItem(start, end);
+  // The one place a new span enters the document — playhead add, dragged
+  // region and canvas range all land here, so the duplicate rule is written
+  // once. A span whose two edges already exist in the target layer is not
+  // added: it would sit exactly on top of the one that's there and the
+  // annotator would have no way to see the second one.
+  const commitSpan = useCallback((start: number, end: number, forcedLayerId: string | null) => {
     const { layers, targetId } = pickSpanTarget(forcedLayerId);
+    const layer = layers.find((l): l is AnnotationLayer<'spans'> =>
+      l.id === targetId && l.type === 'spans');
+    const existing = layer && findItemAtSpot(
+      layer.items, { at: start, end }, (it) => ({ at: it.start, end: it.end }),
+    );
+    if (existing) {
+      onFocusSpan?.({ layerId: targetId, itemId: existing.id });
+      onSelectLayer?.(targetId);
+      onDuplicateSkipped?.(duplicateItemNotice('span', { at: start, end }));
+      return;
+    }
+    const item = newSpanItem(start, end);
     onDocChange({
       ...doc,
       layers: layers.map((l) => (l.id === targetId
@@ -177,8 +230,16 @@ function SpanEditorPanelInner(
     });
     onFocusSpan?.({ layerId: targetId, itemId: item.id });
     onSelectLayer?.(targetId);
+  }, [doc, pickSpanTarget, onDocChange, onFocusSpan, onSelectLayer, onDuplicateSkipped]);
+
+  const confirmPendingForLayer = useCallback((forcedLayerId: string | null) => {
+    if (!pendingSpan) return;
+    const start = Math.max(0, pendingSpan.start);
+    const end   = Math.min(duration > 0 ? duration : pendingSpan.end, pendingSpan.end);
+    if (end - start < 0.05) { onClearPendingSelection?.(); return; }
+    commitSpan(start, end, forcedLayerId);
     onClearPendingSelection?.();
-  }, [pendingSpan, duration, doc, pickSpanTarget, onDocChange, onFocusSpan, onSelectLayer, onClearPendingSelection]);
+  }, [pendingSpan, duration, commitSpan, onClearPendingSelection]);
 
   const confirmPendingSelection = useCallback(() => { confirmPendingForLayer(null); }, [confirmPendingForLayer]);
   const confirmPendingInLayer = useCallback((id: string) => { confirmPendingForLayer(id); }, [confirmPendingForLayer]);
@@ -188,17 +249,8 @@ function SpanEditorPanelInner(
     const eRaw = Math.max(start, end);
     const e = duration > 0 ? Math.min(duration, eRaw) : eRaw;
     if (e - s < 0.05) return;
-    const item = newSpanItem(s, e);
-    const { layers, targetId } = pickSpanTarget(null);
-    onDocChange({
-      ...doc,
-      layers: layers.map((l) => (l.id === targetId
-        ? ({ ...l, items: [...(l as AnnotationLayer<'spans'>).items, item] } as AnnotationLayer)
-        : l)),
-    });
-    onFocusSpan?.({ layerId: targetId, itemId: item.id });
-    onSelectLayer?.(targetId);
-  }, [doc, duration, pickSpanTarget, onDocChange, onFocusSpan, onSelectLayer]);
+    commitSpan(s, e, null);
+  }, [duration, commitSpan]);
 
   // ── Page-level controller wiring ──────────────────────────────────────────
   const focusedSpanItem: SpanItem | null = useMemo(() => {
@@ -272,29 +324,40 @@ function SpanEditorPanelInner(
 
   // Add a default-length span at the playhead — 1 bar when a grid is set,
   // 2 seconds otherwise.
-  const addSpanForLayer = useCallback((forcedLayerId: string | null) => {
+  const addSpanForLayer = useCallback((forcedLayerId: string | null, atTime?: number) => {
+    // A highlighted region always wins over the playhead: if the annotator
+    // dragged a range and then hit "+ Add", the range IS the thing they meant
+    // to add. Falling back to a default-length span at the cursor would throw
+    // their drag away and drop an item somewhere they never pointed at.
+    if (pendingSpan) { confirmPendingForLayer(forcedLayerId); return; }
     const safeGrid = grid?.bpm && grid.beatsPerBar
       ? { bpm: grid.bpm, beatsPerBar: grid.beatsPerBar, gridOffsetSec: grid.gridOffsetSec ?? 0 }
       : null;
     const barLen = safeGrid ? (60 / safeGrid.bpm) * safeGrid.beatsPerBar : 2;
-    const start = currentTime;
+    const start = markTime(atTime);
     let end = start + barLen;
     if (duration > 0 && end > duration) end = duration;
     if (end - start < 0.05) return;
-    const { layers, targetId } = pickSpanTarget(forcedLayerId);
-    const item = newSpanItem(start, end);
-    onDocChange({
-      ...doc,
-      layers: layers.map((l) => (l.id === targetId
-        ? ({ ...l, items: [...(l as AnnotationLayer<'spans'>).items, item] } as AnnotationLayer)
-        : l)),
-    });
-    onFocusSpan?.({ layerId: targetId, itemId: item.id });
-    onSelectLayer?.(targetId);
-  }, [doc, pickSpanTarget, grid, currentTime, duration, onDocChange, onFocusSpan, onSelectLayer]);
+    commitSpan(start, end, forcedLayerId);
+  }, [commitSpan, grid, markTime, duration, pendingSpan, confirmPendingForLayer]);
 
-  const addSpanAtPlayhead = useCallback(() => { addSpanForLayer(null); }, [addSpanForLayer]);
-  const addSpanAtPlayheadInLayer = useCallback((id: string) => { addSpanForLayer(id); }, [addSpanForLayer]);
+  const addSpanAtPlayhead = useCallback(
+    (atTime?: number) => { addSpanForLayer(null, atTime); },
+    [addSpanForLayer],
+  );
+  const addSpanAtPlayheadInLayer = useCallback(
+    (id: string, atTime?: number) => { addSpanForLayer(id, atTime); },
+    [addSpanForLayer],
+  );
+
+  // What "+ Add" will actually create, so the button never promises the
+  // playhead while a dragged region is what lands.
+  const addLabelSuffix = pendingSpan
+    ? `${fmtTime(pendingSpan.start)}\u2192${fmtTime(pendingSpan.end)}`
+    : `@ ${fmtTime(currentTime)}`;
+  const addTitle = pendingSpan
+    ? 'Add the highlighted region as a span'
+    : 'Add span at playhead \u2014 default length = 1 bar / 2s (M)';
 
   const addSpanLayerViaToolbar = useCallback(() => {
     const layer = newSpanLayer(`Spans ${spanLayers.length + 1}`, pickDefaultLayerColor(doc.layers));
@@ -338,6 +401,7 @@ function SpanEditorPanelInner(
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: getLayerStatus(doc, 'spans'),
       hasItems: totalCount > 0,
       saveStatus,
@@ -355,7 +419,7 @@ function SpanEditorPanelInner(
       snapStartLabel: `@ ${fmtTime(currentTime)}`,
       snapEndLabel: `@ ${fmtTime(currentTime)}`,
       canAddAtPlayhead: true,
-      addLabel: `+ Add span @ ${fmtTime(currentTime)}`,
+      addLabel: `+ Add span ${addLabelSuffix}`,
       canAddLayer: true,
       pending: pendingSelection ?? null,
       pendingRequiresRegion: true,
@@ -363,12 +427,20 @@ function SpanEditorPanelInner(
       canExport: totalCount > 0,
       canDeleteAll: spanLayers.length > 0,
     });
-  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, currentTime, pendingSelection, totalCount, spanLayers.length]);
+  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, currentTime, pendingSelection, totalCount, spanLayers.length, addLabelSuffix]);
 
   const sortedItems = useMemo(
     () => (activeLayer?.items ?? []).slice().sort((a, b) => a.start - b.start),
     [activeLayer],
   );
+
+  const beatFmt = useMemo<((t: number) => string) | undefined>(() => {
+    if (!gridLock || !grid?.bpm || grid.bpm <= 0) return undefined;
+    return (t: number) => formatBeatTime(
+      t, grid.bpm!, grid.gridOffsetSec ?? 0, grid.beatsPerBar ?? 4,
+      'bar-beat', settings.barBeatOrigin,
+    );
+  }, [gridLock, grid, settings.barBeatOrigin]);
 
   return (
     <div className="space-y-3">
@@ -379,20 +451,21 @@ function SpanEditorPanelInner(
       {activeLayer && (
         <SpanLayerToolbar
           layer={activeLayer}
-          currentTime={currentTime}
           onRename={(name) => patchLayer(activeLayer.id, { name })}
           onToggleVisibility={() => patchLayer(activeLayer.id, { visible: !activeLayer.visible })}
           onChangeMode={(mode) => patchLayer(activeLayer.id, { mode })}
           onDelete={() => deleteLayer(activeLayer.id)}
-          onAddSpan={addSpanAtPlayhead}
+          onAddSpan={() => addSpanAtPlayhead()}
+          addLabel={`+ Add ${addLabelSuffix}`}
+          addTitle={addTitle}
         />
       )}
 
       {!activeLayer ? (
         <div className="flex flex-wrap items-start gap-1">
           <AddItemAtEndCard
-            onClick={addSpanAtPlayhead}
-            label={`+ Add span @ ${fmtTime(currentTime)}`}
+            onClick={() => addSpanAtPlayhead()}
+            label={`+ Add span ${addLabelSuffix}`}
           />
         </div>
       ) : (
@@ -413,11 +486,12 @@ function SpanEditorPanelInner(
               })}
               onDelete={() => deleteItem(activeLayer.id, span.id)}
               labelTaxonomyId={showTaxonomy ? taxonomyId : undefined}
+              fmt={beatFmt}
             />
           ))}
           <AddItemAtEndCard
-            onClick={addSpanAtPlayhead}
-            label={`+ Add @ ${fmtTime(currentTime)}`}
+            onClick={() => addSpanAtPlayhead()}
+            label={`+ Add ${addLabelSuffix}`}
           />
         </div>
       )}
@@ -433,18 +507,24 @@ function SpanEditorPanelInner(
 
 // ─── Slim per-layer toolbar above the card row ─────────────────────────────
 
+
 interface SpanLayerToolbarProps {
   layer: AnnotationLayer<'spans'>;
-  currentTime: number;
   onRename: (name: string) => void;
   onToggleVisibility: () => void;
   onChangeMode: (mode: import('../../types/annotationLayer').LayerEvalMode) => void;
   onDelete: () => void;
   onAddSpan: () => void;
+  /** Reflects what the add will create — the highlighted region when one is
+   *  pending, otherwise the playhead. */
+  addLabel: string;
+  addTitle: string;
 }
 
 function SpanLayerToolbar({
-  layer, currentTime, onRename, onToggleVisibility, onChangeMode, onDelete, onAddSpan,
+  layer,
+  onRename, onToggleVisibility, onChangeMode, onDelete, onAddSpan,
+  addLabel, addTitle,
 }: SpanLayerToolbarProps) {
   return (
     <div
@@ -466,9 +546,9 @@ function SpanLayerToolbar({
       <button
         onClick={onAddSpan}
         className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 hover:border-emerald-400/50 transition-colors"
-        title="Add span at playhead — default length = 1 bar / 2s (M)"
+        title={addTitle}
       >
-        + Add @ {fmtTime(currentTime)}
+        {addLabel}
       </button>
       <button
         onClick={onToggleVisibility}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { PreviewControlsBar } from './PreviewControlsBar';
+import { isSamePointer, isSecondaryPointer, pointerIdOf } from '../../hooks/useTimelineDrag';
 
 export interface PreviewRegion {
   start: number;
@@ -31,13 +32,17 @@ export function PreviewWindow({
   onChange, onPlay, onPause, onDismiss, onLoopToggle,
   showControls = true,
 }: Props) {
-  const dragRef = useRef<{ mode: DragMode; startX: number; startStart: number; startEnd: number } | null>(null);
+  const dragRef = useRef<{ mode: DragMode; startX: number; startStart: number; startEnd: number; pointerId: number | null } | null>(null);
 
+  // Pointer events, so the band's edges can be dragged with a finger as well
+  // as a mouse. pointercancel ends the drag like pointerup — the region has
+  // been updating live, so there is nothing to put back.
   useEffect(() => {
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const drag = dragRef.current;
       const parent = parentRef.current;
       if (!drag || !parent || duration <= 0) return;
+      if (!isSamePointer(drag.pointerId, ev)) return;
       const rect = parent.getBoundingClientRect();
       if (rect.width <= 0) return;
       const dxSec = ((ev.clientX - drag.startX) / rect.width) * duration;
@@ -54,12 +59,17 @@ export function PreviewWindow({
         onChange({ ...region, start: drag.startStart, end: e });
       }
     };
-    const onUp = () => { dragRef.current = null; };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    const onUp = (ev: PointerEvent) => {
+      if (dragRef.current && !isSamePointer(dragRef.current.pointerId, ev)) return;
+      dragRef.current = null;
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
     return () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
     };
   }, [parentRef, duration, region, onChange]);
 
@@ -68,17 +78,18 @@ export function PreviewWindow({
   const startPct = Math.max(0, Math.min(100, (region.start / duration) * 100));
   const widthPct = Math.max(0, Math.min(100 - startPct, ((region.end - region.start) / duration) * 100));
 
-  const beginDrag = (e: React.MouseEvent, mode: DragMode) => {
+  const beginDrag = (e: React.PointerEvent, mode: DragMode) => {
+    if (isSecondaryPointer(e)) return;
     e.stopPropagation();
     e.preventDefault();
-    dragRef.current = { mode, startX: e.clientX, startStart: region.start, startEnd: region.end };
+    dragRef.current = { mode, startX: e.clientX, startStart: region.start, startEnd: region.end, pointerId: pointerIdOf(e) };
   };
 
   return (
     // Background is pointer-events:none so clicks pass through to the viz rows
     // underneath — keeps row interactions (marker drag, click-to-clear) intact
     // even when the tall band spans them. Only the resize handles and the
-    // floating control bar capture mouse events.
+    // floating control bar capture pointer events.
     <div
       className="absolute top-0 bottom-0 z-30 pointer-events-none"
       style={{
@@ -92,14 +103,14 @@ export function PreviewWindow({
     >
       {/* Resize handles (overlap the borders for easier grab) */}
       <div
-        className="absolute top-0 bottom-0 pointer-events-auto"
+        className="absolute top-0 bottom-0 pointer-events-auto touch-none tc-hit"
         style={{ left: -5, width: 10, cursor: 'ew-resize', zIndex: 1 }}
-        onMouseDown={(e) => beginDrag(e, 'left')}
+        onPointerDown={(e) => beginDrag(e, 'left')}
       />
       <div
-        className="absolute top-0 bottom-0 pointer-events-auto"
+        className="absolute top-0 bottom-0 pointer-events-auto touch-none tc-hit"
         style={{ right: -5, width: 10, cursor: 'ew-resize', zIndex: 1 }}
-        onMouseDown={(e) => beginDrag(e, 'right')}
+        onPointerDown={(e) => beginDrag(e, 'right')}
       />
 
       {/* Floating control bar (above the band) */}

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSettings } from '../context/SettingsContext';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
-import type { ManualAnnotation, AutoGuessManualAnnotation } from '../types/manualAnnotation';
+import type { AutoGuessManualAnnotation } from '../types/autoGuess';
+import type { AnnotationLayersDocument } from '../types/annotationLayer';
+import { primaryBoundaryItems } from '../services/annotationLayers';
 import {
   autoGuessBoundaries,
   buildAgreementMatrix,
@@ -9,30 +10,35 @@ import {
 } from '../utils/annotatorAgreement';
 import type { BoundarySource } from './inspector-v2/shared/tabConfig';
 
-/** The comparison panel picks among the three boundary sources. */
+/** The comparison panel picks among the boundary sources. `manual` reads the
+ *  annotator's primary boundaries layer. */
 type AnnotationKind = BoundarySource;
+
+/** Response bucket backing each kind. */
+const KIND_BUCKET: Record<AnnotationKind, 'layers' | 'autoGuess'> = {
+  manual: 'layers',
+  autoGuess: 'autoGuess',
+};
 
 interface AllAnnotationsResponse {
   slug: string;
-  manual: Record<string, ManualAnnotation>;
-  eye: Record<string, ManualAnnotation>;
+  /** One annotation-layers document per annotator. Boundaries are read out of
+   *  it via `primaryBoundaryItems` — one reference reading per annotator. */
+  layers: Record<string, AnnotationLayersDocument>;
   autoGuess: Record<string, AutoGuessManualAnnotation>;
 }
 
 const KIND_LABEL: Record<AnnotationKind, string> = {
   manual: 'Boundaries',
-  eye: 'Eye',
   autoGuess: 'Auto-guess',
 };
 
 const TOLERANCES = [0.5, 3] as const;
 
 export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
-  const { settings } = useSettings();
-  const eyeEnabled = settings.experimentalEyeAnnotation;
   const KINDS: AnnotationKind[] = useMemo(
-    () => (eyeEnabled ? ['manual', 'eye', 'autoGuess'] : ['manual', 'autoGuess']),
-    [eyeEnabled],
+    () => ['manual', 'autoGuess'],
+    [],
   );
   const [data, setData] = useState<AllAnnotationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,7 +67,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
     const out: Partial<Record<AnnotationKind, Record<number, AgreementMatrix>>> = {};
 
     for (const k of KINDS) {
-      const bucket = data[k];
+      const bucket = data[KIND_BUCKET[k]];
       const ids = Object.keys(bucket).sort();
       if (ids.length < 2) continue;
       const perTol: Record<number, AgreementMatrix> = {};
@@ -75,7 +81,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
         } else {
           perTol[tol] = buildAgreementMatrix(
             ids,
-            (id) => (bucket[id] as ManualAnnotation).sections.map((s) => ({ time: s.time, type: s.type })),
+            (id) => primaryBoundaryItems(bucket[id] as AnnotationLayersDocument).map((s) => ({ time: s.time, type: s.type })),
             tol,
           );
         }
@@ -87,7 +93,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
 
   const availableKinds = useMemo<AnnotationKind[]>(() => {
     if (!data) return [];
-    return KINDS.filter((k) => Object.keys(data[k]).length >= 2);
+    return KINDS.filter((k) => Object.keys(data[KIND_BUCKET[k]]).length >= 2);
   }, [data, KINDS]);
 
   // Auto-select an available kind when current selection has no comparison
@@ -106,8 +112,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
   if (!data) return null;
 
   const totalAnnotators = new Set([
-    ...Object.keys(data.manual),
-    ...(eyeEnabled ? Object.keys(data.eye) : []),
+    ...Object.keys(data.layers),
     ...Object.keys(data.autoGuess),
   ]).size;
 
@@ -152,7 +157,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
                   : 'bg-white/[0.04] text-slate-500 hover:text-slate-300 border border-transparent'
               }`}
             >
-              {KIND_LABEL[k]} ({Object.keys(data[k]).length})
+              {KIND_LABEL[k]} ({Object.keys(data[KIND_BUCKET[k]]).length})
             </button>
           ))}
         </nav>

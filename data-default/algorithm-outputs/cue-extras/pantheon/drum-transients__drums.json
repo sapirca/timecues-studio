@@ -1,0 +1,4984 @@
+{
+  "slug": "pantheon",
+  "audio_file": "drums.wav",
+  "algorithm": "drum-transients",
+  "stem": "drums",
+  "duration": 192.40897959183673,
+  "cues": [
+    {
+      "time": 11.320521541950113,
+      "label": "snare",
+      "confidence": 0.17741860449314117,
+      "velocity": 120,
+      "levelDb": -7.46
+    },
+    {
+      "time": 11.746009070294784,
+      "label": "snare",
+      "confidence": 0.6556258201599121,
+      "velocity": 95,
+      "levelDb": -15.36
+    },
+    {
+      "time": 11.88843537414966,
+      "label": "snare",
+      "confidence": 0.3591868281364441,
+      "velocity": 115,
+      "levelDb": -9.06
+    },
+    {
+      "time": 12.169909297052154,
+      "label": "snare",
+      "confidence": 0.33008918166160583,
+      "velocity": 93,
+      "levelDb": -16.1
+    },
+    {
+      "time": 12.453083900226757,
+      "label": "kick",
+      "confidence": 0.6380168199539185,
+      "velocity": 118,
+      "levelDb": -2.92
+    },
+    {
+      "time": 12.87734693877551,
+      "label": "snare",
+      "confidence": 0.2634516954421997,
+      "velocity": 100,
+      "levelDb": -13.59
+    },
+    {
+      "time": 13.020521541950114,
+      "label": "snare",
+      "confidence": 0.5099068284034729,
+      "velocity": 115,
+      "levelDb": -8.94
+    },
+    {
+      "time": 13.301927437641723,
+      "label": "snare",
+      "confidence": 0.2924489378929138,
+      "velocity": 94,
+      "levelDb": -15.55
+    },
+    {
+      "time": 13.584671201814059,
+      "label": "kick",
+      "confidence": 0.6816437244415283,
+      "velocity": 121,
+      "levelDb": -1.81
+    },
+    {
+      "time": 14.009591836734694,
+      "label": "snare",
+      "confidence": 0.48413169384002686,
+      "velocity": 97,
+      "levelDb": -14.56
+    },
+    {
+      "time": 14.152471655328798,
+      "label": "snare",
+      "confidence": 0.4192347824573517,
+      "velocity": 110,
+      "levelDb": -10.6
+    },
+    {
+      "time": 14.446303854875284,
+      "label": "snare",
+      "confidence": 0.22876714169979095,
+      "velocity": 98,
+      "levelDb": -14.44
+    },
+    {
+      "time": 14.717165532879818,
+      "label": "kick",
+      "confidence": 0.7632995247840881,
+      "velocity": 118,
+      "levelDb": -2.75
+    },
+    {
+      "time": 14.983492063492063,
+      "label": "kick",
+      "confidence": 0.1581326723098755,
+      "velocity": 79,
+      "levelDb": -15.14
+    },
+    {
+      "time": 15.14156462585034,
+      "label": "snare",
+      "confidence": 0.5906345844268799,
+      "velocity": 92,
+      "levelDb": -16.39
+    },
+    {
+      "time": 15.284603174603175,
+      "label": "snare",
+      "confidence": 0.26857197284698486,
+      "velocity": 119,
+      "levelDb": -7.67
+    },
+    {
+      "time": 15.566213151927437,
+      "label": "snare",
+      "confidence": 0.35494664311408997,
+      "velocity": 91,
+      "levelDb": -16.57
+    },
+    {
+      "time": 15.848843537414966,
+      "label": "snare",
+      "confidence": 0.32189780473709106,
+      "velocity": 125,
+      "levelDb": -5.94
+    },
+    {
+      "time": 16.273696145124717,
+      "label": "snare",
+      "confidence": 0.6645105481147766,
+      "velocity": 96,
+      "levelDb": -15.0
+    },
+    {
+      "time": 16.41673469387755,
+      "label": "snare",
+      "confidence": 0.3690767288208008,
+      "velocity": 117,
+      "levelDb": -8.28
+    },
+    {
+      "time": 16.698344671201813,
+      "label": "snare",
+      "confidence": 0.15422335267066956,
+      "velocity": 92,
+      "levelDb": -16.32
+    },
+    {
+      "time": 16.981315192743764,
+      "label": "kick",
+      "confidence": 0.4890909194946289,
+      "velocity": 120,
+      "levelDb": -2.33
+    },
+    {
+      "time": 17.405668934240364,
+      "label": "snare",
+      "confidence": 0.27550646662712097,
+      "velocity": 100,
+      "levelDb": -13.58
+    },
+    {
+      "time": 17.54750566893424,
+      "label": "kick",
+      "confidence": 0.4957205057144165,
+      "velocity": 115,
+      "levelDb": -3.82
+    },
+    {
+      "time": 17.830204081632655,
+      "label": "snare",
+      "confidence": 0.25350847840309143,
+      "velocity": 94,
+      "levelDb": -15.6
+    },
+    {
+      "time": 18.11297052154195,
+      "label": "kick",
+      "confidence": 0.6519222855567932,
+      "velocity": 123,
+      "levelDb": -1.29
+    },
+    {
+      "time": 18.537891156462585,
+      "label": "snare",
+      "confidence": 0.4731857478618622,
+      "velocity": 98,
+      "levelDb": -14.21
+    },
+    {
+      "time": 18.68090702947846,
+      "label": "snare",
+      "confidence": 0.420832097530365,
+      "velocity": 111,
+      "levelDb": -10.38
+    },
+    {
+      "time": 18.967142857142857,
+      "label": "snare",
+      "confidence": 0.21672388911247253,
+      "velocity": 93,
+      "levelDb": -16.03
+    },
+    {
+      "time": 19.24503401360544,
+      "label": "kick",
+      "confidence": 0.7330633401870728,
+      "velocity": 120,
+      "levelDb": -2.24
+    },
+    {
+      "time": 19.66984126984127,
+      "label": "snare",
+      "confidence": 0.6023083329200745,
+      "velocity": 92,
+      "levelDb": -16.41
+    },
+    {
+      "time": 19.81281179138322,
+      "label": "snare",
+      "confidence": 0.26537564396858215,
+      "velocity": 120,
+      "levelDb": -7.28
+    },
+    {
+      "time": 20.095034013605442,
+      "label": "snare",
+      "confidence": 0.37245678901672363,
+      "velocity": 92,
+      "levelDb": -16.38
+    },
+    {
+      "time": 20.377097505668935,
+      "label": "snare",
+      "confidence": 0.3291268050670624,
+      "velocity": 124,
+      "levelDb": -6.03
+    },
+    {
+      "time": 20.80263038548753,
+      "label": "snare",
+      "confidence": 0.6594555377960205,
+      "velocity": 93,
+      "levelDb": -15.86
+    },
+    {
+      "time": 20.945034013605444,
+      "label": "snare",
+      "confidence": 0.3698810338973999,
+      "velocity": 115,
+      "levelDb": -8.87
+    },
+    {
+      "time": 21.226643990929706,
+      "label": "snare",
+      "confidence": 0.18949466943740845,
+      "velocity": 92,
+      "levelDb": -16.16
+    },
+    {
+      "time": 21.509614512471654,
+      "label": "kick",
+      "confidence": 0.4750582277774811,
+      "velocity": 118,
+      "levelDb": -2.7
+    },
+    {
+      "time": 21.93394557823129,
+      "label": "snare",
+      "confidence": 0.25787317752838135,
+      "velocity": 100,
+      "levelDb": -13.66
+    },
+    {
+      "time": 22.07580498866213,
+      "label": "kick",
+      "confidence": 0.49957987666130066,
+      "velocity": 115,
+      "levelDb": -3.68
+    },
+    {
+      "time": 22.358526077097505,
+      "label": "snare",
+      "confidence": 0.24899734556674957,
+      "velocity": 94,
+      "levelDb": -15.56
+    },
+    {
+      "time": 22.64124716553288,
+      "label": "kick",
+      "confidence": 0.6178278923034668,
+      "velocity": 121,
+      "levelDb": -1.82
+    },
+    {
+      "time": 23.06621315192744,
+      "label": "snare",
+      "confidence": 0.3867947459220886,
+      "velocity": 98,
+      "levelDb": -14.28
+    },
+    {
+      "time": 23.20907029478458,
+      "label": "snare",
+      "confidence": 0.4372631311416626,
+      "velocity": 109,
+      "levelDb": -10.97
+    },
+    {
+      "time": 23.50292517006803,
+      "label": "snare",
+      "confidence": 0.28225573897361755,
+      "velocity": 95,
+      "levelDb": -15.39
+    },
+    {
+      "time": 23.773356009070294,
+      "label": "kick",
+      "confidence": 0.6743574738502502,
+      "velocity": 118,
+      "levelDb": -2.82
+    },
+    {
+      "time": 24.203061224489797,
+      "label": "snare",
+      "confidence": 0.5368596315383911,
+      "velocity": 92,
+      "levelDb": -16.3
+    },
+    {
+      "time": 24.341201814058955,
+      "label": "snare",
+      "confidence": 0.24326443672180176,
+      "velocity": 120,
+      "levelDb": -7.53
+    },
+    {
+      "time": 24.62281179138322,
+      "label": "snare",
+      "confidence": 0.35249030590057373,
+      "velocity": 93,
+      "levelDb": -16.08
+    },
+    {
+      "time": 24.90544217687075,
+      "label": "snare",
+      "confidence": 0.2642621397972107,
+      "velocity": 125,
+      "levelDb": -5.93
+    },
+    {
+      "time": 25.33031746031746,
+      "label": "snare",
+      "confidence": 0.6825233101844788,
+      "velocity": 96,
+      "levelDb": -14.92
+    },
+    {
+      "time": 25.473333333333333,
+      "label": "snare",
+      "confidence": 0.3402838408946991,
+      "velocity": 118,
+      "levelDb": -8.04
+    },
+    {
+      "time": 25.758526077097507,
+      "label": "snare",
+      "confidence": 0.3094879984855652,
+      "velocity": 89,
+      "levelDb": -17.19
+    },
+    {
+      "time": 26.037913832199546,
+      "label": "kick",
+      "confidence": 0.469452828168869,
+      "velocity": 119,
+      "levelDb": -2.45
+    },
+    {
+      "time": 26.462290249433106,
+      "label": "snare",
+      "confidence": 0.22228799760341644,
+      "velocity": 100,
+      "levelDb": -13.69
+    },
+    {
+      "time": 26.60532879818594,
+      "label": "snare",
+      "confidence": 0.48046937584877014,
+      "velocity": 114,
+      "levelDb": -9.18
+    },
+    {
+      "time": 26.886780045351475,
+      "label": "snare",
+      "confidence": 0.19558420777320862,
+      "velocity": 93,
+      "levelDb": -15.88
+    },
+    {
+      "time": 27.16956916099773,
+      "label": "kick",
+      "confidence": 0.630635678768158,
+      "velocity": 122,
+      "levelDb": -1.64
+    },
+    {
+      "time": 27.594489795918367,
+      "label": "snare",
+      "confidence": 0.4332932233810425,
+      "velocity": 98,
+      "levelDb": -14.47
+    },
+    {
+      "time": 27.73750566893424,
+      "label": "snare",
+      "confidence": 0.42284122109413147,
+      "velocity": 113,
+      "levelDb": -9.63
+    },
+    {
+      "time": 28.02374149659864,
+      "label": "snare",
+      "confidence": 0.23024383187294006,
+      "velocity": 96,
+      "levelDb": -14.85
+    },
+    {
+      "time": 28.301655328798187,
+      "label": "kick",
+      "confidence": 0.7011162638664246,
+      "velocity": 120,
+      "levelDb": -2.23
+    },
+    {
+      "time": 28.726462585034014,
+      "label": "snare",
+      "confidence": 0.5839086174964905,
+      "velocity": 95,
+      "levelDb": -15.22
+    },
+    {
+      "time": 28.869410430839004,
+      "label": "snare",
+      "confidence": 0.19175361096858978,
+      "velocity": 121,
+      "levelDb": -6.99
+    },
+    {
+      "time": 29.151655328798185,
+      "label": "snare",
+      "confidence": 0.3893948793411255,
+      "velocity": 94,
+      "levelDb": -15.69
+    },
+    {
+      "time": 29.433718820861678,
+      "label": "snare",
+      "confidence": 0.2183765470981598,
+      "velocity": 125,
+      "levelDb": -5.85
+    },
+    {
+      "time": 29.85918367346939,
+      "label": "snare",
+      "confidence": 0.15089084208011627,
+      "velocity": 95,
+      "levelDb": -15.17
+    },
+    {
+      "time": 30.001632653061225,
+      "label": "snare",
+      "confidence": 0.17520755529403687,
+      "velocity": 115,
+      "levelDb": -9.11
+    },
+    {
+      "time": 30.286916099773244,
+      "label": "snare",
+      "confidence": 0.24534554779529572,
+      "velocity": 91,
+      "levelDb": -16.53
+    },
+    {
+      "time": 30.56625850340136,
+      "label": "kick",
+      "confidence": 0.2318267822265625,
+      "velocity": 118,
+      "levelDb": -2.96
+    },
+    {
+      "time": 30.990589569161,
+      "label": "snare",
+      "confidence": 0.34774523973464966,
+      "velocity": 92,
+      "levelDb": -16.21
+    },
+    {
+      "time": 31.133718820861677,
+      "label": "snare",
+      "confidence": 0.3660116493701935,
+      "velocity": 114,
+      "levelDb": -9.14
+    },
+    {
+      "time": 31.415102040816326,
+      "label": "snare",
+      "confidence": 0.18278402090072632,
+      "velocity": 95,
+      "levelDb": -15.35
+    },
+    {
+      "time": 31.697868480725624,
+      "label": "kick",
+      "confidence": 0.47805067896842957,
+      "velocity": 120,
+      "levelDb": -2.34
+    },
+    {
+      "time": 32.12281179138322,
+      "label": "snare",
+      "confidence": 0.2932176887989044,
+      "velocity": 96,
+      "levelDb": -14.92
+    },
+    {
+      "time": 32.265691609977324,
+      "label": "snare",
+      "confidence": 0.334187388420105,
+      "velocity": 110,
+      "levelDb": -10.4
+    },
+    {
+      "time": 32.55952380952381,
+      "label": "snare",
+      "confidence": 0.24328495562076569,
+      "velocity": 94,
+      "levelDb": -15.78
+    },
+    {
+      "time": 32.82997732426304,
+      "label": "kick",
+      "confidence": 0.5978505611419678,
+      "velocity": 118,
+      "levelDb": -2.94
+    },
+    {
+      "time": 33.25959183673469,
+      "label": "snare",
+      "confidence": 0.5275511145591736,
+      "velocity": 90,
+      "levelDb": -16.78
+    },
+    {
+      "time": 33.39780045351474,
+      "label": "snare",
+      "confidence": 0.24132637679576874,
+      "velocity": 120,
+      "levelDb": -7.47
+    },
+    {
+      "time": 33.679433106575964,
+      "label": "snare",
+      "confidence": 0.36126887798309326,
+      "velocity": 90,
+      "levelDb": -16.88
+    },
+    {
+      "time": 33.96206349206349,
+      "label": "snare",
+      "confidence": 0.34692609310150146,
+      "velocity": 126,
+      "levelDb": -5.6
+    },
+    {
+      "time": 34.386916099773245,
+      "label": "snare",
+      "confidence": 0.3478080928325653,
+      "velocity": 94,
+      "levelDb": -15.67
+    },
+    {
+      "time": 34.529931972789115,
+      "label": "snare",
+      "confidence": 0.23861314356327057,
+      "velocity": 117,
+      "levelDb": -8.34
+    },
+    {
+      "time": 34.8133560090703,
+      "label": "snare",
+      "confidence": 0.28587380051612854,
+      "velocity": 89,
+      "levelDb": -17.11
+    },
+    {
+      "time": 35.09408163265306,
+      "label": "kick",
+      "confidence": 0.3549230694770813,
+      "velocity": 119,
+      "levelDb": -2.66
+    },
+    {
+      "time": 35.518843537414966,
+      "label": "snare",
+      "confidence": 0.203234001994133,
+      "velocity": 96,
+      "levelDb": -14.9
+    },
+    {
+      "time": 35.66072562358276,
+      "label": "kick",
+      "confidence": 0.5216937065124512,
+      "velocity": 114,
+      "levelDb": -4.22
+    },
+    {
+      "time": 35.94328798185941,
+      "label": "snare",
+      "confidence": 0.20167675614356995,
+      "velocity": 94,
+      "levelDb": -15.72
+    },
+    {
+      "time": 36.22616780045352,
+      "label": "kick",
+      "confidence": 0.7872282862663269,
+      "velocity": 126,
+      "levelDb": -0.26
+    },
+    {
+      "time": 36.65111111111111,
+      "label": "snare",
+      "confidence": 0.3526402711868286,
+      "velocity": 97,
+      "levelDb": -14.61
+    },
+    {
+      "time": 36.794104308390025,
+      "label": "snare",
+      "confidence": 0.4627991318702698,
+      "velocity": 113,
+      "levelDb": -9.63
+    },
+    {
+      "time": 37.087755102040816,
+      "label": "snare",
+      "confidence": 0.33679860830307007,
+      "velocity": 96,
+      "levelDb": -14.9
+    },
+    {
+      "time": 37.35818594104308,
+      "label": "kick",
+      "confidence": 0.5591437220573425,
+      "velocity": 119,
+      "levelDb": -2.63
+    },
+    {
+      "time": 38.49603174603175,
+      "label": "hat",
+      "confidence": 0.3279891312122345,
+      "velocity": 127,
+      "levelDb": -15.81
+    },
+    {
+      "time": 39.05691609977324,
+      "label": "kick",
+      "confidence": 0.2350219339132309,
+      "velocity": 122,
+      "levelDb": -1.64
+    },
+    {
+      "time": 39.81934240362812,
+      "label": "hat",
+      "confidence": 0.15161168575286865,
+      "velocity": 63,
+      "levelDb": -36.25
+    },
+    {
+      "time": 40.39170068027211,
+      "label": "hat",
+      "confidence": 0.2926673889160156,
+      "velocity": 49,
+      "levelDb": -40.62
+    },
+    {
+      "time": 40.75489795918367,
+      "label": "kick",
+      "confidence": 1.0,
+      "velocity": 120,
+      "levelDb": -2.14
+    },
+    {
+      "time": 41.32047619047619,
+      "label": "kick",
+      "confidence": 0.154135063290596,
+      "velocity": 122,
+      "levelDb": -1.6
+    },
+    {
+      "time": 42.083514739229024,
+      "label": "hat",
+      "confidence": 0.14863473176956177,
+      "velocity": 61,
+      "levelDb": -36.65
+    },
+    {
+      "time": 42.326462585034015,
+      "label": "hat",
+      "confidence": 0.11333886533975601,
+      "velocity": 59,
+      "levelDb": -37.42
+    },
+    {
+      "time": 42.452562358276644,
+      "label": "kick",
+      "confidence": 0.6252787113189697,
+      "velocity": 127,
+      "levelDb": 0.0
+    },
+    {
+      "time": 42.64482993197279,
+      "label": "kick",
+      "confidence": 0.1907300502061844,
+      "velocity": 104,
+      "levelDb": -7.21
+    },
+    {
+      "time": 42.735510204081635,
+      "label": "kick",
+      "confidence": 0.3479292690753937,
+      "velocity": 126,
+      "levelDb": -0.34
+    },
+    {
+      "time": 43.024308390022675,
+      "label": "hat",
+      "confidence": 0.2840039134025574,
+      "velocity": 127,
+      "levelDb": -15.92
+    },
+    {
+      "time": 43.585034013605444,
+      "label": "kick",
+      "confidence": 0.4208454489707947,
+      "velocity": 123,
+      "levelDb": -1.43
+    },
+    {
+      "time": 44.93936507936508,
+      "label": "hat",
+      "confidence": 0.3224770128726959,
+      "velocity": 59,
+      "levelDb": -37.41
+    },
+    {
+      "time": 45.283197278911565,
+      "label": "kick",
+      "confidence": 0.6617476344108582,
+      "velocity": 109,
+      "levelDb": -5.72
+    },
+    {
+      "time": 45.84936507936508,
+      "label": "kick",
+      "confidence": 0.25992459058761597,
+      "velocity": 120,
+      "levelDb": -2.36
+    },
+    {
+      "time": 46.216145124716554,
+      "label": "hat",
+      "confidence": 0.10818459838628769,
+      "velocity": 86,
+      "levelDb": -28.78
+    },
+    {
+      "time": 46.41530612244898,
+      "label": "kick",
+      "confidence": 0.36990973353385925,
+      "velocity": 112,
+      "levelDb": -4.91
+    },
+    {
+      "time": 46.698367346938774,
+      "label": "kick",
+      "confidence": 0.16727110743522644,
+      "velocity": 115,
+      "levelDb": -3.81
+    },
+    {
+      "time": 46.981473922902495,
+      "label": "kick",
+      "confidence": 0.16918547451496124,
+      "velocity": 113,
+      "levelDb": -4.55
+    },
+    {
+      "time": 47.122743764172334,
+      "label": "kick",
+      "confidence": 0.17909787595272064,
+      "velocity": 118,
+      "levelDb": -2.88
+    },
+    {
+      "time": 47.26489795918367,
+      "label": "kick",
+      "confidence": 0.19189833104610443,
+      "velocity": 115,
+      "levelDb": -3.85
+    },
+    {
+      "time": 47.69664399092971,
+      "label": "hat",
+      "confidence": 0.16694623231887817,
+      "velocity": 116,
+      "levelDb": -19.21
+    },
+    {
+      "time": 47.87780045351474,
+      "label": "hat",
+      "confidence": 0.2148868590593338,
+      "velocity": 108,
+      "levelDb": -21.76
+    },
+    {
+      "time": 47.97170068027211,
+      "label": "hat",
+      "confidence": 0.19955113530158997,
+      "velocity": 103,
+      "levelDb": -23.53
+    },
+    {
+      "time": 48.11528344671202,
+      "label": "snare",
+      "confidence": 0.49560242891311646,
+      "velocity": 115,
+      "levelDb": -9.04
+    },
+    {
+      "time": 48.443832199546485,
+      "label": "hat",
+      "confidence": 0.2229241281747818,
+      "velocity": 120,
+      "levelDb": -18.18
+    },
+    {
+      "time": 48.679410430839,
+      "label": "kick",
+      "confidence": 0.5153214335441589,
+      "velocity": 117,
+      "levelDb": -3.3
+    },
+    {
+      "time": 49.00267573696145,
+      "label": "hat",
+      "confidence": 0.1522548347711563,
+      "velocity": 120,
+      "levelDb": -18.06
+    },
+    {
+      "time": 49.00988662131519,
+      "label": "hat",
+      "confidence": 0.1850065290927887,
+      "velocity": 103,
+      "levelDb": -23.57
+    },
+    {
+      "time": 49.12580498866213,
+      "label": "snare",
+      "confidence": 0.3322586119174957,
+      "velocity": 83,
+      "levelDb": -19.13
+    },
+    {
+      "time": 49.24732426303855,
+      "label": "snare",
+      "confidence": 0.8476725816726685,
+      "velocity": 116,
+      "levelDb": -8.74
+    },
+    {
+      "time": 49.53056689342404,
+      "label": "hat",
+      "confidence": 0.3949170410633087,
+      "velocity": 119,
+      "levelDb": -18.2
+    },
+    {
+      "time": 49.81111111111111,
+      "label": "kick",
+      "confidence": 0.7062944173812866,
+      "velocity": 120,
+      "levelDb": -2.33
+    },
+    {
+      "time": 49.96081632653061,
+      "label": "hat",
+      "confidence": 0.16855455935001373,
+      "velocity": 124,
+      "levelDb": -16.82
+    },
+    {
+      "time": 50.235850340136054,
+      "label": "hat",
+      "confidence": 0.33406689763069153,
+      "velocity": 101,
+      "levelDb": -24.03
+    },
+    {
+      "time": 50.379387755102044,
+      "label": "snare",
+      "confidence": 0.21996517479419708,
+      "velocity": 126,
+      "levelDb": -5.48
+    },
+    {
+      "time": 50.69857142857143,
+      "label": "hat",
+      "confidence": 0.310329407453537,
+      "velocity": 119,
+      "levelDb": -18.24
+    },
+    {
+      "time": 50.94310657596372,
+      "label": "kick",
+      "confidence": 0.857291579246521,
+      "velocity": 117,
+      "levelDb": -3.3
+    },
+    {
+      "time": 51.39140589569161,
+      "label": "snare",
+      "confidence": 0.19986236095428467,
+      "velocity": 83,
+      "levelDb": -19.25
+    },
+    {
+      "time": 51.514172335600904,
+      "label": "snare",
+      "confidence": 0.6260418891906738,
+      "velocity": 121,
+      "levelDb": -7.1
+    },
+    {
+      "time": 51.84006802721088,
+      "label": "hat",
+      "confidence": 0.16707415878772736,
+      "velocity": 120,
+      "levelDb": -18.07
+    },
+    {
+      "time": 52.07532879818594,
+      "label": "snare",
+      "confidence": 0.2535073757171631,
+      "velocity": 122,
+      "levelDb": -6.78
+    },
+    {
+      "time": 52.22496598639456,
+      "label": "hat",
+      "confidence": 0.21834926307201385,
+      "velocity": 123,
+      "levelDb": -16.96
+    },
+    {
+      "time": 52.40609977324263,
+      "label": "hat",
+      "confidence": 0.15579012036323547,
+      "velocity": 109,
+      "levelDb": -21.59
+    },
+    {
+      "time": 52.500022675736965,
+      "label": "hat",
+      "confidence": 0.3322915732860565,
+      "velocity": 102,
+      "levelDb": -23.62
+    },
+    {
+      "time": 52.64356009070295,
+      "label": "snare",
+      "confidence": 0.5808688998222351,
+      "velocity": 116,
+      "levelDb": -8.54
+    },
+    {
+      "time": 52.97213151927438,
+      "label": "hat",
+      "confidence": 0.2764672636985779,
+      "velocity": 119,
+      "levelDb": -18.2
+    },
+    {
+      "time": 53.20732426303855,
+      "label": "kick",
+      "confidence": 0.4632866382598877,
+      "velocity": 117,
+      "levelDb": -3.11
+    },
+    {
+      "time": 53.53097505668934,
+      "label": "hat",
+      "confidence": 0.16150958836078644,
+      "velocity": 120,
+      "levelDb": -17.93
+    },
+    {
+      "time": 53.53818594104308,
+      "label": "hat",
+      "confidence": 0.17276766896247864,
+      "velocity": 103,
+      "levelDb": -23.41
+    },
+    {
+      "time": 53.65430839002268,
+      "label": "snare",
+      "confidence": 0.2284594476222992,
+      "velocity": 68,
+      "levelDb": -23.87
+    },
+    {
+      "time": 53.77560090702948,
+      "label": "snare",
+      "confidence": 0.8684115409851074,
+      "velocity": 116,
+      "levelDb": -8.79
+    },
+    {
+      "time": 53.99725623582766,
+      "label": "kick",
+      "confidence": 0.32141754031181335,
+      "velocity": 96,
+      "levelDb": -9.74
+    },
+    {
+      "time": 54.10421768707483,
+      "label": "hat",
+      "confidence": 0.23482981324195862,
+      "velocity": 120,
+      "levelDb": -18.06
+    },
+    {
+      "time": 54.33943310657597,
+      "label": "kick",
+      "confidence": 0.6748641133308411,
+      "velocity": 121,
+      "levelDb": -1.99
+    },
+    {
+      "time": 54.48909297052154,
+      "label": "hat",
+      "confidence": 0.2000671774148941,
+      "velocity": 124,
+      "levelDb": -16.72
+    },
+    {
+      "time": 54.67022675736961,
+      "label": "hat",
+      "confidence": 0.15018601715564728,
+      "velocity": 119,
+      "levelDb": -18.42
+    },
+    {
+      "time": 54.764149659863946,
+      "label": "hat",
+      "confidence": 0.36173465847969055,
+      "velocity": 103,
+      "levelDb": -23.59
+    },
+    {
+      "time": 54.907709750566895,
+      "label": "snare",
+      "confidence": 0.4828811287879944,
+      "velocity": 113,
+      "levelDb": -9.65
+    },
+    {
+      "time": 55.18925170068027,
+      "label": "hat",
+      "confidence": 0.37494194507598877,
+      "velocity": 119,
+      "levelDb": -18.32
+    },
+    {
+      "time": 55.47195011337868,
+      "label": "kick",
+      "confidence": 0.8658218383789062,
+      "velocity": 116,
+      "levelDb": -3.36
+    },
+    {
+      "time": 55.802290249433106,
+      "label": "hat",
+      "confidence": 0.1404542326927185,
+      "velocity": 119,
+      "levelDb": -18.29
+    },
+    {
+      "time": 55.90419501133787,
+      "label": "hat",
+      "confidence": 0.3229648470878601,
+      "velocity": 125,
+      "levelDb": -16.42
+    },
+    {
+      "time": 56.03977324263039,
+      "label": "snare",
+      "confidence": 0.2463715523481369,
+      "velocity": 122,
+      "levelDb": -6.87
+    },
+    {
+      "time": 56.32591836734694,
+      "label": "snare",
+      "confidence": 0.30390360951423645,
+      "velocity": 117,
+      "levelDb": -8.21
+    },
+    {
+      "time": 56.60344671201814,
+      "label": "kick",
+      "confidence": 0.7317459583282471,
+      "velocity": 115,
+      "levelDb": -3.67
+    },
+    {
+      "time": 56.753242630385486,
+      "label": "hat",
+      "confidence": 0.2601303458213806,
+      "velocity": 123,
+      "levelDb": -17.13
+    },
+    {
+      "time": 56.93439909297052,
+      "label": "hat",
+      "confidence": 0.1930992603302002,
+      "velocity": 109,
+      "levelDb": -21.47
+    },
+    {
+      "time": 57.02829931972789,
+      "label": "hat",
+      "confidence": 0.35799846053123474,
+      "velocity": 103,
+      "levelDb": -23.36
+    },
+    {
+      "time": 57.17185941043084,
+      "label": "snare",
+      "confidence": 0.2387462705373764,
+      "velocity": 118,
+      "levelDb": -8.12
+    },
+    {
+      "time": 57.45342403628118,
+      "label": "hat",
+      "confidence": 0.24676254391670227,
+      "velocity": 117,
+      "levelDb": -19.0
+    },
+    {
+      "time": 57.735578231292514,
+      "label": "kick",
+      "confidence": 0.39120960235595703,
+      "velocity": 117,
+      "levelDb": -3.29
+    },
+    {
+      "time": 58.05732426303855,
+      "label": "hat",
+      "confidence": 0.14993079006671906,
+      "velocity": 121,
+      "levelDb": -17.82
+    },
+    {
+      "time": 58.179909297052156,
+      "label": "snare",
+      "confidence": 0.41186201572418213,
+      "velocity": 95,
+      "levelDb": -15.22
+    },
+    {
+      "time": 58.30394557823129,
+      "label": "snare",
+      "confidence": 0.45058000087738037,
+      "velocity": 116,
+      "levelDb": -8.52
+    },
+    {
+      "time": 58.58587301587301,
+      "label": "hat",
+      "confidence": 0.455988347530365,
+      "velocity": 120,
+      "levelDb": -18.15
+    },
+    {
+      "time": 58.867551020408165,
+      "label": "kick",
+      "confidence": 0.6707367300987244,
+      "velocity": 119,
+      "levelDb": -2.56
+    },
+    {
+      "time": 59.0174149659864,
+      "label": "hat",
+      "confidence": 0.18065550923347473,
+      "velocity": 124,
+      "levelDb": -16.76
+    },
+    {
+      "time": 59.19655328798186,
+      "label": "hat",
+      "confidence": 0.12282528728246689,
+      "velocity": 121,
+      "levelDb": -17.65
+    },
+    {
+      "time": 59.29244897959184,
+      "label": "hat",
+      "confidence": 0.19010452926158905,
+      "velocity": 102,
+      "levelDb": -23.7
+    },
+    {
+      "time": 59.43598639455782,
+      "label": "snare",
+      "confidence": 0.3218131363391876,
+      "velocity": 125,
+      "levelDb": -5.67
+    },
+    {
+      "time": 59.77303854875284,
+      "label": "hat",
+      "confidence": 0.15100672841072083,
+      "velocity": 119,
+      "levelDb": -18.34
+    },
+    {
+      "time": 59.999750566893425,
+      "label": "kick",
+      "confidence": 0.8203432559967041,
+      "velocity": 116,
+      "levelDb": -3.4
+    },
+    {
+      "time": 60.33061224489796,
+      "label": "hat",
+      "confidence": 0.1475510597229004,
+      "velocity": 113,
+      "levelDb": -20.31
+    },
+    {
+      "time": 60.448027210884355,
+      "label": "snare",
+      "confidence": 0.2743738293647766,
+      "velocity": 69,
+      "levelDb": -23.48
+    },
+    {
+      "time": 60.56809523809524,
+      "label": "snare",
+      "confidence": 0.6243075132369995,
+      "velocity": 121,
+      "levelDb": -7.07
+    },
+    {
+      "time": 60.896689342403626,
+      "label": "hat",
+      "confidence": 0.18818159401416779,
+      "velocity": 121,
+      "levelDb": -17.87
+    },
+    {
+      "time": 61.1318820861678,
+      "label": "snare",
+      "confidence": 0.21107827126979828,
+      "velocity": 121,
+      "levelDb": -7.15
+    },
+    {
+      "time": 61.28156462585034,
+      "label": "hat",
+      "confidence": 0.23989655077457428,
+      "velocity": 124,
+      "levelDb": -16.91
+    },
+    {
+      "time": 61.462698412698415,
+      "label": "hat",
+      "confidence": 0.16075831651687622,
+      "velocity": 110,
+      "levelDb": -21.25
+    },
+    {
+      "time": 61.55664399092971,
+      "label": "hat",
+      "confidence": 0.244866281747818,
+      "velocity": 102,
+      "levelDb": -23.83
+    },
+    {
+      "time": 61.70018140589569,
+      "label": "snare",
+      "confidence": 0.6702805161476135,
+      "velocity": 116,
+      "levelDb": -8.81
+    },
+    {
+      "time": 61.98113378684807,
+      "label": "hat",
+      "confidence": 0.1458815634250641,
+      "velocity": 116,
+      "levelDb": -19.36
+    },
+    {
+      "time": 62.2637641723356,
+      "label": "kick",
+      "confidence": 0.4245145618915558,
+      "velocity": 118,
+      "levelDb": -2.97
+    },
+    {
+      "time": 62.58539682539683,
+      "label": "hat",
+      "confidence": 0.22924821078777313,
+      "velocity": 121,
+      "levelDb": -17.84
+    },
+    {
+      "time": 62.68936507936508,
+      "label": "snare",
+      "confidence": 0.173595130443573,
+      "velocity": 62,
+      "levelDb": -25.89
+    },
+    {
+      "time": 62.83222222222222,
+      "label": "snare",
+      "confidence": 0.9139084815979004,
+      "velocity": 115,
+      "levelDb": -8.89
+    },
+    {
+      "time": 63.11566893424036,
+      "label": "hat",
+      "confidence": 0.31580275297164917,
+      "velocity": 119,
+      "levelDb": -18.29
+    },
+    {
+      "time": 63.396031746031746,
+      "label": "kick",
+      "confidence": 0.636882483959198,
+      "velocity": 121,
+      "levelDb": -2.02
+    },
+    {
+      "time": 63.54600907029479,
+      "label": "hat",
+      "confidence": 0.16454899311065674,
+      "velocity": 124,
+      "levelDb": -16.82
+    },
+    {
+      "time": 63.7268253968254,
+      "label": "hat",
+      "confidence": 0.15561629831790924,
+      "velocity": 99,
+      "levelDb": -24.8
+    },
+    {
+      "time": 63.82256235827664,
+      "label": "hat",
+      "confidence": 0.2702377438545227,
+      "velocity": 101,
+      "levelDb": -24.07
+    },
+    {
+      "time": 63.96430839002267,
+      "label": "snare",
+      "confidence": 0.25703901052474976,
+      "velocity": 126,
+      "levelDb": -5.54
+    },
+    {
+      "time": 64.24587301587302,
+      "label": "hat",
+      "confidence": 0.2818681299686432,
+      "velocity": 119,
+      "levelDb": -18.49
+    },
+    {
+      "time": 64.52854875283447,
+      "label": "kick",
+      "confidence": 0.8254716992378235,
+      "velocity": 116,
+      "levelDb": -3.37
+    },
+    {
+      "time": 64.85891156462586,
+      "label": "hat",
+      "confidence": 0.14259210228919983,
+      "velocity": 119,
+      "levelDb": -18.33
+    },
+    {
+      "time": 64.96081632653062,
+      "label": "hat",
+      "confidence": 0.381661593914032,
+      "velocity": 119,
+      "levelDb": -18.49
+    },
+    {
+      "time": 65.09639455782313,
+      "label": "snare",
+      "confidence": 0.36089175939559937,
+      "velocity": 111,
+      "levelDb": -10.18
+    },
+    {
+      "time": 65.66056689342403,
+      "label": "kick",
+      "confidence": 0.24801038205623627,
+      "velocity": 115,
+      "levelDb": -3.81
+    },
+    {
+      "time": 65.80984126984127,
+      "label": "hat",
+      "confidence": 0.2517198920249939,
+      "velocity": 123,
+      "levelDb": -16.97
+    },
+    {
+      "time": 66.09655328798186,
+      "label": "hat",
+      "confidence": 0.24791119992733002,
+      "velocity": 99,
+      "levelDb": -24.67
+    },
+    {
+      "time": 66.22845804988663,
+      "label": "snare",
+      "confidence": 0.5886557698249817,
+      "velocity": 118,
+      "levelDb": -7.87
+    },
+    {
+      "time": 66.55702947845805,
+      "label": "hat",
+      "confidence": 0.2436477392911911,
+      "velocity": 120,
+      "levelDb": -18.11
+    },
+    {
+      "time": 66.79215419501134,
+      "label": "kick",
+      "confidence": 0.36694830656051636,
+      "velocity": 116,
+      "levelDb": -3.44
+    },
+    {
+      "time": 66.99977324263038,
+      "label": "kick",
+      "confidence": 0.12539039552211761,
+      "velocity": 90,
+      "levelDb": -11.68
+    },
+    {
+      "time": 67.11392290249434,
+      "label": "hat",
+      "confidence": 0.16717758774757385,
+      "velocity": 120,
+      "levelDb": -18.01
+    },
+    {
+      "time": 67.23820861678004,
+      "label": "snare",
+      "confidence": 0.3664954900741577,
+      "velocity": 87,
+      "levelDb": -17.96
+    },
+    {
+      "time": 67.36054421768708,
+      "label": "snare",
+      "confidence": 0.5952427983283997,
+      "velocity": 116,
+      "levelDb": -8.58
+    },
+    {
+      "time": 67.64210884353741,
+      "label": "hat",
+      "confidence": 0.478608638048172,
+      "velocity": 120,
+      "levelDb": -18.02
+    },
+    {
+      "time": 67.92419501133787,
+      "label": "kick",
+      "confidence": 0.5704249739646912,
+      "velocity": 117,
+      "levelDb": -3.08
+    },
+    {
+      "time": 68.07403628117913,
+      "label": "hat",
+      "confidence": 0.17409422993659973,
+      "velocity": 125,
+      "levelDb": -16.58
+    },
+    {
+      "time": 68.34909297052154,
+      "label": "hat",
+      "confidence": 0.2870734930038452,
+      "velocity": 102,
+      "levelDb": -23.82
+    },
+    {
+      "time": 68.4925850340136,
+      "label": "snare",
+      "confidence": 0.27542415261268616,
+      "velocity": 127,
+      "levelDb": -5.26
+    },
+    {
+      "time": 68.77358276643992,
+      "label": "hat",
+      "confidence": 0.25787705183029175,
+      "velocity": 119,
+      "levelDb": -18.45
+    },
+    {
+      "time": 69.05634920634921,
+      "label": "kick",
+      "confidence": 0.7962831258773804,
+      "velocity": 116,
+      "levelDb": -3.5
+    },
+    {
+      "time": 69.38721088435373,
+      "label": "hat",
+      "confidence": 0.1798800826072693,
+      "velocity": 114,
+      "levelDb": -19.97
+    },
+    {
+      "time": 69.50292517006802,
+      "label": "snare",
+      "confidence": 0.1443658471107483,
+      "velocity": 54,
+      "levelDb": -28.36
+    },
+    {
+      "time": 69.62469387755102,
+      "label": "snare",
+      "confidence": 0.6768677234649658,
+      "velocity": 122,
+      "levelDb": -6.84
+    },
+    {
+      "time": 69.95326530612245,
+      "label": "hat",
+      "confidence": 0.18865181505680084,
+      "velocity": 120,
+      "levelDb": -17.94
+    },
+    {
+      "time": 70.1884126984127,
+      "label": "kick",
+      "confidence": 0.8132947683334351,
+      "velocity": 115,
+      "levelDb": -3.72
+    },
+    {
+      "time": 70.33818594104308,
+      "label": "hat",
+      "confidence": 0.2515893876552582,
+      "velocity": 123,
+      "levelDb": -17.0
+    },
+    {
+      "time": 70.5192970521542,
+      "label": "hat",
+      "confidence": 0.16069655120372772,
+      "velocity": 110,
+      "levelDb": -21.21
+    },
+    {
+      "time": 70.75678004535148,
+      "label": "snare",
+      "confidence": 0.6562070846557617,
+      "velocity": 116,
+      "levelDb": -8.78
+    },
+    {
+      "time": 71.08532879818594,
+      "label": "hat",
+      "confidence": 0.22995822131633759,
+      "velocity": 120,
+      "levelDb": -18.16
+    },
+    {
+      "time": 71.32040816326531,
+      "label": "kick",
+      "confidence": 0.42061764001846313,
+      "velocity": 117,
+      "levelDb": -3.14
+    },
+    {
+      "time": 71.64201814058957,
+      "label": "hat",
+      "confidence": 0.14902321994304657,
+      "velocity": 120,
+      "levelDb": -18.0
+    },
+    {
+      "time": 71.76877551020408,
+      "label": "snare",
+      "confidence": 0.36840784549713135,
+      "velocity": 84,
+      "levelDb": -18.86
+    },
+    {
+      "time": 71.888820861678,
+      "label": "snare",
+      "confidence": 0.739937424659729,
+      "velocity": 116,
+      "levelDb": -8.59
+    },
+    {
+      "time": 72.17260770975057,
+      "label": "hat",
+      "confidence": 0.36168596148490906,
+      "velocity": 119,
+      "levelDb": -18.23
+    },
+    {
+      "time": 72.45263038548752,
+      "label": "kick",
+      "confidence": 0.650326669216156,
+      "velocity": 120,
+      "levelDb": -2.23
+    },
+    {
+      "time": 72.60233560090703,
+      "label": "hat",
+      "confidence": 0.16207969188690186,
+      "velocity": 124,
+      "levelDb": -16.62
+    },
+    {
+      "time": 72.78340136054422,
+      "label": "hat",
+      "confidence": 0.1384374499320984,
+      "velocity": 119,
+      "levelDb": -18.26
+    },
+    {
+      "time": 72.87739229024943,
+      "label": "hat",
+      "confidence": 0.3575158417224884,
+      "velocity": 103,
+      "levelDb": -23.54
+    },
+    {
+      "time": 73.0208843537415,
+      "label": "snare",
+      "confidence": 0.534089982509613,
+      "velocity": 114,
+      "levelDb": -9.33
+    },
+    {
+      "time": 73.30244897959183,
+      "label": "hat",
+      "confidence": 0.41243448853492737,
+      "velocity": 119,
+      "levelDb": -18.43
+    },
+    {
+      "time": 73.58517006802721,
+      "label": "kick",
+      "confidence": 0.8317782282829285,
+      "velocity": 117,
+      "levelDb": -3.33
+    },
+    {
+      "time": 73.91551020408163,
+      "label": "hat",
+      "confidence": 0.15348030626773834,
+      "velocity": 119,
+      "levelDb": -18.49
+    },
+    {
+      "time": 74.01739229024943,
+      "label": "hat",
+      "confidence": 0.250007688999176,
+      "velocity": 125,
+      "levelDb": -16.46
+    },
+    {
+      "time": 74.15299319727892,
+      "label": "snare",
+      "confidence": 0.3007855713367462,
+      "velocity": 122,
+      "levelDb": -6.74
+    },
+    {
+      "time": 74.4391156462585,
+      "label": "snare",
+      "confidence": 0.2675211727619171,
+      "velocity": 116,
+      "levelDb": -8.67
+    },
+    {
+      "time": 74.71716553287982,
+      "label": "kick",
+      "confidence": 0.8192838430404663,
+      "velocity": 116,
+      "levelDb": -3.6
+    },
+    {
+      "time": 74.86648526077097,
+      "label": "hat",
+      "confidence": 0.25316593050956726,
+      "velocity": 124,
+      "levelDb": -16.83
+    },
+    {
+      "time": 75.04759637188208,
+      "label": "hat",
+      "confidence": 0.18060708045959473,
+      "velocity": 110,
+      "levelDb": -21.12
+    },
+    {
+      "time": 75.14154195011338,
+      "label": "hat",
+      "confidence": 0.26652002334594727,
+      "velocity": 103,
+      "levelDb": -23.5
+    },
+    {
+      "time": 75.28507936507937,
+      "label": "snare",
+      "confidence": 0.6504319310188293,
+      "velocity": 118,
+      "levelDb": -8.07
+    },
+    {
+      "time": 75.56662131519275,
+      "label": "hat",
+      "confidence": 0.22536273300647736,
+      "velocity": 115,
+      "levelDb": -19.54
+    },
+    {
+      "time": 75.848820861678,
+      "label": "kick",
+      "confidence": 0.404598593711853,
+      "velocity": 116,
+      "levelDb": -3.38
+    },
+    {
+      "time": 76.13213151927438,
+      "label": "hat",
+      "confidence": 0.14854049682617188,
+      "velocity": 120,
+      "levelDb": -17.89
+    },
+    {
+      "time": 76.1797052154195,
+      "label": "hat",
+      "confidence": 0.1813477873802185,
+      "velocity": 105,
+      "levelDb": -22.72
+    },
+    {
+      "time": 76.29578231292517,
+      "label": "snare",
+      "confidence": 0.34200388193130493,
+      "velocity": 75,
+      "levelDb": -21.61
+    },
+    {
+      "time": 76.41716553287982,
+      "label": "snare",
+      "confidence": 0.7997923493385315,
+      "velocity": 117,
+      "levelDb": -8.44
+    },
+    {
+      "time": 76.70090702947846,
+      "label": "hat",
+      "confidence": 0.48208552598953247,
+      "velocity": 120,
+      "levelDb": -18.14
+    },
+    {
+      "time": 76.98079365079366,
+      "label": "kick",
+      "confidence": 0.5058048367500305,
+      "velocity": 119,
+      "levelDb": -2.62
+    },
+    {
+      "time": 77.13063492063492,
+      "label": "hat",
+      "confidence": 0.16916833817958832,
+      "velocity": 124,
+      "levelDb": -16.74
+    },
+    {
+      "time": 77.31986394557823,
+      "label": "hat",
+      "confidence": 0.14253127574920654,
+      "velocity": 120,
+      "levelDb": -18.12
+    },
+    {
+      "time": 77.40566893424037,
+      "label": "hat",
+      "confidence": 0.29401472210884094,
+      "velocity": 102,
+      "levelDb": -23.61
+    },
+    {
+      "time": 77.54918367346939,
+      "label": "snare",
+      "confidence": 0.29035642743110657,
+      "velocity": 127,
+      "levelDb": -5.16
+    },
+    {
+      "time": 77.8307709750567,
+      "label": "hat",
+      "confidence": 0.32978007197380066,
+      "velocity": 119,
+      "levelDb": -18.25
+    },
+    {
+      "time": 78.11297052154195,
+      "label": "kick",
+      "confidence": 0.7970320582389832,
+      "velocity": 117,
+      "levelDb": -3.23
+    },
+    {
+      "time": 78.44383219954649,
+      "label": "hat",
+      "confidence": 0.15408357977867126,
+      "velocity": 119,
+      "levelDb": -18.2
+    },
+    {
+      "time": 78.68129251700681,
+      "label": "snare",
+      "confidence": 0.6539785265922546,
+      "velocity": 123,
+      "levelDb": -6.54
+    },
+    {
+      "time": 79.00986394557823,
+      "label": "hat",
+      "confidence": 0.1589520275592804,
+      "velocity": 120,
+      "levelDb": -17.88
+    },
+    {
+      "time": 79.24503401360545,
+      "label": "kick",
+      "confidence": 0.8306533098220825,
+      "velocity": 116,
+      "levelDb": -3.48
+    },
+    {
+      "time": 79.39478458049886,
+      "label": "hat",
+      "confidence": 0.24288195371627808,
+      "velocity": 124,
+      "levelDb": -16.79
+    },
+    {
+      "time": 79.57589569160997,
+      "label": "hat",
+      "confidence": 0.15918906033039093,
+      "velocity": 111,
+      "levelDb": -20.96
+    },
+    {
+      "time": 79.67458049886622,
+      "label": "hat",
+      "confidence": 0.12820366024971008,
+      "velocity": 96,
+      "levelDb": -25.65
+    },
+    {
+      "time": 79.81337868480726,
+      "label": "snare",
+      "confidence": 0.6728946566581726,
+      "velocity": 118,
+      "levelDb": -8.14
+    },
+    {
+      "time": 80.14047619047619,
+      "label": "hat",
+      "confidence": 0.2945843040943146,
+      "velocity": 119,
+      "levelDb": -18.23
+    },
+    {
+      "time": 80.37709750566893,
+      "label": "kick",
+      "confidence": 0.3683162331581116,
+      "velocity": 117,
+      "levelDb": -3.1
+    },
+    {
+      "time": 80.66043083900227,
+      "label": "hat",
+      "confidence": 0.19590604305267334,
+      "velocity": 120,
+      "levelDb": -17.97
+    },
+    {
+      "time": 80.82358276643991,
+      "label": "snare",
+      "confidence": 0.15696153044700623,
+      "velocity": 42,
+      "levelDb": -32.3
+    },
+    {
+      "time": 80.94544217687074,
+      "label": "snare",
+      "confidence": 0.9097483158111572,
+      "velocity": 116,
+      "levelDb": -8.77
+    },
+    {
+      "time": 81.22920634920635,
+      "label": "hat",
+      "confidence": 0.3520908057689667,
+      "velocity": 119,
+      "levelDb": -18.37
+    },
+    {
+      "time": 81.50922902494331,
+      "label": "kick",
+      "confidence": 0.6540514826774597,
+      "velocity": 119,
+      "levelDb": -2.47
+    },
+    {
+      "time": 81.65922902494331,
+      "label": "hat",
+      "confidence": 0.17756594717502594,
+      "velocity": 124,
+      "levelDb": -16.81
+    },
+    {
+      "time": 81.93396825396826,
+      "label": "hat",
+      "confidence": 0.420703649520874,
+      "velocity": 103,
+      "levelDb": -23.46
+    },
+    {
+      "time": 82.07752834467121,
+      "label": "snare",
+      "confidence": 0.481474369764328,
+      "velocity": 116,
+      "levelDb": -8.7
+    },
+    {
+      "time": 82.35907029478459,
+      "label": "hat",
+      "confidence": 0.4912298917770386,
+      "velocity": 120,
+      "levelDb": -18.09
+    },
+    {
+      "time": 82.641768707483,
+      "label": "kick",
+      "confidence": 0.7466839551925659,
+      "velocity": 116,
+      "levelDb": -3.41
+    },
+    {
+      "time": 82.97213151927437,
+      "label": "hat",
+      "confidence": 0.20121774077415466,
+      "velocity": 92,
+      "levelDb": -26.81
+    },
+    {
+      "time": 83.07403628117913,
+      "label": "hat",
+      "confidence": 0.36801546812057495,
+      "velocity": 118,
+      "levelDb": -18.7
+    },
+    {
+      "time": 83.24897959183673,
+      "label": "hat",
+      "confidence": 0.4741442799568176,
+      "velocity": 116,
+      "levelDb": -19.43
+    },
+    {
+      "time": 83.77374149659865,
+      "label": "kick",
+      "confidence": 0.20621377229690552,
+      "velocity": 115,
+      "levelDb": -3.75
+    },
+    {
+      "time": 84.19886621315193,
+      "label": "snare",
+      "confidence": 0.6036170125007629,
+      "velocity": 96,
+      "levelDb": -15.06
+    },
+    {
+      "time": 84.34126984126983,
+      "label": "snare",
+      "confidence": 0.20496860146522522,
+      "velocity": 118,
+      "levelDb": -8.05
+    },
+    {
+      "time": 84.62274376417234,
+      "label": "snare",
+      "confidence": 0.37811875343322754,
+      "velocity": 92,
+      "levelDb": -16.31
+    },
+    {
+      "time": 84.90589569160997,
+      "label": "kick",
+      "confidence": 0.2865734100341797,
+      "velocity": 118,
+      "levelDb": -2.81
+    },
+    {
+      "time": 85.33024943310657,
+      "label": "snare",
+      "confidence": 0.64476478099823,
+      "velocity": 95,
+      "levelDb": -15.32
+    },
+    {
+      "time": 85.47333333333333,
+      "label": "snare",
+      "confidence": 0.3849252462387085,
+      "velocity": 118,
+      "levelDb": -8.05
+    },
+    {
+      "time": 85.7547619047619,
+      "label": "snare",
+      "confidence": 0.18728132545948029,
+      "velocity": 95,
+      "levelDb": -15.38
+    },
+    {
+      "time": 86.03748299319727,
+      "label": "kick",
+      "confidence": 0.4787008464336395,
+      "velocity": 121,
+      "levelDb": -1.99
+    },
+    {
+      "time": 86.46242630385487,
+      "label": "snare",
+      "confidence": 0.22772791981697083,
+      "velocity": 101,
+      "levelDb": -13.57
+    },
+    {
+      "time": 86.60530612244898,
+      "label": "snare",
+      "confidence": 0.4503867030143738,
+      "velocity": 114,
+      "levelDb": -9.36
+    },
+    {
+      "time": 86.88748299319728,
+      "label": "snare",
+      "confidence": 0.20768840610980988,
+      "velocity": 96,
+      "levelDb": -14.87
+    },
+    {
+      "time": 87.17,
+      "label": "kick",
+      "confidence": 0.6685279607772827,
+      "velocity": 118,
+      "levelDb": -2.76
+    },
+    {
+      "time": 87.59433106575963,
+      "label": "snare",
+      "confidence": 0.44600510597229004,
+      "velocity": 94,
+      "levelDb": -15.75
+    },
+    {
+      "time": 87.73621315192744,
+      "label": "kick",
+      "confidence": 0.47021692991256714,
+      "velocity": 116,
+      "levelDb": -3.52
+    },
+    {
+      "time": 88.01902494331065,
+      "label": "snare",
+      "confidence": 0.3737809956073761,
+      "velocity": 95,
+      "levelDb": -15.4
+    },
+    {
+      "time": 88.30165532879819,
+      "label": "kick",
+      "confidence": 0.8534886240959167,
+      "velocity": 118,
+      "levelDb": -2.98
+    },
+    {
+      "time": 88.7265306122449,
+      "label": "snare",
+      "confidence": 0.6029003262519836,
+      "velocity": 97,
+      "levelDb": -14.75
+    },
+    {
+      "time": 88.86954648526077,
+      "label": "snare",
+      "confidence": 0.21134532988071442,
+      "velocity": 121,
+      "levelDb": -7.11
+    },
+    {
+      "time": 89.15120181405895,
+      "label": "snare",
+      "confidence": 0.3753224313259125,
+      "velocity": 92,
+      "levelDb": -16.23
+    },
+    {
+      "time": 89.43414965986395,
+      "label": "kick",
+      "confidence": 0.22179746627807617,
+      "velocity": 119,
+      "levelDb": -2.49
+    },
+    {
+      "time": 89.85850340136055,
+      "label": "snare",
+      "confidence": 0.6427120566368103,
+      "velocity": 94,
+      "levelDb": -15.65
+    },
+    {
+      "time": 90.00156462585034,
+      "label": "snare",
+      "confidence": 0.36893796920776367,
+      "velocity": 117,
+      "levelDb": -8.28
+    },
+    {
+      "time": 90.28678004535148,
+      "label": "snare",
+      "confidence": 0.30412042140960693,
+      "velocity": 94,
+      "levelDb": -15.57
+    },
+    {
+      "time": 90.56578231292517,
+      "label": "kick",
+      "confidence": 0.42309290170669556,
+      "velocity": 122,
+      "levelDb": -1.7
+    },
+    {
+      "time": 90.99072562358276,
+      "label": "snare",
+      "confidence": 0.2331567108631134,
+      "velocity": 102,
+      "levelDb": -13.25
+    },
+    {
+      "time": 91.13371882086167,
+      "label": "snare",
+      "confidence": 0.4329417645931244,
+      "velocity": 117,
+      "levelDb": -8.18
+    },
+    {
+      "time": 91.41995464852607,
+      "label": "snare",
+      "confidence": 0.13174143433570862,
+      "velocity": 96,
+      "levelDb": -14.95
+    },
+    {
+      "time": 91.69786848072562,
+      "label": "kick",
+      "confidence": 0.5536099672317505,
+      "velocity": 120,
+      "levelDb": -2.25
+    },
+    {
+      "time": 92.12263038548753,
+      "label": "snare",
+      "confidence": 0.4160296618938446,
+      "velocity": 95,
+      "levelDb": -15.34
+    },
+    {
+      "time": 92.26451247165532,
+      "label": "kick",
+      "confidence": 0.45865097641944885,
+      "velocity": 116,
+      "levelDb": -3.57
+    },
+    {
+      "time": 92.54784580498867,
+      "label": "snare",
+      "confidence": 0.3153494894504547,
+      "velocity": 94,
+      "levelDb": -15.62
+    },
+    {
+      "time": 92.82997732426304,
+      "label": "kick",
+      "confidence": 0.792104959487915,
+      "velocity": 117,
+      "levelDb": -3.22
+    },
+    {
+      "time": 93.25539682539683,
+      "label": "snare",
+      "confidence": 0.5597347617149353,
+      "velocity": 95,
+      "levelDb": -15.44
+    },
+    {
+      "time": 93.39786848072562,
+      "label": "snare",
+      "confidence": 0.2034461945295334,
+      "velocity": 120,
+      "levelDb": -7.29
+    },
+    {
+      "time": 93.68303854875283,
+      "label": "snare",
+      "confidence": 0.37256890535354614,
+      "velocity": 92,
+      "levelDb": -16.31
+    },
+    {
+      "time": 93.96197278911565,
+      "label": "snare",
+      "confidence": 0.2041926383972168,
+      "velocity": 120,
+      "levelDb": -7.52
+    },
+    {
+      "time": 94.38678004535147,
+      "label": "snare",
+      "confidence": 0.6615439653396606,
+      "velocity": 94,
+      "levelDb": -15.62
+    },
+    {
+      "time": 94.52993197278911,
+      "label": "snare",
+      "confidence": 0.36623695492744446,
+      "velocity": 117,
+      "levelDb": -8.22
+    },
+    {
+      "time": 94.81510204081633,
+      "label": "snare",
+      "confidence": 0.32191503047943115,
+      "velocity": 94,
+      "levelDb": -15.52
+    },
+    {
+      "time": 95.09408163265306,
+      "label": "kick",
+      "confidence": 0.42040136456489563,
+      "velocity": 122,
+      "levelDb": -1.47
+    },
+    {
+      "time": 95.51902494331065,
+      "label": "snare",
+      "confidence": 0.6317204833030701,
+      "velocity": 97,
+      "levelDb": -14.6
+    },
+    {
+      "time": 95.66190476190476,
+      "label": "snare",
+      "confidence": 0.44450271129608154,
+      "velocity": 115,
+      "levelDb": -9.04
+    },
+    {
+      "time": 95.94832199546485,
+      "label": "snare",
+      "confidence": 0.1302386075258255,
+      "velocity": 94,
+      "levelDb": -15.73
+    },
+    {
+      "time": 96.22616780045351,
+      "label": "kick",
+      "confidence": 0.5953125357627869,
+      "velocity": 118,
+      "levelDb": -2.81
+    },
+    {
+      "time": 96.65587301587301,
+      "label": "snare",
+      "confidence": 0.3886720836162567,
+      "velocity": 94,
+      "levelDb": -15.71
+    },
+    {
+      "time": 96.79281179138322,
+      "label": "kick",
+      "confidence": 0.4692748486995697,
+      "velocity": 116,
+      "levelDb": -3.56
+    },
+    {
+      "time": 97.07562358276644,
+      "label": "snare",
+      "confidence": 0.32763487100601196,
+      "velocity": 93,
+      "levelDb": -15.93
+    },
+    {
+      "time": 97.35825396825396,
+      "label": "kick",
+      "confidence": 0.8295935392379761,
+      "velocity": 116,
+      "levelDb": -3.37
+    },
+    {
+      "time": 97.78369614512472,
+      "label": "snare",
+      "confidence": 0.5676660537719727,
+      "velocity": 93,
+      "levelDb": -16.08
+    },
+    {
+      "time": 97.92614512471656,
+      "label": "snare",
+      "confidence": 0.1947382539510727,
+      "velocity": 121,
+      "levelDb": -7.16
+    },
+    {
+      "time": 98.20823129251701,
+      "label": "snare",
+      "confidence": 0.3417120575904846,
+      "velocity": 90,
+      "levelDb": -16.83
+    },
+    {
+      "time": 98.49072562358276,
+      "label": "kick",
+      "confidence": 0.19405490159988403,
+      "velocity": 119,
+      "levelDb": -2.46
+    },
+    {
+      "time": 98.91514739229025,
+      "label": "snare",
+      "confidence": 0.6143273711204529,
+      "velocity": 93,
+      "levelDb": -16.02
+    },
+    {
+      "time": 99.05814058956916,
+      "label": "snare",
+      "confidence": 0.34244194626808167,
+      "velocity": 117,
+      "levelDb": -8.28
+    },
+    {
+      "time": 99.34163265306123,
+      "label": "snare",
+      "confidence": 0.295693576335907,
+      "velocity": 91,
+      "levelDb": -16.5
+    },
+    {
+      "time": 99.62240362811791,
+      "label": "kick",
+      "confidence": 0.437967985868454,
+      "velocity": 122,
+      "levelDb": -1.59
+    },
+    {
+      "time": 100.04732426303855,
+      "label": "snare",
+      "confidence": 0.6446890830993652,
+      "velocity": 98,
+      "levelDb": -14.22
+    },
+    {
+      "time": 100.19034013605442,
+      "label": "snare",
+      "confidence": 0.4209771454334259,
+      "velocity": 117,
+      "levelDb": -8.38
+    },
+    {
+      "time": 100.47655328798186,
+      "label": "snare",
+      "confidence": 0.13713012635707855,
+      "velocity": 95,
+      "levelDb": -15.44
+    },
+    {
+      "time": 100.75492063492064,
+      "label": "kick",
+      "confidence": 0.540544867515564,
+      "velocity": 120,
+      "levelDb": -2.32
+    },
+    {
+      "time": 101.1792970521542,
+      "label": "snare",
+      "confidence": 0.41097292304039,
+      "velocity": 97,
+      "levelDb": -14.55
+    },
+    {
+      "time": 101.32108843537415,
+      "label": "kick",
+      "confidence": 0.46049216389656067,
+      "velocity": 114,
+      "levelDb": -4.03
+    },
+    {
+      "time": 101.60448979591837,
+      "label": "snare",
+      "confidence": 0.3127578794956207,
+      "velocity": 95,
+      "levelDb": -15.21
+    },
+    {
+      "time": 101.88657596371883,
+      "label": "kick",
+      "confidence": 0.7083286046981812,
+      "velocity": 122,
+      "levelDb": -1.69
+    },
+    {
+      "time": 105.84879818594105,
+      "label": "snare",
+      "confidence": 0.5876968502998352,
+      "velocity": 126,
+      "levelDb": -5.36
+    },
+    {
+      "time": 106.13181405895692,
+      "label": "kick",
+      "confidence": 0.27226898074150085,
+      "velocity": 125,
+      "levelDb": -0.62
+    },
+    {
+      "time": 106.41482993197279,
+      "label": "kick",
+      "confidence": 0.6433668732643127,
+      "velocity": 124,
+      "levelDb": -0.8
+    },
+    {
+      "time": 106.6982993197279,
+      "label": "kick",
+      "confidence": 0.4771408140659332,
+      "velocity": 125,
+      "levelDb": -0.76
+    },
+    {
+      "time": 106.98124716553288,
+      "label": "kick",
+      "confidence": 0.37971681356430054,
+      "velocity": 124,
+      "levelDb": -0.94
+    },
+    {
+      "time": 107.1228798185941,
+      "label": "kick",
+      "confidence": 0.2557896077632904,
+      "velocity": 122,
+      "levelDb": -1.48
+    },
+    {
+      "time": 107.26392290249433,
+      "label": "snare",
+      "confidence": 0.1805262714624405,
+      "velocity": 116,
+      "levelDb": -8.71
+    },
+    {
+      "time": 107.4059410430839,
+      "label": "kick",
+      "confidence": 0.16030436754226685,
+      "velocity": 122,
+      "levelDb": -1.6
+    },
+    {
+      "time": 107.54739229024943,
+      "label": "kick",
+      "confidence": 0.2585930824279785,
+      "velocity": 114,
+      "levelDb": -4.13
+    },
+    {
+      "time": 107.97170068027211,
+      "label": "hat",
+      "confidence": 0.15681517124176025,
+      "velocity": 103,
+      "levelDb": -23.52
+    },
+    {
+      "time": 108.11585034013605,
+      "label": "snare",
+      "confidence": 0.4036012291908264,
+      "velocity": 112,
+      "levelDb": -9.8
+    },
+    {
+      "time": 108.39625850340136,
+      "label": "hat",
+      "confidence": 0.17422114312648773,
+      "velocity": 117,
+      "levelDb": -18.86
+    },
+    {
+      "time": 108.679410430839,
+      "label": "kick",
+      "confidence": 0.43572506308555603,
+      "velocity": 118,
+      "levelDb": -2.92
+    },
+    {
+      "time": 109.00986394557823,
+      "label": "hat",
+      "confidence": 0.21634241938591003,
+      "velocity": 102,
+      "levelDb": -23.85
+    },
+    {
+      "time": 109.12643990929705,
+      "label": "snare",
+      "confidence": 0.3539409637451172,
+      "velocity": 81,
+      "levelDb": -19.64
+    },
+    {
+      "time": 109.24732426303855,
+      "label": "snare",
+      "confidence": 0.7432085871696472,
+      "velocity": 115,
+      "levelDb": -9.02
+    },
+    {
+      "time": 109.53108843537414,
+      "label": "hat",
+      "confidence": 0.46066105365753174,
+      "velocity": 120,
+      "levelDb": -18.14
+    },
+    {
+      "time": 109.81111111111112,
+      "label": "kick",
+      "confidence": 0.6874101758003235,
+      "velocity": 120,
+      "levelDb": -2.21
+    },
+    {
+      "time": 109.96081632653062,
+      "label": "hat",
+      "confidence": 0.1920185536146164,
+      "velocity": 124,
+      "levelDb": -16.78
+    },
+    {
+      "time": 110.23585034013605,
+      "label": "hat",
+      "confidence": 0.3571518063545227,
+      "velocity": 101,
+      "levelDb": -24.07
+    },
+    {
+      "time": 110.37938775510204,
+      "label": "snare",
+      "confidence": 0.23692737519741058,
+      "velocity": 126,
+      "levelDb": -5.58
+    },
+    {
+      "time": 110.69857142857143,
+      "label": "hat",
+      "confidence": 0.21334800124168396,
+      "velocity": 119,
+      "levelDb": -18.39
+    },
+    {
+      "time": 110.94312925170068,
+      "label": "kick",
+      "confidence": 0.8333402276039124,
+      "velocity": 115,
+      "levelDb": -3.76
+    },
+    {
+      "time": 111.27401360544218,
+      "label": "hat",
+      "confidence": 0.1695430874824524,
+      "velocity": 112,
+      "levelDb": -20.49
+    },
+    {
+      "time": 111.3897052154195,
+      "label": "snare",
+      "confidence": 0.19781677424907684,
+      "velocity": 50,
+      "levelDb": -29.48
+    },
+    {
+      "time": 111.5114739229025,
+      "label": "snare",
+      "confidence": 0.7396727800369263,
+      "velocity": 120,
+      "levelDb": -7.35
+    },
+    {
+      "time": 111.84004535147392,
+      "label": "hat",
+      "confidence": 0.15153653919696808,
+      "velocity": 119,
+      "levelDb": -18.32
+    },
+    {
+      "time": 112.07528344671202,
+      "label": "snare",
+      "confidence": 0.29115891456604004,
+      "velocity": 121,
+      "levelDb": -7.13
+    },
+    {
+      "time": 112.22496598639455,
+      "label": "hat",
+      "confidence": 0.2547287046909332,
+      "velocity": 123,
+      "levelDb": -17.21
+    },
+    {
+      "time": 112.40609977324263,
+      "label": "hat",
+      "confidence": 0.13154257833957672,
+      "velocity": 108,
+      "levelDb": -21.74
+    },
+    {
+      "time": 112.5337641723356,
+      "label": "hat",
+      "confidence": 0.1687375009059906,
+      "velocity": 96,
+      "levelDb": -25.64
+    },
+    {
+      "time": 112.6435827664399,
+      "label": "snare",
+      "confidence": 0.6628812551498413,
+      "velocity": 115,
+      "levelDb": -8.94
+    },
+    {
+      "time": 112.97215419501134,
+      "label": "hat",
+      "confidence": 0.24488946795463562,
+      "velocity": 120,
+      "levelDb": -18.19
+    },
+    {
+      "time": 113.20716553287981,
+      "label": "kick",
+      "confidence": 0.5173452496528625,
+      "velocity": 117,
+      "levelDb": -3.2
+    },
+    {
+      "time": 113.53097505668934,
+      "label": "hat",
+      "confidence": 0.21616283059120178,
+      "velocity": 120,
+      "levelDb": -18.0
+    },
+    {
+      "time": 113.65551020408164,
+      "label": "snare",
+      "confidence": 0.375680536031723,
+      "velocity": 84,
+      "levelDb": -18.92
+    },
+    {
+      "time": 113.77562358276644,
+      "label": "snare",
+      "confidence": 0.6604770421981812,
+      "velocity": 115,
+      "levelDb": -8.85
+    },
+    {
+      "time": 114.05938775510204,
+      "label": "hat",
+      "confidence": 0.4753733277320862,
+      "velocity": 120,
+      "levelDb": -17.94
+    },
+    {
+      "time": 114.33943310657597,
+      "label": "kick",
+      "confidence": 0.6260407567024231,
+      "velocity": 120,
+      "levelDb": -2.36
+    },
+    {
+      "time": 114.48909297052154,
+      "label": "hat",
+      "confidence": 0.19393077492713928,
+      "velocity": 125,
+      "levelDb": -16.55
+    },
+    {
+      "time": 114.67022675736962,
+      "label": "hat",
+      "confidence": 0.16120849549770355,
+      "velocity": 119,
+      "levelDb": -18.36
+    },
+    {
+      "time": 114.76414965986395,
+      "label": "hat",
+      "confidence": 0.3760620057582855,
+      "velocity": 102,
+      "levelDb": -23.73
+    },
+    {
+      "time": 114.9077097505669,
+      "label": "snare",
+      "confidence": 0.4729413092136383,
+      "velocity": 113,
+      "levelDb": -9.69
+    },
+    {
+      "time": 115.18925170068027,
+      "label": "hat",
+      "confidence": 0.47439923882484436,
+      "velocity": 119,
+      "levelDb": -18.35
+    },
+    {
+      "time": 115.47195011337868,
+      "label": "kick",
+      "confidence": 0.8791226744651794,
+      "velocity": 116,
+      "levelDb": -3.36
+    },
+    {
+      "time": 115.80229024943311,
+      "label": "hat",
+      "confidence": 0.13925471901893616,
+      "velocity": 120,
+      "levelDb": -18.19
+    },
+    {
+      "time": 115.90421768707483,
+      "label": "hat",
+      "confidence": 0.3061928153038025,
+      "velocity": 125,
+      "levelDb": -16.47
+    },
+    {
+      "time": 116.03977324263039,
+      "label": "snare",
+      "confidence": 0.28050732612609863,
+      "velocity": 122,
+      "levelDb": -6.84
+    },
+    {
+      "time": 116.32591836734694,
+      "label": "snare",
+      "confidence": 0.31010210514068604,
+      "velocity": 118,
+      "levelDb": -8.06
+    },
+    {
+      "time": 116.60394557823129,
+      "label": "kick",
+      "confidence": 0.7347574234008789,
+      "velocity": 114,
+      "levelDb": -4.01
+    },
+    {
+      "time": 116.76419501133788,
+      "label": "hat",
+      "confidence": 0.10812050849199295,
+      "velocity": 113,
+      "levelDb": -20.14
+    },
+    {
+      "time": 116.93439909297052,
+      "label": "hat",
+      "confidence": 0.19496504962444305,
+      "velocity": 110,
+      "levelDb": -21.35
+    },
+    {
+      "time": 117.03034013605442,
+      "label": "hat",
+      "confidence": 0.30023786425590515,
+      "velocity": 103,
+      "levelDb": -23.3
+    },
+    {
+      "time": 117.17185941043084,
+      "label": "snare",
+      "confidence": 0.2600869834423065,
+      "velocity": 118,
+      "levelDb": -8.09
+    },
+    {
+      "time": 117.45340136054422,
+      "label": "hat",
+      "confidence": 0.2083546221256256,
+      "velocity": 117,
+      "levelDb": -18.9
+    },
+    {
+      "time": 117.73587301587301,
+      "label": "kick",
+      "confidence": 0.38427722454071045,
+      "velocity": 116,
+      "levelDb": -3.38
+    },
+    {
+      "time": 118.05927437641724,
+      "label": "hat",
+      "confidence": 0.13705484569072723,
+      "velocity": 120,
+      "levelDb": -17.89
+    },
+    {
+      "time": 118.06646258503402,
+      "label": "hat",
+      "confidence": 0.18669402599334717,
+      "velocity": 103,
+      "levelDb": -23.43
+    },
+    {
+      "time": 118.18306122448979,
+      "label": "snare",
+      "confidence": 0.40000250935554504,
+      "velocity": 87,
+      "levelDb": -17.81
+    },
+    {
+      "time": 118.30392290249434,
+      "label": "snare",
+      "confidence": 0.7590455412864685,
+      "velocity": 117,
+      "levelDb": -8.38
+    },
+    {
+      "time": 118.58768707482993,
+      "label": "hat",
+      "confidence": 0.5217281579971313,
+      "velocity": 120,
+      "levelDb": -17.99
+    },
+    {
+      "time": 118.86773242630386,
+      "label": "kick",
+      "confidence": 0.6291078925132751,
+      "velocity": 116,
+      "levelDb": -3.41
+    },
+    {
+      "time": 119.01741496598639,
+      "label": "hat",
+      "confidence": 0.20053184032440186,
+      "velocity": 124,
+      "levelDb": -16.83
+    },
+    {
+      "time": 119.19850340136054,
+      "label": "hat",
+      "confidence": 0.1217368096113205,
+      "velocity": 119,
+      "levelDb": -18.36
+    },
+    {
+      "time": 119.29244897959184,
+      "label": "hat",
+      "confidence": 0.33938491344451904,
+      "velocity": 103,
+      "levelDb": -23.47
+    },
+    {
+      "time": 119.43598639455783,
+      "label": "snare",
+      "confidence": 0.2321869283914566,
+      "velocity": 126,
+      "levelDb": -5.53
+    },
+    {
+      "time": 119.71757369614512,
+      "label": "hat",
+      "confidence": 0.3240281641483307,
+      "velocity": 119,
+      "levelDb": -18.35
+    },
+    {
+      "time": 119.9997052154195,
+      "label": "kick",
+      "confidence": 0.8608489036560059,
+      "velocity": 116,
+      "levelDb": -3.34
+    },
+    {
+      "time": 120.33061224489796,
+      "label": "hat",
+      "confidence": 0.15171541273593903,
+      "velocity": 119,
+      "levelDb": -18.41
+    },
+    {
+      "time": 120.44723356009071,
+      "label": "snare",
+      "confidence": 0.30806946754455566,
+      "velocity": 76,
+      "levelDb": -21.49
+    },
+    {
+      "time": 120.56807256235828,
+      "label": "snare",
+      "confidence": 0.6481655836105347,
+      "velocity": 121,
+      "levelDb": -7.09
+    },
+    {
+      "time": 120.89666666666666,
+      "label": "hat",
+      "confidence": 0.18093790113925934,
+      "velocity": 121,
+      "levelDb": -17.83
+    },
+    {
+      "time": 121.13190476190476,
+      "label": "snare",
+      "confidence": 0.2164813131093979,
+      "velocity": 121,
+      "levelDb": -7.09
+    },
+    {
+      "time": 121.28156462585034,
+      "label": "hat",
+      "confidence": 0.2402246594429016,
+      "velocity": 123,
+      "levelDb": -16.97
+    },
+    {
+      "time": 121.46269841269842,
+      "label": "hat",
+      "confidence": 0.15635955333709717,
+      "velocity": 110,
+      "levelDb": -21.25
+    },
+    {
+      "time": 121.55659863945579,
+      "label": "hat",
+      "confidence": 0.2838657796382904,
+      "velocity": 102,
+      "levelDb": -23.65
+    },
+    {
+      "time": 121.70018140589569,
+      "label": "snare",
+      "confidence": 0.5761352777481079,
+      "velocity": 115,
+      "levelDb": -9.09
+    },
+    {
+      "time": 122.02875283446713,
+      "label": "hat",
+      "confidence": 0.2646794021129608,
+      "velocity": 120,
+      "levelDb": -18.16
+    },
+    {
+      "time": 122.26390022675737,
+      "label": "kick",
+      "confidence": 0.4165402054786682,
+      "velocity": 118,
+      "levelDb": -2.96
+    },
+    {
+      "time": 122.58560090702947,
+      "label": "hat",
+      "confidence": 0.1651659905910492,
+      "velocity": 121,
+      "levelDb": -17.82
+    },
+    {
+      "time": 122.59476190476191,
+      "label": "hat",
+      "confidence": 0.16799065470695496,
+      "velocity": 104,
+      "levelDb": -23.14
+    },
+    {
+      "time": 122.71092970521542,
+      "label": "snare",
+      "confidence": 0.1601313352584839,
+      "velocity": 68,
+      "levelDb": -23.81
+    },
+    {
+      "time": 122.83222222222223,
+      "label": "snare",
+      "confidence": 0.8984329700469971,
+      "velocity": 115,
+      "levelDb": -9.0
+    },
+    {
+      "time": 123.1443537414966,
+      "label": "hat",
+      "confidence": 0.3557665944099426,
+      "velocity": 119,
+      "levelDb": -18.23
+    },
+    {
+      "time": 123.39603174603175,
+      "label": "kick",
+      "confidence": 0.6778531670570374,
+      "velocity": 119,
+      "levelDb": -2.4
+    },
+    {
+      "time": 123.54600907029479,
+      "label": "hat",
+      "confidence": 0.1834183931350708,
+      "velocity": 124,
+      "levelDb": -16.77
+    },
+    {
+      "time": 123.72682539682539,
+      "label": "hat",
+      "confidence": 0.12168324738740921,
+      "velocity": 119,
+      "levelDb": -18.33
+    },
+    {
+      "time": 123.82074829931973,
+      "label": "hat",
+      "confidence": 0.3431447744369507,
+      "velocity": 102,
+      "levelDb": -23.78
+    },
+    {
+      "time": 123.96430839002268,
+      "label": "snare",
+      "confidence": 0.20950135588645935,
+      "velocity": 125,
+      "levelDb": -5.65
+    },
+    {
+      "time": 124.24585034013606,
+      "label": "hat",
+      "confidence": 0.29529044032096863,
+      "velocity": 119,
+      "levelDb": -18.22
+    },
+    {
+      "time": 124.52854875283447,
+      "label": "kick",
+      "confidence": 0.7265838980674744,
+      "velocity": 117,
+      "levelDb": -3.24
+    },
+    {
+      "time": 124.85888888888888,
+      "label": "hat",
+      "confidence": 0.15107126533985138,
+      "velocity": 120,
+      "levelDb": -18.08
+    },
+    {
+      "time": 124.96081632653062,
+      "label": "hat",
+      "confidence": 0.3692500591278076,
+      "velocity": 119,
+      "levelDb": -18.48
+    },
+    {
+      "time": 125.13578231292517,
+      "label": "hat",
+      "confidence": 0.3226229250431061,
+      "velocity": 118,
+      "levelDb": -18.63
+    },
+    {
+      "time": 125.66056689342403,
+      "label": "kick",
+      "confidence": 0.2943013310432434,
+      "velocity": 115,
+      "levelDb": -3.9
+    },
+    {
+      "time": 125.8225850340136,
+      "label": "hat",
+      "confidence": 0.09992490708827972,
+      "velocity": 115,
+      "levelDb": -19.56
+    },
+    {
+      "time": 126.1156462585034,
+      "label": "hat",
+      "confidence": 0.14188635349273682,
+      "velocity": 101,
+      "levelDb": -24.03
+    },
+    {
+      "time": 126.22843537414965,
+      "label": "snare",
+      "confidence": 0.3094286024570465,
+      "velocity": 116,
+      "levelDb": -8.57
+    },
+    {
+      "time": 126.55707482993198,
+      "label": "hat",
+      "confidence": 0.2108238786458969,
+      "velocity": 120,
+      "levelDb": -17.97
+    },
+    {
+      "time": 126.79263038548753,
+      "label": "kick",
+      "confidence": 0.34410560131073,
+      "velocity": 116,
+      "levelDb": -3.48
+    },
+    {
+      "time": 127.11392290249434,
+      "label": "hat",
+      "confidence": 0.15946908295154572,
+      "velocity": 120,
+      "levelDb": -18.05
+    },
+    {
+      "time": 127.12308390022676,
+      "label": "hat",
+      "confidence": 0.1614977866411209,
+      "velocity": 104,
+      "levelDb": -23.22
+    },
+    {
+      "time": 127.2391156462585,
+      "label": "snare",
+      "confidence": 0.2246333658695221,
+      "velocity": 72,
+      "levelDb": -22.53
+    },
+    {
+      "time": 127.360589569161,
+      "label": "snare",
+      "confidence": 0.8403264284133911,
+      "velocity": 115,
+      "levelDb": -8.91
+    },
+    {
+      "time": 127.67272108843538,
+      "label": "hat",
+      "confidence": 0.24268624186515808,
+      "velocity": 120,
+      "levelDb": -18.14
+    },
+    {
+      "time": 127.92430839002267,
+      "label": "kick",
+      "confidence": 0.4840628504753113,
+      "velocity": 119,
+      "levelDb": -2.63
+    },
+    {
+      "time": 128.0740136054422,
+      "label": "hat",
+      "confidence": 0.14247547090053558,
+      "velocity": 124,
+      "levelDb": -16.9
+    },
+    {
+      "time": 128.34907029478458,
+      "label": "hat",
+      "confidence": 0.2756313979625702,
+      "velocity": 100,
+      "levelDb": -24.35
+    },
+    {
+      "time": 128.49251700680273,
+      "label": "snare",
+      "confidence": 0.47854164242744446,
+      "velocity": 113,
+      "levelDb": -9.66
+    },
+    {
+      "time": 128.7741723356009,
+      "label": "hat",
+      "confidence": 0.2194429337978363,
+      "velocity": 119,
+      "levelDb": -18.28
+    },
+    {
+      "time": 129.05673469387756,
+      "label": "kick",
+      "confidence": 0.7950954437255859,
+      "velocity": 115,
+      "levelDb": -3.7
+    },
+    {
+      "time": 129.38721088435375,
+      "label": "hat",
+      "confidence": 0.16115114092826843,
+      "velocity": 119,
+      "levelDb": -18.29
+    },
+    {
+      "time": 129.50383219954648,
+      "label": "snare",
+      "confidence": 0.29176750779151917,
+      "velocity": 68,
+      "levelDb": -24.04
+    },
+    {
+      "time": 129.62471655328798,
+      "label": "snare",
+      "confidence": 0.49750784039497375,
+      "velocity": 121,
+      "levelDb": -7.11
+    },
+    {
+      "time": 129.95326530612246,
+      "label": "hat",
+      "confidence": 0.25675612688064575,
+      "velocity": 121,
+      "levelDb": -17.69
+    },
+    {
+      "time": 130.1885260770975,
+      "label": "snare",
+      "confidence": 0.20924101769924164,
+      "velocity": 123,
+      "levelDb": -6.5
+    },
+    {
+      "time": 130.33816326530612,
+      "label": "hat",
+      "confidence": 0.4173564016819,
+      "velocity": 124,
+      "levelDb": -16.78
+    },
+    {
+      "time": 130.5192970521542,
+      "label": "hat",
+      "confidence": 0.14437150955200195,
+      "velocity": 121,
+      "levelDb": -17.73
+    },
+    {
+      "time": 130.64700680272108,
+      "label": "hat",
+      "confidence": 0.1592518389225006,
+      "velocity": 99,
+      "levelDb": -24.79
+    },
+    {
+      "time": 130.7595238095238,
+      "label": "snare",
+      "confidence": 0.2849768400192261,
+      "velocity": 111,
+      "levelDb": -10.14
+    },
+    {
+      "time": 131.08532879818594,
+      "label": "hat",
+      "confidence": 0.28729939460754395,
+      "velocity": 120,
+      "levelDb": -18.18
+    },
+    {
+      "time": 131.32074829931972,
+      "label": "kick",
+      "confidence": 0.3287126123905182,
+      "velocity": 117,
+      "levelDb": -3.16
+    },
+    {
+      "time": 131.64219954648527,
+      "label": "hat",
+      "confidence": 0.23840507864952087,
+      "velocity": 121,
+      "levelDb": -17.86
+    },
+    {
+      "time": 131.65136054421768,
+      "label": "hat",
+      "confidence": 0.2293797880411148,
+      "velocity": 104,
+      "levelDb": -23.06
+    },
+    {
+      "time": 131.76873015873016,
+      "label": "snare",
+      "confidence": 0.19517019391059875,
+      "velocity": 85,
+      "levelDb": -18.36
+    },
+    {
+      "time": 131.88888888888889,
+      "label": "snare",
+      "confidence": 0.5427863597869873,
+      "velocity": 115,
+      "levelDb": -8.82
+    },
+    {
+      "time": 132.17260770975057,
+      "label": "hat",
+      "confidence": 0.33770862221717834,
+      "velocity": 119,
+      "levelDb": -18.24
+    },
+    {
+      "time": 132.45263038548754,
+      "label": "kick",
+      "confidence": 0.6381381750106812,
+      "velocity": 120,
+      "levelDb": -2.21
+    },
+    {
+      "time": 132.60231292517005,
+      "label": "hat",
+      "confidence": 0.20235463976860046,
+      "velocity": 125,
+      "levelDb": -16.47
+    },
+    {
+      "time": 132.78142857142856,
+      "label": "hat",
+      "confidence": 0.14187784492969513,
+      "velocity": 121,
+      "levelDb": -17.74
+    },
+    {
+      "time": 132.87739229024945,
+      "label": "hat",
+      "confidence": 0.2967796325683594,
+      "velocity": 103,
+      "levelDb": -23.41
+    },
+    {
+      "time": 133.02031746031747,
+      "label": "snare",
+      "confidence": 0.3201618790626526,
+      "velocity": 114,
+      "levelDb": -9.22
+    },
+    {
+      "time": 133.3024716553288,
+      "label": "hat",
+      "confidence": 0.26328375935554504,
+      "velocity": 119,
+      "levelDb": -18.26
+    },
+    {
+      "time": 133.58521541950114,
+      "label": "kick",
+      "confidence": 0.7968222498893738,
+      "velocity": 115,
+      "levelDb": -3.75
+    },
+    {
+      "time": 133.91551020408164,
+      "label": "hat",
+      "confidence": 0.16265587508678436,
+      "velocity": 119,
+      "levelDb": -18.26
+    },
+    {
+      "time": 134.01739229024943,
+      "label": "hat",
+      "confidence": 0.23627562820911407,
+      "velocity": 125,
+      "levelDb": -16.44
+    },
+    {
+      "time": 134.15301587301587,
+      "label": "snare",
+      "confidence": 0.3520430624485016,
+      "velocity": 110,
+      "levelDb": -10.55
+    },
+    {
+      "time": 134.46113378684808,
+      "label": "snare",
+      "confidence": 0.5378071069717407,
+      "velocity": 120,
+      "levelDb": -7.36
+    },
+    {
+      "time": 134.71714285714285,
+      "label": "kick",
+      "confidence": 0.7210633158683777,
+      "velocity": 113,
+      "levelDb": -4.32
+    },
+    {
+      "time": 134.86213151927439,
+      "label": "hat",
+      "confidence": 0.15021289885044098,
+      "velocity": 123,
+      "levelDb": -16.98
+    },
+    {
+      "time": 135.0475963718821,
+      "label": "hat",
+      "confidence": 0.1362108737230301,
+      "velocity": 111,
+      "levelDb": -20.82
+    },
+    {
+      "time": 135.14657596371882,
+      "label": "hat",
+      "confidence": 0.18705585598945618,
+      "velocity": 101,
+      "levelDb": -24.06
+    },
+    {
+      "time": 135.28448979591838,
+      "label": "snare",
+      "confidence": 0.13973084092140198,
+      "velocity": 117,
+      "levelDb": -8.39
+    },
+    {
+      "time": 135.61360544217686,
+      "label": "hat",
+      "confidence": 0.29294756054878235,
+      "velocity": 120,
+      "levelDb": -17.99
+    },
+    {
+      "time": 135.84884353741498,
+      "label": "kick",
+      "confidence": 0.2917931079864502,
+      "velocity": 115,
+      "levelDb": -3.7
+    },
+    {
+      "time": 136.13213151927437,
+      "label": "hat",
+      "confidence": 0.24464742839336395,
+      "velocity": 120,
+      "levelDb": -17.93
+    },
+    {
+      "time": 136.29628117913833,
+      "label": "snare",
+      "confidence": 0.3451118767261505,
+      "velocity": 86,
+      "levelDb": -18.11
+    },
+    {
+      "time": 136.41718820861678,
+      "label": "snare",
+      "confidence": 0.48036715388298035,
+      "velocity": 116,
+      "levelDb": -8.72
+    },
+    {
+      "time": 136.70090702947846,
+      "label": "hat",
+      "confidence": 0.3919333517551422,
+      "velocity": 120,
+      "levelDb": -18.16
+    },
+    {
+      "time": 136.9808163265306,
+      "label": "kick",
+      "confidence": 0.599088191986084,
+      "velocity": 119,
+      "levelDb": -2.54
+    },
+    {
+      "time": 137.13063492063492,
+      "label": "hat",
+      "confidence": 0.1590508371591568,
+      "velocity": 124,
+      "levelDb": -16.66
+    },
+    {
+      "time": 137.3117006802721,
+      "label": "hat",
+      "confidence": 0.15890197455883026,
+      "velocity": 120,
+      "levelDb": -18.0
+    },
+    {
+      "time": 137.43868480725624,
+      "label": "snare",
+      "confidence": 0.3187750577926636,
+      "velocity": 101,
+      "levelDb": -13.56
+    },
+    {
+      "time": 137.54857142857142,
+      "label": "snare",
+      "confidence": 0.31964343786239624,
+      "velocity": 114,
+      "levelDb": -9.41
+    },
+    {
+      "time": 137.861179138322,
+      "label": "hat",
+      "confidence": 0.1722104251384735,
+      "velocity": 120,
+      "levelDb": -18.18
+    },
+    {
+      "time": 138.11333333333334,
+      "label": "kick",
+      "confidence": 0.7560476064682007,
+      "velocity": 116,
+      "levelDb": -3.51
+    },
+    {
+      "time": 138.44380952380953,
+      "label": "hat",
+      "confidence": 0.20067444443702698,
+      "velocity": 119,
+      "levelDb": -18.37
+    },
+    {
+      "time": 138.56120181405896,
+      "label": "snare",
+      "confidence": 0.3090168535709381,
+      "velocity": 76,
+      "levelDb": -21.28
+    },
+    {
+      "time": 138.6839909297052,
+      "label": "snare",
+      "confidence": 0.38172659277915955,
+      "velocity": 122,
+      "levelDb": -6.86
+    },
+    {
+      "time": 139.0098866213152,
+      "label": "hat",
+      "confidence": 0.22206439077854156,
+      "velocity": 121,
+      "levelDb": -17.75
+    },
+    {
+      "time": 139.24501133786848,
+      "label": "kick",
+      "confidence": 0.8168836236000061,
+      "velocity": 116,
+      "levelDb": -3.44
+    },
+    {
+      "time": 139.39478458049888,
+      "label": "hat",
+      "confidence": 0.5451158285140991,
+      "velocity": 124,
+      "levelDb": -16.72
+    },
+    {
+      "time": 139.57589569161,
+      "label": "hat",
+      "confidence": 0.17093268036842346,
+      "velocity": 121,
+      "levelDb": -17.64
+    },
+    {
+      "time": 139.67480725623582,
+      "label": "hat",
+      "confidence": 0.20065952837467194,
+      "velocity": 99,
+      "levelDb": -24.65
+    },
+    {
+      "time": 139.81333333333333,
+      "label": "snare",
+      "confidence": 0.17117010056972504,
+      "velocity": 117,
+      "levelDb": -8.43
+    },
+    {
+      "time": 140.14192743764173,
+      "label": "hat",
+      "confidence": 0.29080888628959656,
+      "velocity": 120,
+      "levelDb": -17.89
+    },
+    {
+      "time": 140.3775283446712,
+      "label": "kick",
+      "confidence": 0.30632156133651733,
+      "velocity": 117,
+      "levelDb": -3.04
+    },
+    {
+      "time": 140.66043083900226,
+      "label": "hat",
+      "confidence": 0.3641604781150818,
+      "velocity": 121,
+      "levelDb": -17.83
+    },
+    {
+      "time": 140.824126984127,
+      "label": "snare",
+      "confidence": 0.1443859338760376,
+      "velocity": 58,
+      "levelDb": -27.18
+    },
+    {
+      "time": 140.94548752834467,
+      "label": "snare",
+      "confidence": 0.8475069403648376,
+      "velocity": 115,
+      "levelDb": -8.87
+    },
+    {
+      "time": 141.22920634920635,
+      "label": "hat",
+      "confidence": 0.2631290853023529,
+      "velocity": 120,
+      "levelDb": -18.18
+    },
+    {
+      "time": 141.50925170068027,
+      "label": "kick",
+      "confidence": 0.6096094250679016,
+      "velocity": 121,
+      "levelDb": -1.89
+    },
+    {
+      "time": 141.65891156462584,
+      "label": "hat",
+      "confidence": 0.16559451818466187,
+      "velocity": 125,
+      "levelDb": -16.32
+    },
+    {
+      "time": 141.84002267573698,
+      "label": "hat",
+      "confidence": 0.1816413551568985,
+      "velocity": 100,
+      "levelDb": -24.27
+    },
+    {
+      "time": 141.93396825396826,
+      "label": "hat",
+      "confidence": 0.3637889623641968,
+      "velocity": 103,
+      "levelDb": -23.4
+    },
+    {
+      "time": 142.07691609977323,
+      "label": "snare",
+      "confidence": 0.3314714729785919,
+      "velocity": 115,
+      "levelDb": -8.95
+    },
+    {
+      "time": 142.35904761904763,
+      "label": "hat",
+      "confidence": 0.25531455874443054,
+      "velocity": 119,
+      "levelDb": -18.21
+    },
+    {
+      "time": 142.64183673469387,
+      "label": "kick",
+      "confidence": 0.7619283199310303,
+      "velocity": 116,
+      "levelDb": -3.65
+    },
+    {
+      "time": 142.97213151927437,
+      "label": "hat",
+      "confidence": 0.16259314119815826,
+      "velocity": 120,
+      "levelDb": -17.89
+    },
+    {
+      "time": 143.07399092970522,
+      "label": "hat",
+      "confidence": 0.40327051281929016,
+      "velocity": 120,
+      "levelDb": -18.03
+    },
+    {
+      "time": 143.24081632653062,
+      "label": "snare",
+      "confidence": 0.12285938113927841,
+      "velocity": 91,
+      "levelDb": -16.69
+    },
+    {
+      "time": 143.77378684807258,
+      "label": "kick",
+      "confidence": 0.7030138969421387,
+      "velocity": 114,
+      "levelDb": -4.17
+    },
+    {
+      "time": 143.93580498866214,
+      "label": "hat",
+      "confidence": 0.14598725736141205,
+      "velocity": 116,
+      "levelDb": -19.4
+    },
+    {
+      "time": 144.2031292517007,
+      "label": "hat",
+      "confidence": 0.195657417178154,
+      "velocity": 98,
+      "levelDb": -24.94
+    },
+    {
+      "time": 144.34160997732425,
+      "label": "snare",
+      "confidence": 0.30397650599479675,
+      "velocity": 115,
+      "levelDb": -8.92
+    },
+    {
+      "time": 144.66879818594106,
+      "label": "hat",
+      "confidence": 0.13840797543525696,
+      "velocity": 121,
+      "levelDb": -17.81
+    },
+    {
+      "time": 144.9059410430839,
+      "label": "kick",
+      "confidence": 0.24431933462619781,
+      "velocity": 115,
+      "levelDb": -3.7
+    },
+    {
+      "time": 145.1887074829932,
+      "label": "hat",
+      "confidence": 0.158376082777977,
+      "velocity": 120,
+      "levelDb": -18.0
+    },
+    {
+      "time": 145.23628117913833,
+      "label": "hat",
+      "confidence": 0.21542510390281677,
+      "velocity": 105,
+      "levelDb": -22.72
+    },
+    {
+      "time": 145.35204081632654,
+      "label": "snare",
+      "confidence": 0.21553632616996765,
+      "velocity": 72,
+      "levelDb": -22.75
+    },
+    {
+      "time": 145.47378684807256,
+      "label": "snare",
+      "confidence": 0.880706250667572,
+      "velocity": 115,
+      "levelDb": -9.02
+    },
+    {
+      "time": 145.75698412698412,
+      "label": "hat",
+      "confidence": 0.19136518239974976,
+      "velocity": 119,
+      "levelDb": -18.31
+    },
+    {
+      "time": 146.03752834467122,
+      "label": "kick",
+      "confidence": 0.5961956977844238,
+      "velocity": 119,
+      "levelDb": -2.61
+    },
+    {
+      "time": 146.1872335600907,
+      "label": "hat",
+      "confidence": 0.1667514443397522,
+      "velocity": 124,
+      "levelDb": -16.86
+    },
+    {
+      "time": 146.37648526077098,
+      "label": "hat",
+      "confidence": 0.14714863896369934,
+      "velocity": 120,
+      "levelDb": -18.02
+    },
+    {
+      "time": 146.46226757369615,
+      "label": "hat",
+      "confidence": 0.3720603287220001,
+      "velocity": 102,
+      "levelDb": -23.74
+    },
+    {
+      "time": 146.6051247165533,
+      "label": "snare",
+      "confidence": 0.445682168006897,
+      "velocity": 114,
+      "levelDb": -9.32
+    },
+    {
+      "time": 146.88739229024944,
+      "label": "hat",
+      "confidence": 0.28466716408729553,
+      "velocity": 119,
+      "levelDb": -18.4
+    },
+    {
+      "time": 147.16997732426304,
+      "label": "kick",
+      "confidence": 0.7806096076965332,
+      "velocity": 115,
+      "levelDb": -3.68
+    },
+    {
+      "time": 147.50040816326532,
+      "label": "hat",
+      "confidence": 0.1967456340789795,
+      "velocity": 119,
+      "levelDb": -18.4
+    },
+    {
+      "time": 147.63866213151928,
+      "label": "snare",
+      "confidence": 0.2070329487323761,
+      "velocity": 61,
+      "levelDb": -26.02
+    },
+    {
+      "time": 147.73791383219955,
+      "label": "snare",
+      "confidence": 0.40343067049980164,
+      "velocity": 122,
+      "levelDb": -6.69
+    },
+    {
+      "time": 148.066462585034,
+      "label": "hat",
+      "confidence": 0.19070661067962646,
+      "velocity": 121,
+      "levelDb": -17.86
+    },
+    {
+      "time": 148.3020634920635,
+      "label": "kick",
+      "confidence": 0.8690699934959412,
+      "velocity": 115,
+      "levelDb": -3.92
+    },
+    {
+      "time": 148.45138321995464,
+      "label": "hat",
+      "confidence": 0.4229433238506317,
+      "velocity": 123,
+      "levelDb": -17.03
+    },
+    {
+      "time": 148.63249433106577,
+      "label": "hat",
+      "confidence": 0.22317549586296082,
+      "velocity": 120,
+      "levelDb": -17.9
+    },
+    {
+      "time": 148.75755102040816,
+      "label": "snare",
+      "confidence": 0.22168870270252228,
+      "velocity": 98,
+      "levelDb": -14.34
+    },
+    {
+      "time": 148.86936507936508,
+      "label": "snare",
+      "confidence": 0.21087487041950226,
+      "velocity": 115,
+      "levelDb": -8.94
+    },
+    {
+      "time": 149.19709750566892,
+      "label": "hat",
+      "confidence": 0.3249388635158539,
+      "velocity": 120,
+      "levelDb": -18.15
+    },
+    {
+      "time": 149.43414965986395,
+      "label": "kick",
+      "confidence": 0.3188391625881195,
+      "velocity": 117,
+      "levelDb": -3.22
+    },
+    {
+      "time": 149.71761904761905,
+      "label": "hat",
+      "confidence": 0.18337582051753998,
+      "velocity": 120,
+      "levelDb": -17.97
+    },
+    {
+      "time": 149.76458049886622,
+      "label": "hat",
+      "confidence": 0.22869059443473816,
+      "velocity": 106,
+      "levelDb": -22.44
+    },
+    {
+      "time": 149.88024943310657,
+      "label": "snare",
+      "confidence": 0.21873970329761505,
+      "velocity": 57,
+      "levelDb": -27.48
+    },
+    {
+      "time": 150.00208616780046,
+      "label": "snare",
+      "confidence": 0.8297955393791199,
+      "velocity": 115,
+      "levelDb": -8.97
+    },
+    {
+      "time": 150.33061224489796,
+      "label": "hat",
+      "confidence": 0.2874239981174469,
+      "velocity": 119,
+      "levelDb": -18.24
+    },
+    {
+      "time": 150.56587301587302,
+      "label": "kick",
+      "confidence": 0.6446169018745422,
+      "velocity": 120,
+      "levelDb": -2.29
+    },
+    {
+      "time": 150.71551020408162,
+      "label": "hat",
+      "confidence": 0.14163002371788025,
+      "velocity": 124,
+      "levelDb": -16.82
+    },
+    {
+      "time": 150.9047619047619,
+      "label": "hat",
+      "confidence": 0.1261982023715973,
+      "velocity": 120,
+      "levelDb": -18.08
+    },
+    {
+      "time": 150.99056689342405,
+      "label": "hat",
+      "confidence": 0.40095385909080505,
+      "velocity": 102,
+      "levelDb": -23.62
+    },
+    {
+      "time": 151.13356009070296,
+      "label": "snare",
+      "confidence": 0.5147733092308044,
+      "velocity": 113,
+      "levelDb": -9.64
+    },
+    {
+      "time": 151.41791383219956,
+      "label": "hat",
+      "confidence": 0.2464316040277481,
+      "velocity": 118,
+      "levelDb": -18.52
+    },
+    {
+      "time": 151.69843537414965,
+      "label": "kick",
+      "confidence": 0.8285536766052246,
+      "velocity": 116,
+      "levelDb": -3.49
+    },
+    {
+      "time": 152.13063492063492,
+      "label": "hat",
+      "confidence": 0.43800216913223267,
+      "velocity": 119,
+      "levelDb": -18.44
+    },
+    {
+      "time": 152.26621315192745,
+      "label": "snare",
+      "confidence": 0.39012688398361206,
+      "velocity": 110,
+      "levelDb": -10.55
+    },
+    {
+      "time": 152.57437641723357,
+      "label": "snare",
+      "confidence": 0.6044409871101379,
+      "velocity": 114,
+      "levelDb": -9.22
+    },
+    {
+      "time": 152.8304761904762,
+      "label": "kick",
+      "confidence": 0.8891543745994568,
+      "velocity": 113,
+      "levelDb": -4.38
+    },
+    {
+      "time": 152.97965986394559,
+      "label": "hat",
+      "confidence": 0.16436633467674255,
+      "velocity": 123,
+      "levelDb": -16.95
+    },
+    {
+      "time": 153.1608163265306,
+      "label": "hat",
+      "confidence": 0.23828339576721191,
+      "velocity": 112,
+      "levelDb": -20.52
+    },
+    {
+      "time": 153.28591836734694,
+      "label": "snare",
+      "confidence": 0.22449658811092377,
+      "velocity": 102,
+      "levelDb": -13.22
+    },
+    {
+      "time": 153.3977097505669,
+      "label": "snare",
+      "confidence": 0.14889833331108093,
+      "velocity": 117,
+      "levelDb": -8.32
+    },
+    {
+      "time": 153.72537414965987,
+      "label": "hat",
+      "confidence": 0.3096410632133484,
+      "velocity": 120,
+      "levelDb": -18.15
+    },
+    {
+      "time": 153.96242630385487,
+      "label": "kick",
+      "confidence": 0.26265305280685425,
+      "velocity": 116,
+      "levelDb": -3.54
+    },
+    {
+      "time": 154.24530612244897,
+      "label": "hat",
+      "confidence": 0.2252594530582428,
+      "velocity": 120,
+      "levelDb": -17.88
+    },
+    {
+      "time": 154.29287981859412,
+      "label": "hat",
+      "confidence": 0.18620891869068146,
+      "velocity": 106,
+      "levelDb": -22.4
+    },
+    {
+      "time": 154.38755102040815,
+      "label": "snare",
+      "confidence": 0.27870267629623413,
+      "velocity": 61,
+      "levelDb": -26.21
+    },
+    {
+      "time": 154.53038548752835,
+      "label": "snare",
+      "confidence": 0.7946630716323853,
+      "velocity": 116,
+      "levelDb": -8.8
+    },
+    {
+      "time": 154.81410430839003,
+      "label": "hat",
+      "confidence": 0.23649811744689941,
+      "velocity": 118,
+      "levelDb": -18.69
+    },
+    {
+      "time": 155.09410430839003,
+      "label": "kick",
+      "confidence": 0.5872493386268616,
+      "velocity": 117,
+      "levelDb": -3.02
+    },
+    {
+      "time": 155.2438321995465,
+      "label": "hat",
+      "confidence": 0.3783576190471649,
+      "velocity": 119,
+      "levelDb": -18.48
+    },
+    {
+      "time": 155.4249433106576,
+      "label": "hat",
+      "confidence": 0.17378830909729004,
+      "velocity": 121,
+      "levelDb": -17.71
+    },
+    {
+      "time": 155.51886621315194,
+      "label": "hat",
+      "confidence": 0.38514450192451477,
+      "velocity": 103,
+      "levelDb": -23.49
+    },
+    {
+      "time": 155.662358276644,
+      "label": "snare",
+      "confidence": 0.4579894542694092,
+      "velocity": 114,
+      "levelDb": -9.39
+    },
+    {
+      "time": 155.94396825396825,
+      "label": "hat",
+      "confidence": 0.17100349068641663,
+      "velocity": 119,
+      "levelDb": -18.31
+    },
+    {
+      "time": 156.22657596371883,
+      "label": "kick",
+      "confidence": 0.750855565071106,
+      "velocity": 115,
+      "levelDb": -3.72
+    },
+    {
+      "time": 156.55702947845805,
+      "label": "hat",
+      "confidence": 0.16177301108837128,
+      "velocity": 119,
+      "levelDb": -18.4
+    },
+    {
+      "time": 156.79451247165534,
+      "label": "snare",
+      "confidence": 0.5979961156845093,
+      "velocity": 123,
+      "levelDb": -6.58
+    },
+    {
+      "time": 157.1230612244898,
+      "label": "hat",
+      "confidence": 0.18378885090351105,
+      "velocity": 120,
+      "levelDb": -17.91
+    },
+    {
+      "time": 157.35866213151928,
+      "label": "kick",
+      "confidence": 0.903282105922699,
+      "velocity": 115,
+      "levelDb": -3.8
+    },
+    {
+      "time": 157.50798185941042,
+      "label": "hat",
+      "confidence": 0.35251161456108093,
+      "velocity": 123,
+      "levelDb": -17.01
+    },
+    {
+      "time": 157.6891156462585,
+      "label": "hat",
+      "confidence": 0.26566633582115173,
+      "velocity": 120,
+      "levelDb": -17.89
+    },
+    {
+      "time": 157.8014739229025,
+      "label": "snare",
+      "confidence": 0.254700243473053,
+      "velocity": 96,
+      "levelDb": -15.15
+    },
+    {
+      "time": 157.92600907029478,
+      "label": "snare",
+      "confidence": 0.2496366649866104,
+      "velocity": 117,
+      "levelDb": -8.41
+    },
+    {
+      "time": 158.25367346938776,
+      "label": "hat",
+      "confidence": 0.34615838527679443,
+      "velocity": 119,
+      "levelDb": -18.28
+    },
+    {
+      "time": 158.49065759637188,
+      "label": "kick",
+      "confidence": 0.3056245744228363,
+      "velocity": 117,
+      "levelDb": -3.18
+    },
+    {
+      "time": 158.77419501133787,
+      "label": "hat",
+      "confidence": 0.1803419440984726,
+      "velocity": 120,
+      "levelDb": -18.15
+    },
+    {
+      "time": 158.821179138322,
+      "label": "hat",
+      "confidence": 0.1760319322347641,
+      "velocity": 107,
+      "levelDb": -22.29
+    },
+    {
+      "time": 158.91573696145124,
+      "label": "snare",
+      "confidence": 0.13907001912593842,
+      "velocity": 56,
+      "levelDb": -27.78
+    },
+    {
+      "time": 159.05868480725624,
+      "label": "snare",
+      "confidence": 0.8840513229370117,
+      "velocity": 114,
+      "levelDb": -9.18
+    },
+    {
+      "time": 159.38721088435375,
+      "label": "hat",
+      "confidence": 0.2938428819179535,
+      "velocity": 120,
+      "levelDb": -18.01
+    },
+    {
+      "time": 159.6224716553288,
+      "label": "kick",
+      "confidence": 0.549686074256897,
+      "velocity": 120,
+      "levelDb": -2.28
+    },
+    {
+      "time": 159.7724716553288,
+      "label": "hat",
+      "confidence": 0.34936341643333435,
+      "velocity": 120,
+      "levelDb": -18.04
+    },
+    {
+      "time": 159.9532426303855,
+      "label": "hat",
+      "confidence": 0.12471957504749298,
+      "velocity": 120,
+      "levelDb": -17.89
+    },
+    {
+      "time": 160.0801133786848,
+      "label": "snare",
+      "confidence": 0.45461681485176086,
+      "velocity": 101,
+      "levelDb": -13.47
+    },
+    {
+      "time": 160.19013605442177,
+      "label": "snare",
+      "confidence": 0.28808853030204773,
+      "velocity": 114,
+      "levelDb": -9.24
+    },
+    {
+      "time": 160.47226757369614,
+      "label": "hat",
+      "confidence": 0.20393754541873932,
+      "velocity": 119,
+      "levelDb": -18.45
+    },
+    {
+      "time": 160.7551247165533,
+      "label": "kick",
+      "confidence": 0.6845237016677856,
+      "velocity": 116,
+      "levelDb": -3.35
+    },
+    {
+      "time": 161.08530612244897,
+      "label": "hat",
+      "confidence": 0.15026071667671204,
+      "velocity": 116,
+      "levelDb": -19.33
+    },
+    {
+      "time": 161.1872335600907,
+      "label": "hat",
+      "confidence": 0.418287992477417,
+      "velocity": 119,
+      "levelDb": -18.31
+    },
+    {
+      "time": 161.36219954648527,
+      "label": "hat",
+      "confidence": 0.3468628525733948,
+      "velocity": 118,
+      "levelDb": -18.76
+    },
+    {
+      "time": 161.88707482993198,
+      "label": "kick",
+      "confidence": 0.34275609254837036,
+      "velocity": 114,
+      "levelDb": -3.98
+    },
+    {
+      "time": 162.0472335600907,
+      "label": "hat",
+      "confidence": 0.11839377135038376,
+      "velocity": 126,
+      "levelDb": -16.25
+    },
+    {
+      "time": 162.21684807256236,
+      "label": "hat",
+      "confidence": 0.15885910391807556,
+      "velocity": 114,
+      "levelDb": -19.91
+    },
+    {
+      "time": 162.31451247165532,
+      "label": "hat",
+      "confidence": 0.1966487020254135,
+      "velocity": 102,
+      "levelDb": -23.59
+    },
+    {
+      "time": 162.45430839002267,
+      "label": "snare",
+      "confidence": 0.15661078691482544,
+      "velocity": 118,
+      "levelDb": -8.16
+    },
+    {
+      "time": 162.77625850340135,
+      "label": "hat",
+      "confidence": 0.27391791343688965,
+      "velocity": 120,
+      "levelDb": -17.93
+    },
+    {
+      "time": 163.01904761904763,
+      "label": "kick",
+      "confidence": 0.2713421583175659,
+      "velocity": 116,
+      "levelDb": -3.48
+    },
+    {
+      "time": 163.34947845804987,
+      "label": "hat",
+      "confidence": 0.28492796421051025,
+      "velocity": 107,
+      "levelDb": -22.31
+    },
+    {
+      "time": 163.4441723356009,
+      "label": "snare",
+      "confidence": 0.22181403636932373,
+      "velocity": 58,
+      "levelDb": -27.04
+    },
+    {
+      "time": 163.58700680272108,
+      "label": "snare",
+      "confidence": 0.7760825157165527,
+      "velocity": 115,
+      "levelDb": -8.82
+    },
+    {
+      "time": 163.8701814058957,
+      "label": "hat",
+      "confidence": 0.16390322148799896,
+      "velocity": 118,
+      "levelDb": -18.82
+    },
+    {
+      "time": 164.15074829931973,
+      "label": "kick",
+      "confidence": 0.4100131690502167,
+      "velocity": 118,
+      "levelDb": -2.78
+    },
+    {
+      "time": 164.30043083900227,
+      "label": "hat",
+      "confidence": 0.1407538503408432,
+      "velocity": 123,
+      "levelDb": -17.05
+    },
+    {
+      "time": 164.48154195011338,
+      "label": "hat",
+      "confidence": 0.1463991403579712,
+      "velocity": 121,
+      "levelDb": -17.77
+    },
+    {
+      "time": 164.57546485260772,
+      "label": "hat",
+      "confidence": 0.4502260684967041,
+      "velocity": 103,
+      "levelDb": -23.4
+    },
+    {
+      "time": 164.71895691609978,
+      "label": "snare",
+      "confidence": 0.40994617342948914,
+      "velocity": 114,
+      "levelDb": -9.19
+    },
+    {
+      "time": 165.00056689342404,
+      "label": "hat",
+      "confidence": 0.19998809695243835,
+      "velocity": 119,
+      "levelDb": -18.33
+    },
+    {
+      "time": 165.28317460317461,
+      "label": "kick",
+      "confidence": 0.7353208065032959,
+      "velocity": 115,
+      "levelDb": -3.7
+    },
+    {
+      "time": 165.61360544217686,
+      "label": "hat",
+      "confidence": 0.16028235852718353,
+      "velocity": 119,
+      "levelDb": -18.35
+    },
+    {
+      "time": 165.72736961451247,
+      "label": "snare",
+      "confidence": 0.1290358006954193,
+      "velocity": 51,
+      "levelDb": -29.4
+    },
+    {
+      "time": 165.85111111111112,
+      "label": "snare",
+      "confidence": 0.574729323387146,
+      "velocity": 123,
+      "levelDb": -6.31
+    },
+    {
+      "time": 166.17968253968255,
+      "label": "hat",
+      "confidence": 0.18950511515140533,
+      "velocity": 121,
+      "levelDb": -17.85
+    },
+    {
+      "time": 166.41478458049886,
+      "label": "kick",
+      "confidence": 0.8864848613739014,
+      "velocity": 115,
+      "levelDb": -3.69
+    },
+    {
+      "time": 166.5645804988662,
+      "label": "hat",
+      "confidence": 0.3025083839893341,
+      "velocity": 123,
+      "levelDb": -16.96
+    },
+    {
+      "time": 166.74573696145126,
+      "label": "hat",
+      "confidence": 0.2046709656715393,
+      "velocity": 113,
+      "levelDb": -20.22
+    },
+    {
+      "time": 166.8818140589569,
+      "label": "hat",
+      "confidence": 0.22747087478637695,
+      "velocity": 100,
+      "levelDb": -24.47
+    },
+    {
+      "time": 166.9831292517007,
+      "label": "snare",
+      "confidence": 0.43844690918922424,
+      "velocity": 115,
+      "levelDb": -9.04
+    },
+    {
+      "time": 167.30458049886622,
+      "label": "hat",
+      "confidence": 0.35332930088043213,
+      "velocity": 119,
+      "levelDb": -18.27
+    },
+    {
+      "time": 167.54732426303855,
+      "label": "kick",
+      "confidence": 0.25657135248184204,
+      "velocity": 117,
+      "levelDb": -3.18
+    },
+    {
+      "time": 167.83022675736962,
+      "label": "hat",
+      "confidence": 0.1564263552427292,
+      "velocity": 120,
+      "levelDb": -18.03
+    },
+    {
+      "time": 167.87780045351474,
+      "label": "hat",
+      "confidence": 0.17604318261146545,
+      "velocity": 107,
+      "levelDb": -22.04
+    },
+    {
+      "time": 167.99340136054423,
+      "label": "snare",
+      "confidence": 0.13644087314605713,
+      "velocity": 34,
+      "levelDb": -34.79
+    },
+    {
+      "time": 168.11528344671203,
+      "label": "snare",
+      "confidence": 0.9052482843399048,
+      "velocity": 115,
+      "levelDb": -8.95
+    },
+    {
+      "time": 168.44383219954648,
+      "label": "hat",
+      "confidence": 0.3032473623752594,
+      "velocity": 120,
+      "levelDb": -18.17
+    },
+    {
+      "time": 168.6790702947846,
+      "label": "kick",
+      "confidence": 0.49415406584739685,
+      "velocity": 119,
+      "levelDb": -2.52
+    },
+    {
+      "time": 168.82873015873017,
+      "label": "hat",
+      "confidence": 0.38911882042884827,
+      "velocity": 120,
+      "levelDb": -17.96
+    },
+    {
+      "time": 169.00984126984127,
+      "label": "hat",
+      "confidence": 0.1439732164144516,
+      "velocity": 120,
+      "levelDb": -17.9
+    },
+    {
+      "time": 169.1037641723356,
+      "label": "hat",
+      "confidence": 0.4229429364204407,
+      "velocity": 103,
+      "levelDb": -23.27
+    },
+    {
+      "time": 169.24673469387756,
+      "label": "snare",
+      "confidence": 0.3258368968963623,
+      "velocity": 115,
+      "levelDb": -9.12
+    },
+    {
+      "time": 169.52886621315193,
+      "label": "hat",
+      "confidence": 0.19083692133426666,
+      "velocity": 119,
+      "levelDb": -18.42
+    },
+    {
+      "time": 169.81172335600908,
+      "label": "kick",
+      "confidence": 0.6950196623802185,
+      "velocity": 116,
+      "levelDb": -3.35
+    },
+    {
+      "time": 170.14190476190475,
+      "label": "hat",
+      "confidence": 0.13677063584327698,
+      "velocity": 119,
+      "levelDb": -18.31
+    },
+    {
+      "time": 170.2438321995465,
+      "label": "hat",
+      "confidence": 0.4523487389087677,
+      "velocity": 119,
+      "levelDb": -18.19
+    },
+    {
+      "time": 170.37941043083902,
+      "label": "snare",
+      "confidence": 0.4388711452484131,
+      "velocity": 109,
+      "levelDb": -10.72
+    },
+    {
+      "time": 170.68755102040816,
+      "label": "snare",
+      "confidence": 0.5979704856872559,
+      "velocity": 114,
+      "levelDb": -9.27
+    },
+    {
+      "time": 170.9436961451247,
+      "label": "kick",
+      "confidence": 0.8680945634841919,
+      "velocity": 112,
+      "levelDb": -4.61
+    },
+    {
+      "time": 171.09285714285716,
+      "label": "hat",
+      "confidence": 0.255865216255188,
+      "velocity": 116,
+      "levelDb": -19.42
+    },
+    {
+      "time": 171.27401360544218,
+      "label": "hat",
+      "confidence": 0.2248115986585617,
+      "velocity": 113,
+      "levelDb": -20.14
+    },
+    {
+      "time": 171.3699546485261,
+      "label": "hat",
+      "confidence": 0.22860215604305267,
+      "velocity": 101,
+      "levelDb": -23.99
+    },
+    {
+      "time": 171.51090702947846,
+      "label": "snare",
+      "confidence": 0.2946985960006714,
+      "velocity": 112,
+      "levelDb": -9.85
+    },
+    {
+      "time": 171.8328344671202,
+      "label": "hat",
+      "confidence": 0.3446306884288788,
+      "velocity": 119,
+      "levelDb": -18.28
+    },
+    {
+      "time": 172.07566893424035,
+      "label": "kick",
+      "confidence": 0.6096203923225403,
+      "velocity": 116,
+      "levelDb": -3.54
+    },
+    {
+      "time": 172.35850340136054,
+      "label": "hat",
+      "confidence": 0.14484089612960815,
+      "velocity": 120,
+      "levelDb": -18.06
+    },
+    {
+      "time": 172.40607709750566,
+      "label": "hat",
+      "confidence": 0.19566062092781067,
+      "velocity": 108,
+      "levelDb": -21.94
+    },
+    {
+      "time": 172.50079365079364,
+      "label": "snare",
+      "confidence": 0.2726544141769409,
+      "velocity": 70,
+      "levelDb": -23.31
+    },
+    {
+      "time": 172.64360544217686,
+      "label": "snare",
+      "confidence": 0.7275155782699585,
+      "velocity": 116,
+      "levelDb": -8.63
+    },
+    {
+      "time": 172.92734693877551,
+      "label": "hat",
+      "confidence": 0.16036324203014374,
+      "velocity": 118,
+      "levelDb": -18.81
+    },
+    {
+      "time": 173.20734693877552,
+      "label": "kick",
+      "confidence": 0.48305562138557434,
+      "velocity": 118,
+      "levelDb": -2.79
+    },
+    {
+      "time": 173.35702947845806,
+      "label": "hat",
+      "confidence": 0.3773009777069092,
+      "velocity": 120,
+      "levelDb": -18.07
+    },
+    {
+      "time": 173.53814058956917,
+      "label": "hat",
+      "confidence": 0.18823257088661194,
+      "velocity": 103,
+      "levelDb": -23.41
+    },
+    {
+      "time": 173.66492063492063,
+      "label": "snare",
+      "confidence": 0.44451984763145447,
+      "velocity": 106,
+      "levelDb": -11.83
+    },
+    {
+      "time": 173.7749433106576,
+      "label": "snare",
+      "confidence": 0.39723625779151917,
+      "velocity": 114,
+      "levelDb": -9.42
+    },
+    {
+      "time": 174.05716553287982,
+      "label": "hat",
+      "confidence": 0.21021176874637604,
+      "velocity": 119,
+      "levelDb": -18.34
+    },
+    {
+      "time": 174.33977324263037,
+      "label": "kick",
+      "confidence": 0.6866214871406555,
+      "velocity": 116,
+      "levelDb": -3.6
+    },
+    {
+      "time": 174.67022675736962,
+      "label": "hat",
+      "confidence": 0.15085625648498535,
+      "velocity": 119,
+      "levelDb": -18.23
+    },
+    {
+      "time": 174.78591836734694,
+      "label": "snare",
+      "confidence": 0.2450205683708191,
+      "velocity": 57,
+      "levelDb": -27.48
+    },
+    {
+      "time": 174.90773242630385,
+      "label": "snare",
+      "confidence": 0.47323712706565857,
+      "velocity": 124,
+      "levelDb": -6.04
+    },
+    {
+      "time": 175.23628117913833,
+      "label": "hat",
+      "confidence": 0.16843464970588684,
+      "velocity": 120,
+      "levelDb": -18.01
+    },
+    {
+      "time": 175.47197278911565,
+      "label": "kick",
+      "confidence": 0.8967299461364746,
+      "velocity": 116,
+      "levelDb": -3.6
+    },
+    {
+      "time": 175.621179138322,
+      "label": "hat",
+      "confidence": 0.3555329442024231,
+      "velocity": 124,
+      "levelDb": -16.91
+    },
+    {
+      "time": 175.80231292517007,
+      "label": "hat",
+      "confidence": 0.1852763295173645,
+      "velocity": 121,
+      "levelDb": -17.83
+    },
+    {
+      "time": 175.89825396825398,
+      "label": "hat",
+      "confidence": 0.2801366150379181,
+      "velocity": 100,
+      "levelDb": -24.35
+    },
+    {
+      "time": 176.0397732426304,
+      "label": "snare",
+      "confidence": 0.2330474853515625,
+      "velocity": 116,
+      "levelDb": -8.7
+    },
+    {
+      "time": 176.361179138322,
+      "label": "hat",
+      "confidence": 0.35474225878715515,
+      "velocity": 119,
+      "levelDb": -18.25
+    },
+    {
+      "time": 176.6039455782313,
+      "label": "kick",
+      "confidence": 0.69441819190979,
+      "velocity": 117,
+      "levelDb": -3.06
+    },
+    {
+      "time": 176.88739229024944,
+      "label": "hat",
+      "confidence": 0.26739782094955444,
+      "velocity": 120,
+      "levelDb": -17.99
+    },
+    {
+      "time": 177.02891156462584,
+      "label": "snare",
+      "confidence": 0.2027669996023178,
+      "velocity": 37,
+      "levelDb": -33.86
+    },
+    {
+      "time": 177.17190476190476,
+      "label": "snare",
+      "confidence": 0.8724607825279236,
+      "velocity": 116,
+      "levelDb": -8.79
+    },
+    {
+      "time": 177.50043083900226,
+      "label": "hat",
+      "confidence": 0.2848193347454071,
+      "velocity": 120,
+      "levelDb": -18.02
+    },
+    {
+      "time": 177.73566893424035,
+      "label": "kick",
+      "confidence": 0.43717214465141296,
+      "velocity": 119,
+      "levelDb": -2.38
+    },
+    {
+      "time": 177.88532879818595,
+      "label": "hat",
+      "confidence": 0.3451242446899414,
+      "velocity": 120,
+      "levelDb": -18.0
+    },
+    {
+      "time": 178.06643990929706,
+      "label": "hat",
+      "confidence": 0.1580846756696701,
+      "velocity": 121,
+      "levelDb": -17.75
+    },
+    {
+      "time": 178.1932426303855,
+      "label": "snare",
+      "confidence": 0.44015318155288696,
+      "velocity": 107,
+      "levelDb": -11.59
+    },
+    {
+      "time": 178.30331065759637,
+      "label": "snare",
+      "confidence": 0.23472684621810913,
+      "velocity": 115,
+      "levelDb": -9.04
+    },
+    {
+      "time": 178.63845804988662,
+      "label": "hat",
+      "confidence": 0.1569596827030182,
+      "velocity": 117,
+      "levelDb": -19.09
+    },
+    {
+      "time": 178.86832199546484,
+      "label": "kick",
+      "confidence": 0.4860580563545227,
+      "velocity": 112,
+      "levelDb": -4.75
+    },
+    {
+      "time": 179.11507936507937,
+      "label": "kick",
+      "confidence": 0.13951517641544342,
+      "velocity": 93,
+      "levelDb": -10.65
+    },
+    {
+      "time": 179.3004081632653,
+      "label": "hat",
+      "confidence": 0.24667592346668243,
+      "velocity": 112,
+      "levelDb": -20.51
+    },
+    {
+      "time": 180.04757369614512,
+      "label": "hat",
+      "confidence": 0.34871575236320496,
+      "velocity": 86,
+      "levelDb": -28.81
+    }
+  ],
+  "gated_out": 0,
+  "ok": true,
+  "error": null,
+  "ms": 2175,
+  "computed_at": "2026-09-22T09:59:17+00:00"
+}

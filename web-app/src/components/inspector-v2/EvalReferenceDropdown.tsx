@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BoundarySource } from './shared/tabConfig';
 
-/** The eval-reference dropdown picks among the three boundary sources, so it
+/** The eval-reference dropdown picks among the boundary sources, so it
  *  reuses `BoundarySource` directly. Re-exported under the legacy name for the
  *  files that already import `EvalReferenceMode`. */
 export type EvalReferenceMode = BoundarySource;
 
+/** Deliberately NOT plain "Boundaries": the inspect-song header already spends
+ *  that word on the "Examine" kind picker, and two dropdowns printing the same
+ *  label for different axes is what made this control read as a duplicate. */
 const LABELS: Record<EvalReferenceMode, string> = {
-  manual: 'Boundaries',
-  eye: 'Eye',
+  manual: 'Manual boundaries',
   autoGuess: 'Auto-guess',
 };
 
@@ -30,14 +32,31 @@ export function EvalReferenceDropdown({ value, onChange, options, label = 'Evalu
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
   }, [open]);
 
   const activeLabel = LABELS[value];
+
+  // Nothing to switch TO — every other source is absent (Auto-guess hidden, or
+  // loaded with no data). A chevron that opens onto a single disabled row is a
+  // question with one answer, so name the reference as plain text instead and
+  // let the control reappear when a real alternative does. Mirrors the same
+  // collapse in InspectKindDropdown.
+  const alternatives = options.filter((o) => o.hasData && o.mode !== value);
+  if (!alternatives.length) {
+    return (
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="text-gray-500">{label}</span>
+        <span className="text-gray-400">{activeLabel}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2">

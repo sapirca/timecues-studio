@@ -65,6 +65,7 @@ PORT = 8003
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import ANALYSIS_DIR, REPO_ROOT, find_audio, list_song_slugs, safe_segment  # noqa: E402
+from server_common import cached_result, cors_headers  # noqa: E402
 
 MANIFEST     = ANALYSIS_DIR / "manifest.json"
 
@@ -124,15 +125,6 @@ _batch: dict = {
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def _cors_headers() -> dict:
-    return {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    }
-
 
 def _find_audio(slug: str) -> "Path | None":
     return find_audio(slug)
@@ -345,8 +337,9 @@ def analyze(
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"ruptures-{suffix}.json"
 
-    if cache_path.exists() and not force:
-        return json.loads(cache_path.read_text())
+    hit = cached_result(cache_path, force)
+    if hit is not None:
+        return hit
 
     if audio_path is None:
         audio_path = _find_audio(slug)
@@ -469,6 +462,65 @@ def _song_status(slug: str) -> dict[str, str]:
     return status
 
 
+# ─── Route handlers ────────────────────────────────────────────────────────────
+# Shared by the standalone server below and the consolidated dsp_server.py.
+# Each returns (status_code, body) or None when the path isn't a ruptures route
+# (the caller then emits 404).
+
+def handle_get(full_path: str):
+    path = full_path.split("?")[0]
+    if path == "/api/ruptures/health":
+        return 200, {
+            "ok":         _LIBROSA_OK and _RUPTURES_OK,
+            "librosaOk":  _LIBROSA_OK,
+            "rupturesOk": _RUPTURES_OK,
+            "version":    "1.0.0",
+            "methods":    len(ALL_METHODS),
+        }
+    if path == "/api/ruptures/methods":
+        return 200, ALL_METHODS
+    if path == "/api/ruptures/songs":
+        songs = _load_manifest()
+        result = []
+        for s in songs:
+            slug = s.get("id", "")
+            result.append({
+                "slug":    slug,
+                "name":    s.get("name", slug),
+                "methods": _song_status(slug),
+            })
+        return 200, result
+    if path == "/api/ruptures/progress":
+        with _batch_lock:
+            return 200, dict(_batch)
+    return None
+
+
+def handle_post(full_path: str, body: dict):
+    path = full_path.split("?")[0]
+    if path == "/api/ruptures/run-all":
+        started = start_batch()
+        with _batch_lock:
+            return 200, {"started": started, "progress": dict(_batch)}
+    if path == "/api/ruptures/analyze":
+        slug   = safe_segment(str(body.get("slug", "")).strip())
+        suffix = str(body.get("suffix", "")).strip()
+        force  = bool(body.get("force", False))
+        if not slug:
+            return 400, {"error": "invalid or missing slug"}
+        if suffix not in _SUFFIX_TO_METHOD:
+            return 400, {"error": f"unknown suffix, valid: {list(_SUFFIX_TO_METHOD)}"}
+        try:
+            return 200, analyze(slug, suffix, force=force)
+        except FileNotFoundError as e:
+            return 404, {"error": str(e)}
+        except RuntimeError as e:
+            return 503, {"error": str(e)}
+        except Exception as e:
+            return 500, {"error": f"Analysis failed: {e}"}
+    return None
+
+
 # ─── HTTP handler ──────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
@@ -480,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code: int, body):
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors_headers().items():
+        for k, v in cors_headers(with_content_type=True).items():
             self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -488,79 +540,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        for k, v in _cors_headers().items():
+        for k, v in cors_headers(with_content_type=True).items():
             self.send_header(k, v)
         self.end_headers()
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-
-        if path == "/api/ruptures/health":
-            self._send_json(200, {
-                "ok":         _LIBROSA_OK and _RUPTURES_OK,
-                "librosaOk":  _LIBROSA_OK,
-                "rupturesOk": _RUPTURES_OK,
-                "version":    "1.0.0",
-                "methods":    len(ALL_METHODS),
-            })
-
-        elif path == "/api/ruptures/methods":
-            self._send_json(200, ALL_METHODS)
-
-        elif path == "/api/ruptures/songs":
-            songs = _load_manifest()
-            result = []
-            for s in songs:
-                slug = s.get("id", "")
-                result.append({
-                    "slug":    slug,
-                    "name":    s.get("name", slug),
-                    "methods": _song_status(slug),
-                })
-            self._send_json(200, result)
-
-        elif path == "/api/ruptures/progress":
-            with _batch_lock:
-                self._send_json(200, dict(_batch))
-
-        else:
-            self._send_json(404, {"error": "not found"})
+        self._send_json(*(handle_get(self.path) or (404, {"error": "not found"})))
 
     def do_POST(self):
-        path   = self.path.split("?")[0]
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length)) if length else {}
         except json.JSONDecodeError as e:
             self._send_json(400, {"error": f"invalid JSON: {e}"}); return
-
-        if path == "/api/ruptures/run-all":
-            started = start_batch()
-            with _batch_lock:
-                self._send_json(200, {"started": started, "progress": dict(_batch)})
-
-        elif path == "/api/ruptures/analyze":
-            slug   = safe_segment(str(body.get("slug", "")).strip())
-            suffix = str(body.get("suffix", "")).strip()
-            force  = bool(body.get("force", False))
-
-            if not slug:
-                self._send_json(400, {"error": "invalid or missing slug"}); return
-            if suffix not in _SUFFIX_TO_METHOD:
-                self._send_json(400, {"error": f"unknown suffix, valid: {list(_SUFFIX_TO_METHOD)}"}); return
-
-            try:
-                result = analyze(slug, suffix, force=force)
-                self._send_json(200, result)
-            except FileNotFoundError as e:
-                self._send_json(404, {"error": str(e)})
-            except RuntimeError as e:
-                self._send_json(503, {"error": str(e)})
-            except Exception as e:
-                self._send_json(500, {"error": f"Analysis failed: {e}"})
-
-        else:
-            self._send_json(404, {"error": "not found"})
+        self._send_json(*(handle_post(self.path, body) or (404, {"error": "not found"})))
 
 
 def main():

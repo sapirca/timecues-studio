@@ -11,6 +11,8 @@
 
 import type { ReactNode } from 'react';
 import { CrosshairIcon } from './CrosshairIcon';
+import { InlineEditableName } from './InlineEditableName';
+import { getIsMobile } from '../../mobile/mobileMode';
 
 export interface ItemCardShellProps {
   index: number;
@@ -39,6 +41,17 @@ export function ItemCardShell({
   width = 108,
   children,
 }: ItemCardShellProps) {
+  // Rest-of-border color (top/right/bottom) — the left edge is handled
+  // separately below via the `borderLeft` shorthand so it always stays the
+  // item's own accent color regardless of selection state. Setting these as
+  // longhand *Color properties (never the all-sides `borderColor` shorthand)
+  // avoids mixing shorthand/longhand on the same box, which React warns
+  // about and which produces order-dependent results across re-renders.
+  const restBorderColor = isSelected
+    ? `${color}cc`
+    : highlightCurrent
+      ? `${color}99`
+      : 'rgba(255,255,255,0.06)';
   return (
     <div className="flex items-stretch gap-0.5 group">
       <div
@@ -47,12 +60,9 @@ export function ItemCardShell({
         style={{
           width,
           borderLeft: `2px solid ${color}`,
-          borderColor: isSelected
-            ? `${color}cc`
-            : highlightCurrent
-              ? `${color}99`
-              : 'rgba(255,255,255,0.06)',
-          borderLeftColor: color,
+          borderTopColor: restBorderColor,
+          borderRightColor: restBorderColor,
+          borderBottomColor: restBorderColor,
           boxShadow: isSelected
             ? `0 0 0 1px ${color}aa, 0 0 12px 0 ${color}44`
             : highlightCurrent
@@ -63,7 +73,9 @@ export function ItemCardShell({
         {children}
       </div>
 
-      {!isLast && onInsertAfter && (
+      {/* Hover-only, so on a phone it is a 12px column nobody can reach that
+          costs a whole card per row; there, insert from the card's own + . */}
+      {!isLast && onInsertAfter && !getIsMobile() && (
         <button
           onClick={onInsertAfter}
           className="self-center w-3 flex-shrink-0 flex items-center justify-center text-[10px] text-slate-700 hover:text-violet-400 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -113,14 +125,15 @@ export function ItemCardLabel(props: ItemCardLabelInputProps) {
     );
   }
   return (
-    <input
+    <InlineEditableName
       value={value}
-      onChange={(e) => props.onChange(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
+      onChange={props.onChange}
       placeholder={placeholder}
-      list={props.listId}
-      spellCheck={false}
-      className="mx-1.5 mb-1 px-1 py-0.5 bg-[#0a0b0d] border border-white/[0.06] text-slate-200 text-[10px] rounded focus:outline-none focus:ring-1 focus:ring-violet-500/40 truncate"
+      editLabel="Rename this boundary"
+      className="mx-1.5 mb-1 px-1 py-0.5 flex items-center gap-1 bg-[#0a0b0d] border border-white/[0.06] rounded"
+      textClassName="flex-1 min-w-0 truncate text-slate-200 text-[10px]"
+      pencilClassName="shrink-0 w-4 h-4 flex items-center justify-center rounded text-slate-400 hover:text-violet-300 hover:bg-white/[0.06] text-[10px] leading-none"
+      inputClassName="mx-1.5 mb-1 w-[calc(100%-0.75rem)] px-1 py-0.5 bg-[#0a0b0d] border border-violet-500/40 text-slate-200 text-[10px] rounded focus:outline-none focus:ring-1 focus:ring-violet-500/40"
     />
   );
 }

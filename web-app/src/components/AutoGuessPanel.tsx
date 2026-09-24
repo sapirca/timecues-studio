@@ -10,11 +10,12 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useImperativeHandle, forwardRef, type ForwardedRef, type ReactNode } from 'react';
-import type { AutoGuessManualAnnotation, AutoGuessPoint, AutoGuessSource, AutoGuessStatus, AutoGuessCentroidMethod, ManualSection } from '../types/manualAnnotation';
+import type { SectionBlock } from '../types/sectionBlock';
+import type { AutoGuessManualAnnotation, AutoGuessPoint, AutoGuessSource, AutoGuessStatus, AutoGuessCentroidMethod } from '../types/autoGuess';
 import {
   loadAutoGuessAnnotation,
   saveAutoGuessAnnotation,
-} from '../services/manualAnnotations';
+} from '../services/autoGuessAnnotations';
 import { getCurrentSettings } from '../context/SettingsContext';
 import type { SongInfo } from '../types/songInfo';
 import type { AnnotationStage } from '../types/annotationLayer';
@@ -22,96 +23,20 @@ import { beatsPerBarFromTimeSignature } from '../utils/beatGrid';
 import { BarBeatInput } from './inspector-v2/BarBeatInput';
 import { ConsensusClusterControls } from './inspector-v2/ConsensusClusterControls';
 import type { AnnotationPanelController, AnnotationPanelCapabilities } from './inspector-v2/shared/AnnotationPanelController';
+import { emptyCapabilities } from './inspector-v2/shared/AnnotationPanelController';
+import { agreementCount, clusterPoints, computeClusterTime } from '../utils/boundaryClustering';
+import { sendConsensusConfig, type BoundaryConsensusConfig } from '../state/consensusHandoff';
+import { useConsensusHandoff } from '../hooks/useConsensusHandoff';
+import { formatClockTime } from '../utils/clockTime';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmtTime(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = (sec % 60).toFixed(2).padStart(5, '0');
-  return `${m}:${s}`;
+  return formatClockTime(sec, 2);
 }
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
-}
-
-// Compute the representative time for a cluster's sorted raw member times,
-// using the same methods as the Auto Consensus panel in AlgoInspectStage.
-// `originalTime` on the resulting AutoGuessPoint always stores the arithmetic
-// mean so "reset to mean" always has a stable anchor regardless of method.
-function computeClusterTime(
-  members: { algorithmId: string; time: number }[],
-  method: AutoGuessCentroidMethod,
-): number {
-  const ts = [...members.map((m) => m.time)].sort((a, b) => a - b);
-  const n = ts.length;
-  const mean = ts.reduce((s, t) => s + t, 0) / n;
-  if (method === 'mean' || n === 1) return mean;
-
-  // Median
-  const mid = Math.floor(n / 2);
-  const median = n % 2 === 1 ? ts[mid] : (ts[mid - 1] + ts[mid]) / 2;
-
-  // Trimmed mean — remove the member farthest from the arithmetic mean
-  let trimmed = mean;
-  if (n > 2) {
-    const fi = ts.reduce((bi, t, i) => Math.abs(t - mean) > Math.abs(ts[bi] - mean) ? i : bi, 0);
-    const arr = ts.filter((_, i) => i !== fi);
-    trimmed = arr.reduce((s, t) => s + t, 0) / arr.length;
-  }
-
-  // Tightest span — smallest window covering ≥⌈N/2⌉ members; use its midpoint
-  let tightest = ts[0];
-  {
-    const majority = Math.ceil(n / 2);
-    let bestSpan = Infinity;
-    for (let i = 0; i <= n - majority; i++) {
-      const span = ts[i + majority - 1] - ts[i];
-      if (span < bestSpan) { bestSpan = span; tightest = (ts[i] + ts[i + majority - 1]) / 2; }
-    }
-  }
-
-  // EqGroup — one representative per algorithm (mean of its members), then average reps
-  let eqgroup = mean;
-  {
-    const gm = new Map<string, number[]>();
-    for (const m of members) {
-      if (!gm.has(m.algorithmId)) gm.set(m.algorithmId, []);
-      gm.get(m.algorithmId)!.push(m.time);
-    }
-    const reps = [...gm.values()].map((gts) => gts.reduce((s, t) => s + t, 0) / gts.length);
-    eqgroup = reps.reduce((s, t) => s + t, 0) / reps.length;
-  }
-
-  if (method === 'eqgroup') return eqgroup;
-
-  // NearRaw — raw timestamp with smallest total L1 distance to all others
-  if (method === 'nearraw') {
-    return ts.reduce((best, t) => {
-      const sd = ts.reduce((s, u) => s + Math.abs(t - u), 0);
-      const bd = ts.reduce((s, u) => s + Math.abs(best - u), 0);
-      return sd < bd ? t : best;
-    }, ts[0]);
-  }
-
-  // MetaMed / Plural operate on the four internal candidates
-  const cands = [median, trimmed, tightest, eqgroup];
-
-  if (method === 'metamed') {
-    const sorted = [...cands].sort((a, b) => a - b);
-    const mm = sorted.length % 2 === 1
-      ? sorted[Math.floor(sorted.length / 2)]
-      : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
-    return cands.reduce((best, v) => Math.abs(v - mm) < Math.abs(best - mm) ? v : best, cands[0]);
-  }
-
-  // plural — most agreed-upon candidate (within 0.5 s); ties → closest to mean
-  {
-    const scores = cands.map((v) => cands.filter((u) => Math.abs(u - v) <= 0.5).length);
-    const maxS = Math.max(...scores);
-    const winners = cands.filter((_, i) => scores[i] === maxS);
-    return winners.reduce((best, v) => Math.abs(v - mean) < Math.abs(best - mean) ? v : best, winners[0]);
-  }
 }
 
 const CENTROID_METHODS: { id: AutoGuessCentroidMethod; short: string; detail: string }[] = [
@@ -148,27 +73,7 @@ function clusterBoundaries(
   toleranceSec: number,
   centroidMethod: AutoGuessCentroidMethod = 'mean',
 ): AutoGuessPoint[] {
-  if (!allPoints.length) return [];
-
-  const sorted = [...allPoints].sort((a, b) => a.time - b.time);
-  const clusters: { sum: number; count: number; members: { algorithmId: string; time: number }[] }[] = [];
-
-  for (const pt of sorted) {
-    let bestIdx = -1, bestDist = Infinity;
-    for (let k = clusters.length - 1; k >= 0; k--) {
-      const centroid = clusters[k].sum / clusters[k].count;
-      if (pt.time - centroid > toleranceSec) break;
-      const dist = Math.abs(pt.time - centroid);
-      if (dist <= toleranceSec && dist < bestDist) { bestDist = dist; bestIdx = k; }
-    }
-    if (bestIdx >= 0) {
-      clusters[bestIdx].members.push(pt); clusters[bestIdx].sum += pt.time; clusters[bestIdx].count += 1;
-    } else {
-      clusters.push({ sum: pt.time, count: 1, members: [pt] });
-    }
-  }
-
-  return clusters.map(({ members }, clusterId) => {
+  return clusterPoints(allPoints, toleranceSec).map(({ members }, clusterId) => {
     const sources: AutoGuessSource[] = members.map((m) => ({ algorithmId: m.algorithmId, originalTime: m.time }));
     const meanTime = members.reduce((s, m) => s + m.time, 0) / members.length;
     const centroidTime = computeClusterTime(members, centroidMethod);
@@ -185,7 +90,8 @@ function clusterBoundaries(
   });
 }
 
-// Cluster colour palette — each unique clusterId gets a colour based on size
+// Cluster badge palette — coloured by how many distinct algorithms agreed
+// (see agreementCount), which is what the ×N on the badge counts.
 function clusterBadgeStyle(size: number): { bg: string; text: string } {
   if (size >= 4) return { bg: '#10b981', text: '#fff' };  // green — strong agreement
   if (size === 3) return { bg: '#3b82f6', text: '#fff' };  // blue
@@ -241,7 +147,12 @@ export interface AutoGuessPanelProps {
    *  annotation as section boundaries. Mirrors DetectorOutputReview's
    *  "Copy to manual layer" — same affordance, different target store
    *  (boundaries live in ManualAnnotation, not the layers doc). */
-  onCopyToManualAnnotation?: (sections: ManualSection[]) => void;
+  onCopyToManualAnnotation?: (sections: SectionBlock[]) => void;
+  /** Open Consensus Inspect with these clustering parameters, so they can be
+   *  tuned against a live F1 before anything is generated here. The config is
+   *  parked for that stage first (see state/consensusHandoff). Omit and the
+   *  button doesn't render. */
+  onTuneInConsensus?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -257,6 +168,7 @@ function AutoGuessPanelInner(
     songInfo,
     onCapabilitiesChange,
     onCopyToManualAnnotation,
+    onTuneInConsensus,
   }: AutoGuessPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
@@ -289,8 +201,21 @@ function AutoGuessPanelInner(
   const [selectedAlgorithmIds, setSelectedAlgorithmIds] = useState<Set<string>>(
     () => new Set(algorithmRows.map((r) => r.id)),
   );
-  // Min-consensus threshold — only show/evaluate points where clusterSize >= this
+  // Min-consensus threshold — only show/evaluate points backed by at least
+  // this many distinct algorithms (agreementCount, not raw member count)
   const [minConsensus, setMinConsensus] = useState(() => getCurrentSettings().autoGuessMinConsensus);
+  /** Rows the auto-include effect has already offered. Only detectors that
+   *  arrive *after* this point join the selection — one the panel has seen
+   *  before stays where the user (or a hand-off from Consensus Inspect) left
+   *  it, instead of being switched back on by the next row refresh. */
+  const offeredAlgorithmIdsRef = useRef<Set<string>>(new Set(algorithmRows.map((r) => r.id)));
+  /** The config that arrived from Consensus Inspect, if any. Held so the
+   *  annotation-load effect doesn't reset the centroid back out from under it,
+   *  and so the notice can say what landed. Cleared on song change, on
+   *  Generate, or when dismissed. */
+  const handoffRef = useRef<BoundaryConsensusConfig | null>(null);
+  const [handoffNotice, setHandoffNotice] = useState<BoundaryConsensusConfig | null>(null);
+  const handoffSongIdRef = useRef(songId);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Tracks the previous `points` reference. A new array reference means the
@@ -303,7 +228,11 @@ function AutoGuessPanelInner(
     setSelectedAlgorithmIds((prev) => {
       const next = new Set(prev);
       let changed = false;
-      algorithmRows.forEach((r) => { if (!next.has(r.id)) { next.add(r.id); changed = true; } });
+      algorithmRows.forEach((r) => {
+        if (offeredAlgorithmIdsRef.current.has(r.id)) return;
+        offeredAlgorithmIdsRef.current.add(r.id);
+        if (!next.has(r.id)) { next.add(r.id); changed = true; }
+      });
       return changed ? next : prev;
     });
   }, [algorithmRows]);
@@ -311,10 +240,20 @@ function AutoGuessPanelInner(
   // ── Load on mount / song change ──────────────────────────────────────────
   // Skip if the parent already supplied the annotation via initialAnnotation.
   useEffect(() => {
+    // A hand-off belongs to the song it was sent for; a song change drops it.
+    if (handoffSongIdRef.current !== songId) {
+      handoffSongIdRef.current = songId;
+      handoffRef.current = null;
+      setHandoffNotice(null);
+    }
+    // Parameters that arrived from Consensus Inspect outrank the ones recorded
+    // on the stored annotation — the user is on their way to re-generating.
+    const centroidFor = (stored?: AutoGuessCentroidMethod) =>
+      handoffRef.current?.centroid ?? stored ?? 'mean';
     if (initialAnnotation !== undefined) {
       // Parent handed us the data — sync local state in case it differs.
       setAnn(initialAnnotation ?? null);
-      setCentroidMethod(initialAnnotation?.centroidMethod ?? 'mean');
+      setCentroidMethod(centroidFor(initialAnnotation?.centroidMethod));
       prevPointsRef.current = initialAnnotation?.points;
       setLoading(false);
       return;
@@ -326,13 +265,28 @@ function AutoGuessPanelInner(
     loadAutoGuessAnnotation(songId).then((loaded) => {
       if (cancelled) return;
       setAnn(loaded);
-      setCentroidMethod(loaded?.centroidMethod ?? 'mean');
+      setCentroidMethod(centroidFor(loaded?.centroidMethod));
       prevPointsRef.current = loaded?.points;
       onAnnotationChange?.(loaded);
       setLoading(false);
     });
     return () => { cancelled = true; };
   }, [songId, initialAnnotation]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Incoming hand-off from Consensus Inspect ("Use for Auto-guess") ──────
+  // Only the controls move. The stored points keep the parameters they were
+  // built with until the reviewer presses Generate, which is the one action
+  // that may overwrite reviewed work.
+  useConsensusHandoff('autoGuess', (config) => {
+    handoffRef.current = config;
+    handoffSongIdRef.current = songId;
+    setClusterTolerance(config.clusterWindow);
+    setMinConsensus(config.minAgreement);
+    setCentroidMethod(config.centroid);
+    config.algoIds.forEach((id) => offeredAlgorithmIdsRef.current.add(id));
+    setSelectedAlgorithmIds(new Set(config.algoIds));
+    setHandoffNotice(config);
+  });
 
   // Clamp minConsensus whenever the selected algorithm count shrinks
   useEffect(() => {
@@ -379,6 +333,9 @@ function AutoGuessPanelInner(
       return;
     }
     setConfirmRegenerate(false);
+    // The parameters are now baked into the points; the notice has done its job.
+    handoffRef.current = null;
+    setHandoffNotice(null);
     const activeRows = algorithmRows.filter((r) => selectedAlgorithmIds.has(r.id));
     if (!activeRows.length) return;
     const allPoints = activeRows.flatMap((row) =>
@@ -511,7 +468,7 @@ function AutoGuessPanelInner(
   }, [ann, updateAnn, expandedId]);
 
   // ── Threshold-filtered points (min consensus) ────────────────────────────
-  const thresholdFilteredPoints = ann?.points.filter((p) => p.clusterSize >= minConsensus) ?? [];
+  const thresholdFilteredPoints = ann?.points.filter((p) => agreementCount(p) >= minConsensus) ?? [];
 
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -524,7 +481,7 @@ function AutoGuessPanelInner(
   } : null;
 
   const filteredPoints = ann?.points.filter((p) => {
-    if (p.clusterSize < minConsensus) return false;
+    if (agreementCount(p) < minConsensus) return false;
     if (filterStatus === 'all') return true;
     if (filterStatus === 'pending') return p.status === 'pending' || p.status === 'partial';
     return p.status === filterStatus;
@@ -566,6 +523,7 @@ function AutoGuessPanelInner(
     if (!onCapabilitiesChange) return;
     const stage = stageFromAutoGuessStatus(ann?.auto_guess_status);
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: stage,
       hasItems: (ann?.points.length ?? 0) > 0,
       saveStatus: saving ? 'saving' : saveMsg === 'Saved' ? 'saved' : saveMsg === 'Save failed' ? 'error' : 'idle',
@@ -606,6 +564,22 @@ function AutoGuessPanelInner(
           <p className="text-[11px] text-slate-400 mt-0.5">
             Configure the consensus parameters: <span className="text-slate-500 uppercase tracking-wider text-[10px]">settings</span>
           </p>
+          {handoffNotice && (
+            <p className="text-[11px] text-cyan-300/90 mt-1 flex items-center gap-2 flex-wrap">
+              <span>
+                From Consensus Inspect: <span className="font-mono">±{handoffNotice.clusterWindow}s</span>
+                {' · '}<span className="font-mono">≥{handoffNotice.minAgreement}</span>
+                {' · '}<span className="font-mono">{CENTROID_METHODS.find((m) => m.id === handoffNotice.centroid)?.short}</span>
+                {' · '}<span className="font-mono">{handoffNotice.algoIds.length} detectors</span>
+                {' — press '}<span className="uppercase tracking-wider text-[10px] text-violet-300">generate</span> to rebuild with them.
+              </span>
+              <button
+                onClick={() => { handoffRef.current = null; setHandoffNotice(null); }}
+                className="text-slate-500 hover:text-slate-300 transition-colors"
+                title="Dismiss"
+              >✕</button>
+            </p>
+          )}
         </div>
       )}
 
@@ -626,6 +600,29 @@ function AutoGuessPanelInner(
             onMinConsensusChange={setMinConsensus}
             minConsensusLabel="Min consensus"
           />
+        )}
+
+        {/* ── Take these parameters somewhere they can be scored ───────────
+             Nothing here says whether ±3s beats ±2s; Consensus Inspect draws
+             the same clustering against a reference with live P/R/F1. The trip
+             is round: that panel hands the tuned config back. */}
+        {onTuneInConsensus && algorithmRows.length > 0 && (
+          <button
+            onClick={() => {
+              sendConsensusConfig('consensus', {
+                clusterWindow: clusterTolerance,
+                minAgreement: minConsensus,
+                centroid: centroidMethod,
+                algoIds: [...selectedAlgorithmIds],
+              });
+              onTuneInConsensus();
+            }}
+            className="px-2.5 py-1.5 rounded text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] hover:border-violet-400/40 text-slate-300 transition-colors flex items-center gap-1.5"
+            title="Open Consensus Inspect with these parameters and score them against your Boundaries — precision, recall and F1 — before generating here"
+          >
+            Tune in Consensus Inspect
+            <span className="text-violet-300">→</span>
+          </button>
         )}
 
         {confirmRegenerate ? (
@@ -675,7 +672,7 @@ function AutoGuessPanelInner(
           const copy = (mode: 'accepted' | 'all') => {
             const src = mode === 'accepted' ? acceptedPoints : keepablePoints;
             if (src.length === 0) return;
-            const sections: ManualSection[] = [...src]
+            const sections: SectionBlock[] = [...src]
               .sort((a, b) => a.time - b.time)
               .map((p) => ({ time: p.time, type: 'drop', label: 'Auto-guess' }));
             onCopyToManualAnnotation(sections);
@@ -759,7 +756,8 @@ function AutoGuessPanelInner(
       {ann && filteredPoints.length > 0 && (
         <div className="flex flex-wrap items-start gap-1">
           {filteredPoints.map((point, pi) => {
-            const { bg, text } = clusterBadgeStyle(point.clusterSize);
+            const agreeing = agreementCount(point);
+            const { bg, text } = clusterBadgeStyle(agreeing);
             const isExpanded = expandedId === point.id;
             const isChipsOpen = chipsExpandedIds.has(point.id);
             const timeChanged = Math.abs(point.time - point.originalTime) > 0.01;
@@ -787,21 +785,30 @@ function AutoGuessPanelInner(
               <div
                 key={point.id}
                 className={`flex flex-col rounded-r border border-l-0 bg-[#14171d] hover:bg-[#1b1f27] transition-all overflow-hidden ${isExpanded ? 'w-[300px]' : 'w-[108px]'}`}
-                style={{
-                  borderLeft: `2px solid ${railColor}`,
-                  borderColor: isCurrent ? `${statusColor}99` : 'rgba(255,255,255,0.06)',
-                  borderLeftColor: railColor,
-                  boxShadow: isCurrent ? `0 0 0 1px ${statusColor}55, 0 0 12px 0 ${statusColor}33` : undefined,
-                }}
+                style={(() => {
+                  // Longhand *Color properties (never the all-sides `borderColor`
+                  // shorthand) so the left rail's own color never fights with the
+                  // top/right/bottom color across re-renders — see ItemCardShell.
+                  const restBorderColor = isCurrent ? `${statusColor}99` : 'rgba(255,255,255,0.06)';
+                  return {
+                    borderLeft: `2px solid ${railColor}`,
+                    borderTopColor: restBorderColor,
+                    borderRightColor: restBorderColor,
+                    borderBottomColor: restBorderColor,
+                    boxShadow: isCurrent ? `0 0 0 1px ${statusColor}55, 0 0 12px 0 ${statusColor}33` : undefined,
+                  };
+                })()}
               >
                 {/* ── Header: cluster badge + adjustment indicator ── */}
                 <div className="flex items-center gap-1 px-1.5 pt-1 pb-0.5">
                   <span
                     className="text-[9px] font-mono font-medium rounded px-1 py-0.5 leading-none shrink-0"
                     style={{ background: bg, color: text }}
-                    title={`${point.clusterSize} algorithm${point.clusterSize !== 1 ? 's' : ''} agreed within ±${ann.clusterTolerance}s`}
+                    title={`${agreeing} algorithm${agreeing !== 1 ? 's' : ''} agreed within ±${ann.clusterTolerance}s${
+                      point.sources.length > agreeing ? ` (${point.sources.length} predictions — one or more fired twice)` : ''
+                    }`}
                   >
-                    ×{point.clusterSize}
+                    ×{agreeing}
                   </span>
                   {timeChanged && (
                     <span

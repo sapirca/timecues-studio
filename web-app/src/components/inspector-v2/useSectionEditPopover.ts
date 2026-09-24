@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject, type CSSProperties } from 'react';
+import { closeOtherPopovers, registerOpenPopover } from './shared/useAnnotationPopover';
 
 const POP_W = 300;
 const POP_H = 360;
@@ -19,6 +20,8 @@ export interface UseSectionEditPopoverOptions {
  * - Exposes a popoverRef for outside-click detection (auto-wired).
  * - Exposes a positionStyle that anchors near the click point with viewport clamping,
  *   falling back to centered when no anchor is provided.
+ * - Shares the annotation popovers' single-popover exclusivity registry, so
+ *   opening a section card closes any open annotation card and vice versa.
  */
 export function useSectionEditPopover(options: UseSectionEditPopoverOptions = {}) {
   const { openEditorRef } = options;
@@ -29,37 +32,45 @@ export function useSectionEditPopover(options: UseSectionEditPopoverOptions = {}
   const onCloseRef = useRef(options.onClose);
   useEffect(() => { onCloseRef.current = options.onClose; });
 
-  const open = useCallback((idx: number, anchor?: SectionAnchor) => {
-    setEditingIdx(idx);
-    setEditingAnchor(anchor ?? null);
-  }, []);
-
   const close = useCallback(() => {
     onCloseRef.current?.();
     setEditingIdx(null);
     setEditingAnchor(null);
   }, []);
 
+  const open = useCallback((idx: number, anchor?: SectionAnchor) => {
+    closeOtherPopovers(close);
+    setEditingIdx(idx);
+    setEditingAnchor(anchor ?? null);
+  }, [close]);
+
+  // Join the exclusivity registry for as long as the popover is open.
+  useEffect(() => {
+    if (editingIdx === null) return;
+    return registerOpenPopover(close);
+  }, [editingIdx, close]);
+
   // Imperative handle wiring
   useEffect(() => {
     if (!openEditorRef) return;
     const setter = (idx: number | null, anchor?: SectionAnchor) => {
       if (idx === null) { close(); return; }
-      setEditingIdx(idx);
-      setEditingAnchor(anchor ?? null);
+      open(idx, anchor);
     };
     openEditorRef.current = setter;
     return () => { if (openEditorRef.current === setter) openEditorRef.current = null; };
-  }, [openEditorRef, close]);
+  }, [openEditorRef, close, open]);
 
   // Outside-click closes
   useEffect(() => {
     if (editingIdx === null) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) close();
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
   }, [editingIdx, close]);
 
   const positionStyle: CSSProperties = editingAnchor

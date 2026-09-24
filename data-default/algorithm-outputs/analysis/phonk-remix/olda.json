@@ -1,0 +1,94 @@
+{
+  "algorithm": "olda",
+  "algoName": "OLDA (Optimal Linear Discriminant)",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 11.146,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6199,
+      "centroid": 0.4949
+    },
+    {
+      "time": 11.146,
+      "endTime": 21.92,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.2876
+    },
+    {
+      "time": 21.92,
+      "endTime": 31.672,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.5915,
+      "centroid": 1.0
+    },
+    {
+      "time": 31.672,
+      "endTime": 52.57,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9753,
+      "centroid": 0.7137
+    },
+    {
+      "time": 52.57,
+      "endTime": 94.923,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.983,
+      "centroid": 0.6949
+    },
+    {
+      "time": 94.923,
+      "endTime": 104.722,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.5792,
+      "centroid": 0.9596
+    },
+    {
+      "time": 104.722,
+      "endTime": 146.518,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9826,
+      "centroid": 0.7129
+    },
+    {
+      "time": 146.518,
+      "endTime": 169.459,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.2301,
+      "centroid": 0.8848
+    },
+    {
+      "time": 169.459,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    11.146,
+    21.92,
+    31.672,
+    52.57,
+    94.923,
+    104.722,
+    146.518,
+    169.459,
+    169.465
+  ],
+  "computedAt": 1780118912,
+  "elapsedSec": 27.34
+}

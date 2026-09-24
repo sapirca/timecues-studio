@@ -35,96 +35,39 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from stem_paths import WEB_APP_STEMS_DIR, write_manifest
 sys.path.insert(0, str(Path(__file__).parent / "python"))
-from paths import ANALYSIS_DIR  # noqa: E402
+from paths import ANALYSIS_DIR, DATA_DIR, DEFAULT_DATA_DIR, slugify  # noqa: E402
+from allin1_labels import label_to_type  # noqa: E402
 
 
 # ─── natten compatibility shim (for natten >= 0.17) ──────────────────────────
 # allin1 1.1.x imports natten1dav / natten1dqkrpb / natten2dav / natten2dqkrpb
-# from natten.functional, which were removed in natten 0.17+.
-# This shim re-implements them via pure PyTorch so allin1 keeps working.
+# from natten.functional, which were removed in natten 0.17+. The shared
+# shim in tools/python/natten_shim.py re-implements them in pure PyTorch
+# so allin1 keeps working AND the vite capabilities probe can verify
+# allin1 is importable on CPU-only hosts where natten itself never lands.
 
-def _apply_natten_shim():
-    try:
-        from natten.functional import natten1dav  # noqa: F401  — already present
-        return False  # no shim needed
-    except ImportError:
-        pass
+from natten_shim import apply_natten_shim  # noqa: E402 — sys.path was set above
 
-    import torch
-    import natten.functional as _nf
-
-    def natten1dqkrpb(query, key, rpb, kernel_size, dilation=1):
-        """1-D neighborhood-attention QK + relative-position-bias."""
-        B, H, L, D = query.shape
-        r = kernel_size // 2
-        offsets = torch.arange(-r, r + 1, device=query.device) * dilation
-        positions = torch.arange(L, device=query.device)
-        src_idx = (positions.unsqueeze(1) + offsets.unsqueeze(0)).clamp(0, L - 1)
-        key_nbrs = key[:, :, src_idx, :]                     # (B, H, L, K, D)
-        scores = (query.unsqueeze(3) * key_nbrs).sum(-1)     # (B, H, L, K)
-        rpb_sel = rpb[:, torch.arange(kernel_size, device=query.device)]  # (H, K)
-        return scores + rpb_sel.unsqueeze(0).unsqueeze(2)
-
-    def natten1dav(attn, value, kernel_size, dilation=1):
-        """1-D neighborhood-attention AV product."""
-        _, _, L, _ = attn.shape
-        r = kernel_size // 2
-        offsets = torch.arange(-r, r + 1, device=attn.device) * dilation
-        positions = torch.arange(L, device=attn.device)
-        src_idx = (positions.unsqueeze(1) + offsets.unsqueeze(0)).clamp(0, L - 1)
-        v_nbrs = value[:, :, src_idx, :]                     # (B, H, L, K, D)
-        return (attn.unsqueeze(-1) * v_nbrs).sum(-2)         # (B, H, L, D)
-
-    def natten2dqkrpb(query, key, rpb, kernel_size, dilation=1):
-        """2-D neighborhood-attention QK + relative-position-bias."""
-        B, H, h, w, D = query.shape
-        r = kernel_size // 2
-        K = kernel_size
-        oy = torch.arange(-r, r + 1, device=query.device) * dilation
-        ox = torch.arange(-r, r + 1, device=query.device) * dilation
-        sy = (torch.arange(h, device=query.device).unsqueeze(1) + oy.unsqueeze(0)).clamp(0, h - 1)
-        sx = (torch.arange(w, device=query.device).unsqueeze(1) + ox.unsqueeze(0)).clamp(0, w - 1)
-        lin = sy[:, None, :, None] * w + sx[None, :, None, :]   # (h, w, K, K)
-        kf = key.reshape(B, H, h * w, D)
-        kn = kf[:, :, lin.reshape(-1), :].reshape(B, H, h, w, K, K, D)
-        qe = query.unsqueeze(4).unsqueeze(5)
-        scores = (qe * kn).sum(-1)                              # (B, H, h, w, K, K)
-        ri = torch.arange(K, device=query.device)
-        rp = rpb[:, ri[:, None], ri[None, :]]                   # (H, K, K)
-        scores = scores + rp.unsqueeze(0).unsqueeze(2).unsqueeze(3)
-        return scores.reshape(B, H, h, w, K * K)
-
-    def natten2dav(attn, value, kernel_size, dilation=1):
-        """2-D neighborhood-attention AV product."""
-        B, H, h, w, _ = attn.shape
-        K = kernel_size
-        D = value.shape[-1]
-        r = K // 2
-        oy = torch.arange(-r, r + 1, device=attn.device) * dilation
-        ox = torch.arange(-r, r + 1, device=attn.device) * dilation
-        sy = (torch.arange(h, device=attn.device).unsqueeze(1) + oy.unsqueeze(0)).clamp(0, h - 1)
-        sx = (torch.arange(w, device=attn.device).unsqueeze(1) + ox.unsqueeze(0)).clamp(0, w - 1)
-        lin = sy[:, None, :, None] * w + sx[None, :, None, :]
-        vf = value.reshape(B, H, h * w, D)
-        vn = vf[:, :, lin.reshape(-1), :].reshape(B, H, h, w, K, K, D)
-        at = attn.reshape(B, H, h, w, K, K).unsqueeze(-1)
-        return (at * vn).sum(-2).sum(-2)                        # (B, H, h, w, D)
-
-    _nf.natten1dqkrpb = natten1dqkrpb
-    _nf.natten1dav = natten1dav
-    _nf.natten2dqkrpb = natten2dqkrpb
-    _nf.natten2dav = natten2dav
-    return True
-
-
-_shimmed = _apply_natten_shim()
+_shimmed = apply_natten_shim()
 
 import allin1  # noqa: E402 — must come after the shim
 
 
-# ─── madmom beat-threshold patch ─────────────────────────────────────────────
-# madmom's DBNDownBeatTrackingProcessor sometimes returns 0 beats on CPU.
-# Retry with progressively lower thresholds until beats are found.
+# ─── madmom beat-threshold patch + user-grid prior ───────────────────────────
+# madmom's DBNDownBeatTrackingProcessor sometimes returns 0 beats on CPU, so we
+# retry with progressively lower thresholds until beats are found.
+#
+# We ALSO feed the user's chosen grid straight into the tracker: allin1 builds
+# its own (real, onset-aligned) beat/downbeat grid, but constrained to the
+# user's time signature (`beats_per_bar`) and a tempo window around the user's
+# BPM (`min_bpm`/`max_bpm`). This keeps allin1's grid in the user's ballpark
+# WITHOUT any post-hoc octave/ratio surgery — the DBN simply tracks at the
+# requested metrical level, fixing both octave doubling (pantheon 214→~107) and
+# non-octave mismatches (phonk 92→~123) at the source. `_GRID_CONSTRAINTS` is set
+# by analyze_file() before allin1.analyze() runs; empty → madmom's defaults.
+
+_GRID_CONSTRAINTS: dict = {}
+
 
 def _apply_madmom_patch():
     try:
@@ -144,10 +87,14 @@ def _apply_madmom_patch():
             combined      = combined / combined.sum(dim=-1, keepdim=True)
             combined      = combined.cpu().numpy()
 
+            bpb   = _GRID_CONSTRAINTS.get("beats_per_bar", [3, 4])
+            min_b = _GRID_CONSTRAINTS.get("min_bpm", 55.0)
+            max_b = _GRID_CONSTRAINTS.get("max_bpm", 215.0)
             pred = np.empty((0, 2))
             for threshold in [0.05, 0.02, 0.01, 0.005]:
                 proc = DBNDownBeatTrackingProcessor(
-                    beats_per_bar=[3, 4], threshold=threshold, fps=cfg.fps)
+                    beats_per_bar=bpb, min_bpm=min_b, max_bpm=max_b,
+                    threshold=threshold, fps=cfg.fps)
                 pred = proc(combined[:, :2])
                 if len(pred) >= 2:
                     break
@@ -171,31 +118,71 @@ _madmom_patched = _apply_madmom_patch()
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def slugify(name: str) -> str:
-    """Convert a display name / filename to a URL-safe slug."""
-    name = re.sub(r'\.[^.]+$', '', name)          # strip extension
-    name = name.lower()
-    name = re.sub(r'[^a-z0-9]+', '-', name)
-    name = name.strip('-')
-    return name
+# ─── User-grid prior for allin1 ──────────────────────────────────────────────
+# allin1's own beat tracker is left in charge of the grid — it produces real,
+# onset-aligned beats/downbeats — but we hand it the user's choice as a PRIOR so
+# it tracks at the right metrical level instead of octave-doubling or locking
+# onto the wrong ratio. The user's `timeSignature` becomes the DBN's
+# `beats_per_bar`, and a tempo window around the user's `bpm` becomes its
+# `min_bpm`/`max_bpm` (see _GRID_CONSTRAINTS / the madmom patch above). No
+# librosa/madmom consensus is consulted. allin1 will NOT run until the user has
+# set BOTH a BPM and a time signature for the song — require_user_grid() gates
+# it, and supplies the prior.
+
+# Tempo half-window (fraction) around the user's BPM handed to the DBN tracker.
+# ±15% comfortably excludes the ×0.5 / ×2 octaves (±50% / +100%) so the tracker
+# can't fall back into an octave error, while leaving room for real tempo drift.
+_TEMPO_WINDOW = 0.15
 
 
-def label_to_type(label: str) -> str:
-    """Map allin1 segment labels to the EDM section-type vocabulary."""
-    label = label.lower().strip()
-    mapping = {
-        'intro':        'intro',
-        'verse':        'verse',
-        'pre-chorus':   'buildup',
-        'chorus':       'drop',
-        'bridge':       'breakdown',
-        'break':        'breakdown',
-        'instrumental': 'verse',
-        'outro':        'outro',
-        'solo':         'verse',
-        'interlude':    'breakdown',
-    }
-    return mapping.get(label, label)
+def _parse_beats_per_bar(time_signature):
+    """Beats-per-bar (numerator) from an 'N/D' time-signature string, or None."""
+    if not time_signature or "/" not in str(time_signature):
+        return None
+    try:
+        num = int(str(time_signature).split("/")[0])
+        return num if num > 0 else None
+    except Exception:
+        return None
+
+
+def _user_grid_params(slug: str):
+    """The user-chosen grid for `slug` from song-info: (bpm, beats_per_bar,
+    time_signature, grid_offset_sec). Any unset piece is None (offset → 0.0).
+    Searches data/ then the data-default/ seed."""
+    for base in (DATA_DIR, DEFAULT_DATA_DIR):
+        p = base / "song-info" / f"{slug}.json"
+        if not p.is_file():
+            continue
+        try:
+            info = json.loads(p.read_text())
+        except Exception:
+            continue
+        bpm = info.get("bpm")
+        ts = info.get("timeSignature")
+        return (
+            float(bpm) if bpm else None,
+            _parse_beats_per_bar(ts),
+            str(ts) if ts else None,
+            float(info.get("gridOffset") or 0.0),
+        )
+    return None, None, None, 0.0
+
+
+def require_user_grid(slug: str):
+    """Gate: allin1 may run only once the user has chosen a BPM and a time
+    signature for the song. Exits with a clear message otherwise. Returns
+    (bpm, beats_per_bar, time_signature, grid_offset_sec)."""
+    bpm, bpb, ts, offset = _user_grid_params(slug)
+    if not bpm or not bpb:
+        sys.exit(
+            f"\nERROR: '{slug}' has no user-chosen grid yet.\n"
+            f"  song-info must define BOTH a BPM and a time signature before\n"
+            f"  All-In-One can run — its bar grid is built from those values.\n"
+            f"  current: bpm={bpm!r}, timeSignature={ts!r}\n"
+            f"  Set them in the app (song info / Dataset Prep), then re-run.\n"
+        )
+    return bpm, bpb, ts, offset
 
 
 # ─── Demucs model monkey-patch ───────────────────────────────────────────────
@@ -243,6 +230,32 @@ def analyze_file(audio_path: str, save: bool = False, visualize: bool = False,
     audio_path = os.path.abspath(audio_path)
     if not os.path.isfile(audio_path):
         sys.exit(f"File not found: {audio_path}")
+
+    # Key the output by the song *folder* slug (data/songs/<slug>/audio.mp3),
+    # not slugify(filename): the app and generators read analysis by directory
+    # name, and slugifying underscores→hyphens stranded outputs in a dir the app
+    # never reads (5am_chediak → 5am-chediak/). Fall back to the filename slug
+    # for an audio file not inside a per-song folder.
+    audio_filename = os.path.basename(audio_path)
+    parent = Path(audio_path).parent.name
+    slug = parent if re.match(r'^[a-z0-9._-]+$', parent or "") else slugify(audio_filename)
+
+    # Gate the (saving) run on the user having chosen a BPM + time signature,
+    # and hand those to allin1's tracker as a prior so it grids at the user's
+    # metrical level. _GRID_CONSTRAINTS is read inside the madmom patch during
+    # allin1.analyze() below; clear it so a no-save / no-grid run uses defaults.
+    _GRID_CONSTRAINTS.clear()
+    user_grid = require_user_grid(slug) if save else None
+    if user_grid:
+        bpm_u, bpb_u, ts_u, off_u = user_grid
+        _GRID_CONSTRAINTS.update({
+            "beats_per_bar": [bpb_u],
+            "min_bpm": bpm_u * (1.0 - _TEMPO_WINDOW),
+            "max_bpm": bpm_u * (1.0 + _TEMPO_WINDOW),
+        })
+        print(f"  user-grid prior: {bpm_u} BPM ({ts_u}) → DBN tempo window "
+              f"[{_GRID_CONSTRAINTS['min_bpm']:.1f}–{_GRID_CONSTRAINTS['max_bpm']:.1f}], "
+              f"beats_per_bar={bpb_u}")
 
     if demucs_model != "htdemucs":
         _patch_demucs_model(demucs_model)
@@ -295,9 +308,7 @@ def analyze_file(audio_path: str, save: bool = False, visualize: bool = False,
         return {}
 
     # ── Build output JSON ────────────────────────────────────────────────────
-    audio_filename = os.path.basename(audio_path)
-    slug = slugify(audio_filename)
-
+    # slug / audio_filename were resolved (and the user grid gated) up front.
     sections = []
     raw_boundaries = []
     for seg in result.segments:
@@ -337,6 +348,22 @@ def analyze_file(audio_path: str, save: bool = False, visualize: bool = False,
         "computedAt":        int(time.time()),
         "elapsedSec":        round(elapsed, 2),
     }
+
+    # ── Annotate the allin1 grid (tracked under the user's prior above) ──────
+    bpm_u, bpb_u, ts_u, off_u = user_grid
+    tracked = output.get("bpm")
+    output["userBpm"]      = round(bpm_u, 2)
+    output["beatsPerBar"]  = bpb_u
+    output["timeSignature"] = ts_u
+    output["gridSource"]   = "allin1+userprior"
+    output["tempoPrior"]   = [round(bpm_u * (1.0 - _TEMPO_WINDOW), 1),
+                              round(bpm_u * (1.0 + _TEMPO_WINDOW), 1)]
+    n_beats = len(output.get("beatPositions") or [])
+    n_downs = len(output.get("downbeatPositions") or [])
+    off_pct = abs(tracked - bpm_u) / bpm_u * 100 if (tracked and bpm_u) else 0
+    flag = "  ⚠ outside prior" if off_pct > _TEMPO_WINDOW * 100 + 1 else ""
+    print(f"  grid: allin1 tracked {tracked} BPM (user {bpm_u}, {ts_u}; "
+          f"{n_downs} bars / {n_beats} beats){flag}")
 
     # ── Write to data/algorithm-outputs/analysis/<slug>/<out_filename> ──────
     out_dir = ANALYSIS_DIR / slug

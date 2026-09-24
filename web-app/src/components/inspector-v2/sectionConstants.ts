@@ -1,4 +1,5 @@
-import type { ManualSection } from '../../types/manualAnnotation';
+import type { SectionBlock } from '../../types/sectionBlock';
+/* UNRESOLVED: ManualAnnotation */
 
 /** Sentinel type for "filler" boundaries auto-inserted around a selection.
  *  Renders transparently on the timeline strip and shows as "—" in the
@@ -13,12 +14,18 @@ export const SECTION_TYPES = [
   UNSET_TYPE,
 ] as const;
 
-/** Curated subset shipped as the dropdown default for new users — kept tight to the
- *  7 canonical EDM-style types so the picker is not overwhelming on first launch.
+/** Curated subset shipped as the dropdown default for new users — the EDM-style
+ *  types plus the two song-form terms (`verse`, `chorus`) that vocal-led EDM
+ *  needs constantly, kept short so the picker is not overwhelming on first
+ *  launch. Ordered song-form-first so the two reachable-by-eye groups read as
+ *  groups. Must stay identical to `CANONICAL_VOCAB` in genrePresets.ts, which
+ *  is the same list seen from the genre-card side — the shipped default is
+ *  exactly the EDM/House/Mainstage/Bass card's vocabulary, so the Settings
+ *  genre cards light up correctly for a user who never touched them.
  *  `unset` is appended by `getSectionTypes`, so it's always present without
  *  needing to live in the user-facing default list. */
 export const DEFAULT_VOCABULARY: readonly string[] =
-  ['intro', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence'];
+  ['intro', 'verse', 'chorus', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence'];
 
 export const ALLOWED_SECTION_TYPES = new Set<string>(SECTION_TYPES);
 
@@ -73,22 +80,52 @@ export function sectionLabel(type: string): string {
   return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
+/** True for a section that carries the `unset` type but is NOT one of the
+ *  automatic filler caps — a real section whose type left the vocabulary (the
+ *  user dropped the name in Settings, or the section was imported in someone
+ *  else's vocabulary) and was normalized to `unset` with its written label
+ *  kept by `normalizeSection`.
+ *
+ *  The label is the discriminator: caps are created as `{ type: unset, label:
+ *  '—' }` and never carry anything else, so any other label means a human
+ *  named this section. The distinction matters because caps are deliberately
+ *  invisible — hidden from the section-card list, drawn transparent on the
+ *  lane — and an orphan inheriting that would silently disappear from the two
+ *  places the user could re-type it. */
+export function isOrphanedSection(section: { type: string; label?: string }): boolean {
+  if (section.type !== UNSET_TYPE) return false;
+  const label = (section.label ?? '').trim();
+  return label.length > 0 && label !== sectionLabel(UNSET_TYPE);
+}
+
 export function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
   return `${m}:${(sec % 60).toFixed(1).padStart(4, '0')}`;
 }
 
-export function sectionEnd(sections: ManualSection[], i: number, duration: number): number {
+export function sectionEnd(sections: SectionBlock[], i: number, duration: number): number {
   return i + 1 < sections.length ? sections[i + 1].time : duration;
 }
 
+/** Coerce a stored section type into the active vocabulary.
+ *
+ *  Anything unrecognised lands on `unset` (the "—" filler), NOT on the first
+ *  word of the vocabulary. A type falls through here for two reasons — the user
+ *  dropped that name in Settings, or the section came from an import written in
+ *  someone else's vocabulary (a SALAMI `solo`, say) — and in both cases the
+ *  honest answer is "this section has no type I can name". Mapping it to the
+ *  first word instead would silently assert something specific and wrong: every
+ *  orphaned section would read as a real Intro. `normalizeSection` keeps the
+ *  original written label, so the section still shows what it used to be.
+ *
+ *  Settings warns before dropping a name in use — see VocabularyRemovalDialog. */
 export function normalizeSectionType(type: string | undefined, sectionTypes: readonly string[] = SECTION_TYPES): string {
   const normalized = (type ?? '').trim().toLowerCase();
   // `unset` is always valid — filler sections must survive normalization
   // even when the user's configured vocabulary doesn't list it.
   if (normalized === UNSET_TYPE) return UNSET_TYPE;
   const allowed = new Set(sectionTypes);
-  return allowed.has(normalized) ? normalized : (sectionTypes[0] ?? 'drop');
+  return allowed.has(normalized) ? normalized : UNSET_TYPE;
 }
 
 /** Auto-numbered label for a new section of `type` (e.g. "Drop 3"). */
@@ -96,3 +133,20 @@ export function autoLabel(sections: Array<{ type: string }>, type: string): stri
   const n = sections.filter((s) => s.type === type).length + 1;
   return `${sectionLabel(type)} ${n}`;
 }
+
+export function normalizeSectionLabel(label: string | undefined): string {
+  return label ?? '';
+}
+
+export function normalizeSection(section: SectionBlock, sectionTypes: readonly string[]): SectionBlock {
+  const type = normalizeSectionType(section.type, sectionTypes);
+  const normalizedLabel = normalizeSectionLabel(section.label);
+  const original = (section.label ?? '').trim();
+  const isAutoLike = original === '' || sectionTypes.some((t) => sectionLabel(t).toLowerCase() === original.toLowerCase());
+  return { ...section, type, label: isAutoLike ? sectionLabel(type) : normalizedLabel };
+}
+
+export function normalizeSections(sections: SectionBlock[], sectionTypes: readonly string[]): SectionBlock[] {
+  return sections.map((section) => normalizeSection(section, sectionTypes));
+}
+

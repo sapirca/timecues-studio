@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  aggregateExactRange,
   aggregateRange,
   amplitudeToExtent,
   buildSummary,
@@ -63,6 +64,15 @@ export function OverviewWaveform({
     [audioBuffer],
   );
 
+  // Decoded channels, hoisted once: the high-zoom paths read them per redraw
+  // and getChannelData() inside a per-sample loop is not free.
+  const channels = useMemo<Float32Array[] | null>(() => {
+    if (!audioBuffer) return null;
+    const out: Float32Array[] = [];
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) out.push(audioBuffer.getChannelData(c));
+    return out;
+  }, [audioBuffer]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || containerWidth <= 0) return;
@@ -72,6 +82,7 @@ export function OverviewWaveform({
       drawAll(
         canvas,
         summary,
+        channels,
         containerWidth,
         pxPerSec,
         scrollLeft,
@@ -89,7 +100,7 @@ export function OverviewWaveform({
         rafRef.current = null;
       }
     };
-  }, [summary, containerWidth, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode, isLight]);
+  }, [summary, channels, containerWidth, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode, isLight]);
 
   return (
     <canvas
@@ -111,6 +122,7 @@ export function OverviewWaveform({
 function drawAll(
   canvas: HTMLCanvasElement,
   summary: WaveformSummary | null,
+  channels: readonly Float32Array[] | null,
   cssW: number,
   pxPerSec: number,
   scrollLeft: number,
@@ -135,11 +147,15 @@ function drawAll(
 
   if (!summary || pxPerSec <= 0) return;
 
-  const samplesPerPixel = summary.sampleRate / pxPerSec;
-  if (samplesPerPixel < 1) {
-    drawSampleLine(ctx, summary, cssW, cssH, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode);
+  // The envelope is aggregated per DEVICE pixel, not per CSS pixel: on a 2×
+  // display that is twice the horizontal detail for the same buffer, and it
+  // matches how the 3-Band canvas below already samples its curves.
+  const samplesPerColumn = summary.sampleRate / (pxPerSec * dpr);
+  if (samplesPerColumn < 1) {
+    if (!channels || channels.length === 0) return;
+    drawSampleLine(ctx, summary, channels[0], cssW, cssH, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode);
   } else {
-    drawPeakRms(ctx, summary, cssW, cssH, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode);
+    drawPeakRms(ctx, summary, channels, cssW, cssH, dpr, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode);
   }
 }
 
@@ -208,34 +224,50 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, scaleMode
 function drawPeakRms(
   ctx: CanvasRenderingContext2D,
   summary: WaveformSummary,
+  channels: readonly Float32Array[] | null,
   cssW: number,
   cssH: number,
+  dpr: number,
   pxPerSec: number,
   scrollLeft: number,
   peakColor: string,
   rmsColor: string,
   scaleMode: ScaleMode,
 ) {
-  const halfH = cssH / 2;
+  // Everything below is in DEVICE pixels — one column per physical pixel, so
+  // the transform goes back to identity for the duration of the envelope.
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const devH = cssH * dpr;
+  const halfH = devH / 2;
+  const hair = Math.max(1, Math.round(dpr));
+  const capH = Math.max(1, Math.round(2 * dpr));
   const sr = summary.sampleRate;
-  const n = Math.max(0, Math.floor(cssW));
+  const n = Math.max(0, Math.floor(cssW * dpr));
   const cols: WindowStats[] = new Array(n);
 
+  // Once a column spans less than one summary bucket, the summary can only
+  // repeat itself (bucket-quantized staircase). Read the decoded samples
+  // instead — the visible window is small at those zooms.
+  const exact = !!channels && channels.length > 0 && sr / (pxPerSec * dpr) < summary.bucketSize;
+
   for (let x = 0; x < n; x++) {
-    const t0 = (scrollLeft + x) / pxPerSec;
-    const t1 = (scrollLeft + x + 1) / pxPerSec;
-    cols[x] = aggregateRange(summary, t0 * sr, t1 * sr);
+    const t0 = (scrollLeft + x / dpr) / pxPerSec;
+    const t1 = (scrollLeft + (x + 1) / dpr) / pxPerSec;
+    cols[x] = exact
+      ? aggregateExactRange(channels!, t0 * sr, t1 * sr, summary.totalSamples)
+      : aggregateRange(summary, t0 * sr, t1 * sr);
   }
 
   // Vertical gradients: peaks fade out toward the canvas edges, RMS body
   // stays brightest at the centerline. Reads as a soft glow rather than a
   // flat slab.
-  const peakGrad = ctx.createLinearGradient(0, 0, 0, cssH);
+  const peakGrad = ctx.createLinearGradient(0, 0, 0, devH);
   peakGrad.addColorStop(0,    hexAlpha(peakColor, 0.18));
   peakGrad.addColorStop(0.5,  hexAlpha(peakColor, 0.55));
   peakGrad.addColorStop(1,    hexAlpha(peakColor, 0.18));
 
-  const rmsGrad = ctx.createLinearGradient(0, 0, 0, cssH);
+  const rmsGrad = ctx.createLinearGradient(0, 0, 0, devH);
   rmsGrad.addColorStop(0,    hexAlpha(rmsColor, 0.55));
   rmsGrad.addColorStop(0.5,  rmsColor);
   rmsGrad.addColorStop(1,    hexAlpha(rmsColor, 0.55));
@@ -273,8 +305,8 @@ function drawPeakRms(
     for (let x = 0; x < n; x++) {
       const ext = amplitudeToExtent(cols[x].peak, halfH, scaleMode);
       if (ext < 0.5) continue;
-      ctx.fillRect(x, halfH - ext, 1, 1);
-      ctx.fillRect(x, halfH + ext - 1, 1, 1);
+      ctx.fillRect(x, halfH - ext, 1, hair);
+      ctx.fillRect(x, halfH + ext - hair, 1, hair);
     }
   }
 
@@ -282,14 +314,17 @@ function drawPeakRms(
   ctx.fillStyle = '#ff1f4d';
   for (let x = 0; x < n; x++) {
     if (!cols[x].clipped) continue;
-    ctx.fillRect(x, 0, 1, 2);
-    ctx.fillRect(x, cssH - 2, 1, 2);
+    ctx.fillRect(x, 0, 1, capH);
+    ctx.fillRect(x, devH - capH, 1, capH);
   }
+
+  ctx.restore();
 }
 
 function drawSampleLine(
   ctx: CanvasRenderingContext2D,
   summary: WaveformSummary,
+  channelData: Float32Array,
   cssW: number,
   cssH: number,
   pxPerSec: number,
@@ -322,7 +357,7 @@ function drawSampleLine(
   ctx.beginPath();
   for (let i = s0; i < s1; i++) {
     const x = sampleX(i);
-    const y = sampleY(summary.mono[i]);
+    const y = sampleY(channelData[i]);
     if (i === s0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -334,7 +369,7 @@ function drawSampleLine(
   ctx.fillStyle = peakColor;
   for (let i = s0; i < s1; i++) {
     const x = sampleX(i);
-    const y = sampleY(summary.mono[i]);
+    const y = sampleY(channelData[i]);
     ctx.beginPath();
     ctx.arc(x, y, 2, 0, Math.PI * 2);
     ctx.fill();
@@ -344,7 +379,7 @@ function drawSampleLine(
   // Clipping caps at sample resolution
   ctx.fillStyle = '#ff1f4d';
   for (let i = s0; i < s1; i++) {
-    const v = summary.mono[i];
+    const v = channelData[i];
     const av = v < 0 ? -v : v;
     if (av < CLIP_VISUAL_THRESHOLD) continue;
     const x = Math.floor(sampleX(i));

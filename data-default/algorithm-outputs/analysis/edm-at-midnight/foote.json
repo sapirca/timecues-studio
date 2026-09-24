@@ -1,0 +1,103 @@
+{
+  "algorithm": "foote",
+  "algoName": "Foote Self-Similarity",
+  "audioFile": "edm-at-midnight.mp3",
+  "duration": 166.875,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 1.44,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.2969
+    },
+    {
+      "time": 1.44,
+      "endTime": 31.904,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8954,
+      "centroid": 0.4534
+    },
+    {
+      "time": 31.904,
+      "endTime": 45.976,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6783,
+      "centroid": 0.8399
+    },
+    {
+      "time": 45.976,
+      "endTime": 75.976,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8565,
+      "centroid": 0.9668
+    },
+    {
+      "time": 75.976,
+      "endTime": 90.511,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.3936,
+      "centroid": 0.3658
+    },
+    {
+      "time": 90.511,
+      "endTime": 109.738,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8251,
+      "centroid": 0.5222
+    },
+    {
+      "time": 109.738,
+      "endTime": 120.976,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6335,
+      "centroid": 0.8769
+    },
+    {
+      "time": 120.976,
+      "endTime": 146.286,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8679,
+      "centroid": 1.0
+    },
+    {
+      "time": 146.286,
+      "endTime": 166.859,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.4335,
+      "centroid": 0.7681
+    },
+    {
+      "time": 166.859,
+      "endTime": 166.875,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    1.44,
+    31.904,
+    45.976,
+    75.976,
+    90.511,
+    109.738,
+    120.976,
+    146.286,
+    166.859,
+    166.875
+  ],
+  "computedAt": 1780118750,
+  "elapsedSec": 4.73
+}

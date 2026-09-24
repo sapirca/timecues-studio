@@ -28,27 +28,43 @@ export interface AnnotationPanelController {
   undo?: () => void;
   redo?: () => void;
 
-  // ─── Split (Manual/Eye: split section at playhead; Spans/Loops/Patterns:
+  // ─── Split (Manual/Eye: split section at playhead; Spans/Loops:
   //     split focused interval at playhead; Cues: not applicable) ───────────
   split?: () => void;
 
   // ─── Add affordances ──────────────────────────────────────────────────────
-  /** Insert a new item/section at the playhead. */
-  addAtPlayhead?: () => void;
+  /** Insert a new item/section at the playhead.
+   *
+   *  `atTime` is the caller's own reading of the LIVE media clock, taken at
+   *  the instant of the keypress/click. Pass it whenever you have one: a
+   *  panel's `currentTime` prop is that number one rAF coalesce, one setState
+   *  and one full inspector re-render later, so a mark committed on the prop
+   *  lands where the playhead *was* — tens of milliseconds early on a heavy
+   *  tree, which is exactly the window an annotator is trying to hit. Omit it
+   *  and the panel falls back to the prop, as it always did. */
+  addAtPlayhead?: (atTime?: number) => void;
   /** Insert at the playhead into a specific layer, bypassing the panel's
    *  usual "selected → focused-item → first" fallback. Used by the layer
-   *  picker on the AnnotationAddPanel. Layer-typed panels only. */
-  addAtPlayheadInLayer?: (layerId: string) => void;
+   *  picker on the AnnotationAddPanel. Layer-typed panels only. `atTime` as
+   *  for `addAtPlayhead`. */
+  addAtPlayheadInLayer?: (layerId: string, atTime?: number) => void;
   /** Adopt the page-level pending viz-selection as a new item. */
   confirmPending?: () => void;
   /** Confirm the pending viz-selection into a specific layer. Layer-typed
    *  panels only — Manual/Eye ignore this since they're single-section. */
   confirmPendingInLayer?: (layerId: string) => void;
   /** Create a new empty layer of the panel's type. Layer-typed panels only
-   *  (cues/spans/loops/patterns); Manual/Eye/Auto-guess don't carry a
+   *  (cues/spans/loops); Manual/Eye/Auto-guess don't carry a
    *  multi-layer model and leave this undefined. Wired to the sidebar's
    *  unified "+ Add layer" button. */
   addLayer?: () => void;
+  /** Riff Patterns only (so far): the toolbar's "+" caret offers a choice of
+   *  what to create instead of `addAtPlayhead` always defaulting to one kind.
+   *  The page forwards the picked id verbatim — as defined by the panel's own
+   *  `addKindPicker.options` on AnnotationAddPanel — and the panel owns all
+   *  kind-specific business logic, including whether/how it consumes the
+   *  page's pending viz-selection. */
+  addKind?: (kindId: string) => void;
   /** Apply the user's saved default layout (genre preset / custom bars list)
    *  to the current annotation, replacing any existing sections. When no
    *  annotation file exists yet, this bootstraps one. Manual boundaries only. */
@@ -77,12 +93,12 @@ export interface AnnotationPanelController {
    *  always destructive for the entire layer-type slice). */
   deleteFocused?: () => void;
 
-  // ─── Two-step "Mark In / Mark Out" ADD flow (Spans/Loops/Patterns) ────────
+  // ─── Two-step "Mark In / Mark Out" ADD flow (Spans/Loops) ────────────────
   /** Create a brand-new item with the given [start, end] range and focus it.
    *  Used by the two-step Mark In / Mark Out toolbar buttons + I/O hotkeys:
    *  Mark In stashes the start as a pending flag on the viz; Mark Out calls
    *  this with [stashed, currentPlayhead] to commit the new span / loop /
-   *  pattern in one go. Layer routing matches the page's "+ Add" logic
+   *  item in one go. Layer routing matches the page's "+ Add" logic
    *  (forced override > page-selected > focused-item's > first > fresh). */
   commitItemRange?: (start: number, end: number) => void;
 
@@ -122,7 +138,7 @@ export interface AnnotationPanelCapabilities {
   /** Display label for the split chip, e.g. "Split at 0:30.0". */
   splitLabel: string;
 
-  // Mark In / Mark Out — two-step "create new item" buttons (Spans/Loops/Patterns)
+  // Mark In / Mark Out — two-step "create new item" buttons (Spans/Loops)
   /** When true, the Mark In / Mark Out chips render. Cues / Manual / Eye /
    *  Auto-guess leave this false — they have no notion of an interval
    *  boundary to mark. */
@@ -145,16 +161,16 @@ export interface AnnotationPanelCapabilities {
   /** Display label for the inline add chip, e.g. "+ Add @ 0:30.0". */
   addLabel: string;
   /** Whether the active panel supports creating new layers via the sidebar's
-   *  unified "+ Add layer" button. True for cues/spans/loops/patterns; false
+   *  unified "+ Add layer" button. True for cues/spans/loops; false
    *  for boundary sources (which today are single-doc per source). */
   canAddLayer: boolean;
-  /** When true, the sidebar renders the "⚡ Fill defaults" / "≡ Choose
+  /** When true, the sidebar renders the "✨ Fill defaults" / "≡ Choose
    *  structure…" pair below the +Add button. Manual boundaries only; gated
    *  on a known BPM (without one, the bar-based layouts can't be projected
    *  onto song time). */
   canFillDefaults: boolean;
-  /** Display label for the ⚡ Fill chip — typically "⚡ Fill defaults" or
-   *  "⚡ Fill (N)" when a detector suggestion is available. */
+  /** Display label for the ✨ Fill chip — typically "✨ Fill defaults" or
+   *  "✨ Fill (N)" when a detector suggestion is available. */
   fillDefaultsLabel: string;
   /** Tooltip describing what the saved default layout currently produces. */
   fillDefaultsTooltip: string;
@@ -162,7 +178,7 @@ export interface AnnotationPanelCapabilities {
   // Pending viz selection
   pending: PendingSelection | null;
   /** When true and pending.t2 is null, the confirm pill renders in a
-   *  "drag the viz to set a region" disabled state (Spans/Loops/Patterns). */
+   *  "drag the viz to set a region" disabled state (Spans/Loops). */
   pendingRequiresRegion: boolean;
 
   // Files
@@ -194,7 +210,7 @@ export function emptyCapabilities(): AnnotationPanelCapabilities {
     addLabel: '+ Add',
     canAddLayer: false,
     canFillDefaults: false,
-    fillDefaultsLabel: '⚡ Fill defaults',
+    fillDefaultsLabel: '✨ Fill defaults',
     fillDefaultsTooltip: '',
     pending: null,
     pendingRequiresRegion: false,

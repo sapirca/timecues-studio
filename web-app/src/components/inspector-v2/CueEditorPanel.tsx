@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useId, useImperativeHandle, useMemo, forwardRef, type ForwardedRef } from 'react';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import type {
   AnnotationLayer,
   AnnotationLayersDocument,
@@ -26,11 +27,15 @@ import {
   setLayerStatus,
 } from '../../types/annotationLayer';
 import { snapToBeat, type BarGrid } from '../../utils/barSnap';
+import { resolvePointAddTime } from './boundaryInsert';
 import { useSettings } from '../../context/SettingsContext';
+import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { CueItemCard } from './CueItemCard';
 import { AddItemAtEndCard } from './ItemCard';
 import { LayerModePicker } from './LayerModePicker';
+import { formatBeatTime } from '../../utils/beatTimeFormat';
 
 interface CueEditorPanelProps {
   /** Current playhead position in seconds — used when adding a cue at playhead. */
@@ -49,8 +54,15 @@ interface CueEditorPanelProps {
   selectedLayerId?: string | null;
   onSelectLayer?: (layerId: string | null) => void;
   /** Global Snap-to-grid toggle. When on, "+ Add cue @ playhead" rounds the
-   *  playhead time to the nearest beat. */
+   *  playhead time onto the grid — to the unit GRID is set to, via `snapTime`. */
   snapToGrid?: boolean;
+  /** The page's grid-aware snapper, used for every add / snap-to-playhead
+   *  time. It honours the GRID unit the user picked (1/2 beat, triplets,
+   *  bars…), per-beat overrides and tempo segments, and returns the time
+   *  untouched while Snap and Grid Lock are both off — the same rule a drag
+   *  on the canvas already followed. Optional: without it these paths fall
+   *  back to whole-beat snapping, which is what they all used to do. */
+  snapTime?: (t: number) => number;
   grid?: Partial<BarGrid> | null;
   /** Page-level subscription that fires whenever the toolbar-visible state
    *  changes. Fed to the shared AnnotationToolbar above this panel. */
@@ -59,27 +71,41 @@ interface CueEditorPanelProps {
    *  layers-doc save debounce). Surfaced through the shared toolbar. */
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   /** Drag-range pending selection from the viz. When set with t2, the Enter
-   *  shortcut (and the "+ Add" pill) commits a pair of cues at t1 and t2. */
+   *  shortcut (and the "+ Add" pill) commits ONE cue at the region's start —
+   *  cues are points, so the end of the region is discarded. */
   pendingSelection?: PendingSelection | null;
   onClearPendingSelection?: () => void;
-}
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+  /** Fired right after a highlighted region was collapsed to a single cue at
+   *  its start, so the page can warn that the selection's end was dropped. */
+  onRangeCollapsed?: () => void;
+  /** Fired when an add was refused because a cue already sits on that exact
+   *  instant — carries the line the page shows as a notice. See
+   *  shared/duplicateItem.ts for why the add refuses instead of stacking. */
+  onDuplicateSkipped?: (message: string) => void;
+  /** When true: snap is locked on, annotation times display in bar·beat format. */
+  gridLock?: boolean;
+  /** Reader for the LIVE media clock (the page's `liveSongTime`). Every cue
+   *  add is placed against this rather than `currentTime`: that prop is the
+   *  same number one rAF coalesce, one setState and one inspector re-render
+   *  later, so pressing M on a downbeat while the song plays commits the cue
+   *  where the playhead already was. Optional — without it the panel falls
+   *  back to the prop, as it used to. */
+  getSongTime?: () => number | null;
 }
 
 function CueEditorPanelInner(
   {
     currentTime, doc, onDocChange, focusedCue, onFocusCue,
     selectedLayerId = null, onSelectLayer,
-    snapToGrid = false, grid = null,
+    snapToGrid = false, grid = null, snapTime,
+    gridLock = false,
     onCapabilitiesChange,
     saveStatus = 'idle',
     pendingSelection = null,
     onClearPendingSelection,
+    onRangeCollapsed,
+    onDuplicateSkipped,
+    getSongTime,
   }: CueEditorPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
@@ -128,8 +154,53 @@ function CueEditorPanelInner(
     if (selectedLayerId === layerId) onSelectLayer?.(null);
   }
 
+  // Where a cue dropped right now belongs. Called, never captured, so it
+  // reads the clock when the add FIRES:
+  // the caller's own reading if it has one (the M shortcut takes the media
+  // clock at the keydown and backs out the dispatch lag), otherwise the live
+  // clock, and only then the `currentTime` prop.
+  const markTime = useCallback(
+    (atTime?: number) => resolvePointAddTime({
+      live: atTime ?? getSongTime?.(),
+      fallback: currentTime,
+    }),
+    [getSongTime, currentTime],
+  );
+
+  // Where an add actually lands. Delegates to the page's `snapTime` so a mark
+  // placed from the keyboard ends up on the same lines as one dragged on the
+  // canvas; the whole-beat fallback is only for mounts that inject no snapper.
+  const snapAdd = useCallback(
+    (t: number) => (snapTime
+      ? snapTime(t)
+      : (snapToGrid && grid?.bpm ? snapToBeat(t, grid as BarGrid) : t)),
+    [snapTime, snapToGrid, grid],
+  );
+
+  // The cue already sitting on this exact instant in `layerId`, if any. Every
+  // add path asks first: a second cue at the same time draws exactly on top of
+  // the first, so the annotator can't see that it happened. `layers` is passed
+  // in on the paths that have just built a new layer list and can't read it
+  // back off `doc` yet.
+  const cueAlreadyAt = useCallback((
+    layerId: string,
+    t: number,
+    layers: readonly AnnotationLayer[] = doc.layers,
+  ): CueItem | undefined => {
+    const layer = layers.find((l): l is AnnotationLayer<'cues'> => l.id === layerId && l.type === 'cues');
+    if (!layer) return undefined;
+    return findItemAtSpot(layer.items, { at: t }, (it) => ({ at: it.time }));
+  }, [doc.layers]);
+
   function addCueAtPlayhead(layerId: string) {
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
+    const raw = markTime();
+    const t = snapAdd(raw);
+    const existing = cueAlreadyAt(layerId, t);
+    if (existing) {
+      onFocusCue?.({ layerId, itemId: existing.id });
+      onDuplicateSkipped?.(duplicateItemNotice('cue', { at: t }));
+      return;
+    }
     const cue = newCueItem(t, '');
     onDocChange({
       ...doc,
@@ -145,7 +216,7 @@ function CueEditorPanelInner(
       ...doc,
       layers: doc.layers.map((l) =>
         l.id === layerId
-          ? { ...l, items: l.items.map((it) => (it.id === itemId ? { ...it, ...patch } : it)) }
+          ? { ...l, items: l.items.map((it) => (it.id === itemId ? ({ ...it, ...patch } as typeof it) : it)) }
           : l,
       ),
     });
@@ -162,10 +233,18 @@ function CueEditorPanelInner(
   }
 
   function addCandidate(layerId: string, itemId: string) {
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
+    const raw = markTime();
+    const t = snapAdd(raw);
     const layer = cueLayers.find((l) => l.id === layerId);
     const cue = layer?.items.find((it) => it.id === itemId);
     if (!cue) return;
+    // The cue's own time counts as taken too — a candidate there is the same
+    // claim written twice, and evaluation would score it twice.
+    const taken = [cue.time, ...(cue.candidates ?? [])];
+    if (findItemAtSpot(taken, { at: t }, (c) => ({ at: c })) !== undefined) {
+      onDuplicateSkipped?.(duplicateItemNotice('candidate time for this cue', { at: t }));
+      return;
+    }
     const next = [...(cue.candidates ?? []), t].sort((a, b) => a - b);
     patchItem(layerId, itemId, { candidates: next });
   }
@@ -181,9 +260,9 @@ function CueEditorPanelInner(
   // Trigger an add into whichever layer makes sense — used both by the local
   // toolbar button and by the trailing "+ Add" card after the cards row.
   // Auto-creates the first cue layer when none exist.
-  const addCueAtLayer = useCallback((forcedLayerId: string | null) => {
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
-    const cue = newCueItem(t, '');
+  const addCueAtLayer = useCallback((forcedLayerId: string | null, atTime?: number) => {
+    const raw = markTime(atTime);
+    const t = snapAdd(raw);
     let layers = doc.layers;
     let targetLayerId: string | undefined;
     if (forcedLayerId && layers.some((l) => l.id === forcedLayerId && l.type === 'cues')) {
@@ -201,65 +280,53 @@ function CueEditorPanelInner(
       targetLayerId = newLayer.id;
     }
     const finalId = targetLayerId;
+    const existing = cueAlreadyAt(finalId, t, layers);
+    if (existing) {
+      onFocusCue?.({ layerId: finalId, itemId: existing.id });
+      onSelectLayer?.(finalId);
+      onDuplicateSkipped?.(duplicateItemNotice('cue', { at: t }));
+      return;
+    }
+    const cue = newCueItem(t, '');
     layers = layers.map((l) =>
       l.id === finalId ? { ...l, items: [...l.items, cue] } : l,
     );
     onDocChange({ ...doc, layers });
     onFocusCue?.({ layerId: finalId, itemId: cue.id });
     onSelectLayer?.(finalId);
-  }, [doc, focusedCue, selectedLayerId, activeLayer, currentTime, snapToGrid, grid, onDocChange, onFocusCue, onSelectLayer]);
+  }, [doc, focusedCue, selectedLayerId, activeLayer, markTime, snapToGrid, grid, cueAlreadyAt,
+      onDocChange, onFocusCue, onSelectLayer, onDuplicateSkipped]);
 
-  const addCueViaToolbar = useCallback(() => { addCueAtLayer(null); }, [addCueAtLayer]);
-  const addCueViaToolbarInLayer = useCallback((layerId: string) => { addCueAtLayer(layerId); }, [addCueAtLayer]);
+  const addCueViaToolbar = useCallback((atTime?: number) => { addCueAtLayer(null, atTime); }, [addCueAtLayer]);
+  const addCueViaToolbarInLayer = useCallback(
+    (layerId: string, atTime?: number) => { addCueAtLayer(layerId, atTime); },
+    [addCueAtLayer],
+  );
 
-  // Commit a pair of cues at [t1, t2] into the active (or auto-created) layer.
-  // Mirrors Manual's drag-range behavior — the user gets two boundary points
-  // in one gesture. De-dupes against existing cues within 0.01s.
-  const commitCueRange = useCallback((t1: number, t2: number) => {
-    const snap = (t: number) => (snapToGrid && grid?.bpm ? snapToBeat(t, grid as BarGrid) : t);
-    const start = Math.round(snap(Math.min(t1, t2)) * 1000) / 1000;
-    const end   = Math.round(snap(Math.max(t1, t2)) * 1000) / 1000;
-    let layers = doc.layers;
-    let targetLayerId: string | undefined;
-    if (selectedLayerId && layers.some((l) => l.id === selectedLayerId && l.type === 'cues')) {
-      targetLayerId = selectedLayerId;
-    } else if (activeLayer) {
-      targetLayerId = activeLayer.id;
-    }
-    if (!targetLayerId) {
-      const newLayer = newCueLayer('Cues 1', pickDefaultLayerColor(layers));
-      layers = [...layers, newLayer];
-      targetLayerId = newLayer.id;
-    }
-    const finalId = targetLayerId;
-    const target = layers.find((l) => l.id === finalId);
-    const existing = target && target.type === 'cues' ? target.items : [];
-    const additions: CueItem[] = [];
-    const novel = (t: number) =>
-      !existing.some((c) => Math.abs(c.time - t) < 0.01)
-      && !additions.some((c) => Math.abs(c.time - t) < 0.01);
-    if (novel(start)) additions.push(newCueItem(start, ''));
-    if (Math.abs(end - start) >= 0.05 && novel(end)) additions.push(newCueItem(end, ''));
-    if (additions.length === 0) return;
-    layers = layers.map((l) =>
-      l.id === finalId ? { ...l, items: [...l.items, ...additions] } : l,
-    );
-    onDocChange({ ...doc, layers });
-    const last = additions[additions.length - 1];
-    onFocusCue?.({ layerId: finalId, itemId: last.id });
-    onSelectLayer?.(finalId);
-  }, [doc, selectedLayerId, activeLayer, snapToGrid, grid, onDocChange, onFocusCue, onSelectLayer]);
+  // A cue is a point, so a highlighted region can't become one cue "from"
+  // the selection — only its start survives. Drop a single cue there and tell
+  // the user what happened via `onRangeCollapsed`: a dragged region usually
+  // means the annotator wanted an interval, and silently keeping just the
+  // start (or, as this used to, dropping a second stray cue at the end) is
+  // the kind of thing they'd only notice much later.
+  const commitCueAtRangeStart = useCallback((t1: number, t2: number, forcedLayerId: string | null = null) => {
+    addCueAtLayer(forcedLayerId, Math.min(t1, t2));
+    if (Math.abs(t2 - t1) >= 0.05) onRangeCollapsed?.();
+  }, [addCueAtLayer, onRangeCollapsed]);
 
-  const confirmPendingSelection = useCallback(() => {
+  const confirmPendingForLayer = useCallback((forcedLayerId: string | null) => {
     if (!pendingSelection) return;
     if (pendingSelection.t2 !== null) {
-      commitCueRange(pendingSelection.t1, pendingSelection.t2);
+      commitCueAtRangeStart(pendingSelection.t1, pendingSelection.t2, forcedLayerId);
     } else {
-      // Point-only pending (rare for cues, but handle it): drop one cue at t1.
-      addCueAtLayer(null);
+      // Point-only pending: drop one cue at t1.
+      addCueAtLayer(forcedLayerId, pendingSelection.t1);
     }
     onClearPendingSelection?.();
-  }, [pendingSelection, commitCueRange, addCueAtLayer, onClearPendingSelection]);
+  }, [pendingSelection, commitCueAtRangeStart, addCueAtLayer, onClearPendingSelection]);
+
+  const confirmPendingSelection = useCallback(() => { confirmPendingForLayer(null); }, [confirmPendingForLayer]);
+  const confirmPendingInLayer = useCallback((id: string) => { confirmPendingForLayer(id); }, [confirmPendingForLayer]);
 
   const addLayerViaToolbar = useCallback(() => {
     const layer = newCueLayer(`Cues ${cueLayers.length + 1}`, pickDefaultLayerColor(doc.layers));
@@ -359,12 +426,14 @@ function CueEditorPanelInner(
     deleteAll: deleteAllCues,
     deleteFocused: deleteFocusedCue,
     confirmPending: confirmPendingSelection,
-    commitItemRange: commitCueRange,
-  }), [setCuesStage, addCueViaToolbar, addCueViaToolbarInLayer, addLayerViaToolbar, exportCuesJson, importCuesJson, deleteAllCues, deleteFocusedCue, confirmPendingSelection, commitCueRange]);
+    confirmPendingInLayer,
+    commitItemRange: commitCueAtRangeStart,
+  }), [setCuesStage, addCueViaToolbar, addCueViaToolbarInLayer, addLayerViaToolbar, exportCuesJson, importCuesJson, deleteAllCues, deleteFocusedCue, confirmPendingSelection, confirmPendingInLayer, commitCueAtRangeStart]);
 
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: getLayerStatus(doc, 'cues'),
       hasItems: totalCount > 0,
       saveStatus,
@@ -389,6 +458,15 @@ function CueEditorPanelInner(
     [activeLayer],
   );
 
+  // In Grid Lock with a known BPM, display times as "Bar X · Beat Y".
+  const beatFmt = useMemo<((t: number) => string) | undefined>(() => {
+    if (!gridLock || !grid?.bpm || grid.bpm <= 0) return undefined;
+    return (t: number) => formatBeatTime(
+      t, grid.bpm!, grid.gridOffsetSec ?? 0, grid.beatsPerBar ?? 4,
+      'bar-beat', settings.barBeatOrigin,
+    );
+  }, [gridLock, grid, settings.barBeatOrigin]);
+
   return (
     <div className="space-y-3">
       <div className="text-[10px] uppercase tracking-wider text-slate-500">
@@ -410,7 +488,7 @@ function CueEditorPanelInner(
       {!activeLayer ? (
         <div className="flex flex-wrap items-start gap-1">
           <AddItemAtEndCard
-            onClick={addCueViaToolbar}
+            onClick={() => addCueViaToolbar()}
             label={`+ Add cue @ ${fmtTime(currentTime)}`}
           />
         </div>
@@ -424,9 +502,12 @@ function CueEditorPanelInner(
               color={activeLayer.color}
               isSelected={focusedCue?.layerId === activeLayer.id && focusedCue.itemId === cue.id}
               onSelect={() => { onFocusCue?.({ layerId: activeLayer.id, itemId: cue.id }); onSelectLayer?.(activeLayer.id); }}
-              onSnap={() => patchItem(activeLayer.id, cue.id, {
-                time: snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime,
-              })}
+              onSnap={() => {
+                const raw = markTime();
+                patchItem(activeLayer.id, cue.id, {
+                  time: snapAdd(raw),
+                });
+              }}
               onChangeLabel={(label) => patchItem(activeLayer.id, cue.id, { label })}
               onToggleImportance={() => patchItem(activeLayer.id, cue.id, {
                 importance: cue.importance === 'optional' ? 'critical' : 'optional',
@@ -435,6 +516,7 @@ function CueEditorPanelInner(
               onRemoveCandidate={(ci) => removeCandidate(activeLayer.id, cue.id, ci)}
               onDelete={() => deleteItem(activeLayer.id, cue.id)}
               labelTaxonomyId={showTaxonomy ? taxonomyId : undefined}
+              fmt={beatFmt}
             />
           ))}
           <AddItemAtEndCard
@@ -455,6 +537,7 @@ function CueEditorPanelInner(
 
 // ─── Slim per-layer toolbar above the card row ─────────────────────────────
 
+
 interface LayerToolbarProps {
   layer: AnnotationLayer<'cues'>;
   currentTime: number;
@@ -466,7 +549,8 @@ interface LayerToolbarProps {
 }
 
 function LayerToolbar({
-  layer, currentTime, onRename, onToggleVisibility, onChangeMode, onDelete, onAddCue,
+  layer, currentTime,
+  onRename, onToggleVisibility, onChangeMode, onDelete, onAddCue,
 }: LayerToolbarProps) {
   return (
     <div

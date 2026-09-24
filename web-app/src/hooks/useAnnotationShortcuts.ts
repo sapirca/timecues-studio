@@ -23,9 +23,21 @@ interface Options {
   onCloseHelp: () => void;
 }
 
+// Click-only input types — focusing one of these (e.g. the "Block browser
+// swipe-back" checkbox in the Misc popover) must NOT swallow global shortcuts
+// like Space (play/pause). Deliberately excludes `range`/`radio`: those consume
+// Arrow keys, and our Arrow shortcuts preventDefault(), so treating them as
+// typing targets keeps focused-slider/radio keyboard nudging intact. Genuine
+// text-entry inputs (text, number, search, …) still pause the shortcut layer.
+const NON_TEXT_INPUT_TYPES = new Set([
+  'checkbox', 'button', 'submit', 'reset', 'color', 'file', 'image',
+]);
+
 export function isTypingTarget(target: EventTarget | null): boolean {
+  if (target instanceof HTMLInputElement) {
+    return !NON_TEXT_INPUT_TYPES.has(target.type);
+  }
   return (
-    target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLSelectElement ||
     (target instanceof HTMLElement && target.isContentEditable)

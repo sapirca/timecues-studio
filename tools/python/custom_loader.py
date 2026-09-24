@@ -1,7 +1,7 @@
 """Discover and validate user-authored custom detectors.
 
-Scans tools/python/custom/*.py, imports each file in isolation, and produces
-a registry where every entry is either:
+Scans tools/python/custom/*.py and tools/python/custom-default/*.py, imports
+each file in isolation, and produces a registry where every entry is either:
 
   - status="ok": the file imported, defined exactly one CustomDetector subclass,
     and every required manifest field passed validation.
@@ -40,13 +40,23 @@ from custom_api import (  # noqa: E402
     ValidationError,
 )
 
+# Two folders, the same split as data/ and data-default/. custom-default/
+# holds the shipped examples and template — tracked, read-only from the app,
+# and part of the public bundle. custom/ is where every detector a user writes
+# lands (the editor saves there); it is export-ignored, so a maintainer's own
+# detectors stay in the private repo and never reach the public mirror.
 CUSTOM_DIR = _THIS_DIR / "custom"
+DEFAULT_CUSTOM_DIR = _THIS_DIR / "custom-default"
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
 LABEL_MAX = 80
 # `loop` and `pattern` validate fine here but are filtered out of the registry
 # response by custom_server when the experimentalLoopsAndPatterns flag is off.
-ALLOWED_OUTPUT_KIND = {"boundary", "cue", "span", "loop", "pattern"}
+ALLOWED_OUTPUT_KIND = {"boundary", "cue", "span", "loop", "pattern", "lyrics"}
+# Demucs stem a detector reads from, surfaced so the UI can label a layer with
+# its source stem and light it up while that stem is auditioned. "mix" means the
+# whole track (no single stem). Optional — None when the detector declares none.
+ALLOWED_STEM = {"vocals", "drums", "bass", "other", "guitar", "piano", "mix"}
 # Output kinds gated by the experimentalLoopsAndPatterns UI flag. The server
 # filters these from the registry response when the flag is off, mirroring the
 # annotation-tab gating in the web app.
@@ -90,20 +100,15 @@ def missing_module_hint(exc: BaseException) -> Optional[dict]:
 
 
 def scan() -> list[RegistryEntry]:
-    """Return one RegistryEntry per .py file in CUSTOM_DIR.
+    """Return one RegistryEntry per detector file (see detector_files()).
 
     Sorted by (status priority, name) so OK detectors appear first.
     `name` collisions across files yield validation_error on every conflicting
     file (loader does not silently choose a winner).
     """
-    if not CUSTOM_DIR.exists():
-        return []
-
-    entries: list[RegistryEntry] = []
-    for path in sorted(CUSTOM_DIR.iterdir()):
-        if not _is_user_file(path):
-            continue
-        entries.append(_load_one(path))
+    entries: list[RegistryEntry] = [_load_one(path) for path in detector_files()]
+    for e in entries:
+        e.is_default = is_default_file(Path(e.file))
 
     # Detect duplicate names across files (only among ok entries).
     name_counts: dict[str, int] = {}
@@ -120,7 +125,7 @@ def scan() -> list[RegistryEntry]:
                     value=e.name,
                     message=(
                         f"duplicate detector name: {e.name!r} is also used by "
-                        f"another file in tools/python/custom/. Names must be unique."
+                        f"another detector file. Names must be unique."
                     ),
                 )
             )
@@ -170,6 +175,29 @@ def load_detector(name: str) -> CustomDetector:
     raise DetectorLoadError(f"detector {name!r} not found in {CUSTOM_DIR}")
 
 
+def detector_files() -> list[Path]:
+    """Every candidate detector file, custom/ first and then custom-default/.
+
+    A file in custom/ shadows the shipped one with the same filename, the way
+    data/ shadows data-default/ — that is what editing an example from the app
+    leaves behind (see custom_server.write_script), and it keeps the Docker
+    volume's older seeded copies of the examples from colliding by name.
+    """
+    files: dict[str, Path] = {}
+    for folder in (CUSTOM_DIR, DEFAULT_CUSTOM_DIR):
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if _is_user_file(path):
+                files.setdefault(path.name, path)
+    return [files[k] for k in sorted(files)]
+
+
+def is_default_file(path: Path) -> bool:
+    """True when `path` is one of the shipped files in custom-default/."""
+    return path.resolve().parent == DEFAULT_CUSTOM_DIR.resolve()
+
+
 # ─── Internals ───────────────────────────────────────────────────────────────
 
 
@@ -178,7 +206,7 @@ def _status_rank(s: str) -> int:
 
 
 def _is_user_file(path: Path) -> bool:
-    """Every .py file in tools/python/custom/ is a candidate detector.
+    """Every .py file in either detector folder is a candidate detector.
 
     Skips only mechanical files: __init__.py and dotfiles. The leading-
     underscore convention is intentionally NOT used to hide files — anything
@@ -348,6 +376,19 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
     description = str(getattr(cls, "description", "") or "")
     version     = str(getattr(cls, "version", "") or "0.1")
 
+    # Optional source stem. Reject unknown values rather than silently dropping
+    # them, so a typo surfaces the same way a bad output_kind would.
+    stem = getattr(cls, "stem", None)
+    if stem is not None and stem not in ALLOWED_STEM:
+        errors.append(_err(
+            "stem", stem,
+            f"must be one of {sorted(ALLOWED_STEM)} (or omitted).",
+        ))
+
+    # Optional family/group label (free-form string, max 40 chars).
+    group_raw = getattr(cls, "group", None)
+    group = str(group_raw).strip()[:40] if isinstance(group_raw, str) and group_raw.strip() else None
+
     status = "ok" if not errors else "validation_error"
     return RegistryEntry(
         name=name if isinstance(name, str) and name else path.stem,
@@ -359,6 +400,8 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
         is_annotation=is_annotation,
         description=description,
         version=version,
+        stem=stem if stem in ALLOWED_STEM else None,
+        group=group,
         errors=errors,
     )
 

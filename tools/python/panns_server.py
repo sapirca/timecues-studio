@@ -52,7 +52,7 @@ from __future__ import annotations
 import json
 import sys
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -61,7 +61,8 @@ warnings.filterwarnings("ignore")
 PORT = 8013
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from paths import find_audio, PANNS_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
+from paths import find_audio, stem_audio, cache_name, PANNS_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
+from server_common import cached_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -94,16 +95,8 @@ except Exception:
 _panns_tagger = None
 
 
-def _time_ms(t0_ms: float) -> int:
-    return int((datetime.now().timestamp() * 1000) - t0_ms)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def _err(algo: str, msg: str) -> dict:
-    return {"algorithm": algo, "ok": False, "error": msg, "spans": []}
+    return _common_err(algo, msg, spans=[])
 
 
 def _ensure_panns():
@@ -208,7 +201,7 @@ def detect_panns_cnn14(audio_path: Path) -> dict:
             "ok":        True,
             "spans":     spans,
             "duration":  duration,
-            "ms":        _time_ms(t0),
+            "ms":        time_ms(t0),
         }
     except Exception as e:
         return _err(algo, f"{type(e).__name__}: {e}")
@@ -224,42 +217,41 @@ ALGORITHMS = {
 }
 
 
-def detect_one(slug: str, algo: str, force: bool = False) -> dict:
+def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> dict:
     if algo not in ALGORITHMS:
         raise ValueError(f"unknown algorithm: {algo}")
     cache_dir = CACHE_DIR / slug
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / f"{algo}.json"
-    if cache_path.exists() and not force:
-        return json.loads(cache_path.read_text())
-    audio_path = find_audio(slug)
-    if audio_path is None:
-        raise FileNotFoundError(f"audio not found for slug: {slug}")
+    cache_path = cache_dir / f"{cache_name(algo, stem)}.json"
+    hit = cached_result(cache_path, force)
+    if hit is not None:
+        return hit
+    if stem and stem != "mix":
+        audio_path = stem_audio(slug, stem)
+        if audio_path is None:
+            raise FileNotFoundError(f"no cached '{stem}' stem for slug: {slug}")
+    else:
+        audio_path = find_audio(slug)
+        if audio_path is None:
+            raise FileNotFoundError(f"audio not found for slug: {slug}")
     result = ALGORITHMS[algo]["detect"](audio_path)
     payload = {
         "slug":        slug,
         "audio_file":  audio_path.name,
         "algorithm":   algo,
+        "stem":        stem or "mix",
         "duration":    result.get("duration", 0.0),
         "spans":       result.get("spans", []),
         "ok":          result.get("ok", False),
         "error":       result.get("error"),
         "ms":          result.get("ms", 0),
-        "computed_at": _now_iso(),
+        "computed_at": now_iso(),
     }
     try:
         cache_path.write_text(json.dumps(payload, indent=2))
     except Exception:
         pass
     return payload
-
-
-def _cors():
-    return {
-        "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -271,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body):
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -280,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.end_headers()
 
@@ -323,12 +315,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/panns/detect":
             slug = str(body.get("slug", "")).strip()
             algo = str(body.get("algo", "")).strip()
+            stem = str(body.get("stem", "mix")).strip() or "mix"
             force = bool(body.get("force", False))
             if not slug or not algo:
                 self._send(400, {"error": "slug and algo are required"})
                 return
             try:
-                self._send(200, detect_one(slug, algo, force=force))
+                self._send(200, detect_one(slug, algo, stem=stem, force=force))
             except FileNotFoundError as e:
                 self._send(404, {"error": str(e)})
             except ValueError as e:

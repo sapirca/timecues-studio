@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IdentityPane } from './LoginScreen';
+import { gsiButtonOptions, gsiButtonWidth } from './gsiButton';
 import type { Annotator } from '../types/annotator';
 
 // IdentityPane is the meaningful, exportable sub-component of LoginScreen
@@ -25,7 +26,7 @@ function mockAvailability(available: boolean) {
     ok: true,
     status: 200,
     json: async () => ({ available }),
-  })) as typeof global.fetch;
+  })) as unknown as typeof global.fetch;
 }
 
 afterEach(() => {
@@ -171,5 +172,44 @@ describe('IdentityPane — unavailable-id flow', () => {
 
     expect(onSignIn).toHaveBeenCalledTimes(1);
     expect((onSignIn.mock.calls[0][0] as Annotator).id).toBe('local-jane');
+  });
+});
+
+
+// ─── Google button sizing ────────────────────────────────────────────────────
+//
+// Google's rendered button keeps whatever width it is handed. The card is
+// narrower than 320px on a phone, so the width follows the container,
+// clamped to the 200–400 range GSI accepts and never wider than the 320px
+// it has always been on desktop.
+
+describe('gsiButtonWidth', () => {
+  it('keeps the desktop width when the container is wide', () => {
+    expect(gsiButtonWidth(448)).toBe(320);
+  });
+
+  it('shrinks to a phone-width container', () => {
+    expect(gsiButtonWidth(294.6)).toBe(294);
+  });
+
+  it('never goes below the GSI minimum', () => {
+    expect(gsiButtonWidth(150)).toBe(200);
+  });
+
+  it('falls back to the desktop width before layout has happened', () => {
+    expect(gsiButtonWidth(0)).toBe(320);
+    expect(gsiButtonWidth(Number.NaN)).toBe(320);
+  });
+});
+
+describe('gsiButtonOptions', () => {
+  it('pins the button text to English and passes the measured width', () => {
+    expect(gsiButtonOptions(300)).toEqual({
+      theme: 'filled_black',
+      size: 'large',
+      width: 300,
+      shape: 'pill',
+      locale: 'en',
+    });
   });
 });

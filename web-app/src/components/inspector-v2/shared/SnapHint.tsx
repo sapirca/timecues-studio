@@ -1,7 +1,7 @@
 /**
  * Inline "· snapped to BEAT" chip rendered next to a timestamp when the time
  * lies on the beat grid. Replaces the open-coded title-attribute strings in
- * CueLayerRow / PatternLaneRow / SpanEditPopover so every place that displays
+ * CueLayerRow / SpanLaneRow / SpanEditPopover so every place that displays
  * a time uses the same wording, color, and snap tolerance.
  *
  * Renders nothing when:

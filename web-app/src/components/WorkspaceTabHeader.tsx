@@ -1,44 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useAdmin } from '../hooks/useAdmin';
 import { useDemo } from '../context/DemoContext';
 import { AnnotatorBadge } from './AnnotatorBadge';
+import { tabForPath, useVisibleWorkspaceTabs, type TabDef, type WorkspaceTab } from './workspaceTabs';
 import { loadDatasetConfig } from '../services/datasetConfig';
 import { requestPausePlayback } from '../utils/playerEvents';
 
-export type WorkspaceTab = 'prep' | 'annotate' | 'inspect' | 'playground' | 'team';
-
-/** Path → tab mapping. Used when the header isn't given an explicit `active`
- *  prop (the App-level mount derives it from pathname so the same component
- *  works on every workspace). */
-function tabForPath(pathname: string): WorkspaceTab {
-  if (pathname === '/prep') return 'prep';
-  if (pathname === '/inspect') return 'inspect';
-  if (pathname === '/custom') return 'playground';
-  if (pathname === '/team') return 'team';
-  return 'annotate';
-}
-
-const WORKSPACE_PATHS = new Set(['/prep', '/annotate', '/inspect', '/custom', '/team']);
+const WORKSPACE_PATHS = new Set(['/prep', '/annotate', '/inspect', '/custom', '/team', '/setlist']);
 export function isWorkspacePath(pathname: string): boolean {
   return WORKSPACE_PATHS.has(pathname);
 }
-
-interface TabDef {
-  id: WorkspaceTab;
-  label: string;
-  path: string;
-  accent: string;
-  adminOnly?: boolean;
-}
-
-const TABS: TabDef[] = [
-  { id: 'prep',       label: 'Dataprep',         path: '/prep',     accent: 'emerald' },
-  { id: 'annotate',   label: 'Annotator Tool',   path: '/annotate', accent: 'cyan'    },
-  { id: 'inspect',    label: 'Algorithm Inspect', path: '/inspect', accent: 'violet'  },
-  { id: 'playground', label: 'Playground',       path: '/custom',   accent: 'amber'   },
-  { id: 'team',       label: 'Team',             path: '/team',     accent: 'rose', adminOnly: false },
-];
 
 const ACCENT_ACTIVE: Record<string, string> = {
   emerald: 'border-emerald-400 text-emerald-200',
@@ -57,10 +28,8 @@ const ACCENT_ACTIVE: Record<string, string> = {
 export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { status } = useAdmin();
   const { isDemo, requestExitDemo } = useDemo();
   const resolvedActive: WorkspaceTab = active ?? tabForPath(pathname);
-  const canSeeTeam = status?.tier === 'admin' || status?.tier === 'researcher';
 
   // Best-effort corpus-name chip next to the studio mark, so the active
   // corpus is visible inside every workspace. Hidden when unset.
@@ -83,28 +52,16 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
 
   const handleClick = (tab: TabDef) => {
     if (tab.id === resolvedActive) return;
-    console.log('[tabswitch] click ->', tab.id, tab.path);
     // Pause first so audio doesn't keep playing into the new tab. The three
     // inspector tabs share one mounted player, so navigation alone won't stop it.
     requestPausePlayback();
-    console.log('[tabswitch] pause dispatched; calling navigate now');
     navigate(tab.path);
-    console.log('[tabswitch] navigate returned');
   };
 
-  // Team requires non-public access; the synthetic demo annotator is public,
-  // so the Team tab naturally falls out in demo too. Playground is also
-  // hidden in demo — the Python sandbox there is admin-only and any attempt
-  // to reach /custom while in demo is blocked at both the route guard and
-  // the server proxy.
-  const visibleTabs = TABS.filter((t) => {
-    if (t.id === 'team') return canSeeTeam && !isDemo;
-    if (t.id === 'playground') return !isDemo;
-    return true;
-  });
+  const visibleTabs = useVisibleWorkspaceTabs();
 
   return (
-    <div className="relative z-30 flex items-center gap-3 px-3 py-2 rounded-md border border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
+    <div className="relative z-30 w-full flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 rounded-md border border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
       {/* Left group: back + studio mark + demo chip. flex-1 so the centered
           nav between this and the right group sits in the true visual middle. */}
       <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -122,14 +79,14 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
             navigate('/');
           }}
           title="Back to home"
-          className="text-[11px] font-semibold tracking-[0.18em] uppercase text-slate-100 shrink-0 hover:text-violet-200 transition-colors"
+          className="text-[13px] font-semibold tracking-[0.18em] uppercase text-slate-100 shrink-0 hover:text-violet-200 transition-colors"
         >
           TimeCues <span className="text-slate-500 font-normal">/ Studio</span>
         </button>
         {corpusName && !isDemo && (
           <span
-            title="Corpus name"
-            className="shrink-0 text-[10px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-400/30 truncate max-w-[200px]"
+            title={corpusName}
+            className="min-w-0 text-[11px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-400/30 truncate max-w-[200px]"
           >
             {corpusName}
           </span>
@@ -145,7 +102,7 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
       </div>
       {/* Center: workspace tabs. shrink-0 keeps them from compressing if the
           side groups grow; overflow-x-auto rescues narrow viewports. */}
-      <nav className="flex items-center gap-1 shrink-0 overflow-x-auto">
+      <nav className="flex items-center gap-1 shrink-0 max-w-full overflow-x-auto">
         {visibleTabs.map((t) => {
           const isActive = t.id === resolvedActive;
           const activeClasses = ACCENT_ACTIVE[t.accent] ?? 'border-cyan-400 text-cyan-200';
@@ -154,7 +111,7 @@ export function WorkspaceTabHeader({ active }: { active?: WorkspaceTab } = {}) {
               key={t.id}
               type="button"
               onClick={() => handleClick(t)}
-              className={`px-4 py-2 rounded text-[11px] uppercase tracking-wider font-medium transition-colors border whitespace-nowrap leading-none ${
+              className={`px-4 py-2 rounded text-[13px] uppercase tracking-wider font-medium transition-colors border whitespace-nowrap leading-none ${
                 isActive
                   ? `bg-white/[0.04] ${activeClasses}`
                   : 'border-white/[0.06] text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] hover:border-white/[0.12]'

@@ -25,6 +25,10 @@ export interface BeatnetDetectionResult {
   duration: number;
   result: BeatnetAlgorithmResult;
   computed_at: string;
+  /** Echoed back only on a ranged detection (one grid segment). Its absence is
+   *  how the caller tells a ranged answer from a whole-song one — see
+   *  segmentGridDetection.ts. */
+  range?: { start: number; end: number };
 }
 
 /** Read a cached BeatNet detection. Returns null when no cache exists or the

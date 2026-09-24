@@ -28,22 +28,6 @@ export function snapToBar(timeSec: number, grid: BarGrid): number {
   return Math.round(rel) * barLen + offset;
 }
 
-/** Snap `timeSec` DOWN to the start of the bar it's in (floor). */
-export function floorToBar(timeSec: number, grid: BarGrid): number {
-  const barLen = barLengthSec(grid);
-  const offset = grid.gridOffsetSec ?? 0;
-  const rel = (timeSec - offset) / barLen;
-  return Math.floor(rel) * barLen + offset;
-}
-
-/** Snap `timeSec` UP to the start of the next bar (ceil). */
-export function ceilToBar(timeSec: number, grid: BarGrid): number {
-  const barLen = barLengthSec(grid);
-  const offset = grid.gridOffsetSec ?? 0;
-  const rel = (timeSec - offset) / barLen;
-  return Math.ceil(rel) * barLen + offset;
-}
-
 /** Snap `timeSec` to the nearest beat boundary. */
 export function snapToBeat(timeSec: number, grid: BarGrid): number {
   const beatLen = 60 / grid.bpm;

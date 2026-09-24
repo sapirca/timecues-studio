@@ -12,18 +12,25 @@ import {
   updateDetectorFlags,
   uploadDetector,
 } from '../services/customScripts';
-import { loadAnnotation } from '../services/manualAnnotations';
+import { loadBoundaryItems } from '../services/annotationLayers';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
+import { useDemucsStems, fetchStemManifest, stemsFromManifest, type StemManifest } from '../hooks/useDemucsStems';
+import { StemsRunLog } from '../components/inspector-v2/StemsRunLog';
+import { useCapabilities } from '../hooks/useCapabilities';
+import { GPU_TOOLS_UNAVAILABLE_HINT } from '../services/capabilities';
 import type {
   CustomBoundaryItem,
+  CustomOutputKind,
   CustomRegistryEntry,
   CustomResultEnvelope,
   CustomValidationError,
   MissingModuleHint,
 } from '../types/customScript';
 import { isMissingModuleHint } from '../types/customScript';
-import type { ManualAnnotation, ManualSection } from '../types/manualAnnotation';
+import type { SectionBlock } from '../types/sectionBlock';
+import type { BoundaryItem } from '../types/annotationLayer';
 import { InfoBanner } from '../components/InfoBanner';
+import { groupByDetectorOrigin } from '../utils/detectorOrigin';
 const STARTER_CODE = `from custom_api import Boundary, CustomDetector, DetectionContext
 
 
@@ -76,6 +83,9 @@ interface ManifestSong {
   /** Display name. Some manifest variants call it `title`, others `name`. */
   title?: string;
   name?: string;
+  /** Audio URL — present in /analysis/manifest.json; used to locate the song's
+   *  stem manifest so the Playground can show / trigger Demucs stems. */
+  url?: string;
 }
 
 const STATUS_BADGE: Record<CustomRegistryEntry['status'], { label: string; className: string }> = {
@@ -88,12 +98,61 @@ const STATUS_BADGE: Record<CustomRegistryEntry['status'], { label: string; class
  *  Returns the value of `key = "..."` for the first match — only handles the
  *  simple single-line form the contract uses, which is enough for `name` and
  *  `label`. */
-function parseClassAttr(code: string, key: 'name' | 'label'): string | null {
+function parseClassAttr(code: string, key: string): string | null {
   const re = new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(?:"([^"\\n]*)"|'([^'\\n]*)')`, 'm');
   const m = code.match(re);
   if (!m) return null;
   const v = (m[1] ?? m[2] ?? '').trim();
   return v.length > 0 ? v : null;
+}
+
+/** Output kinds a detector may declare — mirrors CustomOutputKind / ALLOWED_OUTPUT_KIND. */
+const OUTPUT_KINDS: readonly CustomOutputKind[] = ['boundary', 'cue', 'span', 'loop', 'lyrics'];
+
+/** Python-side defaults for the must-have flags (custom_api.py CustomDetector).
+ *  Used when a flag line is absent from the source so the editor controls match
+ *  what the loader would actually read via getattr(). */
+const FLAG_DEFAULTS = { is_algorithm: true, is_annotation: false, output_kind: 'boundary' as CustomOutputKind };
+
+/** Parse a boolean class attribute (`key = True | False`). Returns null when the
+ *  line is absent, so callers can fall back to the Python-side default. */
+function parseBoolAttr(code: string, key: string): boolean | null {
+  const m = code.match(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(True|False)\\b`, 'm'));
+  return m ? m[1] === 'True' : null;
+}
+
+/** Parse a string-literal class attribute constrained to an allowed set. */
+function parseEnumAttr<T extends string>(code: string, key: string, allowed: readonly T[]): T | null {
+  const v = parseClassAttr(code, key);
+  return v != null && (allowed as readonly string[]).includes(v) ? (v as T) : null;
+}
+
+/** Insert a new attribute assignment into the first CustomDetector subclass body,
+ *  right after the class header, indented one level past the class keyword.
+ *  Returns the code unchanged when no such class is found. */
+function insertClassAttr(code: string, assignment: string): string {
+  const lines = code.split('\n');
+  const idx = lines.findIndex((l) => /^\s*class\s+\w+\s*\(.*\bCustomDetector\b.*\)\s*:/.test(l));
+  if (idx === -1) return code;
+  const classIndent = lines[idx].match(/^\s*/)?.[0] ?? '';
+  lines.splice(idx + 1, 0, `${classIndent}    ${assignment}`);
+  return lines.join('\n');
+}
+
+/** Rewrite (or insert) a boolean flag assignment, mirroring the server's
+ *  patch_script_flags so the editor buffer stays the single source of truth.
+ *  Preserves the existing line's indentation and trailing comment. */
+function setBoolFlagInCode(code: string, key: string, value: boolean): string {
+  const re = new RegExp(`^([ \\t]*)(${key})([ \\t]*=[ \\t]*)(?:True|False)([ \\t]*(?:#.*)?)$`, 'm');
+  const lit = value ? 'True' : 'False';
+  return re.test(code) ? code.replace(re, `$1$2$3${lit}$4`) : insertClassAttr(code, `${key} = ${lit}`);
+}
+
+/** Rewrite (or insert) a string-literal flag assignment, preserving indentation
+ *  and trailing comment. */
+function setStrFlagInCode(code: string, key: string, value: string): string {
+  const re = new RegExp(`^([ \\t]*)(${key})([ \\t]*=[ \\t]*)(?:"[^"\\n]*"|'[^'\\n]*')([ \\t]*(?:#.*)?)$`, 'm');
+  return re.test(code) ? code.replace(re, `$1$2$3"${value}"$4`) : insertClassAttr(code, `${key} = "${value}"`);
 }
 
 const NAME_RE_CLIENT = /^[a-z][a-z0-9_-]{0,30}$/;
@@ -145,7 +204,7 @@ function MissingModulePanel({
       </div>
       <div className="flex items-center gap-2 bg-black/40 border border-white/[0.06] rounded px-2 py-1.5 font-mono text-[12px]">
         <span className="text-slate-500 select-none">$</span>
-        <span className="flex-1 text-emerald-200 select-all">{hint.suggested_install}</span>
+        <span className="flex-1 min-w-0 break-all text-emerald-200 select-all">{hint.suggested_install}</span>
         <button
           onClick={copy}
           className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border border-white/[0.08] text-slate-300 hover:text-slate-100 hover:border-white/[0.16] transition-colors"
@@ -198,11 +257,48 @@ function FlagToggle({
   );
 }
 
+/** An on/off switch for a boolean detector flag, used in the editor's Flags row.
+ *  Shows the flag's source name, an explicit on/off state, and a "(default)"
+ *  hint when the value is implied (no assignment line in the source yet). */
+function FlagSwitch({
+  name, tip, value, defaulted, onChange,
+}: {
+  name: string;
+  tip: string;
+  value: boolean;
+  defaulted?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px]" title={tip}>
+      <code className="text-slate-400">{name}</code>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={value}
+        aria-label={`${name}: ${value ? 'on' : 'off'}`}
+        onClick={() => onChange(!value)}
+        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition ${
+          value ? 'bg-emerald-600/70' : 'bg-slate-700'
+        }`}
+      >
+        <span
+          className={`inline-block h-3 w-3 transform rounded-full bg-white transition ${
+            value ? 'translate-x-3.5' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+      <span className={`w-6 ${value ? 'text-emerald-300' : 'text-slate-500'}`}>{value ? 'on' : 'off'}</span>
+      {defaulted && <span className="text-slate-600">(default)</span>}
+    </span>
+  );
+}
+
 interface BatchRow {
   slug: string;
   title: string;
   envelope: CustomResultEnvelope | { error: string };
-  manual: ManualAnnotation | null;
+  manual: BoundaryItem[];
 }
 
 interface BatchRunState {
@@ -220,14 +316,18 @@ export function CustomScriptsPage() {
   const [songsError, setSongsError] = useState<string | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string>('');
   const [busy, setBusy] = useState<Record<string, 'run' | 'delete' | 'clear' | 'flag' | null>>({});
+  /** Detector scope for the top-level bulk-actions bar. '' = every detector. */
+  const [bulkScope, setBulkScope] = useState<string>('');
+  /** Non-null while a bulk Run / Clear sweep is in flight — disables the bar. */
+  const [bulkBusy, setBulkBusy] = useState<'run' | 'clear' | null>(null);
   /** Last-run envelope per `[detectorName][songSlug]`. Nesting by slug means
    *  switching the song dropdown doesn't wipe earlier runs — each song keeps
    *  its own card so users can compare without re-running. */
   const [results, setResults] = useState<Record<string, Record<string, CustomResultEnvelope | { error: string }>>>({});
   /** Manual annotation snapshot per detector run, keyed `[detectorName][songSlug]`.
-   *  Refetched each run so post-edit manual changes show up on the next Run
-   *  without a reload. `null` = no manual annotation exists for the song yet. */
-  const [manualByRun, setManualByRun] = useState<Record<string, Record<string, ManualAnnotation | null>>>({});
+   *  Refetched each run so post-edit boundary changes show up on the next Run
+   *  without a reload. `[]` = the song has no boundary layer yet. */
+  const [manualByRun, setManualByRun] = useState<Record<string, Record<string, BoundaryItem[]>>>({});
   /** Per-detector "Run all" state — survives single-song Run clicks so users can
    *  iterate on one song without losing the batch overview. */
   const [batchByDetector, setBatchByDetector] = useState<Record<string, BatchRunState>>({});
@@ -249,6 +349,18 @@ export function CustomScriptsPage() {
    *  keystroke so the title/subtitle preview stays in sync. */
   const parsedName = useMemo(() => parseClassAttr(uploadCode, 'name'), [uploadCode]);
   const parsedLabel = useMemo(() => parseClassAttr(uploadCode, 'label'), [uploadCode]);
+  /** Must-have flags parsed live from the editor buffer. null = no assignment
+   *  line yet, so the dedicated controls fall back to the Python-side default
+   *  and flag a "(default)" hint. Re-derived on every keystroke / paste, so the
+   *  controls always reflect what the loader would read from the source. */
+  const parsedAlgorithm = useMemo(() => parseBoolAttr(uploadCode, 'is_algorithm'), [uploadCode]);
+  const parsedAnnotation = useMemo(() => parseBoolAttr(uploadCode, 'is_annotation'), [uploadCode]);
+  const parsedOutputKind = useMemo(() => parseEnumAttr(uploadCode, 'output_kind', OUTPUT_KINDS), [uploadCode]);
+  const effAlgorithm = parsedAlgorithm ?? FLAG_DEFAULTS.is_algorithm;
+  const effAnnotation = parsedAnnotation ?? FLAG_DEFAULTS.is_annotation;
+  const effOutputKind = parsedOutputKind ?? FLAG_DEFAULTS.output_kind;
+  /** At least one surfacing flag must stay on, mirroring the loader's rule. */
+  const flagsValid = effAlgorithm || effAnnotation;
   /** Errors from the latest save attempt. Rendered BELOW the editor so the
    *  user can fix the code without losing context. Cleared on successful save. */
   const [uploadErrors, setUploadErrors] = useState<CustomValidationError[]>([]);
@@ -258,9 +370,52 @@ export function CustomScriptsPage() {
    *  the click point and looks like nothing happened. */
   const editorRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Demucs stems for the selected song ─────────────────────────────────────
+  // Reuses the exact run/poll/cancel/kill flow from the inspector (useDemucsStems)
+  // so the Playground can stem a song before running stem-scoped curators. The
+  // manifest tells us which stems already exist on disk.
+  const { capabilities } = useCapabilities();
+  const selectedSong = useMemo(() => songs.find((s) => s.id === selectedSlug) ?? null, [songs, selectedSlug]);
+  const [stemManifest, setStemManifest] = useState<StemManifest | null>(null);
+  const [stemManifestLoading, setStemManifestLoading] = useState(false);
+  const selectedSlugRef = useRef(selectedSlug);
+  useEffect(() => { selectedSlugRef.current = selectedSlug; }, [selectedSlug]);
+
+  const {
+    job: demucsJob,
+    runStems,
+    cancelStems,
+    killStems,
+    dismissError: dismissStemsError,
+    elapsedSec: stemsElapsedSec,
+  } = useDemucsStems({
+    onComplete: (audio, m) => {
+      if (selectedSlugRef.current === audio.id) setStemManifest(m);
+    },
+  });
+
+  // Refetch the stem manifest whenever the selected song changes so the
+  // "has stems" readout reflects what's actually on disk for that track.
+  useEffect(() => {
+    if (!selectedSong?.url) { setStemManifest(null); return; }
+    let cancelled = false;
+    setStemManifestLoading(true);
+    fetchStemManifest(selectedSong.url)
+      .then((m) => { if (!cancelled) setStemManifest(m); })
+      .finally(() => { if (!cancelled) setStemManifestLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedSong?.url]);
+
+  const presentStems = useMemo(() => stemsFromManifest(stemManifest), [stemManifest]);
+  const stemsRunning = demucsJob?.slug === selectedSlug && demucsJob?.status === 'running';
+  const handleRunStems = useCallback(() => {
+    if (!selectedSong?.url) return;
+    runStems({ id: selectedSong.id, name: selectedSong.title ?? selectedSong.name ?? selectedSong.id, url: selectedSong.url });
+  }, [selectedSong, runStems]);
+
   const refresh = useCallback(async () => {
     try {
-      // Authors must see every detector they wrote, even loop/pattern ones
+      // Authors must see every detector they wrote, even loop ones
       // when the user has experimentalLoopsAndPatterns off — otherwise the
       // detector file looks orphaned in the registry view.
       const list = await listDetectors({ includeExperimentalLoopsAndPatterns: true });
@@ -327,7 +482,7 @@ export function CustomScriptsPage() {
     name: string,
     slug: string,
     envelope: CustomResultEnvelope | { error: string },
-    manual: ManualAnnotation | null,
+    manual: BoundaryItem[],
   ) => {
     setBatchByDetector((prev) => {
       const cur = prev[name];
@@ -352,7 +507,7 @@ export function CustomScriptsPage() {
       // and a fresh load picks up manual edits made between runs.
       const [env, manual] = await Promise.all([
         runDetector(name, runSlug, { force: true }),
-        loadAnnotation(runSlug),
+        loadBoundaryItems(runSlug),
       ]);
       setResults((r) => ({ ...r, [name]: { ...(r[name] ?? {}), [runSlug]: env } }));
       setManualByRun((g) => ({ ...g, [name]: { ...(g[name] ?? {}), [runSlug]: manual } }));
@@ -368,7 +523,7 @@ export function CustomScriptsPage() {
     } catch (e) {
       const errEnvelope = { error: (e as Error).message };
       setResults((r) => ({ ...r, [name]: { ...(r[name] ?? {}), [runSlug]: errEnvelope } }));
-      patchBatchRow(name, runSlug, errEnvelope, null);
+      patchBatchRow(name, runSlug, errEnvelope, []);
       setTopMessage({ kind: 'error', text: `Run failed: ${(e as Error).message}` });
     } finally {
       setBusy((b) => ({ ...b, [name]: null }));
@@ -400,11 +555,11 @@ export function CustomScriptsPage() {
       try {
         const [env, manual] = await Promise.all([
           runDetector(name, s.id, { force: true }),
-          loadAnnotation(s.id),
+          loadBoundaryItems(s.id),
         ]);
         rows.push({ slug: s.id, title, envelope: env, manual });
       } catch (e) {
-        rows.push({ slug: s.id, title, envelope: { error: (e as Error).message }, manual: null });
+        rows.push({ slug: s.id, title, envelope: { error: (e as Error).message }, manual: [] });
       }
     }
 
@@ -475,15 +630,23 @@ export function CustomScriptsPage() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!confirm(`Delete custom detector "${name}"? This removes the .py file and all cached results.`)) return;
+    if (!confirm(
+      `Delete custom detector "${name}"?\n\n` +
+      `The .py source is moved to the app trash (tools/python/custom/.trash/), ` +
+      `not erased — delete it from disk manually if you want it gone for good. ` +
+      `Cached algorithm results are wiped.`
+    )) return;
     setBusy((b) => ({ ...b, [name]: 'delete' }));
     try {
       cancelBatchRef.current[name] = true;
-      await deleteDetector(name);
+      const { message } = await deleteDetector(name);
       setResults((r) => { const next = { ...r }; delete next[name]; return next; });
       setManualByRun((g) => { const next = { ...g }; delete next[name]; return next; });
       setBatchByDetector((b) => { const next = { ...b }; delete next[name]; return next; });
       await refresh();
+      setTopMessage({ kind: 'info', text: message });
+    } catch (e) {
+      setTopMessage({ kind: 'error', text: `Delete failed: ${(e as Error).message}` });
     } finally {
       setBusy((b) => ({ ...b, [name]: null }));
     }
@@ -511,6 +674,107 @@ export function CustomScriptsPage() {
       setTopMessage({ kind: 'error', text: `Clear outputs failed: ${(e as Error).message}` });
     } finally {
       setBusy((b) => ({ ...b, [name]: null }));
+    }
+  };
+
+  /** Detectors targeted by the bulk bar — one when scoped, all otherwise. */
+  const bulkTargets = useMemo(
+    () => (bulkScope ? detectors.filter((d) => d.name === bulkScope) : detectors),
+    [bulkScope, detectors],
+  );
+
+  /** Top-level clear: wipe outputs for the scoped detector(s) across either the
+   *  selected song or every song. Mirrors handleClearOutputs' semantics
+   *  (algorithm cache + this annotator's annotation files; .py source kept). */
+  const handleBulkClear = async (songScope: 'song' | 'all') => {
+    const targets = bulkTargets;
+    if (targets.length === 0) {
+      setTopMessage({ kind: 'error', text: 'No detectors to clear.' });
+      return;
+    }
+    const perSong = songScope === 'song';
+    if (perSong && !selectedSlug) {
+      setTopMessage({ kind: 'error', text: 'Select a song first.' });
+      return;
+    }
+    const selectedSong = songs.find((s) => s.id === selectedSlug);
+    const songTitle = selectedSong?.title ?? selectedSong?.name ?? selectedSlug;
+    const scopeLabel = bulkScope ? `detector "${bulkScope}"` : `all ${targets.length} detectors`;
+    const songLabel = perSong ? `the song "${songTitle}"` : 'every song';
+    if (!confirm(
+      `Clear outputs for ${scopeLabel} on ${songLabel}?\n\n` +
+      `This wipes the algorithm cache and your annotation files for that scope. ` +
+      `The .py source is kept. Other annotators' work is not touched.\n\n` +
+      `This cannot be undone.`
+    )) return;
+    setBulkBusy('clear');
+    try {
+      let totalAnn = 0;
+      for (const d of targets) {
+        cancelBatchRef.current[d.name] = true;
+        const { annotations_removed } = await deleteDetectorOutputs(d.name, perSong ? selectedSlug : undefined);
+        totalAnn += annotations_removed;
+        if (perSong) {
+          setResults((r) => {
+            if (!r[d.name]) return r;
+            const { [selectedSlug]: _drop, ...rest } = r[d.name];
+            return { ...r, [d.name]: rest };
+          });
+          setManualByRun((g) => {
+            if (!g[d.name]) return g;
+            const { [selectedSlug]: _drop, ...rest } = g[d.name];
+            return { ...g, [d.name]: rest };
+          });
+        } else {
+          setResults((r) => { const next = { ...r }; delete next[d.name]; return next; });
+          setManualByRun((g) => { const next = { ...g }; delete next[d.name]; return next; });
+          setBatchByDetector((b) => { const next = { ...b }; delete next[d.name]; return next; });
+        }
+      }
+      setTopMessage({
+        kind: 'info',
+        text: `Cleared outputs for ${scopeLabel} on ${songLabel} — ${totalAnn} annotation file${totalAnn === 1 ? '' : 's'} removed.`,
+      });
+    } catch (e) {
+      setTopMessage({ kind: 'error', text: `Bulk clear failed: ${(e as Error).message}` });
+    } finally {
+      setBulkBusy(null);
+    }
+  };
+
+  /** Top-level run: sweep the scoped runnable detector(s) over either the
+   *  selected song or every song, reusing the per-detector run paths. */
+  const handleBulkRun = async (songScope: 'song' | 'allSongs') => {
+    const targets = bulkTargets.filter((d) => d.status === 'ok');
+    if (targets.length === 0) {
+      setTopMessage({ kind: 'error', text: 'No runnable (OK) detectors in scope.' });
+      return;
+    }
+    if (songScope === 'song' && !selectedSlug) {
+      setTopMessage({ kind: 'error', text: 'Select a song first.' });
+      return;
+    }
+    if (songScope === 'allSongs' && songs.length === 0) {
+      setTopMessage({ kind: 'error', text: 'Song manifest is empty — nothing to run on.' });
+      return;
+    }
+    const scopeLabel = bulkScope ? `detector "${bulkScope}"` : `all ${targets.length} runnable detectors`;
+    if (songScope === 'allSongs' && !confirm(
+      `Run ${scopeLabel} across all ${songs.length} song${songs.length === 1 ? '' : 's'}?\n\n` +
+      `That's ${targets.length * songs.length} run${targets.length * songs.length === 1 ? '' : 's'} — this can take a while.`
+    )) return;
+    setBulkBusy('run');
+    try {
+      for (const d of targets) {
+        if (songScope === 'song') await handleRun(d.name);
+        else await handleRunAll(d.name);
+      }
+      setTopMessage({
+        kind: 'info',
+        text: `Finished running ${scopeLabel} on ${songScope === 'song' ? 'the selected song' : `all ${songs.length} songs`}.`,
+      });
+    } finally {
+      setBulkBusy(null);
     }
   };
 
@@ -591,6 +855,17 @@ export function CustomScriptsPage() {
       return;
     }
 
+    // Surfacing flags: re-validate against the live buffer so a pasted-in code
+    // block with both flags off is caught here, not just server-side.
+    if (!((parseBoolAttr(uploadCode, 'is_algorithm') ?? FLAG_DEFAULTS.is_algorithm) ||
+          (parseBoolAttr(uploadCode, 'is_annotation') ?? FLAG_DEFAULTS.is_annotation))) {
+      setTopMessage({
+        kind: 'error',
+        text: 'At least one of is_algorithm / is_annotation must be on — toggle one in Flags before saving.',
+      });
+      return;
+    }
+
     // Refuse a rename-by-edit: the user changed the `name` line while editing
     // an existing file. Tell them to save-as-copy and clean up the old one.
     if (uploadIsEditing && uploadOriginalName && newName !== uploadOriginalName) {
@@ -629,63 +904,203 @@ export function CustomScriptsPage() {
   const okCount = useMemo(() => detectors.filter((d) => d.status === 'ok').length, [detectors]);
 
   return (
-    <div className="min-h-screen bg-[#0a0b0d] text-slate-200 px-6 pb-6 pt-3">
-      <div className="max-w-5xl mx-auto space-y-6">
+    <div className="min-h-screen bg-[#0a0b0d] text-slate-200 px-4 sm:px-6 pb-6 pt-3">
+      <div className="max-w-5xl mx-auto space-y-6 min-w-0">
         <InfoBanner id="custom.v1" title="Playground" accent="amber">
-          Write a Python detector, upload it, and run it on any song. Use <strong>How this works</strong> below for the API.
+          Write a Python detector that finds moments in a song — beats, drops, section
+          boundaries — and see its output on the waveform. <strong>New detector</strong> opens the
+          editor; your code goes in <code>tools/python/custom/</code> and must return a list of
+          timed cues (see <strong>How this works</strong> below for the API and a copy-paste
+          starter). Save it, pick a song from the dropdown, and hit <strong>Run</strong> to
+          execute it on that track — or <strong>Run all</strong> to sweep every song at once.
         </InfoBanner>
         <header className="pb-3 border-b border-white/[0.06]">
-          <h1 className="text-lg font-medium text-slate-100">Playground</h1>
-          <p className="text-[11px] text-slate-500 mt-0.5">
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-medium text-slate-100">Playground</h1>
+            <button
+              onClick={() => setHelpOpen((v) => !v)}
+              aria-label={helpOpen ? 'Hide the on-page guide' : 'Show the on-page guide'}
+              aria-pressed={helpOpen}
+              title="How this works — show / hide the on-page guide"
+              className={`grid place-items-center w-7 h-7 sm:w-5 sm:h-5 rounded-full border text-[12px] sm:text-[11px] font-semibold leading-none transition ${
+                helpOpen
+                  ? 'border-sky-400/60 bg-sky-500/15 text-sky-300'
+                  : 'border-white/15 text-slate-400 hover:border-white/30 hover:text-slate-200'
+              }`}
+            >
+              i
+            </button>
+          </div>
+          <p className="text-[12px] sm:text-[11px] text-slate-500 mt-0.5 break-words">
             {detectors.length} file{detectors.length === 1 ? '' : 's'} in <code>tools/python/custom/</code> · {okCount} runnable
           </p>
         </header>
 
-        <div className="flex items-center justify-between gap-2 bg-[#14171d] border border-white/[0.06] rounded px-3 py-2 text-xs">
-          <button
-            onClick={() => setHelpOpen((v) => !v)}
-            className="px-3 py-1.5 rounded border border-white/10 hover:border-white/20 hover:bg-white/[0.03] transition"
-            title="Show / hide the on-page guide"
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-[#14171d] border border-white/[0.06] rounded px-3 py-2 text-xs">
+          <select
+            className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-2.5 sm:py-1.5 text-base sm:text-xs text-slate-200 w-full sm:w-auto min-w-0 sm:min-w-[12rem]"
+            value={selectedSlug}
+            onChange={(e) => setSelectedSlug(e.target.value)}
+            title={
+              songsError
+                ? `Manifest load failed: ${songsError}`
+                : `Song that the "This song" Run / Clear actions (and per-row Run) act on (${songs.length} available)`
+            }
+            disabled={songsLoading || songs.length === 0}
           >
-            {helpOpen ? 'Hide help' : 'How this works'}
-          </button>
-          <div className="flex items-center gap-2">
-            <select
-              className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-1.5 text-slate-200 min-w-[12rem]"
-              value={selectedSlug}
-              onChange={(e) => setSelectedSlug(e.target.value)}
+            {songsLoading && <option value="">loading songs…</option>}
+            {!songsLoading && songsError && <option value="">manifest error: {songsError}</option>}
+            {!songsLoading && !songsError && songs.length === 0 && (
+              <option value="">no songs in manifest</option>
+            )}
+            {songs.map((s) => (
+              <option key={s.id} value={s.id}>{s.title ?? s.name ?? s.id}</option>
+            ))}
+          </select>
+
+          {/* ── Demucs stems for the selected song ── */}
+          <span className="hidden sm:inline text-slate-700" aria-hidden>·</span>
+          <span className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="text-[11px] sm:text-[10px] uppercase tracking-wider text-slate-500">Stems</span>
+            {!selectedSlug ? (
+              <span className="text-slate-500">—</span>
+            ) : stemManifestLoading ? (
+              <span className="text-slate-500">checking…</span>
+            ) : presentStems.length > 0 ? (
+              <span className="text-emerald-300" title={`On disk: ${presentStems.join(', ')}`}>
+                ✓ {presentStems.length} stem{presentStems.length === 1 ? '' : 's'} ({presentStems.join(', ')})
+              </span>
+            ) : (
+              <span className="text-amber-300" title="No Demucs stems cached for this song yet.">
+                none cached
+              </span>
+            )}
+
+            <button
+              onClick={handleRunStems}
+              disabled={!selectedSlug || !selectedSong?.url || stemsRunning}
+              className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-violet-700/50 bg-violet-900/30 text-violet-200 hover:bg-violet-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
               title={
-                songsError
-                  ? `Manifest load failed: ${songsError}`
-                  : `Song that the Run button executes the detector on (${songs.length} available)`
+                // The capability probe can be slow / report a false negative,
+                // so (like the inspector) we still let the user click and let
+                // the backend be the source of truth — surfacing the hint only
+                // as advice when the probe says Demucs is unreachable.
+                !capabilities.demucs
+                  ? `Demucs may be unavailable — ${GPU_TOOLS_UNAVAILABLE_HINT}`
+                  : presentStems.length > 0
+                    ? 'Re-run Demucs (overwrites the cached stems for this song).'
+                    : 'Run Demucs stem separation for this song.'
               }
-              disabled={songsLoading || songs.length === 0}
             >
-              {songsLoading && <option value="">loading songs…</option>}
-              {!songsLoading && songsError && <option value="">manifest error: {songsError}</option>}
-              {!songsLoading && !songsError && songs.length === 0 && (
-                <option value="">no songs in manifest</option>
+              {stemsRunning
+                ? `⏳ Stemming${demucsJob?.progressPct != null ? ` ${demucsJob.progressPct}%` : '…'}`
+                : presentStems.length > 0 ? '↻ Re-run stems' : '▶ Run stems'}
+            </button>
+          </span>
+
+          {detectors.length > 0 && (
+            <>
+              <span className="hidden sm:inline text-slate-700" aria-hidden>·</span>
+              {/* Phone: Bulk scope / Run / Clear outputs share one label column
+                  and their buttons split the rest evenly, so the three rows line
+                  up instead of each wrapping to its own ragged width. */}
+              <label className="grid grid-cols-[6.5rem_minmax(0,1fr)] w-full sm:w-auto sm:flex items-center gap-1.5 text-slate-400 min-w-0">
+                <span className="text-[11px] sm:text-[10px] uppercase tracking-wider text-slate-500 shrink-0">Bulk scope</span>
+                <select
+                  className="bg-[#0a0b0d] border border-white/10 rounded px-2 py-2 sm:py-1 text-base sm:text-xs text-slate-200 min-w-0"
+                  value={bulkScope}
+                  onChange={(e) => setBulkScope(e.target.value)}
+                  disabled={!!bulkBusy}
+                  title="Limit the Run / Clear actions below to one detector, or apply them to every detector."
+                >
+                  <option value="">All detectors</option>
+                  {groupByDetectorOrigin(detectors, (d) => d.is_default).map((group) => {
+                    const options = group.items.map((d) => (
+                      <option key={d.name} value={d.name}>{d.name}</option>
+                    ));
+                    return group.title
+                      ? <optgroup key={group.origin} label={group.title}>{options}</optgroup>
+                      : options;
+                  })}
+                </select>
+              </label>
+
+              <span className="grid grid-cols-[6.5rem_1fr_1fr] w-full sm:w-auto sm:flex sm:flex-wrap items-center gap-1.5">
+                <span className="text-slate-500">Run:</span>
+                <button
+                  onClick={() => handleBulkRun('song')}
+                  disabled={!!bulkBusy || !selectedSlug}
+                  className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-sky-700/50 bg-sky-900/30 text-sky-200 hover:bg-sky-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Run the scoped detector(s) on the selected song."
+                >
+                  This song
+                </button>
+                <button
+                  onClick={() => handleBulkRun('allSongs')}
+                  disabled={!!bulkBusy || songs.length === 0}
+                  className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-sky-700/50 text-sky-200 hover:bg-sky-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Run the scoped detector(s) on every song in the manifest."
+                >
+                  All songs
+                </button>
+              </span>
+
+              <span className="grid grid-cols-[6.5rem_1fr_1fr] w-full sm:w-auto sm:flex sm:flex-wrap items-center gap-1.5">
+                <span className="text-slate-500">Clear outputs:</span>
+                <button
+                  onClick={() => handleBulkClear('song')}
+                  disabled={!!bulkBusy || !selectedSlug}
+                  className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-amber-700/50 text-amber-200 hover:bg-amber-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Wipe the scoped detector(s) outputs for the selected song only. Keeps the .py source. Cannot be undone."
+                >
+                  This song
+                </button>
+                <button
+                  onClick={() => handleBulkClear('all')}
+                  disabled={!!bulkBusy}
+                  className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-rose-700/50 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Wipe the scoped detector(s) outputs for every song. Keeps the .py source. Cannot be undone."
+                >
+                  All songs
+                </button>
+              </span>
+
+              {bulkBusy && (
+                <span className="text-slate-500">{bulkBusy === 'run' ? 'Running…' : 'Clearing…'}</span>
               )}
-              {songs.map((s) => (
-                <option key={s.id} value={s.id}>{s.title ?? s.name ?? s.id}</option>
-              ))}
-            </select>
+            </>
+          )}
+
+          <div className="grid grid-cols-2 w-full sm:w-auto sm:flex items-center gap-1.5 sm:gap-2 sm:ml-auto">
             <button
               onClick={handleReload}
-              className="px-3 py-1.5 rounded border border-white/10 hover:border-white/20 hover:bg-white/[0.03] transition"
+              className="px-3 py-2.5 sm:py-1.5 rounded border border-white/10 hover:border-white/20 hover:bg-white/[0.03] transition"
               title="Re-scan tools/python/custom/ — pick up file changes without restarting the server"
             >
               Reload
             </button>
             <button
               onClick={() => uploadOpen ? closeEditor() : openEditor()}
-              className="px-3 py-1.5 rounded border border-emerald-700/50 bg-emerald-900/30 text-emerald-200 hover:bg-emerald-900/50 transition"
+              className="px-3 py-2.5 sm:py-1.5 rounded border border-emerald-700/50 bg-emerald-900/30 text-emerald-200 hover:bg-emerald-900/50 transition"
               title="Open the code editor with a starter template, then save it as tools/python/custom/<name>.py"
             >
               {uploadOpen ? 'Close editor' : 'New detector'}
             </button>
           </div>
         </div>
+
+        {/* Demucs stem-separation report — live terminal log + per-stem progress
+            for the selected song, modelled on the algorithm-run log panel. */}
+        {demucsJob && demucsJob.slug === selectedSlug && (
+          <StemsRunLog
+            job={demucsJob}
+            elapsedSec={stemsElapsedSec}
+            presentStems={presentStems}
+            onCancel={cancelStems}
+            onKill={killStems}
+            onDismiss={dismissStemsError}
+          />
+        )}
 
         {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
@@ -707,21 +1122,21 @@ export function CustomScriptsPage() {
           const nameChangedMidEdit =
             uploadIsEditing && !!uploadOriginalName && !!parsedName && parsedName !== uploadOriginalName;
           return (
-          <div ref={editorRef} className="bg-[#14171d] border border-white/[0.08] rounded p-4 space-y-3">
-            <div className="flex items-baseline justify-between">
-              <div>
+          <div ref={editorRef} className="bg-[#14171d] border border-white/[0.08] rounded p-3 sm:p-4 space-y-3 min-w-0">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <div className="min-w-0">
                 {/* Subtitle: human-readable label parsed from `label = "..."` */}
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">
                   {parsedLabel ?? <span className="italic text-slate-600">no label — add `label = "..."` to the class</span>}
                 </div>
                 {/* Title: filename derived from `name = "..."` */}
-                <h2 className="text-base text-slate-100 font-mono">
+                <h2 className="text-base text-slate-100 font-mono break-all">
                   {parsedName
                     ? <>{parsedName}<span className="text-slate-500">.py</span></>
                     : <span className="italic text-slate-500 text-sm">no name — add `name = "..."` to the class</span>}
                 </h2>
               </div>
-              <span className="text-[10px] text-slate-500 text-right">
+              <span className="text-[11px] sm:text-[10px] text-slate-500 text-left sm:text-right">
                 {uploadIsEditing
                   ? <>Editing <code className="text-slate-300">{uploadOriginalName}.py</code></>
                   : 'New detector — will be written to tools/python/custom/'}
@@ -741,9 +1156,56 @@ export function CustomScriptsPage() {
               </div>
             )}
 
-            <div className="flex gap-3">
-              <label className="text-[11px] uppercase tracking-wider text-slate-500 w-14 mt-2">Code</label>
-              <div className="flex-1 border border-white/10 rounded overflow-hidden">
+            {/* ── Must-have flags ──────────────────────────────────────────
+                Dedicated controls for the flags the loader reads from the
+                source. Two-way synced with the code buffer: pasting new code
+                updates these instantly (they're derived from `uploadCode`), and
+                flipping a control rewrites the matching assignment line. */}
+            <div className="flex flex-col sm:flex-row gap-1.5 sm:gap-3">
+              <label className="text-[11px] uppercase tracking-wider text-slate-500 sm:w-14 sm:mt-1.5">Flags</label>
+              <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-5 gap-y-2">
+                <FlagSwitch
+                  name="is_algorithm"
+                  tip="Show as a read-only row in the inspector's algorithm picker."
+                  value={effAlgorithm}
+                  defaulted={parsedAlgorithm == null}
+                  onChange={(v) => setUploadCode((c) => setBoolFlagInCode(c, 'is_algorithm', v))}
+                />
+                <FlagSwitch
+                  name="is_annotation"
+                  tip="Surface as an editable annotation track in the inspector with ✓/✗/@ review cards."
+                  value={effAnnotation}
+                  defaulted={parsedAnnotation == null}
+                  onChange={(v) => setUploadCode((c) => setBoolFlagInCode(c, 'is_annotation', v))}
+                />
+                <label
+                  className="inline-flex items-center gap-1.5 text-[11px]"
+                  title="What kind of timed output detect() returns."
+                >
+                  <code className="text-slate-400">output_kind</code>
+                  <select
+                    value={effOutputKind}
+                    onChange={(e) => setUploadCode((c) => setStrFlagInCode(c, 'output_kind', e.target.value))}
+                    className="bg-[#0a0b0d] border border-white/10 rounded px-1.5 py-0.5 text-slate-200"
+                  >
+                    {OUTPUT_KINDS.map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                  {parsedOutputKind == null && <span className="text-slate-600">(default)</span>}
+                </label>
+              </div>
+            </div>
+            {!flagsValid && (
+              <div className="text-[11px] px-2 py-1.5 rounded border border-rose-700/40 bg-rose-900/20 text-rose-200">
+                At least one of <code>is_algorithm</code> / <code>is_annotation</code> must be on — otherwise the
+                detector won't surface anywhere in the inspector, and Save will be rejected.
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-1.5 sm:gap-3">
+              <label className="text-[11px] uppercase tracking-wider text-slate-500 sm:w-14 sm:mt-2">Code</label>
+              <div className="flex-1 min-w-0 border border-white/10 rounded overflow-hidden">
                 <CodeMirror
                   value={uploadCode}
                   onChange={(v) => setUploadCode(v)}
@@ -765,16 +1227,16 @@ export function CustomScriptsPage() {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button
                 onClick={closeEditor}
-                className="px-3 py-1.5 rounded border border-white/10 text-xs hover:bg-white/[0.03]"
+                className="px-3 py-2.5 sm:py-1.5 rounded border border-white/10 text-xs hover:bg-white/[0.03]"
               >
                 Cancel
               </button>
               <button
                 onClick={handleUpload}
-                className="px-3 py-1.5 rounded border border-emerald-700/50 bg-emerald-900/30 text-emerald-200 text-xs hover:bg-emerald-900/50"
+                className="px-3 py-2.5 sm:py-1.5 rounded border border-emerald-700/50 bg-emerald-900/30 text-emerald-200 text-xs hover:bg-emerald-900/50"
                 title="Writes the file, re-scans the registry, and reports validation errors below the editor."
               >
                 Save &amp; validate
@@ -811,7 +1273,7 @@ export function CustomScriptsPage() {
         })()}
 
         {detectors.length === 0 ? (
-          <div className="text-xs text-slate-400 py-8 px-6 border border-dashed border-white/[0.08] rounded space-y-3">
+          <div className="text-xs text-slate-400 py-8 px-4 sm:px-6 border border-dashed border-white/[0.08] rounded space-y-3">
             <div className="text-slate-300 font-medium">No detectors yet — pick one of these to start:</div>
             <ol className="list-decimal pl-5 space-y-1.5 text-slate-400">
               <li>
@@ -835,145 +1297,158 @@ export function CustomScriptsPage() {
             </div>
           </div>
         ) : (
-          <div className="space-y-2">
-            {detectors.map((d) => {
-              const last = results[d.name]?.[selectedSlug];
-              const lastManual = manualByRun[d.name]?.[selectedSlug];
-              const selectedSong = songs.find((s) => s.id === selectedSlug);
-              const selectedSongTitle = selectedSong?.title ?? selectedSong?.name ?? selectedSlug;
-              return (
-                <div
-                  key={d.file}
-                  className="bg-[#14171d] border border-white/[0.06] rounded p-3 space-y-2"
-                >
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider ${STATUS_BADGE[d.status].className}`}
+          <div className="space-y-4">
+            {groupByDetectorOrigin(detectors, (d) => d.is_default).map((group) => (
+              <section key={group.origin} className="space-y-2">
+                {group.title && (
+                  <h2 className="text-[11px] uppercase tracking-wider text-slate-500 px-0.5">{group.title}</h2>
+                )}
+                {group.items.map((d) => {
+                  const last = results[d.name]?.[selectedSlug];
+                  const lastManual = manualByRun[d.name]?.[selectedSlug];
+                  const selectedSong = songs.find((s) => s.id === selectedSlug);
+                  const selectedSongTitle = selectedSong?.title ?? selectedSong?.name ?? selectedSlug;
+                  return (
+                    <div
+                      key={d.file}
+                      className="bg-[#14171d] border border-white/[0.06] rounded p-3 space-y-2 min-w-0"
                     >
-                      {STATUS_BADGE[d.status].label}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <code className="text-sm text-slate-100">{d.name}</code>
-                        {d.label && <span className="text-xs text-slate-400">— {d.label}</span>}
-                      </div>
-                      <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span>{d.output_kind}</span>
-                        <span className="text-slate-700">·</span>
-                        <FlagToggle
-                          label="algorithm"
-                          tip="Show as a read-only row in the inspector's algorithm picker."
-                          disabled={d.status !== 'ok' || busy[d.name] === 'flag'}
-                          checked={d.is_algorithm}
-                          onChange={(next) => handleFlagChange(d, { is_algorithm: next, is_annotation: d.is_annotation })}
-                        />
-                        <FlagToggle
-                          label="annotation"
-                          tip="Surface as an editable annotation track in the inspector with ✓/✗/@ review cards."
-                          disabled={d.status !== 'ok' || busy[d.name] === 'flag'}
-                          checked={d.is_annotation}
-                          onChange={(next) => handleFlagChange(d, { is_algorithm: d.is_algorithm, is_annotation: next })}
-                        />
-                        <span className="text-slate-700">·</span>
-                        <span>v{d.version || '0.1'}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[11px]">
-                      <button
-                        onClick={() => handleEdit(d)}
-                        className="px-2 py-1 rounded border border-white/10 hover:bg-white/[0.04]"
-                        title="Open the source in the editor — fix any errors and Save & validate."
-                      >
-                        Edit
-                      </button>
-                      <button
-                        disabled={d.status !== 'ok' || !selectedSlug || busy[d.name] === 'run' || batchByDetector[d.name]?.running}
-                        onClick={() => handleRun(d.name)}
-                        className="px-2 py-1 rounded border border-sky-700/50 bg-sky-900/30 text-sky-200 hover:bg-sky-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
-                        title="Run on the song chosen in the top dropdown."
-                      >
-                        {busy[d.name] === 'run' ? 'Running…' : 'Run'}
-                      </button>
-                      {batchByDetector[d.name]?.running ? (
-                        <button
-                          onClick={() => handleCancelBatch(d.name)}
-                          disabled={batchByDetector[d.name]?.cancelRequested}
-                          className="px-2 py-1 rounded border border-amber-700/50 bg-amber-900/30 text-amber-200 hover:bg-amber-900/50 disabled:opacity-40"
-                          title="Stop after the current song finishes."
+                      {/* On a phone the action buttons drop to their own full-width
+                          row under the name; from sm up they sit on the right as
+                          before. */}
+                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2">
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider ${STATUS_BADGE[d.status].className}`}
                         >
-                          {batchByDetector[d.name]?.cancelRequested ? 'Stopping…' : `Stop (${batchByDetector[d.name]?.current}/${batchByDetector[d.name]?.total})`}
-                        </button>
-                      ) : (
-                        <button
-                          disabled={d.status !== 'ok' || songs.length === 0 || busy[d.name] === 'run'}
-                          onClick={() => handleRunAll(d.name)}
-                          className="px-2 py-1 rounded border border-sky-700/50 text-sky-200 hover:bg-sky-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
-                          title={`Re-run on every song in the manifest (${songs.length}). Caches results and reports per-song F1 vs manual.`}
-                        >
-                          Run all
-                        </button>
-                      )}
-                      <button
-                        disabled={busy[d.name] === 'clear' || batchByDetector[d.name]?.running}
-                        onClick={() => handleClearOutputs(d.name)}
-                        className="px-2 py-1 rounded border border-amber-700/50 text-amber-200 hover:bg-amber-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
-                        title="Wipe this detector's algorithm cache and your annotation files for every song. Keeps the .py source. Cannot be undone."
-                      >
-                        {busy[d.name] === 'clear' ? 'Clearing…' : 'Clear outputs'}
-                      </button>
-                      <button
-                        disabled={busy[d.name] === 'delete'}
-                        onClick={() => handleDelete(d.name)}
-                        className="px-2 py-1 rounded border border-rose-700/50 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-
-                  {(() => {
-                    if (d.errors.length === 0) return null;
-                    const missing = findMissingModule(d.errors);
-                    return (
-                      <div className="space-y-2">
-                        {missing && <MissingModulePanel hint={missing} onReload={handleReload} />}
-                        <div className="text-[11px] bg-rose-950/30 border border-rose-800/40 rounded p-2 space-y-1 font-mono">
-                          {d.errors.map((e, i) => (
-                            <div key={i} className="text-rose-200">{fmtError(e)}</div>
-                          ))}
+                          {STATUS_BADGE[d.status].label}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap sm:flex-nowrap items-baseline sm:items-center gap-x-2">
+                            <code className="text-sm text-slate-100 break-all">{d.name}</code>
+                            {d.label && <span className="text-xs text-slate-400">— {d.label}</span>}
+                          </div>
+                          <div className="text-[12px] sm:text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span>{d.output_kind}</span>
+                            <span className="text-slate-700">·</span>
+                            <FlagToggle
+                              label="algorithm"
+                              tip="Show as a read-only row in the inspector's algorithm picker."
+                              disabled={d.status !== 'ok' || busy[d.name] === 'flag'}
+                              checked={d.is_algorithm}
+                              onChange={(next) => handleFlagChange(d, { is_algorithm: next, is_annotation: d.is_annotation })}
+                            />
+                            <FlagToggle
+                              label="annotation"
+                              tip="Surface as an editable annotation track in the inspector with ✓/✗/@ review cards."
+                              disabled={d.status !== 'ok' || busy[d.name] === 'flag'}
+                              checked={d.is_annotation}
+                              onChange={(next) => handleFlagChange(d, { is_algorithm: d.is_algorithm, is_annotation: next })}
+                            />
+                            <span className="text-slate-700">·</span>
+                            <span>v{d.version || '0.1'}</span>
+                          </div>
+                        </div>
+                        {/* Phone: a 3-column grid — Edit · Run · Run all, then Clear
+                            outputs (two columns) · Delete — so every card's buttons
+                            sit on the same lines at the same widths. */}
+                        <div className="w-full sm:w-auto grid grid-cols-3 sm:flex sm:flex-nowrap items-center gap-1.5 text-[12px] sm:text-[11px]">
+                          <button
+                            onClick={() => handleEdit(d)}
+                            className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-white/10 hover:bg-white/[0.04]"
+                            title="Open the source in the editor — fix any errors and Save & validate."
+                          >
+                            Edit
+                          </button>
+                          <button
+                            disabled={d.status !== 'ok' || !selectedSlug || busy[d.name] === 'run' || batchByDetector[d.name]?.running}
+                            onClick={() => handleRun(d.name)}
+                            className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-sky-700/50 bg-sky-900/30 text-sky-200 hover:bg-sky-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Run on the song chosen in the top dropdown."
+                          >
+                            {busy[d.name] === 'run' ? 'Running…' : 'Run'}
+                          </button>
+                          {batchByDetector[d.name]?.running ? (
+                            <button
+                              onClick={() => handleCancelBatch(d.name)}
+                              disabled={batchByDetector[d.name]?.cancelRequested}
+                              className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-amber-700/50 bg-amber-900/30 text-amber-200 hover:bg-amber-900/50 disabled:opacity-40"
+                              title="Stop after the current song finishes."
+                            >
+                              {batchByDetector[d.name]?.cancelRequested ? 'Stopping…' : `Stop (${batchByDetector[d.name]?.current}/${batchByDetector[d.name]?.total})`}
+                            </button>
+                          ) : (
+                            <button
+                              disabled={d.status !== 'ok' || songs.length === 0 || busy[d.name] === 'run'}
+                              onClick={() => handleRunAll(d.name)}
+                              className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-sky-700/50 text-sky-200 hover:bg-sky-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={`Re-run on every song in the manifest (${songs.length}). Caches results and reports per-song F1 vs manual.`}
+                            >
+                              Run all
+                            </button>
+                          )}
+                          <button
+                            disabled={busy[d.name] === 'clear' || batchByDetector[d.name]?.running}
+                            onClick={() => handleClearOutputs(d.name)}
+                            className="col-span-2 px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-amber-700/50 text-amber-200 hover:bg-amber-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Wipe this detector's algorithm cache and your annotation files for every song. Keeps the .py source. Cannot be undone."
+                          >
+                            {busy[d.name] === 'clear' ? 'Clearing…' : 'Clear outputs'}
+                          </button>
+                          <button
+                            disabled={busy[d.name] === 'delete'}
+                            onClick={() => handleDelete(d.name)}
+                            className="px-3 py-2.5 sm:px-2 sm:py-1 rounded border border-rose-700/50 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40"
+                          >
+                            Delete
+                          </button>
                         </div>
                       </div>
-                    );
-                  })()}
 
-                  {last && 'error' in last && (
-                    <div className="text-[11px] bg-rose-950/30 border border-rose-800/40 rounded p-2 text-rose-200 font-mono space-y-1">
-                      <div className="text-rose-300 text-[10px] uppercase tracking-wider">
-                        {selectedSongTitle}
-                      </div>
-                      <div>run failed: {last.error}</div>
+                      {(() => {
+                        if (d.errors.length === 0) return null;
+                        const missing = findMissingModule(d.errors);
+                        return (
+                          <div className="space-y-2">
+                            {missing && <MissingModulePanel hint={missing} onReload={handleReload} />}
+                            <div className="text-[11px] bg-rose-950/30 border border-rose-800/40 rounded p-2 space-y-1 font-mono">
+                              {d.errors.map((e, i) => (
+                                <div key={i} className="text-rose-200">{fmtError(e)}</div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {last && 'error' in last && (
+                        <div className="text-[11px] bg-rose-950/30 border border-rose-800/40 rounded p-2 text-rose-200 font-mono space-y-1">
+                          <div className="text-rose-300 text-[10px] uppercase tracking-wider">
+                            {selectedSongTitle}
+                          </div>
+                          <div>run failed: {last.error}</div>
+                        </div>
+                      )}
+
+                      {last && !('error' in last) && (
+                        <RunSummary
+                          envelope={last}
+                          manual={lastManual}
+                          songTitle={selectedSongTitle}
+                          onReload={handleReload}
+                        />
+                      )}
+
+                      {batchByDetector[d.name] && (batchByDetector[d.name].rows.length > 0 || batchByDetector[d.name].running) && (
+                        <BatchSummary
+                          state={batchByDetector[d.name]}
+                          activeSlug={selectedSlug}
+                          onSelectRow={(row) => handleSelectBatchRow(d.name, row)}
+                        />
+                      )}
                     </div>
-                  )}
-
-                  {last && !('error' in last) && (
-                    <RunSummary
-                      envelope={last}
-                      manual={lastManual}
-                      songTitle={selectedSongTitle}
-                      onReload={handleReload}
-                    />
-                  )}
-
-                  {batchByDetector[d.name] && (batchByDetector[d.name].rows.length > 0 || batchByDetector[d.name].running) && (
-                    <BatchSummary
-                      state={batchByDetector[d.name]}
-                      activeSlug={selectedSlug}
-                      onSelectRow={(row) => handleSelectBatchRow(d.name, row)}
-                    />
-                  )}
-                </div>
-              );
-            })}
+                  );
+                })}
+              </section>
+            ))}
           </div>
         )}
       </div>
@@ -1085,11 +1560,11 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
             Claude Code to scaffold a detector.
           </li>
           <li>
-            <code className="text-slate-100">tools/python/custom/template.py</code> — minimal
+            <code className="text-slate-100">tools/python/custom-default/template.py</code> — minimal
             starter to copy. Also registered live as the <code className="text-slate-100">template</code> detector.
           </li>
           <li>
-            <code className="text-slate-100">tools/python/custom/example_energy.py</code> —
+            <code className="text-slate-100">tools/python/custom-default/example_energy.py</code> —
             working RMS-jump boundary detector. Registered live as <code className="text-slate-100">example_energy</code>.
           </li>
         </ul>
@@ -1122,7 +1597,7 @@ interface BoundaryComparison {
  *  Both sides honour `candidates` — any candidate time within tolerance counts. */
 function compareWithManual(
   items: CustomBoundaryItem[],
-  manual: ManualSection[],
+  manual: SectionBlock[],
   toleranceMs: number = MANUAL_TOLERANCE_MS,
 ): BoundaryComparison {
   const hits = new Set<number>();
@@ -1182,7 +1657,7 @@ function ComparisonTimeline({
   comparison,
 }: {
   envelope: CustomResultEnvelope;
-  manual: ManualAnnotation;
+  manual: BoundaryItem[];
   comparison: BoundaryComparison;
 }) {
   const duration = envelope.duration_ms;
@@ -1214,7 +1689,7 @@ function ComparisonTimeline({
           />
         ))}
         {/* manual sections — top half */}
-        {manual.sections.map((s, j) => {
+        {manual.map((s, j) => {
           const matched = matchedManualSet.has(j);
           const matchedI = manualToMatched.get(j);
           return (
@@ -1264,7 +1739,7 @@ function RunSummary({
 }: {
   envelope: CustomResultEnvelope;
   /** undefined = not loaded yet, null = song has no manual annotation. */
-  manual: ManualAnnotation | null | undefined;
+  manual: BoundaryItem[] | undefined;
   /** Human-readable song name. Shown in the header so the user can tell which
    *  song this output belongs to after they've switched the dropdown. */
   songTitle: string;
@@ -1299,8 +1774,8 @@ function RunSummary({
   }
   const previewItems = envelope.items.slice(0, 5);
   const isBoundary = envelope.output_kind === 'boundary';
-  const comparison = isBoundary && manual && manual.sections.length > 0
-    ? compareWithManual(envelope.items as CustomBoundaryItem[], manual.sections)
+  const comparison = isBoundary && manual && manual.length > 0
+    ? compareWithManual(envelope.items as CustomBoundaryItem[], manual)
     : null;
   return (
     <div className="text-[11px] space-y-1">
@@ -1320,7 +1795,7 @@ function RunSummary({
             <span>·</span>
             <span
               className="text-slate-300"
-              title={`vs manual (${manual!.sections.length} sections, ±${MANUAL_TOLERANCE_MS}ms tolerance). Each manual section matches at most one detection; ✓ on a row = matched, ◯ = false positive.`}
+              title={`vs manual (${manual!.length} sections, ±${MANUAL_TOLERANCE_MS}ms tolerance). Each manual section matches at most one detection; ✓ on a row = matched, ◯ = false positive.`}
             >
               vs manual:{' '}
               <span className="text-slate-100">F1 {comparison.f1.toFixed(2)}</span>
@@ -1339,7 +1814,7 @@ function RunSummary({
             <span className="text-slate-500 italic">no manual annotation for "{envelope.slug}"</span>
           </>
         )}
-        {isBoundary && manual && manual.sections.length === 0 && (
+        {isBoundary && manual && manual.length === 0 && (
           <>
             <span>·</span>
             <span className="text-slate-500 italic">manual annotation has 0 sections</span>
@@ -1367,7 +1842,7 @@ function RunSummary({
           </summary>
           <pre className="font-mono text-[10px] mt-1 max-h-40 overflow-auto bg-black/30 p-2 rounded">
             {comparison.missedManual.map((j) => {
-              const s = manual!.sections[j];
+              const s = manual![j];
               const imp = s.importance ? ` · ${s.importance}` : '';
               return `${j.toString().padStart(2)}. ${s.time.toFixed(3)}s — ${s.label}${imp}`;
             }).join('\n')}
@@ -1404,10 +1879,10 @@ function scoreBatchRow(row: BatchRow): BatchRowStats {
   }
   const env = row.envelope;
   const items = env.items.length;
-  if (env.fatal || env.output_kind !== 'boundary' || !row.manual || row.manual.sections.length === 0) {
+  if (env.fatal || env.output_kind !== 'boundary' || !row.manual || row.manual.length === 0) {
     return { items, hits: null, extra: null, missed: null, precision: null, recall: null, f1: null };
   }
-  const cmp = compareWithManual(env.items as CustomBoundaryItem[], row.manual.sections);
+  const cmp = compareWithManual(env.items as CustomBoundaryItem[], row.manual);
   return {
     items,
     hits:      cmp.tp,
@@ -1454,7 +1929,7 @@ function BatchSummary({
   const pct = state.total > 0 ? Math.round((state.current / state.total) * 100) : 0;
   const errorCount = state.rows.filter((r) => 'error' in r.envelope || (!('error' in r.envelope) && r.envelope.fatal)).length;
   const noManualCount = state.rows.filter((r) =>
-    !('error' in r.envelope) && !r.envelope.fatal && (!r.manual || r.manual.sections.length === 0),
+    !('error' in r.envelope) && !r.envelope.fatal && (!r.manual || r.manual.length === 0),
   ).length;
 
   return (

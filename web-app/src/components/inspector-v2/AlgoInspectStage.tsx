@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ToolResultData, AllIn1Result } from '../../tools/runTool';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { ToolResultData } from '../../tools/runTool';
 import { useMirEvalSingle } from '../../services/mirEvalClient';
 import { evaluateCustom } from '../../utils/evaluation';
-import type { ManualSection } from '../../types/manualAnnotation';
+import { clusterPoints, computeAllClusterTimes } from '../../utils/boundaryClustering';
+import type { SectionBlock } from '../../types/sectionBlock';
+import type { AutoGuessCentroidMethod } from '../../types/autoGuess';
+import { sendConsensusConfig } from '../../state/consensusHandoff';
+import { useConsensusHandoff } from '../../hooks/useConsensusHandoff';
 import { CustomEvalControls, DEFAULT_CUSTOM_EVAL_SETTINGS, type CustomEvalSettings } from './CustomEvalControls';
 import { EvalReferenceDropdown, type EvalReferenceMode } from './EvalReferenceDropdown';
 import { ConsensusClusterControls } from './ConsensusClusterControls';
-import { PreviewWindow, type PreviewRegion } from './PreviewWindow';
+import { ConsensusPreviewLane, type PreviewCluster } from './ConsensusPreviewLane';
+import { sectionEnd } from './sectionConstants';
+import { InfoDot } from './InfoDot';
 
 type ReferenceMode = EvalReferenceMode;
 
@@ -21,12 +27,18 @@ export interface ToolState {
 export interface AlgorithmRow {
   id: string;
   label: string;
-  sections: { time: number; endTime: number; label: string; type: string; color?: string }[];
+  /** `raw` carries the detector's original per-section JSON (every field it
+   *  emitted, before the lossy map onto time/endTime/label/type) so the algo
+   *  Inspect card can surface it as "Raw model output" — parity with the
+   *  curator cards. Absent → the card falls back to the mapped section. */
+  sections: { time: number; endTime: number; label: string; type: string; color?: string; raw?: unknown }[];
+  /** LOOP-family only: which beat grid the detector aligned to
+   *  ("song-info" | "allin1" | "librosa"). Drives a small lane badge so the
+   *  annotator can see whether loops sit on the curator-aligned grid. */
+  gridSource?: string | null;
 }
 
 // ─── Tool-state → row builder constants ───────────────────────────────────────
-
-const ALLIN1_FOLD_IDS = new Set([0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`));
 
 const ALGO_LABELS: Record<string, string> = {
   'msaf-olda':                 'OLDA',
@@ -45,13 +57,15 @@ const ALGO_LABELS: Record<string, string> = {
   'silero-vad':                'Silero-VAD',
   'jdcnet-voicing':            'JDCNet (voicing)',
   'panns-cnn14':               'PANNs CNN14',
-  'chroma-autocorr':           'Chroma loops',
   'basic-pitch':               'basic-pitch',
   'librosa-key':               'librosa key',
   'autochord-chords':          'autochord',
   'librosa-onsets':            'librosa onsets',
+  'drum-transients':           'drum transients',
   'hpss-percussive':           'HPSS percussive',
   'whisper-base':              'Whisper-base lyrics',
+  'ctc-forced-aligner':        'CTC forced aligner (lyrics)',
+  'locomotif':                 'LoCoMotif',
 };
 
 /** SPAN-family algo IDs. Exported so consumers (the run-options sidebar in
@@ -60,17 +74,13 @@ const ALGO_LABELS: Record<string, string> = {
 export const SPAN_ALGO_IDS = ['silero-vad', 'jdcnet-voicing', 'panns-cnn14'] as const;
 export type SpanAlgoId = typeof SPAN_ALGO_IDS[number];
 
-/** LOOP-family algo IDs (gated by `experimentalLoopFamily`). */
-export const LOOP_ALGO_IDS = ['chroma-autocorr'] as const;
-export type LoopAlgoId = typeof LOOP_ALGO_IDS[number];
-
 /** CUE-family note-onset detector IDs (gated by `experimentalCueExtras`). */
 export const PITCH_ALGO_IDS = ['basic-pitch'] as const;
 export type PitchAlgoId = typeof PITCH_ALGO_IDS[number];
 
-/** CUE-family extras (librosa key, autochord chords, librosa onsets) — gated by
- *  `experimentalCueExtras`. */
-export const CUE_EXTRAS_ALGO_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets'] as const;
+/** CUE-family extras (librosa key, autochord chords, librosa onsets, drum
+ *  transients) — gated by `experimentalCueExtras`. */
+export const CUE_EXTRAS_ALGO_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients'] as const;
 export type CueExtrasAlgoId = typeof CUE_EXTRAS_ALGO_IDS[number];
 
 /** Percussive SPAN-family detector (HPSS) — gated by `experimentalSpanFamily`. */
@@ -78,8 +88,12 @@ export const PERCUSSIVE_ALGO_IDS = ['hpss-percussive'] as const;
 export type PercussiveAlgoId = typeof PERCUSSIVE_ALGO_IDS[number];
 
 /** LYRICS-family detector IDs — gated by `experimentalLyricsFamily`. */
-export const LYRICS_ALGO_IDS = ['whisper-base'] as const;
+export const LYRICS_ALGO_IDS = ['whisper-base', 'ctc-forced-aligner'] as const;
 export type LyricsAlgoId = typeof LYRICS_ALGO_IDS[number];
+
+/** PATTERN-family detector IDs — gated by `experimentalPatternFamily`. */
+export const PATTERN_ALGO_IDS = ['locomotif'] as const;
+export type PatternAlgoId = typeof PATTERN_ALGO_IDS[number];
 
 const ALGO_ORDER = [
   'band-gradient',
@@ -88,55 +102,60 @@ const ALGO_ORDER = [
   'allin1',
   ...[0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`),
   ...SPAN_ALGO_IDS,
-  ...LOOP_ALGO_IDS,
   ...PITCH_ALGO_IDS,
   ...CUE_EXTRAS_ALGO_IDS,
   ...PERCUSSIVE_ALGO_IDS,
   ...LYRICS_ALGO_IDS,
+  ...PATTERN_ALGO_IDS,
 ];
 
+// The six Demucs stems, in the order per-stem rows stack under their base row.
+const STEM_ROW_ORDER = ['vocals', 'drums', 'bass', 'other', 'guitar', 'piano'] as const;
+
 function algoLabel(id: string): string {
+  // Composite per-stem id "<algo>__<stem>" → "<base label> · <stem>".
+  const i = id.indexOf('__');
+  if (i !== -1) return `${algoLabel(id.slice(0, i))} · ${id.slice(i + 2)}`;
   return ALGO_LABELS[id] ?? id.replace('allin1-', 'allin1 ');
 }
 
-// ─── Section colour palette ───────────────────────────────────────────────────
-
-const SECTION_COLORS: Record<string, string> = {
-  intro: '#a78bfa', bridge: '#fb7185', buildup: '#fde047',
-  drop: '#4ade80', breakdown: '#e879f9', outro: '#64748b',
-  silence: '#334155', section: '#64748b', default: '#94a3b8',
-  // hit/miss tints used by the Consensus row to show evaluation status
-  hit: '#22c55e', miss: '#ef4444',
-};
-
-function sectionBg(type: string) { return SECTION_COLORS[type] ?? SECTION_COLORS.default; }
-
-// Hit/miss marker palette (used for tick overlays on the reference row)
-const HIT_COLOR = '#22c55e';
-const MISS_COLOR = '#ef4444';
+/** Example detectors ship as templates (tools/python/custom-default/example_*.py) and
+ *  register as `custom:example_…` rows. They're opt-in in the consensus picker:
+ *  excluded from the default selection and never auto-added by the row-sync
+ *  effect, so they only join the consensus when the user checks them on in the
+ *  Settings popover. */
+const isExampleAlgoId = (id: string) => id.startsWith('custom:example_');
 
 // ─── Build annotation rows from toolStates ────────────────────────────────────
 
 export function buildAnnotationRows(toolStates: Record<string, ToolState>): AlgorithmRow[] {
-  return ALGO_ORDER.flatMap((id) => {
+  // Walk the canonical order, and right after each base detector emit any
+  // per-stem variants ("<base>__<stem>") that have a cached result — so a
+  // detector's stem rows group directly beneath its full-mix row.
+  const ids: string[] = [];
+  for (const base of ALGO_ORDER) {
+    ids.push(base);
+    for (const stem of STEM_ROW_ORDER) {
+      if (toolStates[`${base}__${stem}`]) ids.push(`${base}__${stem}`);
+    }
+  }
+  return ids.flatMap((id) => {
     const state = toolStates[id];
     if (!state || state.status !== 'done' || !state.result) return [];
-    const r = state.result;
-    let sections: { time: number; endTime: number; label: string; type: string }[] = [];
-    if (r.toolId === 'msaf-sf' || r.toolId === 'msaf-foote' || r.toolId === 'msaf-cnmf' || r.toolId === 'msaf-olda') sections = r.result.sections;
-    else if (r.toolId === 'allin1') sections = r.result.sections;
-    else if (ALLIN1_FOLD_IDS.has(r.toolId)) sections = (r.result as AllIn1Result).sections;
-    else if (r.toolId === 'ruptures-pelt-default' || r.toolId === 'ruptures-binseg-default' || r.toolId === 'ruptures-window-default') sections = r.result.sections;
-    else if (r.toolId === 'band-gradient') sections = r.result.sections;
-    else if (r.toolId === 'silero-vad' || r.toolId === 'jdcnet-voicing') sections = r.result.sections;
-    else if (r.toolId === 'panns-cnn14') sections = r.result.sections;
-    else if (r.toolId === 'chroma-autocorr') sections = r.result.sections;
-    else if (r.toolId === 'basic-pitch') sections = r.result.sections;
-    else if (r.toolId === 'librosa-key' || r.toolId === 'autochord-chords' || r.toolId === 'librosa-onsets') sections = r.result.sections;
-    else if (r.toolId === 'hpss-percussive') sections = r.result.sections;
-    else if (r.toolId === 'whisper-base') sections = r.result.sections;
-    if (!sections.length) return [];
-    return [{ id, label: algoLabel(id), sections }];
+    // Every id here comes from ALGO_ORDER (or a per-stem variant of one), so the
+    // result always carries `sections`. The old per-toolId dispatch existed only
+    // to narrow the discriminated union; the composite stem ids can't be
+    // narrowed that way, so read sections structurally instead.
+    const rawSections =
+      (state.result.result as { sections?: { time: number; endTime: number; label: string; type: string }[] })
+        .sections ?? [];
+    if (!rawSections.length) return [];
+    // Keep the rendered shape, but pin each section's full original object as
+    // `raw` — MSAF carries energy/centroid, lyrics carry per-word fields, etc.,
+    // all of which the narrowed type drops but the card should still show.
+    const sections = rawSections.map((s) => ({ ...s, raw: s }));
+    const gridSource = (state.result.result as { gridSource?: string | null }).gridSource ?? undefined;
+    return [{ id, label: algoLabel(id), sections, gridSource }];
   });
 }
 
@@ -144,7 +163,14 @@ export function buildAnnotationRows(toolStates: Record<string, ToolState>): Algo
 
 type CentroidMethod = 'mean' | 'median' | 'trimmed' | 'tightest' | 'eqgroup' | 'metamed' | 'plural' | 'nearraw';
 
-const CENTROID_METHODS: { id: CentroidMethod; short: string; desc: string; example: string }[] = [
+// The selectable subset — the same five the Auto-guess panel offers, so a
+// config handed between the two panels always has a home on both.
+const CENTROID_METHODS: { id: AutoGuessCentroidMethod; short: string; desc: string; example: string }[] = [
+  {
+    id: 'mean', short: 'Mean',
+    desc: 'Arithmetic mean of every raw member time. Fast and symmetric, but one algorithm firing twice pulls the result toward itself.',
+    example: 'Sources: 3.0, 3.2, 4.0 → (3.0+3.2+4.0)/3 = 3.4s',
+  },
   {
     id: 'eqgroup', short: 'EqGrp',
     desc: 'Gives each algorithm one equal vote, no matter how many boundaries it placed here.',
@@ -175,401 +201,152 @@ interface ConsensusCluster {
 
 function clusterForConsensus(rows: AlgorithmRow[], toleranceSec: number): ConsensusCluster[] {
   const allPoints = rows.flatMap((r) => r.sections.map((s) => ({ algorithmId: r.id, time: s.time })));
-  if (!allPoints.length) return [];
-  const sorted = [...allPoints].sort((a, b) => a.time - b.time);
-  const raw: { sum: number; count: number; members: { algorithmId: string; time: number }[] }[] = [];
-
-  for (const pt of sorted) {
-    let bestIdx = -1, bestDist = Infinity;
-    for (let k = raw.length - 1; k >= 0; k--) {
-      const cent = raw[k].sum / raw[k].count;
-      if (pt.time - cent > toleranceSec) break;
-      const dist = Math.abs(pt.time - cent);
-      if (dist <= toleranceSec && dist < bestDist) { bestDist = dist; bestIdx = k; }
-    }
-    if (bestIdx >= 0) {
-      raw[bestIdx].members.push(pt); raw[bestIdx].sum += pt.time; raw[bestIdx].count += 1;
-    } else {
-      raw.push({ sum: pt.time, count: 1, members: [pt] });
-    }
-  }
-
-  return raw.map(({ members }) => {
-    const ts = [...members.map((m) => m.time)].sort((a, b) => a - b);
-    const n = ts.length;
-    const mean = ts.reduce((s, t) => s + t, 0) / n;
-
-    const mid = Math.floor(n / 2);
-    const median = n % 2 === 1 ? ts[mid] : (ts[mid - 1] + ts[mid]) / 2;
-
-    let trimmed: number;
-    if (n <= 2) {
-      trimmed = mean;
-    } else {
-      const fi = ts.reduce((bi, t, i) => Math.abs(t - mean) > Math.abs(ts[bi] - mean) ? i : bi, 0);
-      const arr = ts.filter((_, i) => i !== fi);
-      trimmed = arr.reduce((s, t) => s + t, 0) / arr.length;
-    }
-
-    let tightest: number;
-    {
-      const majority = Math.ceil(n / 2);
-      let bestSpan = Infinity, bestCenter = ts[0];
-      for (let i = 0; i <= n - majority; i++) {
-        const span = ts[i + majority - 1] - ts[i];
-        if (span < bestSpan) { bestSpan = span; bestCenter = (ts[i] + ts[i + majority - 1]) / 2; }
-      }
-      tightest = bestCenter;
-    }
-
-    let eqgroup: number;
-    {
-      const gm = new Map<string, number[]>();
-      for (const m of members) {
-        if (!gm.has(m.algorithmId)) gm.set(m.algorithmId, []);
-        gm.get(m.algorithmId)!.push(m.time);
-      }
-      const reps = [...gm.values()].map((gts) => gts.reduce((s, t) => s + t, 0) / gts.length);
-      eqgroup = reps.reduce((s, t) => s + t, 0) / reps.length;
-    }
-
-    let metamed: number;
-    {
-      const cands = [median, trimmed, tightest, eqgroup].sort((x, y) => x - y);
-      const mm = cands.length % 2 === 1
-        ? cands[Math.floor(cands.length / 2)]
-        : (cands[cands.length / 2 - 1] + cands[cands.length / 2]) / 2;
-      metamed = [median, trimmed, tightest, eqgroup].reduce(
-        (best, v) => Math.abs(v - mm) < Math.abs(best - mm) ? v : best, median);
-    }
-
-    let plural: number;
-    {
-      const cands = [median, trimmed, tightest, eqgroup];
-      const scores = cands.map((v) => cands.filter((u) => Math.abs(u - v) <= 0.5).length);
-      const maxS = Math.max(...scores);
-      const winners = cands.filter((_, i) => scores[i] === maxS);
-      plural = winners.reduce((best, v) => Math.abs(v - mean) < Math.abs(best - mean) ? v : best, winners[0]);
-    }
-
-    const nearraw = ts.reduce((best, t) => {
-      const sd = ts.reduce((s, u) => s + Math.abs(t - u), 0);
-      const bd = ts.reduce((s, u) => s + Math.abs(best - u), 0);
-      return sd < bd ? t : best;
-    }, ts[0]);
-
-    return { members, size: n, times: { mean, median, trimmed, tightest, eqgroup, metamed, plural, nearraw } };
-  });
-}
-
-// ─── UI helpers ───────────────────────────────────────────────────────────────
-
-function MetricChip({ label, value, isMnbd = false }: { label: string; value: number | null; isMnbd?: boolean }) {
-  if (value === null) return null;
-  let color: string;
-  let display: string;
-  if (isMnbd) {
-    color = value <= 0.5 ? 'text-green-400' : value <= 1.5 ? 'text-yellow-400' : 'text-red-400';
-    display = `${value.toFixed(2)}s`;
-  } else {
-    const pct = Math.round(value * 100);
-    color = pct >= 70 ? 'text-green-400' : pct >= 45 ? 'text-yellow-400' : 'text-red-400';
-    display = `${pct}%`;
-  }
-  return (
-    <span className="inline-flex items-baseline gap-0.5">
-      <span className="text-[9px] uppercase text-gray-500">{label}</span>
-      <span className={`text-[11px] font-mono ${color}`}>{display}</span>
-    </span>
-  );
-}
-
-interface BoundaryMarker {
-  time: number;
-  status: 'hit' | 'miss';
-  /** Distance to matched counterpart (sec). Only set on hits. */
-  error?: number;
-}
-
-function MiniBlockRow({
-  sections, duration, label, color = '#64748b', cursorTime, onSeek, boundaryMarkers,
-  previewRegion, previewIsPlaying, onOpenPreviewRegion, onPreviewRegionChange,
-  onPreviewPlay, onPreviewPause, onPreviewLoopToggle, onPreviewDismiss, onPreviewClear,
-  showPreviewControls = false,
-}: {
-  sections: { time: number; endTime: number; label: string; type: string }[];
-  duration: number;
-  label: string;
-  color?: string;
-  cursorTime?: number;
-  onSeek?: (time: number) => void;
-  boundaryMarkers?: BoundaryMarker[];
-  /** Active preview region; renders as the same cyan band as the viz panel. */
-  previewRegion?: PreviewRegion | null;
-  previewIsPlaying?: boolean;
-  /** Drag-to-listen — fires on a row drag (NOT a plain click). Plain click
-   *  falls through to `onSeek`. */
-  onOpenPreviewRegion?: (start: number, end: number) => void;
-  onPreviewRegionChange?: (next: PreviewRegion) => void;
-  onPreviewPlay?: () => void;
-  onPreviewPause?: () => void;
-  onPreviewLoopToggle?: () => void;
-  /** × button — restores the playback anchor (where the cursor was before the
-   *  preview opened). */
-  onPreviewDismiss?: () => void;
-  /** Click-on-row clear — like `onPreviewDismiss` but does NOT restore the
-   *  anchor; the playhead stays at the just-clicked position. */
-  onPreviewClear?: () => void;
-  /** Only the topmost row in a stack should render the floating control bar
-   *  — the other rows show the band-only mirror. */
-  showPreviewControls?: boolean;
-}) {
-  const cursorPct = cursorTime != null && duration > 0
-    ? Math.max(0, Math.min(100, (cursorTime / duration) * 100))
-    : null;
-  const barRef = useRef<HTMLDivElement | null>(null);
-  // Tracks the in-progress click/drag so we can distinguish a plain click
-  // (→ onSeek) from a drag (→ onOpenPreviewRegion). Global window listeners
-  // (installed on mousedown) keep the drag alive even when the cursor leaves
-  // the 20-px-tall row — using only React's onMouseLeave/onMouseUp would
-  // silently drop most drags on a row this thin.
-  const dragRef = useRef<{ time: number; x: number } | null>(null);
-  const [dragSel, setDragSel] = useState<{ s: number; e: number } | null>(null);
-
-  const timeAtClientX = (clientX: number): number => {
-    const el = barRef.current;
-    if (!el || duration <= 0) return 0;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0) return 0;
-    return Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
-  };
-
-  const supportsRegion = !!onOpenPreviewRegion;
-  const onSeekRef = useRef(onSeek);
-  const onOpenPreviewRegionRef = useRef(onOpenPreviewRegion);
-  const onPreviewClearRef = useRef(onPreviewClear);
-  const hasPreviewRef = useRef(!!previewRegion);
-  useEffect(() => { onSeekRef.current = onSeek; }, [onSeek]);
-  useEffect(() => { onOpenPreviewRegionRef.current = onOpenPreviewRegion; }, [onOpenPreviewRegion]);
-  useEffect(() => { onPreviewClearRef.current = onPreviewClear; }, [onPreviewClear]);
-  useEffect(() => { hasPreviewRef.current = !!previewRegion; }, [previewRegion]);
-  // The wrapper is intentionally NOT overflow-hidden so the preview band's
-  // floating control bar (which sits ~28 px above the row) doesn't get
-  // clipped. The inner bar div keeps overflow-hidden for clipping the
-  // section blocks at the row's edges.
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] text-gray-500 w-16 shrink-0 text-right truncate">{label}</span>
-      <div ref={barRef} className="flex-1 relative h-5">
-      <div
-        className={`absolute inset-0 rounded overflow-hidden bg-gray-950 ${onSeek ? 'cursor-pointer' : ''}`}
-        onMouseDown={onSeek && duration > 0 ? (e) => {
-          // The PreviewWindow band sets pointer-events:none on its background
-          // so clicks fall through to here; its resize handles call
-          // e.stopPropagation() in beginDrag so handle-drags never reach this
-          // handler. So there is nothing to filter out at this layer — every
-          // mousedown that arrives is a legitimate row interaction.
-          const t0 = timeAtClientX(e.clientX);
-          const x0 = e.clientX;
-          dragRef.current = { time: t0, x: x0 };
-          if (supportsRegion) setDragSel({ s: t0, e: t0 });
-          // Global listeners — survive the cursor leaving the 20-px row
-          // mid-drag, which is the common case for a fast horizontal drag.
-          const onMove = (ev: MouseEvent) => {
-            if (!dragRef.current) return;
-            setDragSel({ s: dragRef.current.time, e: timeAtClientX(ev.clientX) });
-          };
-          const onUp = (ev: MouseEvent) => {
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-            const drag = dragRef.current;
-            dragRef.current = null;
-            setDragSel(null);
-            if (!drag) return;
-            const endT = timeAtClientX(ev.clientX);
-            const px = Math.abs(ev.clientX - drag.x);
-            const t1 = Math.min(drag.time, endT);
-            const t2 = Math.max(drag.time, endT);
-            if (supportsRegion && px > 6 && t2 - t1 > 0.1) {
-              onOpenPreviewRegionRef.current?.(t1, t2);
-            } else {
-              // Plain click → seek to the clicked time, and clear any active
-              // preview (without restoring the dismiss-anchor) so the playhead
-              // stays where the user just clicked. Matches viz-panel UX.
-              onSeekRef.current?.(drag.time);
-              if (hasPreviewRef.current) onPreviewClearRef.current?.();
-            }
-          };
-          window.addEventListener('mousemove', onMove);
-          window.addEventListener('mouseup', onUp);
-          e.preventDefault();
-        } : undefined}
-      >
-        {sections.map((s, i) => {
-          const left  = duration > 0 ? (s.time / duration) * 100 : 0;
-          const width = Math.max(0.3, duration > 0 ? ((s.endTime - s.time) / duration) * 100 : 0);
-          const bg    = sectionBg(s.type) !== SECTION_COLORS.default ? sectionBg(s.type) : color;
-          const isStatus = s.type === 'hit' || s.type === 'miss';
-          return (
-            <div key={i} className="absolute top-0 bottom-0 overflow-hidden"
-              style={{ left: `${left}%`, width: `${width}%`, background: bg, opacity: isStatus ? 0.85 : 0.62, borderRight: '1px solid rgba(0,0,0,0.3)' }}
-              title={`${s.label} @ ${(s.time / 60 | 0)}:${(s.time % 60).toFixed(0).padStart(2, '0')}`}
-            >
-              <span className={`absolute inset-x-0.5 top-0.5 truncate pointer-events-none select-none leading-none ${isStatus ? 'text-[9px] text-white font-bold' : 'text-[7px] text-white/70'}`}>
-                {s.label}
-              </span>
-            </div>
-          );
-        })}
-        {boundaryMarkers && duration > 0 && boundaryMarkers.map((m, i) => {
-          const leftPct = (m.time / duration) * 100;
-          const fill = m.status === 'hit' ? HIT_COLOR : MISS_COLOR;
-          const tip = m.status === 'hit'
-            ? `✓ matched (Δ${m.error != null ? m.error.toFixed(2) : '0.00'}s) @ ${m.time.toFixed(2)}s`
-            : `✗ missed by consensus @ ${m.time.toFixed(2)}s`;
-          return (
-            <div
-              key={i}
-              className="absolute pointer-events-auto"
-              style={{
-                left: `${leftPct}%`,
-                top: 0,
-                height: '5px',
-                width: '5px',
-                background: fill,
-                transform: 'translateX(-2px)',
-                zIndex: 5,
-                boxShadow: `0 0 3px ${fill}`,
-                borderBottomLeftRadius: '1px',
-                borderBottomRightRadius: '1px',
-              }}
-              title={tip}
-            />
-          );
-        })}
-        {cursorPct != null && (
-          <div
-            className="absolute top-0 bottom-0 pointer-events-none"
-            style={{ left: `${cursorPct}%`, width: '2px', background: '#fff', boxShadow: '0 0 4px rgba(255,255,255,0.7)', transform: 'translateX(-1px)', zIndex: 10 }}
-          />
-        )}
-        {/* In-progress drag rectangle (transient — replaced by the real
-            previewRegion band once mouseup commits the gesture). */}
-        {dragSel && duration > 0 && Math.abs(dragSel.e - dragSel.s) > 0.05 && (
-          <div
-            className="absolute top-0 bottom-0 pointer-events-none"
-            style={{
-              left: `${(Math.min(dragSel.s, dragSel.e) / duration) * 100}%`,
-              width: `${(Math.abs(dragSel.e - dragSel.s) / duration) * 100}%`,
-              background: 'rgba(45,212,191,0.13)',
-              borderLeft: '2px solid rgba(45,212,191,0.7)',
-              borderRight: '2px solid rgba(45,212,191,0.7)',
-              zIndex: 8,
-            }}
-          />
-        )}
-      </div>
-      {/* Committed preview band — same cyan strip + handles + (top row only)
-          control bar as the viz panel. Lives OUTSIDE the overflow-hidden bar
-          so the -28 px floating control bar isn't clipped. data-preview-band
-          marker lets the bar's mousedown handler skip drags originating
-          inside the band's handles / controls. */}
-      {previewRegion && duration > 0 && onPreviewRegionChange && onPreviewPlay && onPreviewPause && onPreviewDismiss && onPreviewLoopToggle && (
-        <div data-preview-band className="absolute inset-0 pointer-events-none" style={{ zIndex: 12 }}>
-          <PreviewWindow
-            region={previewRegion}
-            duration={duration}
-            isPlaying={!!previewIsPlaying}
-            parentRef={barRef}
-            onChange={onPreviewRegionChange}
-            onPlay={onPreviewPlay}
-            onPause={onPreviewPause}
-            onDismiss={onPreviewDismiss}
-            onLoopToggle={onPreviewLoopToggle}
-            showControls={showPreviewControls}
-          />
-        </div>
-      )}
-      </div>
-    </div>
-  );
+  return clusterPoints(allPoints, toleranceSec).map(({ members }) => ({
+    members,
+    size: members.length,
+    times: computeAllClusterTimes(members),
+  }));
 }
 
 // ─── Auto-Consensus Panel ─────────────────────────────────────────────────────
 
+const CONSENSUS_OPEN_KEY = 'tc:consensusInspect:open';
+
 const REFERENCE_ROW_LABELS: Record<ReferenceMode, string> = {
   manual: 'Boundaries',
-  eye: 'Eye',
   autoGuess: 'Auto-guess',
 };
-const REFERENCE_ROW_COLORS: Record<ReferenceMode, string> = {
-  manual: '#f59e0b',
-  eye: '#2dd4bf',
-  autoGuess: '#a855f7',
-};
 
+/** Everything the shared viz panel needs to draw the Consensus row. The stage
+ *  computes it; the page parks it on the panel. Kept deliberately small — no
+ *  callbacks, no settings — so the row is a picture of a result and every knob
+ *  that shapes it stays in this stage. */
+export interface ConsensusVizState {
+  /** Consensus boundaries, tiled to the next one and typed by verdict
+   *  ('hit' / 'miss', or 'consensus' when there is no reference to score). */
+  blocks: { time: number; endTime: number; label: string; type: string }[];
+  /** Reference boundaries the consensus never matched (FN). */
+  refMisses: number[];
+  /** Which reference produced those verdicts. */
+  referenceLabel: string;
+  /** The ± window a match had to land in, in seconds. */
+  tolerance: number;
+}
 function AutoConsensusPanel({
   rows,
   referenceSections,
   referenceMode,
+  canSwitchReference,
   duration,
   evalTolerance,
+  onToleranceChange,
   customSettings,
   onCustomSettingsChange,
-  currentTime,
-  onSeek,
-  previewRegion,
-  previewIsPlaying,
-  onOpenPreviewRegion,
-  onPreviewRegionChange,
-  onPreviewPlay,
-  onPreviewPause,
-  onPreviewLoopToggle,
-  onPreviewDismiss,
-  onPreviewClear,
+  onVizChange,
+  onReferenceModeChange,
+  onHandoffToAutoGuess,
 }: {
   rows: AlgorithmRow[];
-  referenceSections: ManualSection[];
+  referenceSections: SectionBlock[];
   referenceMode: ReferenceMode;
+  /** Whether the header's reference picker is a dropdown at all — it collapses
+   *  to static text when no other source has data. Gates the "switch the
+   *  reference" half of the no-reference hint. */
+  canSwitchReference: boolean;
   duration: number;
   evalTolerance: number;
+  /** τ lives in this panel's control strip, under the preview it redraws —
+   *  the stage header keeps only the title and the reference picker. */
+  onToleranceChange: (t: number) => void;
   customSettings: CustomEvalSettings;
   onCustomSettingsChange: (next: CustomEvalSettings) => void;
-  currentTime?: number;
-  onSeek?: (time: number) => void;
-  previewRegion?: PreviewRegion | null;
-  previewIsPlaying?: boolean;
-  onOpenPreviewRegion?: (start: number, end: number) => void;
-  onPreviewRegionChange?: (next: PreviewRegion) => void;
-  onPreviewPlay?: () => void;
-  onPreviewPause?: () => void;
-  onPreviewLoopToggle?: () => void;
-  onPreviewDismiss?: () => void;
-  onPreviewClear?: () => void;
+  /** Used by the circularity guard to move the reference off Auto-guess. */
+  onReferenceModeChange?: (mode: ReferenceMode) => void;
+  /** Open the Auto-guess panel — the config is already parked for it. Omitted
+   *  where there is nowhere to go, which hides the hand-off button. */
+  onHandoffToAutoGuess?: () => void;
+  /** Hand the drawable consensus up to the page, which parks it on the shared
+   *  viz panel's Consensus row. Called with null when there is nothing to
+   *  draw, and on unmount — the row must not outlive this stage. */
+  onVizChange?: (next: ConsensusVizState | null) => void;
 }) {
   const [clusterTol, setClusterTol] = useState(3);
   const [minAgreement, setMinAgreement] = useState(2);
-  const [method, setMethod] = useState<CentroidMethod>('metamed');
-  const [selectedAlgoIds, setSelectedAlgoIds] = useState<Set<string>>(() => new Set(rows.map((r) => r.id)));
+  const [method, setMethod] = useState<AutoGuessCentroidMethod>('metamed');
+  const [selectedAlgoIds, setSelectedAlgoIds] = useState<Set<string>>(
+    () => new Set(rows.filter((r) => !isExampleAlgoId(r.id)).map((r) => r.id)),
+  );
+  /** Rows the auto-add effect has already offered. Only genuinely *new*
+   *  detectors join the selection — one this panel has seen before is left
+   *  wherever the user (or a hand-off from Auto-guess) put it. */
+  const offeredAlgoIdsRef = useRef<Set<string>>(new Set(rows.map((r) => r.id)));
+  /** Set while the incoming config is being applied, so the notice below the
+   *  header can say where the numbers came from. */
+  const [handoffNotice, setHandoffNotice] = useState(false);
+
+  /** Drawer state, per user rather than per song: somebody tuning a corpus
+   *  opens this panel on every track, and re-collapsing it each time is the
+   *  kind of small tax that makes a tool feel like it is arguing. Collapsed is
+   *  the right first-run default — the verdict is the answer most visits
+   *  need. */
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(CONSENSUS_OPEN_KEY) === '1'; } catch { return false; }
+  });
+  const toggleOpen = useCallback(() => {
+    setOpen((prev) => {
+      try { localStorage.setItem(CONSENSUS_OPEN_KEY, prev ? '0' : '1'); } catch { /* private mode */ }
+      return !prev;
+    });
+  }, []);
 
   useEffect(() => {
     setSelectedAlgoIds((prev) => {
       const next = new Set(prev);
       let changed = false;
-      rows.forEach((r) => { if (!next.has(r.id)) { next.add(r.id); changed = true; } });
+      // Auto-add newly discovered rows so real detectors light up on arrival —
+      // but skip example detectors, which stay opt-in until the user checks them.
+      rows.forEach((r) => {
+        if (offeredAlgoIdsRef.current.has(r.id)) return;
+        offeredAlgoIdsRef.current.add(r.id);
+        if (!isExampleAlgoId(r.id) && !next.has(r.id)) { next.add(r.id); changed = true; }
+      });
       return changed ? next : prev;
     });
   }, [rows]);
+
+  // ── Incoming hand-off from the Auto-guess panel ("Tune in Consensus") ────
+  useConsensusHandoff('consensus', (config) => {
+    setClusterTol(config.clusterWindow);
+    setMinAgreement(config.minAgreement);
+    setMethod(config.centroid);
+    // Ids the Auto-guess panel never saw stay out of the blend; the auto-add
+    // effect must not put them back.
+    config.algoIds.forEach((id) => offeredAlgoIdsRef.current.add(id));
+    setSelectedAlgoIds(new Set(config.algoIds));
+    setHandoffNotice(true);
+  });
+
+  // ── Outgoing hand-off to the Auto-guess panel ───────────────────────────
+  // Scoring the consensus against Auto-guess and then *building* Auto-guess
+  // from that consensus is circular — the F1 above would be the consensus
+  // grading itself. So the button stops and says so first.
+  const [confirmCircular, setConfirmCircular] = useState(false);
+  const sendToAutoGuess = useCallback(() => {
+    sendConsensusConfig('autoGuess', {
+      clusterWindow: clusterTol,
+      minAgreement,
+      centroid: method,
+      algoIds: [...selectedAlgoIds],
+    });
+    setConfirmCircular(false);
+    onHandoffToAutoGuess?.();
+  }, [clusterTol, minAgreement, method, selectedAlgoIds, onHandoffToAutoGuess]);
 
   const activeRows = useMemo(() => rows.filter((r) => selectedAlgoIds.has(r.id)), [rows, selectedAlgoIds]);
 
   const clusters = useMemo(() => clusterForConsensus(activeRows, clusterTol), [activeRows, clusterTol]);
   const filtered = useMemo(() => clusters.filter((c) => new Set(c.members.map((m) => m.algorithmId)).size >= minAgreement), [clusters, minAgreement]);
   const consensusTimes = useMemo(() => filtered.map((c) => c.times[method]), [filtered, method]);
-
-  const referenceBlocks = useMemo(() => referenceSections.map((s, i) => ({
-    time: s.time, endTime: referenceSections[i + 1]?.time ?? duration, label: s.label ?? s.type, type: s.type,
-  })), [referenceSections, duration]);
 
   // mir_eval (server-side, debounced) — strict boundary retrieval against ref.
   const sortedConsensus = useMemo(() => [...consensusTimes].sort((a, b) => a - b), [consensusTimes]);
@@ -619,20 +396,34 @@ function AutoConsensusPanel({
     });
   }, [consensusTimes, duration, estMatch, evalResult]);
 
-  // Reference-row markers: green tick on matched ref boundaries (TP), red tick
-  // on missed ones (FN). Only shown on the row that's actively being evaluated.
-  const referenceMarkers = useMemo<BoundaryMarker[] | undefined>(() => {
-    if (!evalResult) return undefined;
-    return referenceSections.map((s) => {
-      const err = refMatch.get(s.time);
-      return err !== undefined
-        ? { time: s.time, status: 'hit' as const, error: err }
-        : { time: s.time, status: 'miss' as const };
-    });
+  // Reference boundaries the consensus never proposed (FN). They ride the
+  // Consensus lane as ticks: the hits are already green tiles there, so only
+  // the absences need a mark of their own.
+  const refMisses = useMemo<number[]>(() => {
+    if (!evalResult) return [];
+    return referenceSections.filter((s) => !refMatch.has(s.time)).map((s) => s.time);
   }, [evalResult, referenceSections, refMatch]);
 
   const referenceLabel = REFERENCE_ROW_LABELS[referenceMode];
-  const referenceColor = REFERENCE_ROW_COLORS[referenceMode];
+
+  /** Every cluster the window produced, with the agreement count the filter
+   *  judges it by — including the ones it drops. The preview draws those in
+   *  grey: the discard is exactly what the Agreement slider is choosing, and a
+   *  count that silently shrinks is not something anyone can tune against. */
+  const previewClusters = useMemo<PreviewCluster[]>(() => {
+    const labelOf = new Map(rows.map((r) => [r.id, r.label]));
+    return clusters.map((c) => {
+      const ids = [...new Set(c.members.map((m) => m.algorithmId))];
+      return {
+        time: c.times[method],
+        agree: ids.length,
+        detectors: ids.map((id) => labelOf.get(id) ?? id).sort((a, b) => a.localeCompare(b)),
+      };
+    });
+  }, [clusters, method, rows]);
+
+  /** Reference edges whose nearest consensus boundary landed inside τ. */
+  const matchedRefTimes = useMemo(() => new Set(refMatch.keys()), [refMatch]);
 
   const customEvalResult = useMemo(() => {
     if (!referenceSections.length || !consensusTimes.length || duration <= 0) return null;
@@ -642,6 +433,16 @@ function AutoConsensusPanel({
       useSecondary: customSettings.useSecondary,
     });
   }, [referenceSections, consensusTimes, duration, evalTolerance, customSettings.optionalWeight, customSettings.useSecondary]);
+
+  // Hand the drawn form of the consensus to the page. `null` while there is
+  // nothing to draw, and on unmount — leaving the row up after the stage
+  // closes would strand a lane no visible control can change.
+  useEffect(() => {
+    onVizChange?.(consensusBlocks.length
+      ? { blocks: consensusBlocks, refMisses, referenceLabel, tolerance: evalTolerance }
+      : null);
+  }, [onVizChange, consensusBlocks, refMisses, referenceLabel, evalTolerance]);
+  useEffect(() => () => onVizChange?.(null), [onVizChange]);
 
   if (!rows.length) {
     return (
@@ -654,138 +455,362 @@ function AutoConsensusPanel({
   }
 
   const totalAlgos = activeRows.length;
+  const centroidShort = CENTROID_METHODS.find((m) => m.id === method)?.short ?? method;
+  const verdict = consensusVerdict({
+    detectorsSelected: totalAlgos,
+    clusterCount: filtered.length,
+    minAgreement,
+    clusterWindow: clusterTol,
+    referenceLabel,
+    referenceCount: referenceSections.length,
+    canSwitchReference,
+    // mir_eval is called with trim=True (the MIREX convention), so the [0, T]
+    // anchors it drops are not in the counts the metrics line reports. The
+    // sentence has to quote the same ones, or it contradicts the numbers
+    // directly beneath it.
+    scoredEst: evalResult?.estCount ?? null,
+    scoredRef: evalResult?.refCount ?? null,
+    hits: evalResult ? evalResult.hitCount : null,
+    tolerance: evalTolerance,
+  });
 
   return (
     <div className="rounded-lg border border-violet-800/40 bg-violet-950/20 p-3 space-y-3">
-      {/* ── Section header: mirrors the Auto-guess panel so the controls below read the same ── */}
-      {rows.length > 0 && (
-        <div className="border-l-2 border-violet-400/40 pl-3 py-1">
-          <h4 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-violet-200">
-            Evaluate as &apos;Boundaries&apos;
-          </h4>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            Configure the consensus parameters: <span className="text-slate-500 uppercase tracking-wider text-[10px]">settings</span>
-          </p>
-        </div>
-      )}
-
-      {/* ── Header: title · counts · metrics · settings popover · cluster window ── */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wide">Auto Consensus</span>
-        <span className="text-[10px] text-gray-600">{filtered.length} bnds · {totalAlgos}/{rows.length}</span>
-
-        {evalResult && (
-          <span
-            className="inline-flex items-center gap-2 px-2 py-0.5 rounded border border-indigo-800/40 bg-indigo-950/20"
-            title={`Strict mir_eval boundary retrieval — no importance weighting. Candidate alternates ${customSettings.useSecondary ? 'count as valid matches' : 'are ignored (primary boundary only)'}.`}
-          >
-            <span className="text-[9px] text-indigo-400 uppercase tracking-wide">mir_eval</span>
-            <MetricChip label="P"  value={evalResult.precision} />
-            <MetricChip label="R"  value={evalResult.recall} />
-            <MetricChip label="F1" value={evalResult.fmeasure} />
-          </span>
-        )}
-        {customEvalResult && (
-          <span
-            className="inline-flex items-center gap-2 px-2 py-0.5 rounded border border-amber-800/40 bg-amber-950/20"
-            title="Custom evaluator — applies optional-weight; adds MNBD and CSR. Candidate-alternate matching is shared with mir_eval and controlled by the 'Use candidates' toggle."
-          >
-            <span className="text-[9px] text-amber-400 uppercase tracking-wide">custom</span>
-            <MetricChip label="P"   value={customEvalResult.precision} />
-            <MetricChip label="R"   value={customEvalResult.recall} />
-            <MetricChip label="F1"  value={customEvalResult.f1} />
-            <MetricChip label="MNBD" value={customEvalResult.mnbd} isMnbd />
-            <MetricChip label="CSR" value={customEvalResult.csr} />
-          </span>
-        )}
-
-        <div className="flex-1" />
-
-        <ConsensusClusterControls
-          algoRows={rows.map((r) => ({ id: r.id, displayLabel: r.label, count: r.sections.length }))}
-          selectedAlgoIds={selectedAlgoIds}
-          onSelectedAlgoIdsChange={setSelectedAlgoIds}
-          clusterWindow={clusterTol}
-          onClusterWindowChange={setClusterTol}
-          centroidMethod={method}
-          onCentroidMethodChange={setMethod}
-          centroidOptions={CENTROID_METHODS.map((m) => ({ id: m.id, short: m.short, description: m.desc, example: m.example }))}
-          minConsensus={minAgreement}
-          onMinConsensusChange={setMinAgreement}
-          minConsensusLabel="Min agreement"
-          popoverAlign="right"
-          extraPopoverSection={
-            <div className="pt-3 border-t border-white/[0.06] space-y-2">
-              <span className="text-[10px] uppercase tracking-wider text-amber-400">Custom eval</span>
-              <CustomEvalControls settings={customSettings} onChange={onCustomSettingsChange} compact />
-            </div>
-          }
-        />
-      </div>
-
-      {/* ── Visualization rows ───────────────────────────────────────────── */}
-      {duration > 0 ? (
-        <div className="space-y-1.5">
-          {referenceBlocks.length > 0 ? (
-            <MiniBlockRow
-              sections={referenceBlocks} duration={duration} label={referenceLabel} color={referenceColor}
-              cursorTime={currentTime} onSeek={onSeek} boundaryMarkers={referenceMarkers}
-              previewRegion={previewRegion} previewIsPlaying={previewIsPlaying}
-              onOpenPreviewRegion={onOpenPreviewRegion}
-              onPreviewRegionChange={onPreviewRegionChange}
-              onPreviewPlay={onPreviewPlay} onPreviewPause={onPreviewPause}
-              onPreviewLoopToggle={onPreviewLoopToggle} onPreviewDismiss={onPreviewDismiss}
-              onPreviewClear={onPreviewClear}
-            />
-          ) : (
-            <p className="text-[11px] text-gray-600 text-center py-1">
-              No {referenceLabel} annotation for this song.
-            </p>
-          )}
-          {consensusBlocks.length > 0 ? (
-            <MiniBlockRow
-              sections={consensusBlocks} duration={duration} label="Consensus" color="#8b5cf6"
-              cursorTime={currentTime} onSeek={onSeek}
-              previewRegion={previewRegion} previewIsPlaying={previewIsPlaying}
-              onOpenPreviewRegion={onOpenPreviewRegion}
-              onPreviewRegionChange={onPreviewRegionChange}
-              onPreviewPlay={onPreviewPlay} onPreviewPause={onPreviewPause}
-              onPreviewLoopToggle={onPreviewLoopToggle} onPreviewDismiss={onPreviewDismiss}
-              onPreviewClear={onPreviewClear}
-            />
-          ) : (
-            <p className="text-[11px] text-gray-600 text-center py-1">
-              {activeRows.length === 0 ? 'No algorithms selected.' : `No clusters with ≥${minAgreement}/${totalAlgos} agreeing algorithms.`}
-            </p>
-          )}
-          {evalResult && consensusBlocks.length > 0 && (() => {
-            const tp = evalResult.hitCount;
-            const fp = evalResult.estCount - tp;
-            const fn = evalResult.refCount - tp;
-            const refLabel = REFERENCE_ROW_LABELS[referenceMode];
-            return (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 pl-[72px] text-[10px] text-gray-500">
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: HIT_COLOR, opacity: 0.85 }} />
-                  Hit · matched within ±{evalTolerance}s ({tp})
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: MISS_COLOR, opacity: 0.85 }} />
-                  Miss · consensus w/ no {refLabel} match ({fp})
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-1.5 h-2.5" style={{ background: MISS_COLOR }} />
-                  {refLabel} boundary missed by consensus ({fn})
-                </span>
-              </div>
-            );
-          })()}
-        </div>
-      ) : (
-        <p className="text-[11px] text-gray-600 text-center py-1">
-          {activeRows.length === 0 ? 'No algorithms selected.' : `No clusters with ≥${minAgreement}/${totalAlgos} agreeing algorithms.`}
+      {handoffNotice && (
+        <p className="text-[11px] text-cyan-300/90 flex items-center gap-2">
+          Loaded from the Auto-guess panel — tune them against the scores, then send them back.
+          <button
+            onClick={() => setHandoffNotice(false)}
+            className="text-slate-500 hover:text-slate-300 transition-colors"
+            title="Dismiss"
+          >✕</button>
         </p>
       )}
+
+      {/* ── The verdict: what the whole panel is for, in one sentence ──────
+           The reference is named once, up in the stage header's "Evaluate vs"
+           dropdown, so nothing here repeats it as a banner. Percentages are
+           left to the metrics line: at the extremes ("F1 0%") they read as a
+           broken widget, where "none of 54" reads as an answer. */}
+      <div className="flex items-start gap-4">
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] leading-snug text-gray-200">{verdict.head}</p>
+          {verdict.sub && <p className="text-[11px] text-gray-500 mt-1">{verdict.sub}</p>}
+        </div>
+        {/* The thumbnail IS the preview, at a sixth of the size — so it only
+            earns its space while the preview itself is folded away. */}
+        {!open && (
+          <MiniTilings
+            duration={duration}
+            blocks={consensusBlocks}
+            referenceSections={referenceSections}
+            matchedRefTimes={matchedRefTimes}
+          />
+        )}
+      </div>
+
+      {/* ── The drawer handle, and the one action that does not need it ──── */}
+      <div className="flex items-stretch gap-2">
+        <button
+          onClick={toggleOpen}
+          aria-expanded={open}
+          className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-md border text-[11.5px] transition-colors ${
+            open
+              ? 'bg-violet-500/10 border-violet-400/35 text-violet-100'
+              : 'bg-white/[0.035] border-white/[0.12] text-slate-300 hover:bg-violet-500/[0.09] hover:border-violet-400/40'
+          }`}
+          title={open ? 'Collapse the tuning controls' : 'Open the consensus preview and its parameters'}
+        >
+          <span className="text-violet-400 text-[10px] w-2.5">{open ? '▾' : '▸'}</span>
+          <span className="font-medium">{open ? 'Hide the controls' : 'Tune the consensus'}</span>
+          <span className="flex-1" />
+          {/* Printed here only while they are out of sight. Open, the sliders
+              below carry them, and repeating them is the duplication this
+              rebuild set out to remove. */}
+          {!open && (
+            <span className="text-[10.5px] font-mono tabular-nums text-slate-500">
+              ±{clusterTol}s · {centroidShort} · ≥{minAgreement} of {totalAlgos} · τ {evalTolerance}s
+            </span>
+          )}
+        </button>
+
+        {onHandoffToAutoGuess && (
+          confirmCircular ? (
+            <span className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono text-amber-400">
+                Scored against Auto-guess — building it from this is circular.
+              </span>
+              <button
+                onClick={() => { onReferenceModeChange?.('manual'); setConfirmCircular(false); }}
+                className="px-2 py-1 rounded text-[10px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 transition-colors"
+                title="Score the consensus against your Boundaries layer instead, then read the numbers again"
+              >Use Boundaries</button>
+              <button
+                onClick={sendToAutoGuess}
+                className="px-2 py-1 rounded text-[10px] uppercase tracking-wider bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-400/40 transition-colors"
+              >Send anyway</button>
+            </span>
+          ) : (
+            <button
+              onClick={() => {
+                if (referenceMode === 'autoGuess') { setConfirmCircular(true); return; }
+                sendToAutoGuess();
+              }}
+              disabled={totalAlgos === 0}
+              className="px-3 py-1.5 rounded-md text-[11px] uppercase tracking-wider bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 disabled:opacity-40 disabled:cursor-not-allowed text-cyan-100 transition-colors flex items-center gap-1.5 shrink-0"
+              title={totalAlgos === 0
+                ? 'Select at least one algorithm'
+                : `Open the Auto-guess panel with these parameters — ±${clusterTol}s, ≥${minAgreement}, ${centroidShort}, ${totalAlgos} detector${totalAlgos === 1 ? '' : 's'}`}
+            >
+              <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 3a1 1 0 011 1v9.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 13.586V4a1 1 0 011-1z" clipRule="evenodd" />
+              </svg>
+              Use for Auto-guess
+            </button>
+          )
+        )}
+      </div>
+
+      {/* ── The instrument ────────────────────────────────────────────────
+           A slider that moves a number you cannot see is guesswork, so the
+           parameters sit directly under the picture they redraw. */}
+      {open && (
+        <div className="space-y-3">
+          <ConsensusPreviewLane
+            duration={duration}
+            blocks={consensusBlocks}
+            clusters={previewClusters}
+            minAgreement={minAgreement}
+            totalDetectors={totalAlgos}
+            clusterWindow={clusterTol}
+            referenceSections={referenceSections}
+            referenceLabel={referenceLabel}
+            matchedRefTimes={matchedRefTimes}
+            tolerance={evalTolerance}
+          />
+
+          <div className="flex items-center gap-x-3.5 gap-y-2 flex-wrap">
+            <SliderControl
+              label="Match within"
+              title="τ — how far a consensus boundary may sit from one of your edges and still count as a match."
+              min={0.25} max={5} step={0.25}
+              value={evalTolerance}
+              onChange={onToleranceChange}
+              format={(v) => `±${v}s`}
+              valueWidth="w-12"
+            />
+            <SliderControl
+              label="Group within"
+              title="Cluster window — detector boundaries closer together than this are treated as one proposed boundary. Widen it and nearby detectors merge into fewer, better-agreed boundaries."
+              min={0.5} max={10} step={0.5}
+              value={clusterTol}
+              onChange={setClusterTol}
+              format={(v) => `±${v}s`}
+              valueWidth="w-12"
+            />
+            <SliderControl
+              label="Keep if"
+              title="Agreement threshold — a grouped boundary only enters the consensus when at least this many distinct detectors proposed it."
+              min={1} max={Math.max(1, totalAlgos)} step={1}
+              value={Math.min(minAgreement, Math.max(1, totalAlgos))}
+              onChange={setMinAgreement}
+              format={(v) => `≥${v} of ${totalAlgos}`}
+              valueWidth="w-16"
+            />
+
+            {/* Centroid rejoins the popover: five buttons for a setting that is
+                chosen once a session cost more of the strip than the three
+                sliders that are moved constantly. */}
+            <ConsensusClusterControls
+              variant="detectors"
+              buttonSuffix={centroidShort}
+              selectedCount={totalAlgos}
+              algoRows={rows.map((r) => ({ id: r.id, displayLabel: r.label, count: r.sections.length }))}
+              selectedAlgoIds={selectedAlgoIds}
+              onSelectedAlgoIdsChange={setSelectedAlgoIds}
+              clusterWindow={clusterTol}
+              onClusterWindowChange={setClusterTol}
+              centroidMethod={method}
+              onCentroidMethodChange={setMethod}
+              centroidOptions={CENTROID_METHODS.map((m) => ({ id: m.id, short: m.short, description: m.desc, example: m.example }))}
+              minConsensus={minAgreement}
+              onMinConsensusChange={setMinAgreement}
+              minConsensusLabel="Min agreement"
+              popoverAlign="right"
+              extraPopoverSection={
+                <div className="pt-3 border-t border-white/[0.06] space-y-2">
+                  <span className="text-[10px] uppercase tracking-wider text-amber-400">Custom eval</span>
+                  <CustomEvalControls settings={customSettings} onChange={onCustomSettingsChange} compact />
+                </div>
+              }
+            />
+          </div>
+
+          {/* ── Both evaluators on one line: labelled, unboxed, and quiet
+               enough that they confirm the verdict instead of competing with
+               it. They disagree on purpose — strict retrieval vs. the
+               optional-weighted one — so each says which it is. ── */}
+          {(evalResult || customEvalResult) && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 pt-2 border-t border-white/[0.06] text-[11px] font-mono tabular-nums text-slate-400">
+              {evalResult && (
+                <span title="Strict mir_eval boundary retrieval — no importance weighting.">
+                  <span className="text-[9.5px] uppercase tracking-wider text-slate-600 mr-1.5">mir_eval</span>
+                  P {fmtPct(evalResult.precision)} · R {fmtPct(evalResult.recall)} · F1 {fmtPct(evalResult.fmeasure)}
+                </span>
+              )}
+              {customEvalResult && (
+                <span title={`Custom evaluator — optional weight ${customSettings.optionalWeight.toFixed(2)}, candidate alternates ${customSettings.useSecondary ? 'on' : 'off'}. Adds MNBD and CSR.`}>
+                  <span className="text-[9.5px] uppercase tracking-wider text-amber-400/70 mr-1.5">custom</span>
+                  P {fmtPct(customEvalResult.precision)} · R {fmtPct(customEvalResult.recall)} · F1 {fmtPct(customEvalResult.f1)}
+                  {' · '}MNBD {customEvalResult.mnbd.toFixed(2)}s · CSR {fmtPct(customEvalResult.csr)}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Verdict, mini tilings, slider ────────────────────────────────────────────
+
+function fmtPct(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)}%`;
+}
+
+/** The panel's headline. Every branch is a real state the panel can be in —
+ *  no detectors, nothing above the threshold, no reference to score against,
+ *  a server round-trip still in flight — because an empty panel with a stale
+ *  number in it is the version people misread. */
+function consensusVerdict(p: {
+  detectorsSelected: number;
+  clusterCount: number;
+  minAgreement: number;
+  clusterWindow: number;
+  referenceLabel: string;
+  referenceCount: number;
+  /** Whether another reference source is actually on offer — see the panel prop. */
+  canSwitchReference: boolean;
+  /** Boundary counts as the scorer saw them (post-trim), when it has answered. */
+  scoredEst: number | null;
+  scoredRef: number | null;
+  hits: number | null;
+  tolerance: number;
+}): { head: ReactNode; sub: string } {
+  const est = p.scoredEst ?? p.clusterCount;
+  const refs = p.scoredRef ?? p.referenceCount;
+  const n = <span className="font-mono font-semibold text-gray-100">{est}</span>;
+  if (p.detectorsSelected === 0) {
+    return { head: 'No detectors are feeding the consensus.', sub: 'Open the controls and pick at least one.' };
+  }
+  if (p.clusterCount === 0) {
+    return {
+      head: <>No clusters reach <span className="font-mono font-semibold text-gray-100">≥{p.minAgreement}</span> agreeing detectors at a <span className="font-mono font-semibold text-gray-100">{p.clusterWindow}s</span> window.</>,
+      sub: 'Widen the window or lower the agreement threshold.',
+    };
+  }
+  if (p.referenceCount === 0) {
+    return {
+      head: <>{n} consensus boundaries, with no {p.referenceLabel} layer to score them against.</>,
+      sub: p.canSwitchReference
+        ? 'Annotate a section edge, or switch the reference in "Evaluate vs" above.'
+        : 'Annotate a section edge to score them against.',
+    };
+  }
+  if (p.hits === null) {
+    return { head: <>Scoring {n} consensus boundaries against {p.referenceLabel}…</>, sub: '' };
+  }
+  const edges = `${refs} edge${refs === 1 ? '' : 's'}`;
+  if (p.hits === 0) {
+    return {
+      head: <><span className="font-mono font-semibold text-red-400">None</span> of the {n} consensus boundaries land within <span className="font-mono font-semibold text-gray-100">±{p.tolerance}s</span> of the {edges} in your {p.referenceLabel} layer.</>,
+      sub: `Every edge was missed. Try a wider window, or a larger τ.${
+        p.detectorsSelected >= 6 && p.minAgreement <= 2
+          ? ` ${p.detectorsSelected} detectors at ≥${p.minAgreement} is close to unfiltered.`
+          : ''}`,
+    };
+  }
+  const recall = refs ? p.hits / refs : 0;
+  const missed = refs - p.hits;
+  return {
+    head: <><span className={`font-mono font-semibold ${recall >= 0.6 ? 'text-green-400' : 'text-yellow-400'}`}>{p.hits} of {refs}</span> {p.referenceLabel} edges are matched by the {n} consensus boundaries, within <span className="font-mono font-semibold text-gray-100">±{p.tolerance}s</span>.</>,
+    sub: `${missed ? `${missed} edge${missed === 1 ? '' : 's'} missed` : 'Every edge matched'} · ${est - p.hits} consensus boundaries with no match.`,
+  };
+}
+
+/** The collapsed state's picture: the same two tilings the preview draws, at
+ *  a sixth of the size, so opening the drawer reads as a zoom rather than a
+ *  switch to some other surface. */
+function MiniTilings({
+  duration,
+  blocks,
+  referenceSections,
+  matchedRefTimes,
+}: {
+  duration: number;
+  blocks: { time: number; endTime: number; type: string }[];
+  referenceSections: SectionBlock[];
+  matchedRefTimes: Set<number>;
+}) {
+  if (duration <= 0) return null;
+  const w = (from: number, to: number) => `${Math.max(0.2, ((to - from) / duration) * 100)}%`;
+  const x = (t: number) => `${Math.max(0, Math.min(100, (t / duration) * 100))}%`;
+  return (
+    <div className="w-[168px] shrink-0 hidden sm:block">
+      <div className="relative h-2.5 rounded-sm bg-white/[0.03] overflow-hidden">
+        {blocks.map((b) => (
+          <span
+            key={b.time}
+            className="absolute top-0 bottom-0"
+            style={{
+              left: x(b.time), width: w(b.time, b.endTime),
+              background: b.type === 'hit' ? 'rgba(34,197,94,0.55)' : b.type === 'miss' ? 'rgba(239,68,68,0.4)' : 'rgba(139,92,246,0.4)',
+              boxShadow: 'inset 1px 0 0 rgba(255,255,255,0.22)',
+            }}
+          />
+        ))}
+      </div>
+      <div className="relative h-2.5 rounded-sm bg-white/[0.03] overflow-hidden mt-0.5">
+        {referenceSections.map((s, i) => (
+          <span
+            key={s.time}
+            className="absolute top-0 bottom-0"
+            style={{
+              left: x(s.time), width: w(s.time, sectionEnd(referenceSections, i, duration)),
+              background: 'rgba(139,92,246,0.4)',
+              boxShadow: `inset 2px 0 0 ${matchedRefTimes.has(s.time) ? '#22c55e' : '#ef4444'}`,
+            }}
+          />
+        ))}
+      </div>
+      <p className="text-[9px] font-mono uppercase tracking-wider text-slate-600 text-right mt-1">consensus / yours</p>
+    </div>
+  );
+}
+
+function SliderControl({
+  label, title, min, max, step, value, onChange, format, valueWidth = 'w-9',
+}: {
+  label: string;
+  title: string;
+  min: number; max: number; step: number;
+  value: number;
+  onChange: (n: number) => void;
+  format: (n: number) => string;
+  /** Widened for the labels that carry a unit or a denominator. */
+  valueWidth?: string;
+}) {
+  return (
+    <div className="flex items-center gap-1.5" title={title}>
+      <span className="text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
+      <input
+        type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-16 accent-violet-500"
+        aria-label={title}
+      />
+      <span className={`text-[11px] font-mono tabular-nums text-violet-300 ${valueWidth} text-right`}>{format(value)}</span>
     </div>
   );
 }
@@ -794,100 +819,89 @@ function AutoConsensusPanel({
 
 export interface AlgoInspectStageProps {
   annotationRows: AlgorithmRow[];
-  manualSections: ManualSection[];
-  eyeSections?: ManualSection[];
-  autoGuessSections?: ManualSection[];
-  /** When false, hide the Eye option from the eval-reference dropdown
-   *  entirely (gated by the `experimentalEyeAnnotation` Settings flag). */
-  eyeEnabled?: boolean;
+  manualSections: SectionBlock[];
+  autoGuessSections?: SectionBlock[];
+  /** Whether the Auto-guess reference layer is currently shown (the
+   *  same viz-panel visibility toggle, off by default). When off, its
+   *  eval-reference option is hidden here too — the user opts in from the
+   *  viz panel before they can score consensus against it. */
+  showAutoGuess?: boolean;
   duration: number;
   tolerance: number;
   onToleranceChange: (t: number) => void;
-  currentTime?: number;
-  onSeek?: (time: number) => void;
-  // Drag-to-listen preview region — same cyan band + play/loop controls as
-  // the viz panel. Wired from InspectorPageV2's existing handlers so the
-  // region state is shared (a region opened in algo-inspect also paints on
-  // the OverviewWaveform and vice-versa).
-  previewRegion?: PreviewRegion | null;
-  previewIsPlaying?: boolean;
-  onOpenPreviewRegion?: (start: number, end: number) => void;
-  onPreviewRegionChange?: (next: PreviewRegion) => void;
-  onPreviewPlay?: () => void;
-  onPreviewPause?: () => void;
-  onPreviewLoopToggle?: () => void;
-  onPreviewDismiss?: () => void;
-  /** Click-on-row clear — used to dismiss the preview without restoring the
-   *  anchor cursor (so the playhead stays where the user just clicked). */
-  onPreviewClear?: () => void;
+  /** Hand the drawable consensus up to the page, which parks it on the shared
+   *  viz panel's Consensus row — cursor, seeking and the preview band all come
+   *  from the timeline there, so this stage no longer draws a lane of its own.
+   *  Called with null when there is nothing to draw, and on unmount. */
+  onConsensusVizChange?: (next: ConsensusVizState | null) => void;
+  /** Switch the workspace to the Annotator's Auto-guess panel. The consensus
+   *  parameters are parked for it first (see state/consensusHandoff). Omit and
+   *  the hand-off button doesn't render. */
+  onHandoffToAutoGuess?: () => void;
+  /** Rendered at the left of this stage's reference row. The page puts the
+   *  "Reference from" annotator picker here so it shares one line with
+   *  "Evaluate vs" — whose annotations are the truth, and which of their
+   *  layers — instead of each getting a near-empty row of its own. */
+  leading?: ReactNode;
 }
 
 export function AlgoInspectStage({
   annotationRows,
   manualSections,
-  eyeSections = [],
   autoGuessSections = [],
-  eyeEnabled = true,
+  showAutoGuess = true,
   duration,
   tolerance,
   onToleranceChange,
-  currentTime,
-  onSeek,
-  previewRegion,
-  previewIsPlaying,
-  onOpenPreviewRegion,
-  onPreviewRegionChange,
-  onPreviewPlay,
-  onPreviewPause,
-  onPreviewLoopToggle,
-  onPreviewDismiss,
-  onPreviewClear,
+  onConsensusVizChange,
+  onHandoffToAutoGuess,
+  leading,
 }: AlgoInspectStageProps) {
   const [referenceMode, setReferenceMode] = useState<ReferenceMode>('manual');
   const [customSettings, setCustomSettings] = useState<CustomEvalSettings>(DEFAULT_CUSTOM_EVAL_SETTINGS);
 
-  // Fall back to manual if the chosen reference disappears (including when
-  // the experimental Eye flag flips off while Eye was selected).
+  const autoGuessAvailable = showAutoGuess && autoGuessSections.length > 0;
+
+  // Fall back to manual if the chosen reference disappears (e.g. the Auto-guess
+  // show toggle is turned off while that reference was selected).
   useEffect(() => {
-    if (referenceMode === 'eye'       && (!eyeEnabled || !eyeSections.length) && manualSections.length) setReferenceMode('manual');
-    if (referenceMode === 'autoGuess' && !autoGuessSections.length && manualSections.length) setReferenceMode('manual');
-  }, [referenceMode, eyeEnabled, eyeSections.length, autoGuessSections.length, manualSections.length]);
+    if (referenceMode === 'autoGuess' && !autoGuessAvailable && manualSections.length) setReferenceMode('manual');
+  }, [referenceMode, autoGuessAvailable, manualSections.length]);
 
   const referenceSections = useMemo(() => {
-    if (referenceMode === 'eye')       return eyeSections;
     if (referenceMode === 'autoGuess') return autoGuessSections;
     return manualSections;
-  }, [referenceMode, manualSections, eyeSections, autoGuessSections]);
+  }, [referenceMode, manualSections, autoGuessSections]);
+
+  /** The sources the picker can offer, and whether any of them is an actual
+   *  alternative to the current one. The picker collapses to plain text when
+   *  none is, so every hint that says "switch the reference" has to ask this
+   *  first or it points at a control that isn't rendered. */
+  const referenceOptions = useMemo(() => [
+    { mode: 'manual' as const, hasData: manualSections.length > 0 },
+    ...(showAutoGuess ? [{ mode: 'autoGuess' as const, hasData: autoGuessSections.length > 0 }] : []),
+  ], [manualSections.length, showAutoGuess, autoGuessSections.length]);
+  const canSwitchReference = referenceOptions.some((o) => o.hasData && o.mode !== referenceMode);
 
   return (
     <div className="space-y-3">
-      {/* Header layout mirrors the Evaluation tab: title on the left, reference + τ on the right. */}
-      <div className="flex items-center gap-4 flex-wrap">
-        <div className="flex-1">
-          <h3 className="text-sm font-semibold text-gray-300">Consensus Inspect</h3>
-          <p className="text-[11px] text-gray-600 mt-0.5">
-            Aggregate algorithm boundaries into a single consensus and score it against {referenceMode}.
-          </p>
-        </div>
+      {/* No heading here — the lit sub-tab directly above already says
+          "Consensus Inspect", and printing it twice made one workspace look
+          like two panels. What this row carries is the thing the tab can't:
+          which reference every number below is measured against. */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center">{leading}</div>
 
-        <EvalReferenceDropdown
-          value={referenceMode}
-          onChange={setReferenceMode}
-          options={[
-            { mode: 'manual',      hasData: manualSections.length      > 0 },
-            ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: eyeSections.length > 0 }] : []),
-            { mode: 'autoGuess', hasData: autoGuessSections.length > 0 },
-          ]}
-        />
+        <div className="flex items-center justify-end gap-3 flex-wrap">
+          <InfoDot label="What Consensus Inspect does" align="right">
+            Aggregates the checked detectors&apos; boundaries into one consensus and scores it against the chosen reference.
+          </InfoDot>
 
-        <div className="flex items-center gap-2 text-[11px] text-gray-500">
-          <span>τ =</span>
-          <input
-            type="range" min="0.25" max="5" step="0.25"
-            value={tolerance} onChange={(e) => onToleranceChange(Number(e.target.value))}
-            className="w-20 accent-indigo-500"
+          <EvalReferenceDropdown
+            value={referenceMode}
+            onChange={setReferenceMode}
+            options={referenceOptions}
           />
-          <span className="font-mono text-gray-300 w-8">{tolerance}s</span>
         </div>
       </div>
 
@@ -895,21 +909,15 @@ export function AlgoInspectStage({
         rows={annotationRows}
         referenceSections={referenceSections}
         referenceMode={referenceMode}
+        canSwitchReference={canSwitchReference}
         duration={duration}
         evalTolerance={tolerance}
+        onToleranceChange={onToleranceChange}
         customSettings={customSettings}
         onCustomSettingsChange={setCustomSettings}
-        currentTime={currentTime}
-        onSeek={onSeek}
-        previewRegion={previewRegion}
-        previewIsPlaying={previewIsPlaying}
-        onOpenPreviewRegion={onOpenPreviewRegion}
-        onPreviewRegionChange={onPreviewRegionChange}
-        onPreviewPlay={onPreviewPlay}
-        onPreviewPause={onPreviewPause}
-        onPreviewLoopToggle={onPreviewLoopToggle}
-        onPreviewDismiss={onPreviewDismiss}
-        onPreviewClear={onPreviewClear}
+        onVizChange={onConsensusVizChange}
+        onReferenceModeChange={setReferenceMode}
+        onHandoffToAutoGuess={onHandoffToAutoGuess}
       />
     </div>
   );

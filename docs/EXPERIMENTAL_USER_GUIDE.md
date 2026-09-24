@@ -9,13 +9,22 @@ guide in the same change set.
 > their JSON shape, or be removed entirely between releases. Do not build
 > downstream tooling on these endpoints until they graduate.
 
+> **Per-song Eval is tabbed by annotation kind.** Open any song's Eval
+> stage and the tabs across the top expose **Boundaries · Cues · Spans ·
+> Loops · Lyrics**. Boundaries is the legacy mir_eval table;
+> each other tab fetches the relevant reference layer + the cached
+> detection of every algorithm in that family and renders kind-specific
+> metrics (IoU + frame F1 for spans, bar-snap + phase-pop-free for loops,
+> WER + word-onset F1 for lyrics). Tabs only appear when the matching family flag is on.
+> The all-songs Eval view shows the same tables stacked.
+
 ## Where the flags live
 
 `Settings → Annotation → Experimental annotation types`. Each toggle is
 independent:
 
-- **Enable Loops and Patterns** — schema-only today; UI in progress.
-- **Enable Eye annotation** — second-observer pass over the same sections.
+- **Enable Loops and Riff Patterns** — Loops ship the editor; Riff Patterns
+  composes reusable motif nodes into timeline instances.
 - **Enable SPAN-family detectors** — voicing / instrument-activity intervals
   via Silero-VAD, JDCNet, and PANNs (AudioSet-527 tagging).
 - **Enable CUE-family extras** — BeatNet beats / downbeats / meter,
@@ -24,6 +33,11 @@ independent:
   (pure DSP, no model weights).
 - **Enable LYRICS-family detectors** — Whisper-base multilingual vocal
   transcription. Opens the LYRICS family (per-word + per-line entries).
+- **Enable PATTERN-family detectors** — LoCoMotif DTW-warped motif discovery
+  on beat-synchronous chroma. Opens the PATTERN family (variable-length
+  repeating motifs, grouped by motif id). The manual Patterns layer was removed;
+  motifs now promote into a **Riff Patterns** layer instead — one node per
+  motif, one instance per occurrence.
 
 Flipping a flag on does not by itself bring up the backend services. See
 *Running the experimental servers* below.
@@ -33,16 +47,22 @@ Flipping a flag on does not by itself bring up the backend services. See
 The SPAN-family and BeatNet detectors live in their own docker sidecars so a
 broken install in one doesn't take the others down with it.
 
-**Local dev (`./run.sh`):** the 8 experimental Python servers start
-automatically on ports 8009–8016 alongside the core stack. Heavy deps
-(torch, BeatNet, basic-pitch, panns_inference, openai-whisper, autochord)
-are NOT auto-installed — each server's imports are guarded by try/except, so
-the process starts but `available=false` flows through to the Initialize-
-models panel as `Deps missing`. Install per-family deps with `pip install`
-as listed in `run.sh`.
+**Local dev — lean (`./run.sh`):** the 9 experimental Python servers start
+automatically on ports 8009–8017 alongside the core stack, but their heavy
+deps (torch, BeatNet, basic-pitch, panns_inference, openai-whisper,
+autochord) are **NOT** installed in the lean default. Each server's imports
+are guarded by try/except, so the process starts but `available=false` flows
+through to the Initialize-models panel as `Deps missing`.
+
+**Local dev — full (`./run_all.sh`):** the same launcher with every model
+family installed (≡ `./run.sh --all`) — it pip-installs torch + the
+experimental deps (and builds a Python 3.11 venv for basic-pitch/autochord
+on Python ≥3.12), so all 9 detectors report `Ready`. ~3 GB of wheels on
+first run. To install just one family by hand instead, run the matching
+`pip install` line as listed in `run.sh`.
 
 **Full stack (all sidecars):** activate `--profile experimental-models`
-alongside `--profile demucs-cpu` so all 8 servers run out of the box. The
+alongside `--profile demucs-cpu` so all 9 servers run out of the box. The
 per-family user-settings flag still controls visibility — flipping a flag
 off hides the family's UI without stopping the server.
 
@@ -53,22 +73,32 @@ locally, run
 docker compose --profile experimental-models up --build
 ```
 
-This brings up two extra services alongside the core stack:
+This brings up nine extra services alongside the core stack:
 
 | Service | Port | What it runs |
 |---|---|---|
 | `span`    | 8009 | `tools/python/span_server.py` — Silero-VAD + JDCNet |
 | `beatnet` | 8010 | `tools/python/beatnet_server.py` — BeatNet (CRNN + DBN) |
 | `pitch`   | 8011 | `tools/python/pitch_server.py` — basic-pitch (Spotify, polyphonic notes) |
-| `loop`    | 8012 | `tools/python/loop_server.py` — chroma autocorrelation loop finder |
 | `panns`   | 8013 | `tools/python/panns_server.py` — PANNs CNN14 AudioSet-527 tagging |
-| `cue-extras` | 8014 | `tools/python/cue_extras_server.py` — librosa key, autochord, librosa onsets |
+| `cue-extras` | 8014 | `tools/python/cue_extras_server.py` — librosa key, autochord, librosa onsets, drum transients |
 | `percussive` | 8015 | `tools/python/percussive_server.py` — HPSS percussive spans |
 | `lyrics`  | 8016 | `tools/python/lyrics_server.py` — Whisper-base vocal transcription |
+| `pattern` | 8017 | `tools/python/pattern_server.py` — LoCoMotif motif discovery |
 
 If the profile is not running, the web app's `/api/span/*` and
 `/api/beatnet/*` calls return 503 and the corresponding family UI surfaces
 stay hidden — there is no broken-button state to clean up later.
+
+One exception, and it is what the hosted demo runs on: a family whose
+results are already **cached on disk** stays visible with the sidecar down,
+because the visibility gate asks `/api/<fam>/cached` rather than the server.
+Cached results are read from this deployment's own
+`data/algorithm-outputs/<fam>/` first and from the shipped
+`data-default/algorithm-outputs/<fam>/` second, so the three CC0 demo songs
+show their detector lanes on a host that runs no experimental sidecars at
+all. The lanes are read-only there: *running* a detector still needs the
+profile, and still answers 503 without it.
 
 ## Initialize models
 
@@ -122,8 +152,8 @@ time points with a label).
 ## LOOP family
 
 Output kind: **loops** — labeled intervals representing seamless N-bar
-phrases that audibly repeat. Distinct from spans (no repetition contract)
-and from patterns (no per-beat highlight grid).
+phrases that audibly repeat. Distinct from spans, which carry no repetition
+contract.
 
 ### Detectors
 
@@ -133,6 +163,23 @@ and from patterns (no per-beat highlight grid).
   every platform that runs the existing TimeCues stack. Outputs the
   top-K non-overlapping candidates with their bar count and intra-cycle
   similarity score. Fast (~5–10 s for a 3 min track on CPU).
+
+### Loop-specific eval columns
+
+Beyond the inherited span-style metrics (IoU + frame F1 + edge F1), the
+LOOP eval table adds two loop-quality columns:
+
+- **Bar snap** — fraction of predicted loops whose `start` AND `end`
+  fall within ±50 ms of a bar boundary. Requires a cached BPM
+  detection — without one the cell shows `—`.
+- **Phase-pop free** — fraction of predicted loops whose duration is
+  an integer multiple of the bar length (within ±50 ms). Loops that
+  are non-integer-bar audibly pop when the playback engine wraps; this
+  metric flags them up front.
+
+The bar grid is derived from the cached `/api/bpm/detect/<slug>` result
+(first detector with `beat_times` sets the grid origin; the first
+detector with a numeric `bpm` is the fallback).
 
 ### Evaluation
 
@@ -157,7 +204,7 @@ detector rows still show their "Songs" count.
 Per-layer mode toggle (`'full-annotation'` ↔ `'multiple-candidates'`) is
 implemented in [`evaluation.ts`](../web-app/src/utils/evaluation.ts) and
 surfaced as a compact **Full / Cands** pill in each layer's editor
-toolbar (Cues, Spans, Loops, Patterns — see
+toolbar (Cues, Spans, Loops — see
 [`LayerModePicker.tsx`](../web-app/src/components/inspector-v2/LayerModePicker.tsx)).
 The SPAN-family eval table reads the pill's value off the active span
 reference layer before scoring. Item-level `candidates: [[start, end], ...]`
@@ -169,8 +216,8 @@ arrays work today too: any candidate within tolerance counts as a hit.
   same underlying truth; matching ANY ONE item satisfies the layer.
 
 A global override lives in **Settings → Research → Evaluation → "Score
-region layers as multiple candidates (spans / loops / patterns)"**. When on,
-every span, loop, and pattern layer is scored in **Cands** mode regardless of
+region layers as multiple candidates (spans / loops)"**. When on,
+every span and loop layer is scored in **Cands** mode regardless of
 its per-layer **Full / Cands** pill — a single switch for when you want all of
 a layer's items treated as interchangeable alternatives of the same event.
 When off, each layer's own pill is honoured. Cues and boundaries are
@@ -207,9 +254,9 @@ time is kept on the payload so downstream consumers (eval, MIDI export)
 can use it without re-running. Cache lives at
 `data/algorithm-outputs/pitch/<slug>/basic-pitch.json`.
 
-### librosa key + autochord + librosa onsets
+### librosa key + autochord + librosa onsets + drum transients
 
-Three pure-DSP detectors sharing one slim sidecar (`cue-extras` :8014):
+Four pure-DSP detectors sharing one slim sidecar (`cue-extras` :8014):
 
 - **librosa key** — Krumhansl-Schmuckler chord-tone-profile correlation
   against the 24 major/minor keys. Emits the global key as a cue at t=0
@@ -221,8 +268,43 @@ Three pure-DSP detectors sharing one slim sidecar (`cue-extras` :8014):
 - **librosa onsets** — `librosa.onset.onset_detect` spectral-flux
   transient detection. One cue per onset event, with a confidence
   proportional to onset-envelope peak strength.
+- **drum transients** — the same hits librosa onsets finds, each named
+  `kick`, `snare` or `hat` by which part of the spectrum moved, and each
+  placed on the moment the drum starts rather than 20-30 ms later where
+  librosa onsets marks its peak — so at high zoom the tick sits on the
+  attack you hear, not on its decay. Run it on
+  the **Drums** stem: pick *Drums* in the right sidebar's **Stem filter**,
+  open **CUE EXTRAS** and tick *drum transients*. Its lane draws every hit
+  in its drum's colour — **red kick, blue snare, green hat** — and as tall
+  as it was struck: a full-height tick is that drum at its hardest, a short
+  stub is a ghost note. Hover a tick for `kick · velocity 112 · -3.2 dB`;
+  click it for the full output card. The two numbers mean different things:
+  **velocity** (1-127) compares a hit only with the other hits of the *same*
+  drum, so a full-force hi-hat is 127; the **dB level** compares it with
+  the loudest hit in the whole song, so it is the one that shows a kick is
+  louder than a hat. On heavily distorted drums the kick/snare/hat names
+  are unreliable.
 
 Cache at `data/algorithm-outputs/cue-extras/<slug>/<algo>.json`.
+
+### Cues eval columns
+
+The Cues tab compares every cue-emitting detector against the song's
+first `cues` annotation layer at a per-kind tolerance:
+
+| Algorithm | Tolerance | Why |
+|---|---|---|
+| BeatNet downbeats          | 100 ms | beat-onset alignment |
+| basic-pitch onsets         |  50 ms | sharp note attacks |
+| librosa-key changes        | 250 ms | mode transitions are perceptually wide |
+| autochord chord changes    | 250 ms | same |
+| librosa-onsets             |  50 ms | DSP onsets are tight by construction |
+| drum transients            |  50 ms | same hits as librosa-onsets, so the same tolerance |
+
+Columns: precision · recall · F1 · MNBD (mean nearest-cue distance, s).
+Each algorithm's prediction set is projected to `{time, label}[]`
+before scoring via `evaluateCueLayer` so all six share the same
+boundary-style point-F1 metric.
 
 ## LYRICS family
 
@@ -245,8 +327,35 @@ as their alignment target. The panel auto-saves on a 600 ms debounce; word
 - **Whisper base** — OpenAI Whisper "base" multilingual transcription.
   ~140 MB checkpoint lazy-downloaded into the shared `timecues-model-cache`
   named volume on first detect. CPU-only torch wheels keep the sidecar
-  multi-platform. Word-level timestamps are coarse (~200 ms) — refining
-  with WhisperX / ctc-forced-aligner is the planned Phase 5 follow-up.
+  multi-platform. Word-level timestamps are coarse (~200 ms) — refine
+  with the CTC forced aligner below if you have the reference text.
+
+- **CTC forced aligner** — `MahmoudAshraf97/ctc-forced-aligner` (MIT)
+  pinned to `facebook/wav2vec2-base-960h` (Apache-2.0, English-only).
+  ~360 MB checkpoint lazy-downloaded into the shared HuggingFace cache
+  on first detect. Requires the **Reference lyrics** panel to be filled
+  in for the song — without a transcript the detector returns ok=false
+  with a clear error message. Tight word-level onset/offset (~30 ms)
+  vs. Whisper's coarse ~200 ms.
+  > **Note** — the package's default `MMS_FA` model (CC-BY-NC) is **not**
+  > used; the integration stays fully permissively-licensed.
+
+### Lyrics eval columns
+
+The LYRICS eval table inherits the line-level IoU + edge-F1 columns
+from the span family (every `kind: 'line'` ref/est item gets scored
+as a span) and adds two word-level metrics on top:
+
+- **WER** — classic Levenshtein word distance between the reference's
+  normalised word sequence and the detector's, divided by the
+  reference word count. Whisper-base sees this move; ctc-forced-aligner
+  forces it to 0 by construction (the model aligns the reference text
+  itself, so the word sequence is fixed).
+- **Word onset F1** — among text-aligned word pairs (output of the
+  Wagner-Fischer DP), a true-positive requires the predicted onset
+  to land within ±50 ms of the reference onset. Whisper-base's ~200 ms
+  granularity caps this in the 0.3–0.6 range on most tracks; ctc-forced-aligner
+  routinely sits above 0.85 when the reference text is accurate.
 
 When BeatNet returns a meter and the value differs from the currently
 selected Time Signature, a violet `BeatNet: 4/4` chip appears next to
@@ -254,25 +363,147 @@ the Time Signature select in the Song Info panel. Click it to apply
 BeatNet's detected meter. The chip hides itself when the current value
 already matches (or when no meter could be inferred from too few bars).
 
+## PATTERN family
+
+Output kind: **variable-length repeating motifs** discovered via DTW-warped
+matching on beat-synchronous chroma. Each detected motif is a *set* of
+similar (but not identical, and not necessarily evenly spaced) intervals.
+Each occurrence surfaces as one inspector tile labelled `Motif N · k/m`
+so the user can see "this is occurrence k of m for motif N" at a glance.
+Tiles of the same motif share a color.
+
+### Detector
+
+| ID | What it does | Weights | Sidecar |
+|---|---|---|---|
+| `locomotif` | [LoCoMotif](https://github.com/ML-KULeuven/locomotif) (MIT, KU Leuven) — applies dynamic time warping over beat-synchronous chroma to find repeating motif sets. Variable length, time-warped. | None (pure DSP + numba JIT) | `pattern` (port 8017) |
+
+### How it differs from LOOP
+
+The LOOP family (`chroma-autocorr`) finds *exact-length, evenly-spaced*
+N-bar repeats — useful for "is this loopable as an 8-bar phrase?". The
+PATTERN family is broader: it discovers any musical motif that repeats,
+even if the occurrences are different lengths and arrive at irregular
+times. A chorus-with-variations or a riff that gets stretched/compressed
+under a vocal line is exactly the kind of thing LoCoMotif catches that
+chroma-autocorr misses.
+
+### What lands on disk
+
+**Promoting motifs into an annotation layer.** *Copy → Manual* on a LoCoMotif
+lane builds a **Riff Patterns** layer, not the Spans layer every other interval
+family produces: each `motif_id` becomes one boundary node and each occurrence
+an instance of it, so occurrences of the same figure stay tied together (same
+node, same colour) instead of collapsing into unrelated bands. The node's
+length is the median occurrence length, since DTW-warped occurrences differ.
+Needs a song BPM — a riff node is measured in beats — and falls back to the
+ordinary span copy without one.
+
+`data/algorithm-outputs/pattern/<slug>/locomotif.json` contains:
+
+```json
+{
+  "patterns": [
+    {
+      "start": 32.39, "end": 39.17,
+      "label": "Motif 1 · 7/9",
+      "motif_id": 1,
+      "occurrence_index": 6,
+      "occurrence_count": 9,
+      "confidence": 0.87
+    },
+    ...
+  ]
+}
+```
+
+### One-time numba JIT warm-up
+
+The first `/api/pattern/detect` call after the sidecar boots pays a one-time
+~15 s numba JIT compile cost; subsequent calls are seconds. The Initialize
+Models panel triggers this explicitly so the user can pay the warm-up cost
+before clicking Run on a song.
+
 ## Warm models before first use (dev only)
 
 The Initialize panel is the recommended way to warm models during normal
-use. For batch dev work (multiple containers / fresh machines) you can
-trigger the same warming via curl once the sidecars are up:
+use. For batch dev work (multiple containers / fresh machines) the
+project ships `tools/warm-experimental-models.sh` — a one-shot curl
+loop over every `/api/<family>/algorithms` + `/api/<family>/initialize`
+endpoint:
 
 ```sh
-# SPAN family
+# Warm everything against the default dev base (http://localhost:5174):
+./tools/warm-experimental-models.sh
+
+# Custom host (VM, remote dev, CI):
+./tools/warm-experimental-models.sh -h http://my-remote-host:5173
+
+# Subset of families:
+./tools/warm-experimental-models.sh --only lyrics,span
+```
+
+The script skips algorithms the sidecar reports as `available=false`
+(deps missing) and prints a Ready / Failed / Skipped table at the end.
+Exit code 1 if any /initialize returned non-2xx so it slots cleanly
+into CI.
+
+For ad-hoc per-algorithm warming the underlying endpoints still work:
+
+```sh
 curl -XPOST http://localhost:5173/api/span/initialize \
      -H 'content-type: application/json' \
      -d '{"algo": "silero-vad"}'
-
-# BeatNet
-curl -XPOST http://localhost:5173/api/beatnet/initialize
 ```
 
-A `make warm-experimental-models` target is listed as TODO in
-`integration_plan.md` Phase 0 and will land once the wider Phase-2 docs pass
-catches up to it.
+## Setlist workspace
+
+A separate top-level workspace at `/setlist` that orders the corpus into a
+DJ-style play sequence. Off by default — flip on **Enable Setlist workspace
+(algorithmic DJ-style ordering)** under Settings → Experimental to expose
+the tab.
+
+### What it does
+
+Pulls the cached BPM (median across the 5 detectors) for every song in your
+corpus and runs a greedy nearest-neighbour pass over the included subset:
+seed with the lowest-BPM song, then repeatedly pick whichever remaining song
+has the smallest BPM gap to the tail of the sequence. Pairs whose BPMs
+differ by ≥ 8 score 0 and are effectively pushed to the end. Songs with no
+cached BPM trail at the very end in their original order.
+
+### Controls
+
+- **Strategy** — only `BPM ladder` ships in v0. The dropdown is the extension
+  point for `harmonic-mix` (once Phase 3 key/chord detectors land) and
+  future strategies.
+- **Weights** — sliders for BPM, Meter, and Energy. v0 honours BPM and
+  Meter; the Energy slider is disabled until that scorer ships.
+- **Corpus picker** — every song is included by default. Uncheck songs you
+  want to skip without removing them from the corpus.
+- **Generated order panel** — shows the ordered list with each pair's Δ BPM,
+  meter match (✓ / ✗), and combined score.
+
+### Saving & exporting
+
+Setlists persist per-annotator under
+`data/setlists/<your-id>/<name>.json`. The **Save** button writes the
+current order plus the strategy + weights used; the dropdown picker lists
+your saved setlists. **Export JSON** downloads the same payload locally.
+
+Server-side writes require team membership — public / demo visitors cannot
+save and will see *Save failed — are you signed in as a team member?*. The
+demo route is blocked entirely, since demo identities have no persistent
+storage.
+
+### What's next
+
+Meter scoring is wired in but currently weighted 0 by default; flip the
+slider up to bias same-meter neighbours. Energy and harmonic-mix scorers
+arrive once the underlying cached signals (energy curves are already in
+`mir_server.py`; key / chord wait on Phase 3) are plumbed through the
+strategy registry. See `future_work/README.md` for the broader DJ-set
+research track.
 
 ## When a feature graduates
 

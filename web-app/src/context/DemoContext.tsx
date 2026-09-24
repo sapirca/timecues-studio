@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { getIsDemo, setIsDemo, subscribeIsDemo } from '../state/demoFlag';
 import { demoClearAll, demoCountSavedWork } from '../services/demoStorage';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 interface DemoContextValue {
   /** True while the visitor is in Demo Mode. */
@@ -139,6 +140,12 @@ function ExitDemoDialog({
   onKeep: () => void;
   onDiscard: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // aria-modal="true" is a promise to assistive tech that nothing outside is
+  // reachable; without a trap, Tab walked straight out into the page behind
+  // the scrim and made that a lie.
+  useFocusTrap(panelRef, true);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
     window.addEventListener('keydown', onKey);
@@ -153,6 +160,7 @@ function ExitDemoDialog({
       onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="exit-demo-title"

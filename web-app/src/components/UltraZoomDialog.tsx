@@ -53,22 +53,25 @@ export function UltraZoomDialog({
 
           <div className="px-5 py-4 space-y-3">
             <p className="text-[12px] text-slate-300 leading-relaxed">
-              You've reached the maximum safe-buffer zoom ({fmt(extendedCap)}).
-              The cap is set so the spectrogram-style canvases stay within
-              the browser's max-canvas size.
+              You've reached the current zoom limit ({fmt(extendedCap)}).
             </p>
             <p className="text-[12px] text-slate-300 leading-relaxed">
               Allow zoom up to <span className="text-rose-200 font-semibold">{fmt(ultraCap)}</span>?
-              Going further makes the <span className="text-slate-200">spectrogram, chromagram, cepstrogram, and 3-Band</span> canvases
-              progressively <span className="text-rose-200">softer/blurrier</span> with zoom
-              — their internal pixel buffer can no longer keep up with the CSS
-              width, so each CSS pixel ends up covering less than one buffer
-              pixel. The waveform, time grid, and playhead stay crisp.
+              Every row stays <span className="text-slate-200">pixel-sharp</span> — the spectrogram
+              re-runs its FFT at the finer time resolution rather than magnifying a picture — but
+              that detail is computed as you go.
+            </p>
+            <p className="text-[12px] text-rose-200/90 leading-relaxed">
+              Expect panning to feel heavier: the rows repaint section by section as you scroll, and
+              with every signal row on that is roughly a tenth of a second of work per section. Turn
+              off rows you are not using (Signals menu) and it gets noticeably lighter.
             </p>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              There is no way around this in the browser — past the browser's
-              max-canvas size, resolution must give. You can return to lower
-              zoom at any time to recover full sharpness.
+              Memory stays bounded — only the sections near the viewport are held, and they are
+              released when you zoom back out. Past roughly ×300 you are looking at the limits of
+              the analysis itself: the 3-Band envelope is kept at 0.5 ms and the MFCC / chroma /
+              tempogram / SSM rows at their analysis hop, so those stay sharp but stop revealing
+              more.
             </p>
 
           </div>

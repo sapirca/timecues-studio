@@ -2,24 +2,34 @@ import { useEffect, useRef, useState, useMemo, useCallback, type RefObject } fro
 import WaveSurfer from 'wavesurfer.js';
 import { OverviewWaveform } from './OverviewWaveform';
 import type { ScaleMode } from '../utils/waveformAnalysis';
+import { zoomCenterFor } from '../utils/zoomCenter';
 import { visibleGridLines } from '../utils/beatGrid';
-import { AnchorFlagOverlay } from './inspector-v2/AnchorFlagOverlay';
+import { GridLines } from './GridLines';
+import { useBarBeatOrigin } from '../context/SettingsContext';
+import { GridSegmentLane, GridSegmentCutOverlay } from './inspector-v2/GridSegmentLane';
+import type { ResolvedSegment } from '../utils/gridSegments';
 import { ManualGridEditor } from './inspector-v2/ManualGridEditor';
 import { PendingHighlightOverlay, type PendingSelection } from './inspector-v2/AnnotationOverlays';
 import type { PreviewRegion } from './inspector-v2/PreviewWindow';
 import { PreviewControlsBar } from './inspector-v2/PreviewControlsBar';
-import type { TempoAnchor } from '../types/songInfo';
 import { useExtendedZoom } from '../hooks/useExtendedZoom';
+import { isSamePointer, isSecondaryPointer, pointerIdOf, preventPressDefault } from '../hooks/useTimelineDrag';
 import { PAUSE_PLAYBACK_EVENT } from '../utils/playerEvents';
-import { ExtendedZoomDialog } from './ExtendedZoomDialog';
 import { UltraZoomDialog } from './UltraZoomDialog';
 
 const SCALE_STORAGE_KEY = 'tc.overviewWaveformScale';
 
 // Zoom cap configuration — see the cap-computation block inside PlayerPanel.
+// The sibling rows (spectrogram, MFCC, chroma, tempogram, SSM, 3-Band, the
+// signal sparklines) are tiled now — each paints small buffers at full device
+// resolution however wide the timeline gets, so none of them has a maximum
+// width any more. What's left is the cost of the tiles that scroll into view,
+// which is what the Ultra prompt is now about.
 const MAX_BUFFER_PX = 32_000;
 const STANDARD_CEILING = 32;
-const ULTRA_CEILING = 128;
+// One device pixel ≈ one audio sample at roughly ×1000 on a typical pane;
+// past that there is nothing left to resolve.
+const ULTRA_CEILING = 1024;
 
 function readStoredScale(): ScaleMode {
   if (typeof window === 'undefined') return 'db';
@@ -55,6 +65,12 @@ const DEFAULT_PLAYER_ACCENT: PlayerAccent = {
   progressColor: '#818cf8',
 };
 
+/** Frames [t1, t2] in the viewport. `pad` is the margin kept on each side as
+ *  a fraction of the range (default 0.15); a shared link's window passes 0 to
+ *  land on exactly the seconds it names. False when the player has no layout
+ *  or duration yet, so a caller restoring a view knows to try again. */
+export type ZoomToRange = (t1: number, t2: number, opts?: { pad?: number }) => boolean;
+
 interface PlayerPanelProps {
   url: string;
   trackName?: string;
@@ -82,8 +98,21 @@ interface PlayerPanelProps {
   seekRef?: RefObject<((time: number) => void) | null>;
   /** Ref populated with a play() function once the player is ready */
   playRef?: RefObject<(() => void) | null>;
+  /** Ref populated with a reader for the LIVE media clock once the player is
+   *  ready. `onTimeUpdate` is the same number after a rAF coalesce, a setState
+   *  and a full inspector re-render; anything that places audio (the click
+   *  track) has to anchor on this instead — see the note on the audioprocess
+   *  handler below. Returns null before the player is ready. */
+  getTimeRef?: RefObject<(() => number) | null>;
   /** Ref populated with a pause() function once the player is ready */
   pauseRef?: RefObject<(() => void) | null>;
+  /** Ref populated with a "someone else is sounding the audio" playhead
+   *  setter. While the loop-preview engine runs, WaveSurfer is paused and
+   *  emits no audioprocess, so this player's own cursor would sit frozen
+   *  where playback stopped while every lane row below swept through the
+   *  loop. The page calls this from the engine's clock to keep the two in
+   *  step, and with `null` to hand the playhead back to the media element. */
+  externalTimeRef?: RefObject<((time: number | null) => void) | null>;
   /** Called whenever WaveSurfer's scroll position changes */
   onScrollChange?: (scrollLeft: number) => void;
   /** Ref populated with a function to programmatically set the WaveSurfer scroll position (pixels) */
@@ -92,6 +121,13 @@ interface PlayerPanelProps {
   zoomInRef?: RefObject<(() => void) | null>;
   zoomOutRef?: RefObject<(() => void) | null>;
   zoomResetRef?: RefObject<(() => void) | null>;
+  /** What a ± zoom step should keep in the middle of the viewport, when the
+   *  page knows better than the playhead. Returns a track time in seconds —
+   *  the centre of the selected annotation item, else the centre of the
+   *  highlighted region — or null when neither exists, in which case the
+   *  panel falls back to the playhead (if it's on screen) and then to the
+   *  centre of the viewport the user is currently looking at. */
+  getZoomFocusTime?: () => number | null;
   /** Prompt-free single-step zoom for pinch / Ctrl+wheel. Hard-caps at the
    *  currently-authorized tier so trackpad pinch never auto-progresses the
    *  user into Extended or Ultra zoom — those tiers require an explicit
@@ -101,9 +137,15 @@ interface PlayerPanelProps {
   /** Scroll the viewport so `time` is centered (or near-left when align='left'). */
   scrollToTimeRef?: RefObject<((time: number, align?: 'center' | 'left') => void) | null>;
   /** Zoom + scroll so [t1, t2] fits the viewport with a small padding margin. */
-  zoomToRangeRef?: RefObject<((t1: number, t2: number) => void) | null>;
+  zoomToRangeRef?: RefObject<ZoomToRange | null>;
   /** Called when play/pause state changes */
   onPlayingChange?: (playing: boolean) => void;
+  /** Playback speed multiplier (1 = normal, 0.5 = half-speed, …). Applied
+   *  once here at the audio source via WaveSurfer's setPlaybackRate, so the
+   *  playhead — and every currentTime-driven viz (karaoke, beat grid sweep) —
+   *  slows in lockstep with no extra wiring. Pitch is preserved so the song
+   *  stays musically recognizable when slowed. Defaults to 1. */
+  playbackRate?: number;
   /** Theme accent colors. Defaults to indigo. */
   accent?: PlayerAccent;
   /** Called while the user holds Alt and drags horizontally on the waveform to slide the grid. */
@@ -112,29 +154,39 @@ interface PlayerPanelProps {
   onGridOffsetDragStart?: (currentOffset: number) => void;
   /** When true, render bar numbers (1, 2, 3…) above the bar lines. */
   showBarNumbers?: boolean;
-  /** Tempo anchors. When provided and non-empty, the beat grid becomes
-   *  piecewise-constant — each segment uses its anchor's BPM for spacing.
-   *  Also drives the flag overlay above the waveform when `anchorFlagMode`
-   *  is non-null. */
-  anchors?: readonly TempoAnchor[];
   /** Per-beat overrides (Manual mode). Sparse map keyed by global integer
    *  beat index → absolute timestamp in seconds. Pinned beats render at
    *  their override positions and are tagged so the editor can recolor
    *  them. */
   beatOverrides?: Readonly<Record<string, number>>;
-  /** Active grid mode for the anchor flags. 'dynamic' → cyan, 'manual' →
-   *  emerald. `null` or 'static' hides the flag layer. */
-  anchorFlagMode?: 'dynamic' | 'manual' | null;
-  /** Right-click handler for an anchor flag. Only wired in manual mode. */
-  onDeleteAnchor?: (index: number) => void;
-  /** Drag-an-anchor-flag handlers. Only wired in manual mode. */
-  onAnchorDrag?: (index: number, newTime: number) => void;
-  onAnchorDragStart?: (index: number) => void;
+  /** Resolved grid segments. More than one means the song is split, and the
+   *  beat grid is drawn per segment — each with its own tempo, meter and bar
+   *  1 — instead of from the global BPM. */
+  gridSegments?: readonly ResolvedSegment[];
+  /** Show the editable grid-segment lane under the waveform (DataPrep only).
+   *  Without the drag/split callbacks it renders read-only. */
+  showGridSegmentLane?: boolean;
+  onSegmentSelect?: (segment: ResolvedSegment, anchor: { x: number; y: number }) => void;
+  onSegmentHeadDrag?: (segment: ResolvedSegment, time: number) => void;
+  onSegmentHeadDragStart?: (segment: ResolvedSegment) => void;
+  onSegmentHeadDragEnd?: (segment: ResolvedSegment) => void;
+  onDeleteGridSegment?: (segment: ResolvedSegment) => void;
+  onSplitGridAt?: (time: number) => void;
+  selectedSegmentId?: string | null;
+  /** Segment whose cut bar gets its beat-count chip drawn over the waveform.
+   *  The hatch is unconditional; the chip is not, because it covers audio —
+   *  the host passes the segment whose editor is actually open, so the count
+   *  is on screen while it is being acted on and nowhere else. */
+  cutLabelSegmentId?: string | null;
+  /** Snap a segment head being dragged. Identity when snapping is off. */
+  snapSegmentTime?: (time: number, dragged: ResolvedSegment, shiftKey: boolean) => number;
+  /** Whether a plain head drag snaps right now — drawn in the drag readout. */
+  segmentSnapOn?: boolean;
   /** When 'manual' (and the rest of the manual-edit handlers are wired),
    *  render the per-beat ManualGridEditor as a transparent overlay on top
    *  of the waveform — grabbable hit zones at each beat, seek-clicks still
    *  fall through between them. */
-  gridMode?: 'static' | 'dynamic' | 'manual';
+  gridMode?: 'static' | 'mapped' | 'manual';
   /** Manual-mode per-beat drag commit. Receives the beat's macro time, the
    *  dropped time, and the global integer beat index (override key). */
   onBeatDrag?: (tOrig: number, tNew: number, beatIndex: number) => void;
@@ -163,6 +215,10 @@ interface PlayerPanelProps {
    *  bar above the cyan band on this OverviewWaveform — the in-band bars on
    *  the viz / algo-inspect rows below are intentionally hidden because the
    *  viz scroll container's `overflow-y-hidden` would clip them. */
+  /** Called when playback reaches the end of a non-looping `previewRegion`.
+   *  The wrap/stop itself happens here, off the media clock — this only tells
+   *  the parent so it can restore its cursor anchor. */
+  onPreviewEnd?: () => void;
   previewControls?: {
     isPlaying: boolean;
     loop: boolean;
@@ -198,14 +254,17 @@ function parseTrackName(trackName?: string): { artist: string; song: string } | 
   return { artist: 'Unknown Artist', song: trimmed };
 }
 
-export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, beatOffset = 0, beatsPerBar = 4, barGroupSize, subBeatDivision, beatGroupSize, gridThickness = 1, onBufferReady, onReady, onTimeUpdate, onViewChange, seekRef, playRef, pauseRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef, onScrollChange, onPlayingChange, accent = DEFAULT_PLAYER_ACCENT, onGridOffsetChange, onGridOffsetDragStart, showBarNumbers = false, anchors, beatOverrides, anchorFlagMode, onDeleteAnchor, onAnchorDrag, onAnchorDragStart, gridMode, onBeatDrag, onClearBeatOverride, manualEditLocked = false, pendingSelection, previewRegion, onUserSeek, onUserRegion, previewControls }: PlayerPanelProps) {
+export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, beatOffset = 0, beatsPerBar = 4, barGroupSize, subBeatDivision, beatGroupSize, gridThickness = 1, onBufferReady, onReady, onTimeUpdate, onViewChange, seekRef, playRef, pauseRef, getTimeRef, externalTimeRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, getZoomFocusTime, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef, onScrollChange, onPlayingChange, playbackRate = 1, accent = DEFAULT_PLAYER_ACCENT, onGridOffsetChange, onGridOffsetDragStart, showBarNumbers = false, beatOverrides, gridSegments, showGridSegmentLane = false, onSegmentSelect, onSegmentHeadDrag, onSegmentHeadDragStart, onSegmentHeadDragEnd, onDeleteGridSegment, onSplitGridAt, selectedSegmentId, cutLabelSegmentId = null, snapSegmentTime, segmentSnapOn = false, gridMode, onBeatDrag, onClearBeatOverride, manualEditLocked = false, pendingSelection, previewRegion, onUserSeek, onUserRegion, onPreviewEnd, previewControls }: PlayerPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  // Tracks the inner anchor-row div whose width = waveformWidth. Passed to
-  // AnchorFlagOverlay so its drag hook maps clientX → time across the full
-  // zoomed timeline (the parent rect is post-transform, so its width still
-  // equals waveformWidth even after the translateX scroll).
-  const anchorRowRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
+  // Last trackName the WS-init effect saw, and the zoom/center-time to restore
+  // once the new buffer is ready — lets switching stems of the SAME song (url
+  // changes but trackName doesn't) keep the user's current viewport instead of
+  // resetting to fit-to-container. A genuine track change (trackName differs,
+  // or nothing was zoomed in) leaves this null and falls through to the normal
+  // fit-to-container reset below.
+  const lastTrackNameRef = useRef<string | undefined>(undefined);
+  const restoreViewRef = useRef<{ zoom: number; centerTime: number } | null>(null);
   const onBufferReadyRef = useRef(onBufferReady);
   const onReadyRef = useRef(onReady);
   const onTimeUpdateRef = useRef(onTimeUpdate);
@@ -213,6 +272,33 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   const onScrollChangeRef = useRef(onScrollChange);
   const onPlayingChangeRef = useRef(onPlayingChange);
   const onUserSeekRef = useRef(onUserSeek);
+  // The preview region is mirrored into a ref (not read from the prop) because
+  // the WaveSurfer init effect below closes over it once per URL, and because
+  // the whole point of the end-check is to run *before* React is involved.
+  const previewRegionRef = useRef(previewRegion);
+  const onPreviewEndRef = useRef(onPreviewEnd);
+  // Tracks the pending requestAnimationFrame id used to coalesce WaveSurfer's
+  // sub-frame `audioprocess` events into one setCurrentTime + onTimeUpdate
+  // per displayed frame. Lives on the component (not inside the WS-init
+  // effect closure) so the seek path can also cancel it.
+  const audioProcessRafRef = useRef<number | null>(null);
+  // The scroll offset that went out with the last published time. The
+  // per-frame audioprocess flush publishes a time only while this still
+  // matches WaveSurfer's live offset — otherwise WS is mid auto-scroll and
+  // the 'scroll' handler owns the frame (see below).
+  const publishedScrollRef = useRef(0);
+  // The playhead is positioned by direct DOM write, not by React style props.
+  // WaveSurfer scrolls its own container every frame while playing, so a
+  // playhead placed from the `scrollLeft` React state trails the waveform (and
+  // every viz row, which scrolls in the same frame WS does) by one render.
+  // Measured at ×32 zoom during playback: every viz-row cursor agreed at
+  // x=707 while this one sat at x=718 — an 11 px gap that reads as the
+  // playhead being drawn twice, and that widens with zoom. Reading
+  // `ws.getScroll()` live at write time removes the render from the loop.
+  const playheadRef = useRef<HTMLDivElement | null>(null);
+  const effectiveZoomRef = useRef(0);
+  const playheadTimeRef = useRef(0);
+  const placePlayheadRef = useRef<((t?: number) => void) | null>(null);
   useEffect(() => { onBufferReadyRef.current = onBufferReady; }, [onBufferReady]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onTimeUpdateRef.current = onTimeUpdate; }, [onTimeUpdate]);
@@ -220,22 +306,27 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   useEffect(() => { onScrollChangeRef.current = onScrollChange; }, [onScrollChange]);
   useEffect(() => { onPlayingChangeRef.current = onPlayingChange; }, [onPlayingChange]);
   useEffect(() => { onUserSeekRef.current = onUserSeek; }, [onUserSeek]);
+  useEffect(() => { previewRegionRef.current = previewRegion; }, [previewRegion]);
+  useEffect(() => { onPreviewEndRef.current = onPreviewEnd; }, [onPreviewEnd]);
 
   // Global pause request (fired by the workspace tab strip before a tab switch
   // so audio doesn't keep playing across the change). The 'pause' WS event wired
   // below already syncs isPlaying + onPlayingChange, so we only need ws.pause().
   useEffect(() => {
     const onPauseRequest = () => {
-      console.log('[tabswitch] pause listener fired; ws?', !!wsRef.current, 'isPlaying?', wsRef.current?.isPlaying());
       wsRef.current?.pause();
     };
     window.addEventListener(PAUSE_PLAYBACK_EVENT, onPauseRequest);
     return () => window.removeEventListener(PAUSE_PLAYBACK_EVENT, onPauseRequest);
   }, []);
 
+  // Bar / beat numbering convention (first bar = 1 or 0) — a display setting.
+  const barBeatOrigin = useBarBeatOrigin();
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  // The elapsed-time digits, for the frames where an outside clock owns them.
+  const elapsedReadoutRef = useRef<HTMLSpanElement | null>(null);
   const [duration, setDuration] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -268,18 +359,13 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     return () => mq.removeEventListener('change', onChange);
   }, [pixelRatio]);
 
-  // Opt-in "extended zoom" — when the user accepts, spectrogram-style canvases
-  // drop their internal devicePixelRatio to 1 so the buffer stays under the
-  // browser's max-canvas limit even at high zoom. Cost: slightly softer
-  // overlays on HiDPI screens. See ExtendedZoomDialog for the user-facing
-  // explanation.
+  // Opt-in extended + ultra zoom — approved together via a single UltraZoomDialog.
   const {
     enabled: extendedZoom,
     setEnabled: setExtendedZoomEnabled,
     ultraEnabled: ultraZoom,
     setUltraEnabled: setUltraZoomEnabled,
   } = useExtendedZoom();
-  const [showExtendedZoomPrompt, setShowExtendedZoomPrompt] = useState(false);
   const [showUltraZoomPrompt, setShowUltraZoomPrompt] = useState(false);
 
   // Track container width for grid positioning
@@ -331,12 +417,35 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     return () => el.removeEventListener('wheel', onWheel);
   }, [pinchZoomInRef, pinchZoomOutRef]);
 
+  // Fit zoom = container fills duration (WaveSurfer's default)
+  const fitZoom = containerWidth > 0 && duration > 0 ? containerWidth / duration : 0;
+
+  // Effective px/sec passed to WaveSurfer
+  const effectiveZoom = zoom > 0 ? zoom : fitZoom;
+  effectiveZoomRef.current = effectiveZoom;
+
   useEffect(() => {
     const el = containerRef.current;
     if (!url || !el) return;
 
+    // Same song, different stem, and the user had actually zoomed in (not
+    // just fit-to-container): remember where they were looking so it can be
+    // restored once the new stem's buffer is ready, instead of snapping back
+    // out to the whole-track view.
+    const isStemSwap = isReady && lastTrackNameRef.current !== undefined && lastTrackNameRef.current === trackName;
+    restoreViewRef.current = isStemSwap && zoom > 0 && effectiveZoom > 0
+      ? { zoom, centerTime: (scrollLeft + containerWidth / 2) / effectiveZoom }
+      : null;
+    lastTrackNameRef.current = trackName;
+
     setIsReady(false);
+    // Tearing down the old WaveSurfer stops playback without emitting 'pause',
+    // so the parent's playing flag has to be cleared by hand here. Skipping it
+    // leaves every consumer of onPlayingChange (the preview region's play/pause
+    // bar, most visibly) stuck showing "playing" after a stem swap, where its
+    // pause click is a no-op on already-paused audio.
     setIsPlaying(false);
+    onPlayingChangeRef.current?.(false);
     setCurrentTime(0);
     setDuration(0);
     setScrollLeft(0);
@@ -345,64 +454,182 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
 
     // WaveSurfer still owns playback / scroll / zoom math, but renders nothing
     // visible — the OverviewWaveform canvas (mounted below) draws the peak/RMS
-    // dual envelope on top. WS keeps drawing the playback cursor.
+    // dual envelope on top, and the playhead is drawn by this component.
+    //
+    // WS used to draw the cursor itself, and that made it the one element on
+    // screen painted from WaveSurfer's internal clock while everything else —
+    // this player's canvas and overlays, and every viz row below — is painted
+    // from React state a frame or two later. At fit zoom nobody could see the
+    // difference; at x128 a frame is tens of pixels, so the player's cursor
+    // and the rows' cursors visibly disagreed during playback. Now nothing
+    // paints from WS's clock: `cursorWidth: 0`.
     const ws = WaveSurfer.create({
       container: el,
       waveColor: 'rgba(0,0,0,0)',
       progressColor: 'rgba(0,0,0,0)',
       cursorColor: '#ef4444',
-      cursorWidth: 2,
+      cursorWidth: 0,
       height: 96,
       normalize: false,
     });
 
     const t0 = performance.now();
     const tag = `[PlayerPanel] ${url}`;
-    console.log(`${tag} ← mount, calling ws.load()`);
 
-    // Fires while the audio file bytes are downloading. Stalls here usually
-    // mean the server is hung or the response is much larger than expected.
-    ws.on('loading', (percent: number) => {
-      console.log(`${tag} loading: ${percent}% (+${Math.round(performance.now() - t0)}ms)`);
-    });
+    // Write the playhead's x straight to the DOM from the live clock + live
+    // scroll. Called from every WS event that can move either one, so the
+    // playhead lands on the same pixel the waveform and the viz rows do.
+    const placePlayhead = (t?: number) => {
+      const node = playheadRef.current;
+      if (node === null) return;
+      if (t !== undefined) playheadTimeRef.current = t;
+      const z = effectiveZoomRef.current;
+      if (z <= 0) return;
+      node.style.transform = `translateX(${playheadTimeRef.current * z - ws.getScroll()}px)`;
+    };
+    placePlayheadRef.current = placePlayhead;
 
     ws.on('ready', () => {
+      placePlayhead(ws.getCurrentTime());
       const dur = ws.getDuration();
-      const buf = ws.getDecodedData();
-      console.log(
-        `${tag} ready (+${Math.round(performance.now() - t0)}ms)`,
-        { duration: dur, sampleRate: buf?.sampleRate, channels: buf?.numberOfChannels, length: buf?.length },
-      );
       setDuration(dur);
       setIsReady(true);
       onReadyRef.current?.();
+      // Same song, different stem: restore the zoom/viewport the user had
+      // before the swap (captured above) instead of leaving them at the
+      // fit-to-container default the reset above just applied. Applied
+      // directly on `ws` rather than via the pendingUserZoomRef/zoom-apply
+      // effect below, which is only ever written from the zoomIn/zoomOut/etc.
+      // handlers.
+      const restore = restoreViewRef.current;
+      restoreViewRef.current = null;
+      if (restore) {
+        const cw = el.clientWidth;
+        const target = restore.centerTime * restore.zoom - cw / 2;
+        const maxScroll = Math.max(0, restore.zoom * dur - cw);
+        const clamped = Math.max(0, Math.min(maxScroll, target));
+        ws.zoom(restore.zoom);
+        ws.setScroll(clamped);
+        setZoom(restore.zoom);
+        // The zoom-apply effect below also fires on this isReady/zoom change
+        // and re-calls ws.zoom() with the same value; re-assert scroll after
+        // it settles in case that recomputes the scrollable width.
+        requestAnimationFrame(() => {
+          if (wsRef.current) wsRef.current.setScroll(clamped);
+        });
+      }
       if (seekRef) seekRef.current = (time: number) => ws.seekTo(Math.max(0, Math.min(1, time / dur)));
       if (playRef) playRef.current = () => ws.play();
+      if (getTimeRef) getTimeRef.current = () => ws.getCurrentTime();
       if (pauseRef) pauseRef.current = () => ws.pause();
+      if (externalTimeRef) externalTimeRef.current = (time: number | null) => {
+        // `null` = the other engine stopped; fall back to where the media
+        // element actually sits, which is where Play would resume from.
+        const t = time ?? ws.getCurrentTime();
+        placePlayhead(t);
+        // Written, not set: this runs once per frame off someone else's audio
+        // clock, and the same rule the playhead follows applies to the digits
+        // beside it — a setState per frame from outside React's own event
+        // plumbing is how this page ends up in a render loop.
+        const readout = elapsedReadoutRef.current;
+        if (readout) readout.textContent = formatTime(t);
+      };
       if (wsScrollRef) wsScrollRef.current = (sl: number) => ws.setScroll(sl);
     });
 
     ws.on('decode', () => {
       const buf = ws.getDecodedData();
-      console.log(
-        `${tag} decode (+${Math.round(performance.now() - t0)}ms)`,
-        buf
-          ? { duration: buf.duration, sampleRate: buf.sampleRate, channels: buf.numberOfChannels, length: buf.length }
-          : 'no buffer',
-      );
       if (buf) {
         setAudioBuffer(buf);
         onBufferReadyRef.current?.(buf);
       }
     });
 
-    ws.on('audioprocess', () => {
-      const t = ws.getCurrentTime();
+    // WaveSurfer fires `audioprocess` faster than the display can repaint
+    // (one event per audio-buffer slice). Each one used to call setCurrentTime
+    // synchronously, which re-reconciled the entire inspector tree per event
+    // and visibly stuttered the playhead at high zoom. Coalesce to one
+    // setState + onTimeUpdate per animation frame.
+    let pendingProcessTime: number | null = null;
+    // Set by the 'scroll' handler on the frames where IT published the time.
+    // Read and cleared here — see the note below.
+    let scrollPublishedTime = false;
+    const flushProcessTime = () => {
+      audioProcessRafRef.current = null;
+      const scrollAlreadyPublished = scrollPublishedTime;
+      scrollPublishedTime = false;
+      if (pendingProcessTime === null) return;
+      const t = pendingProcessTime;
+      pendingProcessTime = null;
+      // When WS auto-scrolls, its 'scroll' handler is the publisher for that
+      // frame (it alone can read the clock at the instant the offset it
+      // reports was computed). A time published from here would be paired
+      // with the previous frame's offset, and at high zoom one frame of
+      // scroll is tens of pixels — the playhead would jitter back and forth
+      // against the waveform every frame.
+      //
+      // But "playing" is NOT the same as "a scroll event is coming". WS only
+      // auto-scrolls once the playhead reaches the viewport's centre
+      // (autoCenter), and not at all while the offset is pinned at either end
+      // of the track. Seek into the left half of a zoomed-in view and press
+      // play and no scroll fires until the playhead crosses the centre — and
+      // guarding on `isPlaying` alone published nothing for that whole
+      // stretch: the player's own playhead (placed straight off the media
+      // clock) swept, while every currentTime-driven viz row below — 3-Band,
+      // lane rows, karaoke — sat frozen where the seek left it and only
+      // snapped into place on pause.
+      //
+      // So defer to the scroll handler only when it actually published this
+      // frame. On the frames WS holds still, the offset hasn't moved, and
+      // this path's time is paired with it correctly.
+      if (ws.isPlaying() && scrollAlreadyPublished) return;
+      publishedScrollRef.current = ws.getScroll();
       setCurrentTime(t);
       onTimeUpdateRef.current?.(t);
+    };
+    ws.on('audioprocess', () => {
+      const t = ws.getCurrentTime();
+      placePlayhead(t);
+      // Preview-region end is decided HERE, against the media clock, rather
+      // than in the parent against `playerTime`. That prop is this same value
+      // after a rAF coalesce, a setState, a full inspector re-render and an
+      // effect — 50 ms or more once the tree is heavy, and the element keeps
+      // playing throughout. Measured on a 157 ms selection whose end sits
+      // 20 ms before the first onset: with the check on the laggy prop, a
+      // >=50 ms delay leaks the song's attack at 41 dB above the selection's
+      // own noise floor ("I highlighted a quiet area and still hear
+      // something"); at 0-33 ms nothing leaks. Reading the clock the media
+      // element actually keeps removes the lag from the decision entirely.
+      // Same lesson as the anchor in useBoundaryAudioFeedback / MetronomePanel:
+      // never place audio off a value that has been through React.
+      const preview = previewRegionRef.current;
+      if (preview && t >= preview.end) {
+        if (preview.loop) {
+          ws.setTime(preview.start);
+          pendingProcessTime = preview.start;
+        } else {
+          ws.pause();
+          pendingProcessTime = t;
+          onPreviewEndRef.current?.();
+        }
+      } else {
+        pendingProcessTime = t;
+      }
+      if (audioProcessRafRef.current === null) {
+        audioProcessRafRef.current = requestAnimationFrame(flushProcessTime);
+      }
     });
     ws.on('seeking', () => {
+      // Seeks are one-shot user actions — flush immediately so the playhead
+      // doesn't appear to lag the click, and cancel any pending audioprocess
+      // frame so it can't overwrite the seek target.
+      if (audioProcessRafRef.current !== null) {
+        cancelAnimationFrame(audioProcessRafRef.current);
+        audioProcessRafRef.current = null;
+      }
+      pendingProcessTime = null;
       const t = ws.getCurrentTime();
+      placePlayhead(t);
       setCurrentTime(t);
       onTimeUpdateRef.current?.(t);
     });
@@ -418,6 +645,21 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     ws.on('scroll', (_vs: number, _ve: number, sl: number) => {
       setScrollLeft(sl);
       onScrollChangeRef.current?.(sl);
+      // Re-place against the scroll that just landed, before React sees it.
+      placePlayhead(ws.isPlaying() ? ws.getCurrentTime() : undefined);
+      // While playing, WaveSurfer auto-scrolls once per frame and this is the
+      // instant it did. Read the clock HERE so the time published to React is
+      // the one that belongs to this scroll offset. Pairing a fresher time
+      // with the previous frame's offset (or vice versa) leaves the playhead
+      // jittering back and forth against the timeline at high zoom, because
+      // one frame of scroll is tens of pixels there.
+      publishedScrollRef.current = sl;
+      if (ws.isPlaying()) {
+        const t = ws.getCurrentTime();
+        scrollPublishedTime = true;
+        setCurrentTime(t);
+        onTimeUpdateRef.current?.(t);
+      }
     });
     // Without this, decodeAudioData rejections are swallowed and the player
     // sits on "LOADING…" forever — most often when the WAV/audio file uses a
@@ -431,15 +673,6 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     // (status, content-type, byte length). If decode fails downstream, this
     // tells us whether the bytes arrived intact and what codec they claim.
     fetch(url, { method: 'HEAD' })
-      .then((res) => {
-        console.log(`${tag} HEAD (+${Math.round(performance.now() - t0)}ms)`, {
-          status: res.status,
-          ok: res.ok,
-          contentType: res.headers.get('content-type'),
-          contentLength: res.headers.get('content-length'),
-          acceptRanges: res.headers.get('accept-ranges'),
-        });
-      })
       .catch((err: unknown) => {
         console.warn(`${tag} HEAD probe failed`, err);
       });
@@ -449,12 +682,8 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     // aborted and the promise rejects with AbortError. Swallow that specific
     // case so it doesn't surface as an uncaught rejection.
     ws.load(url)
-      .then(() => {
-        console.log(`${tag} ws.load() resolved (+${Math.round(performance.now() - t0)}ms)`);
-      })
       .catch((err: unknown) => {
         if (err instanceof Error && err.name === 'AbortError') {
-          console.log(`${tag} ws.load() aborted (likely StrictMode/url-change) (+${Math.round(performance.now() - t0)}ms)`);
           return;
         }
         console.error(`${tag} ws.load() rejected (+${Math.round(performance.now() - t0)}ms)`, err);
@@ -462,7 +691,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     wsRef.current = ws;
 
     return () => {
-      console.log(`${tag} ✗ unmount (+${Math.round(performance.now() - t0)}ms)`);
+      if (audioProcessRafRef.current !== null) {
+        cancelAnimationFrame(audioProcessRafRef.current);
+        audioProcessRafRef.current = null;
+      }
       try {
         ws.destroy();
       } catch (err) {
@@ -470,17 +702,27 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       }
       wsRef.current = null;
       if (seekRef) seekRef.current = null;
+      if (getTimeRef) getTimeRef.current = null;
       if (playRef) playRef.current = null;
       if (pauseRef) pauseRef.current = null;
+      if (externalTimeRef) externalTimeRef.current = null;
       if (wsScrollRef) wsScrollRef.current = null;
     };
   }, [url]);
 
-  // Fit zoom = container fills duration (WaveSurfer's default)
-  const fitZoom = containerWidth > 0 && duration > 0 ? containerWidth / duration : 0;
-
-  // Effective px/sec passed to WaveSurfer
-  const effectiveZoom = zoom > 0 ? zoom : fitZoom;
+  // Apply the playback-speed multiplier at the source. Re-runs when the rate
+  // changes and once the player becomes ready (so a non-default rate selected
+  // before load still takes hold). `preservePitch=true` keeps the song's
+  // pitch intact when slowed — half-speed without the chipmunk/anchor drop.
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws || !isReady) return;
+    try {
+      ws.setPlaybackRate(playbackRate > 0 ? playbackRate : 1, true);
+    } catch (err) {
+      console.warn('[PlayerPanel] setPlaybackRate failed', err);
+    }
+  }, [playbackRate, isReady]);
 
   // Latest values for use inside the zoom-apply effect without re-firing on every tick.
   const currentTimeRef = useRef(0);
@@ -489,21 +731,27 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   useEffect(() => { containerWidthRef.current = containerWidth; }, [containerWidth]);
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
+  const scrollLeftRef = useRef(0);
+  useEffect(() => { scrollLeftRef.current = scrollLeft; }, [scrollLeft]);
+  const getZoomFocusTimeRef = useRef(getZoomFocusTime);
+  useEffect(() => { getZoomFocusTimeRef.current = getZoomFocusTime; }, [getZoomFocusTime]);
 
   // Set by zoomIn/zoomOut/zoomReset; the next zoom-apply re-scrolls to keep the
   // playhead centered in the viewport. Resize-driven zoom changes leave this
   // false and don't scroll.
   const pendingUserZoomRef = useRef(false);
-  // Optional override for the post-zoom scroll center (seconds). When set, the
-  // zoom-apply effect centers on this time instead of currentTime — used by
-  // zoomToRange so the new viewport frames the requested interval, not the
-  // playhead. Cleared after one consumption.
+  // Override for the post-zoom scroll center (seconds). Every user-driven zoom
+  // sets it — via resolveZoomCenter() for the ± buttons and pinch, or directly
+  // from zoomToRange, which frames a requested interval. Cleared after one
+  // consumption; the zoom-apply effect falls back to the playhead for the one
+  // path that doesn't set it (the cap-clamp effect below).
   const pendingScrollCenterRef = useRef<number | null>(null);
 
   // Apply zoom to WaveSurfer whenever it changes. If the zoom was triggered by
-  // a user zoom command, scroll so the playhead stays centered — clamped to
-  // [0, maxScroll] when the playhead is near the start or end of the track, so
-  // the cursor is at least kept inside the viewport.
+  // a user zoom command, scroll so its focus point (see resolveZoomCenter —
+  // the page's nominated highlight / selection, else the playhead)
+  // stays centered — clamped to [0, maxScroll] near the start or end of the
+  // track, so the focus is at least kept inside the viewport.
   useEffect(() => {
     if (!isReady || !wsRef.current || effectiveZoom <= 0) return;
     wsRef.current.zoom(effectiveZoom);
@@ -564,8 +812,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   }, [onGridOffsetChange]);
 
   const gridDragRef = useRef<{ startTime: number; startOffset: number; rectLeft: number } | null>(null);
-  const handleGridDragDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleGridDragDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!e.altKey || !onGridOffsetChange || duration <= 0 || effectiveZoom <= 0) return;
+    if (isSecondaryPointer(e)) return;
+    const pointerId = pointerIdOf(e);
     const rect = e.currentTarget.getBoundingClientRect();
     // Convert screen X → track time. The container is scrolled by `scrollLeft`,
     // so the track time at the click is (clientX - rectLeft + scrollLeft) / pxPerSec.
@@ -575,21 +825,33 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     e.preventDefault();
     e.stopPropagation();
 
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const drag = gridDragRef.current;
-      if (!drag) return;
+      if (!drag || !isSamePointer(pointerId, ev)) return;
       const tNow = (ev.clientX - drag.rectLeft + scrollLeft) / effectiveZoom;
       const next = drag.startOffset + (tNow - drag.startTime);
       onGridOffsetChange(Math.max(0, next));
     };
-    const onUp = () => {
+    // pointercancel ends the slide where it stands, like pointerup.
+    const onUp = (ev: PointerEvent) => {
+      if (!isSamePointer(pointerId, ev)) return;
       gridDragRef.current = null;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   }, [duration, effectiveZoom, scrollLeft, effectiveAnchor, onGridOffsetChange, onGridOffsetDragStart]);
+
+  // Anything that moves the playhead without a WaveSurfer event — a zoom step,
+  // a seek published through React, the first paint after `ready` — still has
+  // to re-place it. The live-scroll read inside placePlayhead keeps this in
+  // agreement with the event-driven path rather than competing with it.
+  useEffect(() => {
+    placePlayheadRef.current?.(currentTime);
+  }, [currentTime, effectiveZoom, scrollLeft, isReady, duration]);
 
   // Waveform total pixel width for overlay alignment.
   // Use Math.ceil to match WaveSurfer's internal scrollWidth = Math.ceil(duration * minPxPerSec).
@@ -669,20 +931,35 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     }
   }, [zoom, maxZoomPx]);
 
+  // Where a ± zoom step should land the viewport's midpoint:
+  //   1. whatever the page nominates via getZoomFocusTime — a range with its
+  //      picker open, else the highlighted region or the selected item,
+  //      whichever the user reached for last;
+  //   2. otherwise the playhead. Always.
+  //
+  // Rule 2 used to be conditional: the playhead only won when it could reach
+  // the exact middle (half a viewport of track on either side of it), and
+  // anywhere else the step kept the middle of whatever was on screen. That
+  // stranded the cursor. Park it at 0:10, scroll a screen away, zoom out, and
+  // the view stayed where it had been scrolled — the cursor wasn't merely
+  // off-centre, it was off-screen, and zooming again never brought it back.
+  //
+  // So the playhead is simply the anchor when nothing else is selected, and
+  // the scroll clamp in the apply effect handles the ends of the track for
+  // free: near 0:00 or the tail the view stops at the edge and the cursor sits
+  // off-centre — but always in frame, which is the thing that actually matters.
+  const resolveZoomCenter = useCallback((): number => zoomCenterFor(
+    getZoomFocusTimeRef.current?.(),
+    currentTimeRef.current,
+    durationRef.current,
+  ), []);
+
+
   const zoomIn = useCallback(() => {
-    // At the standard (sharp-pixel) cap with extended headroom still on offer:
-    // surface the extended-zoom modal rather than silently no-op.
-    if (canOfferExtended) {
-      const currentZoomPx = zoom > 0 ? zoom : fitZoom;
-      if (currentZoomPx >= standardCapPx - 1e-3) {
-        setShowExtendedZoomPrompt(true);
-        return;
-      }
-    }
-    // At the extended cap with ultra headroom still on offer: surface the
-    // ultra-zoom modal. Reached either after the user already enabled extended
-    // or — if extended is dismissed — directly at the standard cap.
-    if (canOfferUltra) {
+    // Single gate: show the ultra-zoom dialog whenever the user hits any cap
+    // that still has headroom above it. Extended zoom is approved silently at
+    // the same time (it's a subset of ultra). One dialog total.
+    if (canOfferExtended || canOfferUltra) {
       const currentZoomPx = zoom > 0 ? zoom : fitZoom;
       const triggerPx = extendedZoom ? extendedCapPx : standardCapPx;
       if (currentZoomPx >= triggerPx - 1e-3) {
@@ -691,39 +968,26 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       }
     }
     pendingUserZoomRef.current = true;
+    pendingScrollCenterRef.current = resolveZoomCenter();
     setZoom((prev) => {
       const base = prev > 0 ? prev : (fitZoom || 50);
       return Math.min(base * 2, maxZoomPx);
     });
-  }, [canOfferExtended, canOfferUltra, extendedZoom, zoom, fitZoom, standardCapPx, extendedCapPx, maxZoomPx]);
-
-  const handleApproveExtendedZoom = useCallback(() => {
-    setExtendedZoomEnabled(true);
-    setShowExtendedZoomPrompt(false);
-    // Perform the queued zoom step immediately using the freshly-unlocked cap.
-    const newCapPx = fitZoom > 0 ? fitZoom * extendedCapMultiplier : 1600;
-    pendingUserZoomRef.current = true;
-    setZoom((prev) => {
-      const base = prev > 0 ? prev : (fitZoom || 50);
-      return Math.min(base * 2, newCapPx);
-    });
-  }, [setExtendedZoomEnabled, fitZoom, extendedCapMultiplier]);
-
-  const handleDismissExtendedZoom = useCallback(() => {
-    setShowExtendedZoomPrompt(false);
-  }, []);
+  }, [canOfferExtended, canOfferUltra, extendedZoom, zoom, fitZoom, standardCapPx, extendedCapPx, maxZoomPx, resolveZoomCenter]);
 
   const handleApproveUltraZoom = useCallback(() => {
+    setExtendedZoomEnabled(true);
     setUltraZoomEnabled(true);
     setShowUltraZoomPrompt(false);
     // Perform the queued zoom step immediately using the freshly-unlocked cap.
     const newCapPx = fitZoom > 0 ? fitZoom * ULTRA_CEILING : 1600;
     pendingUserZoomRef.current = true;
+    pendingScrollCenterRef.current = resolveZoomCenter();
     setZoom((prev) => {
       const base = prev > 0 ? prev : (fitZoom || 50);
       return Math.min(base * 2, newCapPx);
     });
-  }, [setUltraZoomEnabled, fitZoom]);
+  }, [setExtendedZoomEnabled, setUltraZoomEnabled, fitZoom, zoom, resolveZoomCenter]);
 
   const handleDismissUltraZoom = useCallback(() => {
     setShowUltraZoomPrompt(false);
@@ -731,12 +995,13 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
 
   const zoomOut = useCallback(() => {
     pendingUserZoomRef.current = true;
+    pendingScrollCenterRef.current = resolveZoomCenter();
     setZoom((prev) => {
       const base = prev > 0 ? prev : (fitZoom || 50);
       const next = base / 2;
       return next <= (fitZoom || 50) * 1.05 ? 0 : next;
     });
-  }, [fitZoom]);
+  }, [fitZoom, resolveZoomCenter]);
 
   const zoomReset = useCallback(() => {
     pendingUserZoomRef.current = true;
@@ -748,9 +1013,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   // enabled) so a trackpad gesture can never silently progress the user past
   // the safe-pixel cap. Crossing into Extended/Ultra requires an explicit
   // click on the + button, which routes through zoomIn() and surfaces the
-  // ExtendedZoomDialog / UltraZoomDialog.
+  // UltraZoomDialog.
   const pinchZoomIn = useCallback(() => {
     pendingUserZoomRef.current = true;
+    pendingScrollCenterRef.current = resolveZoomCenter();
     setZoom((prev) => {
       const base = prev > 0 ? prev : (fitZoom || 50);
       // Authorized cap: whatever tier the user has already opted into.
@@ -759,15 +1025,16 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
         : (extendedZoom ? extendedCapPx : standardCapPx);
       return Math.min(base * 2, authorizedCapPx);
     });
-  }, [fitZoom, ultraZoom, extendedZoom, maxZoomPx, extendedCapPx, standardCapPx]);
+  }, [fitZoom, ultraZoom, extendedZoom, maxZoomPx, extendedCapPx, standardCapPx, resolveZoomCenter]);
   const pinchZoomOut = useCallback(() => {
     pendingUserZoomRef.current = true;
+    pendingScrollCenterRef.current = resolveZoomCenter();
     setZoom((prev) => {
       const base = prev > 0 ? prev : (fitZoom || 50);
       const next = base / 2;
       return next <= (fitZoom || 50) * 1.05 ? 0 : next;
     });
-  }, [fitZoom]);
+  }, [fitZoom, resolveZoomCenter]);
 
   // Scroll the viewport so a specific time is visible. `center` puts the time
   // mid-viewport; `left` parks it ~32 px from the left edge (so the user can
@@ -794,17 +1061,17 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   // documented in the zoom-apply effect comment. When zoom doesn't actually
   // change we still set scroll directly so the viewport re-frames even at
   // an already-correct zoom level.
-  const zoomToRange = useCallback((t1: number, t2: number) => {
+  const zoomToRange = useCallback<ZoomToRange>((t1, t2, opts) => {
     const cw = containerWidthRef.current;
     const dur = durationRef.current;
-    if (cw <= 0 || dur <= 0) return;
+    if (cw <= 0 || dur <= 0) return false;
     const lo = Math.max(0, Math.min(t1, t2));
     const hi = Math.min(dur, Math.max(t1, t2));
     if (hi - lo < 1e-3) {
       scrollToTime((lo + hi) / 2, 'center');
-      return;
+      return true;
     }
-    const padFrac = 0.15;
+    const padFrac = opts?.pad ?? 0.15;
     const span = (hi - lo) * (1 + padFrac * 2);
     const fit = fitZoom > 0 ? fitZoom : (cw / dur);
     let desired = cw / span;
@@ -813,15 +1080,16 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     const center = (lo + hi) / 2;
     if (nextZoomState === zoom) {
       const z = effectiveZoom;
-      if (z <= 0) return;
+      if (z <= 0) return false;
       const target = center * z - cw / 2;
       const maxScroll = Math.max(0, z * dur - cw);
       wsRef.current?.setScroll(Math.max(0, Math.min(maxScroll, target)));
-      return;
+      return true;
     }
     pendingUserZoomRef.current = true;
     pendingScrollCenterRef.current = center;
     setZoom(nextZoomState);
+    return true;
   }, [fitZoom, maxZoomPx, zoom, effectiveZoom, scrollToTime]);
 
   // Expose imperative zoom handles to the parent (e.g. for keyboard shortcuts).
@@ -856,10 +1124,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       barGroupSize: barGroupSize ?? null,
       subBeatDivision,
       beatGroupSize,
-      anchors,
       beatOverrides,
+      barBeatOrigin,
+      segments: gridSegments,
     });
-  }, [isReady, duration, bpm, effectiveAnchor, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, anchors, beatOverrides]);
+  }, [isReady, duration, bpm, effectiveAnchor, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, beatOverrides, barBeatOrigin, gridSegments]);
 
   // When zoomed out, labelling every bar turns the top edge into an unreadable
   // smear of digits. Cull to powers-of-two so the label set doesn't shimmer as
@@ -876,7 +1145,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   // ── Drag-to-select on the top waveform ─────────────────────────────────────
   // Mirrors RegionDragOverlay on the signal rows: short clicks fall through as
   // seeks via onUserSeek; drags above the 6px threshold emit a Mark In/Out
-  // region via onUserRegion.
+  // region via onUserRegion. Pointer events, so a finger paints one too: a
+  // touch is implicitly captured by the overlay it landed on, so its moves
+  // and its release keep arriving here even once it slides off. A
+  // pointercancel (the browser deciding the finger was scrolling) abandons
+  // the gesture like leaving the overlay with the mouse does.
   const timeAtClientX = useCallback((clientX: number, rect: DOMRect): number => {
     if (rect.width <= 0 || effectiveZoom <= 0 || duration <= 0) return 0;
     const localX = clientX - rect.left;
@@ -884,23 +1157,28 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     return Math.max(0, Math.min(duration, t));
   }, [duration, effectiveZoom, scrollLeft]);
 
-  const handleSelectMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
+  const handleSelectPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || e.isPrimary === false) return;
     const t = timeAtClientX(e.clientX, e.currentTarget.getBoundingClientRect());
     dragSelRef.current = { time: t, x: e.clientX };
-    setDragSel({ s: t, e: t });
-    e.preventDefault();
+    // Don't paint a selection yet — a plain click should only move the cursor.
+    // The teal region appears once the drag passes the 6px commit threshold.
+    preventPressDefault(e);
   }, [timeAtClientX]);
 
-  const handleSelectMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!dragSelRef.current) return;
+  const handleSelectPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragSelRef.current || e.isPrimary === false) return;
     const t = timeAtClientX(e.clientX, e.currentTarget.getBoundingClientRect());
-    setDragSel({ s: dragSelRef.current.time, e: t });
+    if (Math.abs(e.clientX - dragSelRef.current.x) > 6) {
+      setDragSel({ s: dragSelRef.current.time, e: t });
+    } else {
+      setDragSel(null);
+    }
   }, [timeAtClientX]);
 
-  const handleSelectMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleSelectPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragSelRef.current;
-    if (!drag) return;
+    if (!drag || e.isPrimary === false) return;
     const endT = timeAtClientX(e.clientX, e.currentTarget.getBoundingClientRect());
     const movedPx = Math.abs(e.clientX - drag.x);
     const t1 = Math.min(drag.time, endT);
@@ -909,15 +1187,16 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       onUserRegion(t1, t2);
     } else {
       // Short click: route to the same dismiss-then-seek handler used by the
-      // viz rows, and seek WS directly so the cursor jumps.
+      // viz rows. That handler owns the WS seek (via handleVizClick → seekRef →
+      // ws.seekTo) so the cursor can be snapped to the grid first — don't seek
+      // WS directly here or a raw, un-snapped seek would override the snap.
       onUserSeek?.(drag.time);
-      wsRef.current?.seekTo(Math.max(0, Math.min(1, drag.time / Math.max(0.0001, duration))));
     }
     dragSelRef.current = null;
     setDragSel(null);
-  }, [timeAtClientX, onUserRegion, onUserSeek, duration]);
+  }, [timeAtClientX, onUserRegion, onUserSeek]);
 
-  const handleSelectMouseLeave = useCallback(() => {
+  const handleSelectPointerLeave = useCallback(() => {
     dragSelRef.current = null;
     setDragSel(null);
   }, []);
@@ -939,13 +1218,34 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           scaleMode={scaleMode}
         />
 
-        {/* WaveSurfer container — invisible bars + visible cursor. z-2 puts the
-            cursor above the OverviewWaveform overlay. */}
+        {/* WaveSurfer container — invisible bars, no cursor. Still owns
+            playback, scrolling and zoom math. */}
         <div
           ref={containerRef}
           className="w-full relative"
           style={{ zIndex: 2, overscrollBehaviorX: 'none' }}
         />
+
+        {/* Playhead. Positioned from the same (currentTime, scrollLeft) pair
+            the waveform canvas and every viz row use, which is the whole
+            point — see the WaveSurfer.create comment above. z-2 keeps the
+            old stacking: above the waveform, below the drag-select and
+            highlight overlays. */}
+        {isReady && duration > 0 && effectiveZoom > 0 && (
+          <div
+            ref={playheadRef}
+            data-testid="player-playhead"
+            className="absolute top-0 pointer-events-none"
+            style={{
+              left: 0,
+              transform: `translateX(${currentTime * effectiveZoom - scrollLeft}px)`,
+              width: 2,
+              height: 96,
+              background: '#ef4444',
+              zIndex: 2,
+            }}
+          />
+        )}
 
         {/* Drag-to-select overlay — sits above the WS canvas (z-3) but below
             the highlights/grid/manual-editor/anchor overlays so their pointer-
@@ -954,12 +1254,15 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             In/Out region via onUserRegion. */}
         {isReady && (onUserSeek || onUserRegion) && (
           <div
-            className="absolute inset-0 z-[3]"
+            // touch-pan-y: a vertical swipe over the waveform still scrolls
+            // the page on a phone; a horizontal one paints the selection.
+            className="absolute inset-0 z-[3] touch-pan-y"
             style={{ cursor: 'crosshair' }}
-            onMouseDown={handleSelectMouseDown}
-            onMouseMove={handleSelectMouseMove}
-            onMouseUp={handleSelectMouseUp}
-            onMouseLeave={handleSelectMouseLeave}
+            onPointerDown={handleSelectPointerDown}
+            onPointerMove={handleSelectPointerMove}
+            onPointerUp={handleSelectPointerUp}
+            onPointerLeave={handleSelectPointerLeave}
+            onPointerCancel={handleSelectPointerLeave}
           >
             {dragSel && duration > 0 && effectiveZoom > 0 && (() => {
               const lo = Math.min(dragSel.s, dragSel.e);
@@ -1071,8 +1374,8 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
         )}
 
 
-        {/* Alt-drag overlay — only intercepts mouse events while Alt is held so
-            normal click-to-seek still falls through to WaveSurfer. */}
+        {/* Alt-drag overlay — only intercepts pointer events while Alt is held
+            so normal click-to-seek still falls through to WaveSurfer. */}
         {onGridOffsetChange && (
           <div
             className="absolute inset-0 z-30"
@@ -1081,7 +1384,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
               cursor: altHeld ? 'ew-resize' : 'default',
               background: altHeld ? 'rgba(56,189,248,0.04)' : 'transparent',
             }}
-            onMouseDown={handleGridDragDown}
+            onPointerDown={handleGridDragDown}
             title="Alt-drag to slide the beat grid"
           />
         )}
@@ -1097,59 +1400,13 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
                 transform: `translateX(-${scrollLeft}px)`,
               }}
             >
-              {beatLines.map((line, i) => (
-                <div
-                  key={i}
-                  className="absolute top-0 bottom-0"
-                  style={{ left: `${(line.t / duration) * 100}%` }}
-                >
-                  {/* Subtle full-height rule. Phrases stand out only via the small
-                      tick caps below — keeps the waveform readable while still
-                      letting the eye lock onto bar boundaries. */}
-                  <div
-                    style={{
-                      width: (line.isBar ? 1 : 0.5) * gridThickness,
-                      height: '100%',
-                      background: line.isPhrase
-                        ? 'rgba(251,191,36,0.55)'   // amber — phrase (every 4 bars)
-                        : line.isBar
-                        ? 'rgba(255,255,255,0.38)'  // white — bar (must read against violet RMS body)
-                        : line.isSubBeat
-                        ? 'rgba(255,255,255,0.06)'  // very faint — 8th / 16th note subdivisions
-                        : 'rgba(255,255,255,0.14)', // hairline — beat subdivision
-                    }}
-                  />
-                  {/* Top + bottom tick caps mark phrases boldly without bleeding
-                      across the whole canvas. */}
-                  {line.isPhrase && (
-                    <>
-                      <div className="absolute top-0 left-0" style={{ width: 1, height: 6, background: 'rgba(251,191,36,0.85)' }} />
-                      <div className="absolute bottom-0 left-0" style={{ width: 1, height: 6, background: 'rgba(251,191,36,0.85)' }} />
-                    </>
-                  )}
-                  {/* Bar number label (shown only when caller opted in and there is a bar) */}
-                  {showBarNumbers && line.isBar && line.barNumber > 0 && ((line.barNumber - 1) % barNumberStep === 0) && (
-                    <span
-                      className="absolute font-mono select-none"
-                      style={{
-                        top: 1, left: 2,
-                        fontSize: 9,
-                        lineHeight: 1,
-                        color: line.isPhrase ? 'rgba(251,191,36,0.95)' : 'rgba(226,232,240,0.85)',
-                        textShadow: '0 0 2px rgba(0,0,0,0.9)',
-                      }}
-                    >
-                      {line.barNumber}
-                    </span>
-                  )}
-                  {line.isBar && !line.isPhrase && (
-                    <>
-                      <div className="absolute top-0 left-0" style={{ width: 1, height: 3, background: 'rgba(226,232,240,0.75)' }} />
-                      <div className="absolute bottom-0 left-0" style={{ width: 1, height: 3, background: 'rgba(226,232,240,0.75)' }} />
-                    </>
-                  )}
-                </div>
-              ))}
+              <GridLines
+                lines={beatLines}
+                duration={duration}
+                thickness={gridThickness}
+                showBarNumbers={showBarNumbers}
+                barNumberStep={barNumberStep}
+              />
             </div>
           </div>
         )}
@@ -1174,7 +1431,6 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
                 bpm={bpm}
                 gridOffset={effectiveAnchor}
                 beatsPerBar={beatsPerBar}
-                anchors={anchors}
                 beatOverrides={beatOverrides}
                 duration={duration}
                 onBeatDrag={onBeatDrag}
@@ -1185,13 +1441,15 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           </div>
         )}
 
-        {/* Tempo-anchor flags — ride the same zoom + scroll transform as the
-            beat grid so each flag stays pinned to its timestamp. z-20 puts
-            the BPM badges above the grid but below the WaveSurfer cursor. */}
-        {isReady && anchorFlagMode && anchors && anchors.length > 0 && (
-          <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
+        {/* Cut bars — the tail of a segment that a split ended mid-bar. Sits
+            under the anchor flags and above the beat grid, on the same scroll
+            transform, so the hatch stays over the bar it describes. The hatch
+            is always on; the beat-count chip only while the segment lane is
+            open on the segment it belongs to, so it never covers the waveform
+            for someone who is just listening. */}
+        {isReady && gridSegments && gridSegments.length > 1 && (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden z-[16]">
             <div
-              ref={anchorRowRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
@@ -1199,15 +1457,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
                 transform: `translateX(-${scrollLeft}px)`,
               }}
             >
-              <AnchorFlagOverlay
-                anchors={anchors}
+              <GridSegmentCutOverlay
+                segments={gridSegments}
                 duration={duration}
-                mode={anchorFlagMode}
-                containerRef={anchorRowRef}
-                formatLabel={(a) => `${a.timestamp.toFixed(2)}s · ${a.bpm.toFixed(2)} BPM${anchorFlagMode === 'manual' ? ' · drag to reposition · right-click to delete' : ''}`}
-                onDeleteAnchor={anchorFlagMode === 'manual' ? onDeleteAnchor : undefined}
-                onAnchorDrag={anchorFlagMode === 'manual' ? onAnchorDrag : undefined}
-                onAnchorDragStart={anchorFlagMode === 'manual' ? onAnchorDragStart : undefined}
+                labelledSegmentId={cutLabelSegmentId}
               />
             </div>
           </div>
@@ -1223,8 +1476,44 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
         )}
       </div>
 
+      {/* Grid-segment lane — how the song's ruler is divided, and where it is
+          redivided. Lives below the waveform rather than on it: the blocks
+          tile the whole track, so they need a row of their own. Rides the
+          same scroll transform as everything else on the timeline. */}
+      {isReady && showGridSegmentLane && gridSegments && gridSegments.length > 0 && duration > 0 && (
+        <div className="relative overflow-hidden">
+          <div
+            style={{
+              position: 'relative',
+              width: waveformWidth,
+              transform: `translateX(-${scrollLeft}px)`,
+            }}
+          >
+            <GridSegmentLane
+              segments={gridSegments}
+              duration={duration}
+              selectedId={selectedSegmentId}
+              barBeatOrigin={barBeatOrigin}
+              locked={!onSegmentHeadDrag && !onSplitGridAt}
+              onSelect={(seg, anchor) => onSegmentSelect?.(seg, anchor)}
+              onHeadDrag={onSegmentHeadDrag}
+              onHeadDragStart={onSegmentHeadDragStart}
+              onHeadDragEnd={onSegmentHeadDragEnd}
+              onDeleteSegment={onDeleteGridSegment}
+              onSplitAt={onSplitGridAt}
+              snapTime={snapSegmentTime}
+              snapping={segmentSnapOn}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Controls */}
-      <div className="flex items-center gap-3 px-3 py-2 border-t border-white/[0.05] flex-wrap">
+      {/* Marked so a page that also renders a sticky transport can find this
+          row and hand over at the exact scroll position where it goes out of
+          sight — two visible play buttons at once is the bug that motivates
+          the attribute (see InspectorPageV2's `headerCollapsed`). */}
+      <div data-transport-row className="flex items-center gap-3 px-3 py-2 border-t border-white/[0.05] flex-wrap">
         {/* Transport: jump-to-start · skip back · play/pause · skip forward · jump-to-end */}
         <div className="flex items-center gap-1 shrink-0">
           <button
@@ -1323,9 +1612,12 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           </button>
         </div>
 
-        {/* Time */}
+        {/* Time. The elapsed half carries a ref so the loop-preview engine can
+            write it straight to the DOM (see `externalTimeRef`): while that
+            engine sounds the audio this component gets no time updates, and a
+            readout frozen under a sweeping cursor reads as a stuck player. */}
         <span className="font-mono text-[13px] text-slate-200 tabular-nums">
-          {formatTime(currentTime)}
+          <span ref={elapsedReadoutRef}>{formatTime(currentTime)}</span>
           <span className="text-slate-700 mx-1">/</span>
           <span className="text-slate-500">{formatTime(duration)}</span>
         </span>
@@ -1395,14 +1687,6 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
         )}
       </div>
     </div>
-    <ExtendedZoomDialog
-      open={showExtendedZoomPrompt}
-      onOpenChange={setShowExtendedZoomPrompt}
-      standardCap={standardCapMultiplier}
-      extendedCap={extendedCapMultiplier}
-      onApprove={handleApproveExtendedZoom}
-      onDismiss={handleDismissExtendedZoom}
-    />
     <UltraZoomDialog
       open={showUltraZoomPrompt}
       onOpenChange={setShowUltraZoomPrompt}

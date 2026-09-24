@@ -31,6 +31,13 @@ const docs = [
       'The definitive reference for the TimeCues web app — workspaces, panels, shortcuts, settings, file formats, REST API.',
   },
   {
+    src: 'docs/VIDEO_TOUR.md',
+    out: 'video-tour.md',
+    title: 'Video walkthrough',
+    description:
+      'Every feature in a short clip — 77 in all, in tutorial order. Watch the whole tour or jump to any feature.',
+  },
+  {
     src: 'DATA.md',
     out: 'data-model.md',
     title: 'Data model',
@@ -44,6 +51,13 @@ const docs = [
     description:
       'Opt-in detectors behind per-family feature flags. May break without notice.',
   },
+  {
+    src: 'docs/DEPLOYMENT.md',
+    out: 'deployment.md',
+    title: 'Deployment',
+    description:
+      'Put TimeCues on a public URL — a cloud VM with Docker Compose, HTTPS, Google sign-in, and a persistent disk.',
+  },
 ];
 
 // Map of original markdown link targets → Starlight-relative routes.
@@ -52,6 +66,8 @@ const linkRewrites = new Map([
   ['USER_GUIDE.md', '/timecues/user-guide/'],
   ['docs/EXPERIMENTAL_USER_GUIDE.md', '/timecues/experimental/'],
   ['EXPERIMENTAL_USER_GUIDE.md', '/timecues/experimental/'],
+  ['docs/DEPLOYMENT.md', '/timecues/deployment/'],
+  ['DEPLOYMENT.md', '/timecues/deployment/'],
   ['DATA.md', '/timecues/data-model/'],
   ['../DATA.md', '/timecues/data-model/'],
 ]);

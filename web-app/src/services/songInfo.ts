@@ -1,21 +1,26 @@
-import { makeEmptySongInfo, type SongInfo } from '../types/songInfo';
+import { makeEmptySongInfo, sanitizeSongInfo, type SongInfo } from '../types/songInfo';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
 import { getIsDemo } from '../state/demoFlag';
 import { demoLoadSongInfo, demoSaveSongInfo } from './demoStorage';
 
-/** Load song info; the server seeds from any legacy manual/eye annotation fields on first read.
+/** Load song info; the server seeds from any legacy manual annotation fields on first read.
  *  In Demo Mode, any local edit overrides the canonical server copy so the user's tweaks
- *  to BPM / grid offset survive a refresh without touching the shared dataset. */
+ *  to BPM / grid offset survive a refresh without touching the shared dataset.
+ *
+ *  Everything read here passes through sanitizeSongInfo, so a corpus written by
+ *  an older build (one that still names the removed Drifting mode, or carries
+ *  its `tempoAnchors`) loads as a grid this build actually has — and the next
+ *  save writes the cleaned document back to disk. */
 export async function loadSongInfo(slug: string): Promise<SongInfo> {
   if (getIsDemo()) {
     const local = demoLoadSongInfo(slug);
-    if (local) return local;
+    if (local) return sanitizeSongInfo(local);
   }
   try {
     const res = await fetch(`/api/song-info/${encodeURIComponent(slug)}`);
     if (!res.ok) return makeEmptySongInfo(slug);
     const data = await res.json();
-    return data ?? makeEmptySongInfo(slug);
+    return data ? sanitizeSongInfo(data as SongInfo) : makeEmptySongInfo(slug);
   } catch {
     return makeEmptySongInfo(slug);
   }

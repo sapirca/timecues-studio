@@ -9,13 +9,19 @@ Detectors
   librosa-tempo-static  librosa.feature.rhythm.tempo()      (always)
   librosa-tempo-dynamic librosa.feature.rhythm.tempo(agg=None) — median over frames
   madmom-rnn-beats      RNNBeatProcessor + DBNBeatTracking  (if madmom)
+  madmom-dbn-downbeats  RNNDownBeatProcessor + DBNDownBeat  (if madmom)
   madmom-tempo          TempoEstimationProcessor (RNN+ACF)  (if madmom)
 
 Endpoints
 ---------
   GET  /api/bpm/health              → availability per detector
   GET  /api/bpm/detect/:slug        → return cached result, or null
-  POST /api/bpm/detect              { slug, force? } — run all detectors
+  POST /api/bpm/detect              { slug, force?, start?, end? } — run all
+                                    detectors, over the whole song or over
+                                    just the [start, end) seconds given (used
+                                    by DataPrep to read one grid segment's
+                                    own tempo). Ranged results carry a
+                                    `range` key and are never cached.
 
 Cache
 -----
@@ -31,7 +37,8 @@ Usage
 import json
 import sys
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -41,6 +48,10 @@ PORT = 8004
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import REPO_ROOT, find_audio, safe_segment, BPM_DETECTIONS_DIR as CACHE_DIR  # noqa: E402
+from server_common import (  # noqa: E402
+    cached_result, cors_headers, now_iso, parse_range, shift_times, time_ms,
+    trimmed_audio,
+)
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -84,10 +95,6 @@ def _find_audio(slug: str) -> "Path | None":
 # Detectors swallow their own exceptions and report ok=False on failure so a
 # single bad detector never blocks the others.
 
-def _time_ms(t0_ms: float) -> int:
-    return int((datetime.now().timestamp() * 1000) - t0_ms)
-
-
 def detect_librosa_beat_track(y, sr) -> dict:
     src = "librosa-beat-track"
     if not _LIBROSA_OK:
@@ -102,7 +109,7 @@ def detect_librosa_beat_track(y, sr) -> dict:
             "ok":         True,
             "bpm":        bpm,
             "beat_times": beat_times,
-            "ms":         _time_ms(t0),
+            "ms":         time_ms(t0),
         }
     except Exception as e:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -117,7 +124,7 @@ def detect_librosa_tempo_static(y, sr) -> dict:
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
         tempo = _librosa_tempo_fn(onset_envelope=onset_env, sr=sr)
         bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
-        return {"source": src, "ok": True, "bpm": bpm, "ms": _time_ms(t0)}
+        return {"source": src, "ok": True, "bpm": bpm, "ms": time_ms(t0)}
     except Exception as e:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -132,38 +139,7 @@ def detect_librosa_tempo_dynamic(y, sr) -> dict:
         tempos = _librosa_tempo_fn(onset_envelope=onset_env, sr=sr, aggregate=None)
         # Median over per-frame tempo estimates.
         bpm = float(np.median(tempos))
-        return {"source": src, "ok": True, "bpm": bpm, "ms": _time_ms(t0)}
-    except Exception as e:
-        return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
-
-
-def compute_tempo_curve(y, sr) -> dict:
-    """Per-frame tempo curve (librosa). Drives Dynamic mode anchor derivation
-    on the client side. Returns { frame_times, bpms } at librosa's default
-    hop_length (512 → ~23 ms/frame at sr=22050)."""
-    src = "librosa-tempo-curve"
-    if not _LIBROSA_OK or _librosa_tempo_fn is None:
-        return {"source": src, "ok": False, "error": "librosa.tempo unavailable"}
-    t0 = datetime.now().timestamp() * 1000
-    try:
-        hop_length = 512
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
-        tempos = _librosa_tempo_fn(
-            onset_envelope=onset_env, sr=sr, hop_length=hop_length, aggregate=None,
-        )
-        n_frames = len(tempos)
-        # librosa tempo() with aggregate=None returns one tempo per onset
-        # envelope frame; frame i covers approximately i * hop / sr seconds.
-        frame_times = (np.arange(n_frames) * hop_length / sr).tolist()
-        return {
-            "source":      src,
-            "ok":          True,
-            "frame_times": frame_times,
-            "bpms":        [float(t) for t in tempos],
-            "hop_length":  int(hop_length),
-            "sr":          int(sr),
-            "ms":          _time_ms(t0),
-        }
+        return {"source": src, "ok": True, "bpm": bpm, "ms": time_ms(t0)}
     except Exception as e:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -189,7 +165,55 @@ def detect_madmom_rnn_beats(audio_path: Path) -> dict:
             "ok":         True,
             "bpm":        bpm,
             "beat_times": beat_times,
-            "ms":         _time_ms(t0),
+            "ms":         time_ms(t0),
+        }
+    except Exception as e:
+        return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def detect_madmom_dbn_downbeats(audio_path: Path) -> dict:
+    """madmom's joint beat + DOWNBEAT tracker.
+
+    The existing madmom-rnn-beats above finds beats only. Downbeats are the
+    harder and more valuable half: on EDM a tracker's beat F1 sits around
+    0.95 because four-on-the-floor is trivial, while its downbeat F1 drops to
+    around 0.67 (Raveform, TISMIR 2025) — and the downbeat is what a grid
+    segment's bar 1 is anchored to.
+
+    `beats_per_bar=[3, 4]` is the DBN's hypothesis set, not an assertion: it
+    decides between 3/4 and 4/4 from the audio. Meters outside that list
+    (this corpus has a 5/4 track) are not representable, which is one of the
+    DBN limitations the Beat This! paper singles out.
+    """
+    src = "madmom-dbn-downbeats"
+    if not _MADMOM_OK:
+        return {"source": src, "ok": False, "error": "madmom not installed"}
+    t0 = datetime.now().timestamp() * 1000
+    try:
+        from madmom.features.downbeats import (
+            RNNDownBeatProcessor, DBNDownBeatTrackingProcessor,
+        )
+        act = RNNDownBeatProcessor()(str(audio_path))
+        # Returns (N, 2): [time_sec, beat_position_in_bar] where position 1
+        # is the downbeat.
+        out = DBNDownBeatTrackingProcessor(beats_per_bar=[3, 4], fps=100)(act)
+        if out is None or len(out) == 0:
+            return {"source": src, "ok": False, "error": "no beats detected"}
+        out = np.asarray(out)
+        beat_times = [float(t) for t in out[:, 0]]
+        positions  = [int(round(float(p))) for p in out[:, 1]]
+        downbeats  = [t for t, p in zip(beat_times, positions) if p == 1]
+        if len(beat_times) < 2:
+            return {"source": src, "ok": False, "error": "fewer than 2 beats detected"}
+        median_ibi = float(np.median(np.diff(beat_times)))
+        bpm = 60.0 / median_ibi if median_ibi > 0 else 0.0
+        return {
+            "source":     src,
+            "ok":         True,
+            "bpm":        bpm,
+            "beat_times": beat_times,
+            "downbeats":  downbeats,
+            "ms":         time_ms(t0),
         }
     except Exception as e:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -214,7 +238,7 @@ def detect_madmom_tempo(audio_path: Path) -> dict:
             "ok":         True,
             "bpm":        cand_list[0]["bpm"],
             "candidates": cand_list,
-            "ms":         _time_ms(t0),
+            "ms":         time_ms(t0),
         }
     except Exception as e:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -222,38 +246,70 @@ def detect_madmom_tempo(audio_path: Path) -> dict:
 
 # ─── Orchestration ───────────────────────────────────────────────────────────
 
-def detect_all(slug: str, force: bool = False) -> dict:
+def detect_all(slug: str, force: bool = False, span: "tuple[float, float] | None" = None) -> dict:
+    """Run every detector on `slug`, or — when `span` is given — on just that
+    `[start, end)` window of it.
+
+    A range result is deliberately never cached, in either direction. It is
+    asked once for one grid segment, and that segment's bounds move whenever
+    the curator drags its head; a cache would have to be keyed on a pair of
+    floats to avoid handing back an answer about audio the segment no longer
+    covers. Reading the whole-song cache would be worse still — it would
+    return the song's tempo dressed up as the segment's.
+    """
     cache_path = CACHE_DIR / f"{slug}.json"
-    if cache_path.exists() and not force:
-        return json.loads(cache_path.read_text())
+    if span is None:
+        hit = cached_result(cache_path, force)
+        if hit is not None:
+            return hit
 
     audio_path = _find_audio(slug)
     if audio_path is None:
         raise FileNotFoundError(f"audio not found for slug: {slug}")
 
+    start, end = span if span else (0.0, None)
+
     # Load once for the librosa detectors; the file-based detectors reload
     # themselves so they can use their own preferred sample rates.
     if _LIBROSA_OK:
-        y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
+        y, sr = librosa.load(
+            str(audio_path), sr=22050, mono=True,
+            offset=start, duration=(end - start) if span else None,
+        )
         duration = float(len(y) / sr)
     else:
         y, sr, duration = None, None, 0.0
 
-    algorithms = [
-        detect_librosa_beat_track(y, sr)    if _LIBROSA_OK else _skip("librosa-beat-track"),
-        detect_librosa_tempo_static(y, sr)  if _LIBROSA_OK else _skip("librosa-tempo-static"),
-        detect_librosa_tempo_dynamic(y, sr) if _LIBROSA_OK else _skip("librosa-tempo-dynamic"),
-        detect_madmom_rnn_beats(audio_path),
-        detect_madmom_tempo(audio_path),
-    ]
+    # The madmom detectors take a path, so a range request gets a real file
+    # holding only the range. nullcontext keeps the whole-song path allocation
+    # -free — it hands back the song's own file untouched.
+    trim = trimmed_audio(audio_path, start, end) if span else nullcontext(audio_path)
+    with trim as detector_path:
+        algorithms = [
+            detect_librosa_beat_track(y, sr)    if _LIBROSA_OK else _skip("librosa-beat-track"),
+            detect_librosa_tempo_static(y, sr)  if _LIBROSA_OK else _skip("librosa-tempo-static"),
+            detect_librosa_tempo_dynamic(y, sr) if _LIBROSA_OK else _skip("librosa-tempo-dynamic"),
+            detect_madmom_rnn_beats(detector_path),
+            detect_madmom_dbn_downbeats(detector_path),
+            detect_madmom_tempo(detector_path),
+        ]
+
+    if span:
+        # Every detector just answered about a file that starts at zero.
+        for algorithm in algorithms:
+            shift_times(algorithm, start)
 
     result = {
         "slug":        slug,
         "audio_file":  audio_path.name,
         "duration":    duration,
         "algorithms":  algorithms,
-        "computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "computed_at": now_iso(),
     }
+    if span:
+        result["range"] = {"start": start, "end": end}
+        return result
+
     try:
         cache_path.write_text(json.dumps(result, indent=2))
     except Exception:
@@ -265,46 +321,7 @@ def _skip(source: str) -> dict:
     return {"source": source, "ok": False, "error": "librosa not installed"}
 
 
-def compute_curve(slug: str, force: bool = False) -> dict:
-    """Compute (and cache) the per-frame tempo curve for `slug`. Drives the
-    DataPrep "Dynamic" grid mode on the client. Cached separately from the
-    main detection result (single-detector payload, larger arrays)."""
-    curve_path = CACHE_DIR / f"{slug}.curve.json"
-    if curve_path.exists() and not force:
-        return json.loads(curve_path.read_text())
-
-    audio_path = _find_audio(slug)
-    if audio_path is None:
-        raise FileNotFoundError(f"audio not found for slug: {slug}")
-
-    if not _LIBROSA_OK:
-        return {"slug": slug, "ok": False, "error": "librosa not installed"}
-
-    y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
-    curve = compute_tempo_curve(y, sr)
-    result = {
-        "slug":        slug,
-        "audio_file":  audio_path.name,
-        "duration":    float(len(y) / sr),
-        "curve":       curve,
-        "computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    try:
-        curve_path.write_text(json.dumps(result))
-    except Exception:
-        pass
-    return result
-
-
 # ─── HTTP handler ────────────────────────────────────────────────────────────
-
-def _cors():
-    return {
-        "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    }
-
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -315,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body):
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -324,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.end_headers()
 
@@ -348,17 +365,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, None)
             return
 
-        # Per-frame tempo curve. Returns null when nothing is cached so the
-        # client can decide whether to trigger a POST.
-        if path.startswith("/api/bpm/tempo-curve/"):
-            slug = path[len("/api/bpm/tempo-curve/"):]
-            curve_path = CACHE_DIR / f"{slug}.curve.json"
-            if curve_path.exists():
-                self._send(200, json.loads(curve_path.read_text()))
-            else:
-                self._send(200, None)
-            return
-
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -375,24 +381,15 @@ class Handler(BaseHTTPRequestHandler):
             if not slug:
                 self._send(400, {"error": "invalid or missing slug"}); return
             try:
-                self._send(200, detect_all(slug, force=force))
+                span = parse_range(body)
+            except ValueError as e:
+                self._send(400, {"error": str(e)}); return
+            try:
+                self._send(200, detect_all(slug, force=force, span=span))
             except FileNotFoundError as e:
                 self._send(404, {"error": str(e)})
             except Exception as e:
                 self._send(500, {"error": f"detection failed: {type(e).__name__}: {e}"})
-            return
-
-        if path == "/api/bpm/tempo-curve":
-            slug  = safe_segment(str(body.get("slug", "")).strip())
-            force = bool(body.get("force", False))
-            if not slug:
-                self._send(400, {"error": "invalid or missing slug"}); return
-            try:
-                self._send(200, compute_curve(slug, force=force))
-            except FileNotFoundError as e:
-                self._send(404, {"error": str(e)})
-            except Exception as e:
-                self._send(500, {"error": f"tempo-curve failed: {type(e).__name__}: {e}"})
             return
 
         self._send(404, {"error": "not found"})

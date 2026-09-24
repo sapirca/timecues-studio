@@ -29,7 +29,7 @@ export interface PerSongStorage {
   caches: StorageCaches;
   /** Sum of all caches.* — what DELETE will erase. */
   cacheBytes: number;
-  /** Bytes of annotation JSONs (manual + eye + auto-guess + song-info, all annotators). NEVER deleted. */
+  /** Bytes of annotation JSONs (manual + auto-guess + song-info, all annotators). NEVER deleted. */
   annotations: number;
   /** Bytes of the audio file in songs/<slug>/. NEVER deleted. */
   audio: number;
@@ -80,7 +80,7 @@ export async function clearSongStems(slug: string): Promise<PerSongStorage> {
 }
 
 /**
- * Nuke a song entirely: audio file, all annotators' annotations (manual/eye/auto-guess/
+ * Nuke a song entirely: audio file, all annotators' annotations (manual/auto-guess/
  * custom + song-info), and all regenerable caches. Cannot be undone.
  */
 export async function deleteSongEverything(slug: string): Promise<{ deleted: number; slug: string }> {

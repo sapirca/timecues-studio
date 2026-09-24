@@ -39,11 +39,16 @@ export function AppPageHeader({ back, rightSlot }: AppPageHeaderProps) {
     navigate('/');
   };
 
+  const goBack = () => {
+    if (isDemo) { requestExitDemo(() => navigate('/')); return; }
+    navigate(-1);
+  };
+
   const showBack = back !== false;
   const backLabel = (back ? back.label : undefined) ?? (isDemo ? 'Exit demo' : 'Back');
   const backTitle = (back ? back.title : undefined)
-    ?? (isDemo ? 'Exit demo and return to main page' : 'Back to main page');
-  const backOnClick = (back ? back.onClick : undefined) ?? goHome;
+    ?? (isDemo ? 'Exit demo and return to main page' : 'Go back');
+  const backOnClick = (back ? back.onClick : undefined) ?? goBack;
 
   return (
     <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-white/[0.05]">

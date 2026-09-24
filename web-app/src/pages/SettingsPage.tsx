@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAnnotator } from '../context/AnnotatorContext';
 import {
@@ -20,8 +20,11 @@ import {
 } from '../components/inspector-v2/genrePresets';
 import { sectionColor, sectionLabel } from '../components/inspector-v2/sectionConstants';
 import type { Annotator } from '../types/annotator';
-import type { AutoGuessCentroidMethod } from '../types/manualAnnotation';
+import type { AutoGuessCentroidMethod } from '../types/autoGuess';
 import { BAND_PALETTES, type BandPaletteId } from '../utils/bandPalettes';
+import { DEMUCS_MODEL_OPTIONS } from '../hooks/useDemucsStems';
+import { DEFAULT_TIME_PRECISION, MIN_TIME_PRECISION, MAX_TIME_PRECISION } from '../utils/beatGrid';
+import type { BarBeatOrigin } from '../utils/beatGrid';
 import {
   clearAllCaches,
   deleteAllSongs,
@@ -32,6 +35,7 @@ import {
   type StorageStatsResponse,
 } from '../services/storageStats';
 import { DeleteConfirmDialog } from '../components/DeleteConfirmDialog';
+import { VocabularyRemovalDialog } from '../components/VocabularyRemovalDialog';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { ExperimentalModelsPanel } from '../components/ExperimentalModelsPanel';
 import { InfoBanner, resetAllInfoBanners } from '../components/InfoBanner';
@@ -45,6 +49,12 @@ import {
   type AccessTier,
   type DatasetConfig,
 } from '../types/datasetConfig';
+
+const SectionControlCtx = createContext<{
+  searchQuery: string;
+  expandSeq: number;
+  collapseSeq: number;
+}>({ searchQuery: '', expandSeq: 0, collapseSeq: 0 });
 
 const ALL_BPM_DETECTORS = [
   'librosa-beat-track',
@@ -104,6 +114,10 @@ export function SettingsPage() {
   const { status: adminStatus, refresh: refreshAdmin } = useAdmin();
   const isAdmin = adminStatus?.isAdmin ?? false;
   const expAvail = useExperimentalAvailability();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandSeq, setExpandSeq] = useState(0);
+  const [collapseSeq, setCollapseSeq] = useState(0);
 
   // Dataset config — read so non-admins can see whether they're overriding an
   // admin recommendation, and so admins can edit the corpus-wide defaults.
@@ -195,6 +209,13 @@ export function SettingsPage() {
   // Which corpus-wide destructive action is currently confirming. Drives the
   // shared DeleteConfirmDialog at the bottom of the page; null means closed.
   const [dangerPending, setDangerPending] = useState<'songs' | 'workspace' | 'factory' | null>(null);
+  /** A vocabulary edit that drops names in use, held until the user approves it
+   *  in VocabularyRemovalDialog. `genres === undefined` means "leave the genre
+   *  selection alone" (the admin-default reset does that); `null` means custom
+   *  mode. */
+  const [vocabRemoval, setVocabRemoval] = useState<
+    { removed: string[]; vocab: string[]; genres?: GenrePresetKey[] | null } | null
+  >(null);
   const refreshStats = async () => {
     setStatsLoading(true);
     setStats(await fetchStorageStats());
@@ -238,6 +259,23 @@ export function SettingsPage() {
   );
   const isGenreSelected = (key: GenrePresetKey) => selectedGenres.includes(key);
 
+  const commitVocabulary = (vocab: string[], genres?: GenrePresetKey[] | null) => {
+    update('sectionTypeVocabulary', vocab);
+    if (genres !== undefined) update('sectionVocabularyGenres', genres);
+  };
+
+  /** Single gate in front of every vocabulary write. Adding names is applied
+   *  straight away; dropping one is not, because sections already annotated with
+   *  it get re-typed to `unset` the next time their song loads — a change to
+   *  annotation data, made from a settings screen, that the user has to approve
+   *  first. Both the genre cards and the Custom textarea go through here. */
+  const requestVocabulary = (vocab: string[], genres?: GenrePresetKey[] | null) => {
+    const kept = new Set(vocab);
+    const removed = settings.sectionTypeVocabulary.filter((word) => !kept.has(word));
+    if (removed.length === 0) { commitVocabulary(vocab, genres); return; }
+    setVocabRemoval({ removed, vocab, genres });
+  };
+
   /** Toggle a genre on/off in the multi-select. Recomputes the effective vocabulary
    *  union and writes both fields. Deselecting the last genre switches to custom
    *  mode with the prior vocab preserved as the editable draft, so the user never
@@ -251,9 +289,7 @@ export function SettingsPage() {
       update('sectionVocabularyGenres', null);
       return;
     }
-    const vocab = unionVocabulary(next);
-    update('sectionVocabularyGenres', next);
-    update('sectionTypeVocabulary', vocab);
+    requestVocabulary(unionVocabulary(next), next);
   };
 
   /** Click the Custom card: enter custom mode with the current vocab as the draft. */
@@ -266,8 +302,7 @@ export function SettingsPage() {
     const next = normalizedCurrentVocabulary.length > 0
       ? normalizedCurrentVocabulary
       : [...DEFAULT_SETTINGS.sectionTypeVocabulary];
-    update('sectionTypeVocabulary', next);
-    update('sectionVocabularyGenres', null);
+    requestVocabulary(next, null);
   };
 
   // ── Fill-default layout — filtered by current vocabulary genres ─────────
@@ -347,7 +382,7 @@ export function SettingsPage() {
   }, [settings.spanTaxonomy, settings.spanTaxonomyEnabled, spanAdminDefault, spanAdminEnabledDefault]);
 
   const resetSectionVocabToDataset = () => {
-    if (sectionVocabAdminDefault) update('sectionTypeVocabulary', [...sectionVocabAdminDefault]);
+    if (sectionVocabAdminDefault) requestVocabulary([...sectionVocabAdminDefault]);
   };
   const resetCueTaxonomyToDataset = () => {
     if (cueAdminEnabledDefault !== undefined) update('cueTaxonomyEnabled', cueAdminEnabledDefault);
@@ -418,13 +453,13 @@ export function SettingsPage() {
   return (
     <div className="min-h-screen bg-[#0a0b0d] text-slate-200">
       <AppPageHeader back={{}} />
-      <div className="max-w-3xl mx-auto space-y-8 p-6">
+      <div className="max-w-3xl mx-auto space-y-8 px-4 py-6 sm:p-6 min-w-0">
         <InfoBanner id="settings.v1" title="Settings" accent="slate">
           Expand a section to edit. <strong>Personal</strong> changes save locally; <strong>Corpus</strong> changes apply to everyone.
         </InfoBanner>
         <header className="border-b border-white/[0.06] pb-3">
           <h1 className="text-lg font-medium text-slate-100">Settings</h1>
-          <p className="text-[11px] text-slate-500 mt-0.5">
+          <p className="text-[12px] sm:text-[11px] text-slate-500 mt-0.5 break-words">
             Personal preferences are stored locally in this browser. Corpus sections write to{' '}
             <code>data/dataset-config.json</code> and apply to every annotator.
           </p>
@@ -432,6 +467,61 @@ export function SettingsPage() {
 
         <RoleBanner tier={effectiveTier} signedIn={!!annotator} />
 
+        {/* ── Search & layout controls ───────────────────────────────── */}
+        <div className="space-y-2">
+          <div className="relative">
+            <svg
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="absolute left-2.5 top-3 sm:top-2.5 w-4 h-4 text-slate-500 pointer-events-none"
+              aria-hidden
+            >
+              <circle cx="9" cy="9" r="5.5" />
+              <path d="M16 16l-3-3" />
+            </svg>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search settings…"
+              className="w-full bg-[#0a0b0d] border border-white/[0.08] rounded-lg pl-9 pr-8 py-2 text-base sm:text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-slate-500/40"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-3 sm:top-2.5 text-slate-500 hover:text-slate-300 transition"
+                aria-label="Clear search"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="w-3.5 h-3.5" aria-hidden>
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setExpandSeq((s) => s + 1)}
+              className="px-3 sm:px-2.5 py-2.5 sm:py-1 rounded border border-white/10 hover:border-white/20 text-[12px] sm:text-[11px] text-slate-400 hover:text-slate-200 transition"
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              onClick={() => setCollapseSeq((s) => s + 1)}
+              className="px-3 sm:px-2.5 py-2.5 sm:py-1 rounded border border-white/10 hover:border-white/20 text-[12px] sm:text-[11px] text-slate-400 hover:text-slate-200 transition"
+            >
+              Collapse all
+            </button>
+          </div>
+        </div>
+
+        <SectionControlCtx.Provider value={{ searchQuery, expandSeq, collapseSeq }}>
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* CATEGORY 1 — User info                                          */}
         {/* ════════════════════════════════════════════════════════════════ */}
@@ -605,15 +695,37 @@ export function SettingsPage() {
           </Section>
 
           <Section
+            title="Timing export"
+            hint="How annotation times are written when you export label tracks and the JSON manifest."
+          >
+            <Field label="Time precision (decimal places)">
+              <input
+                type="number"
+                min={MIN_TIME_PRECISION}
+                max={MAX_TIME_PRECISION}
+                step={1}
+                value={settings.timePrecisionDecimals}
+                onChange={(e) => {
+                  const n = Math.max(
+                    MIN_TIME_PRECISION,
+                    Math.min(MAX_TIME_PRECISION, Math.round(Number(e.target.value) || DEFAULT_TIME_PRECISION)),
+                  );
+                  update('timePrecisionDecimals', n);
+                }}
+                className="w-16 px-2 py-1 rounded bg-black/40 border border-white/[0.08] text-[12px] font-mono text-slate-100 focus:outline-none focus:border-indigo-400/50"
+              />
+            </Field>
+            <p className="text-[11px] text-slate-500 mt-1.5">
+              3 = millisecond; lower = smaller files. In-memory times keep full
+              precision — only exported numbers are rounded.
+            </p>
+          </Section>
+
+          <Section
             title="Default signals"
             hint="What's checked in the SIGNALS dropdown when a song opens."
           >
-            <Toggle
-              label="Signal overlays on (master toggle)"
-              value={settings.defaultShowSignalOverlays}
-              onChange={(v) => update('defaultShowSignalOverlays', v)}
-            />
-            <div className="pl-4 border-l border-white/[0.06] space-y-1.5">
+            <div className="space-y-1.5">
               <Toggle
                 label="3-Band (waveform)"
                 value={settings.defaultShowWaveform}
@@ -710,26 +822,13 @@ export function SettingsPage() {
 
           <Section
             title="Annotations — display"
-            hint="Which annotation layers are visible by default, and the time unit used by Manual/Eye editors."
+            hint="Which annotation layers are visible by default, and the time unit used by Manual editors."
           >
             <Toggle
               label="Show manual annotations"
               value={settings.defaultShowManual}
               onChange={(v) => update('defaultShowManual', v)}
             />
-            <div className="flex items-center gap-2 flex-wrap">
-              <Toggle
-                label="Show eye annotations"
-                value={settings.defaultShowEye}
-                onChange={(v) => update('defaultShowEye', v)}
-                disabled={!settings.experimentalEyeAnnotation}
-              />
-              {!settings.experimentalEyeAnnotation && (
-                <span className="text-[10px] text-slate-500">
-                  Enable Eye annotation under Experimental annotation types & models to use this.
-                </span>
-              )}
-            </div>
             <Toggle
               label="Show auto-guess annotations"
               value={settings.defaultShowAutoGuess}
@@ -752,7 +851,31 @@ export function SettingsPage() {
                 ))}
               </div>
               <p className="text-[11px] text-slate-500 mt-1.5">
-                Applies to manual + eye annotation editors when the song has a BPM set.
+                Applies to the manual annotation editor when the song has a BPM set.
+              </p>
+            </Field>
+            <Field label="First bar / first beat numbered">
+              <div className="flex gap-2">
+                {([0, 1] as BarBeatOrigin[]).map((o) => (
+                  <button
+                    key={o}
+                    onClick={() => update('barBeatOrigin', o)}
+                    className={`px-3 py-1.5 rounded border text-xs ${
+                      settings.barBeatOrigin === o
+                        ? 'border-indigo-500 bg-indigo-900/30 text-indigo-200'
+                        : 'border-white/10 text-slate-300 hover:border-white/20'
+                    }`}
+                  >
+                    {o === 1 ? 'Start at 1 (bar 1 · beat 1)' : 'Start at 0 (bar 0 · beat 0)'}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                Numbering convention for every bar.beat position — cue/loop/span times,
+                the bar.beat inputs, the bar labels on the beat grid, and grid exports.
+                Only the numbering changes: stored times, snapping, and the grid itself
+                are untouched. Typed bar.beat values follow the same convention, so
+                under “start at 0” the first downbeat is <code>0.0</code>.
               </p>
             </Field>
           </Section>
@@ -760,8 +883,8 @@ export function SettingsPage() {
           <Section
             title="Vocabularies & taxonomies"
             hint={isAdmin
-              ? "Section names (Manual/Eye), cue labels, and span labels. Admins: each field has 'Save as dataset default' to push the current value to every annotator."
-              : "Section names (Manual/Eye), cue labels, and span labels. Suggestions come from the dataset default set by an admin."}
+              ? "Section names (Manual), cue labels, and span labels. Admins: each field has 'Save as dataset default' to push the current value to every annotator."
+              : "Section names (Manual), cue labels, and span labels. Suggestions come from the dataset default set by an admin."}
             headerExtra={<OverrideBadge active={sectionVocabOverride} onReset={resetSectionVocabToDataset} />}
           >
             <Field label="Section vocabulary">
@@ -772,7 +895,7 @@ export function SettingsPage() {
                 </p>
               )}
               <p className="text-[11px] text-slate-500 mb-1.5">
-                Pick one or more genres — the dropdown vocabulary in Manual/Eye editors becomes
+                Pick one or more genres — the dropdown vocabulary in the Manual editor becomes
                 the union of their section names. Use Custom for a hand-edited list.
               </p>
               <div className="space-y-1.5">
@@ -850,7 +973,7 @@ export function SettingsPage() {
                       <div className="text-[10px] text-slate-500 font-mono">{normalizedCurrentVocabulary.length} names</div>
                     </div>
                     <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                      Use any comma- or newline-separated list, then apply it to the Manual and Eye dropdowns.
+                      Use any comma- or newline-separated list, then apply it to the Manual dropdown.
                     </div>
                   </button>
                   <div className="px-3 pb-3 space-y-2">
@@ -859,7 +982,7 @@ export function SettingsPage() {
                       onChange={(e) => setSectionVocabularyDraft(e.target.value)}
                       rows={3}
                       className="bg-[#0a0b0d] border border-white/[0.08] rounded px-2 py-1.5 text-sm w-full font-mono text-slate-100 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40"
-                      placeholder="intro, buildup, drop, breakdown, bridge, outro, silence"
+                      placeholder="intro, verse, chorus, buildup, drop, breakdown, bridge, outro, silence"
                     />
                     <div className="flex flex-wrap gap-1">
                       {normalizedCurrentVocabulary.length > 0 ? normalizedCurrentVocabulary.map((type) => (
@@ -880,7 +1003,7 @@ export function SettingsPage() {
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-1">
                       <p className="text-[11px] text-slate-500">
-                        Comma- or newline-separated section names shown in the Manual and Eye type dropdowns.
+                        Comma- or newline-separated section names shown in the Manual type dropdown.
                       </p>
                       <button
                         onClick={applySectionVocabulary}
@@ -1081,7 +1204,7 @@ export function SettingsPage() {
                     )}
                   </div>
                   <p className="text-[11px] text-slate-500">
-                    Applied by the ⚡ Fill default button on Manual annotations when there are no algorithm-suggested sections.
+                    Applied by the ✨ Fill default button on Manual annotations when there are no algorithm-suggested sections.
                     Bars convert to seconds using the song's BPM &amp; time signature at apply time.
                   </p>
                 </div>
@@ -1267,28 +1390,18 @@ export function SettingsPage() {
             hint="Coming soon. Each toggle is independent; flip on locally to test in-progress paradigms and MIR models before they ship."
           >
             <Toggle
-              label="Enable Loops and Patterns (in development)"
+              label="Enable Loops and Riff Patterns (in development)"
               value={settings.experimentalLoopsAndPatterns}
               onChange={(v) => update('experimentalLoopsAndPatterns', v)}
             />
             <p className="text-[11px] text-slate-500">
               <span className="font-medium text-slate-400">Loops</span> are grid-aware
               seamless-playback regions for auditioning N-bar phrases.{' '}
-              <span className="font-medium text-slate-400">Patterns</span> are labeled cycles
-              that tile across the song. Backend supports both; the UI is still being built and
-              won't show until this flag is on. Boundaries (Manual/Auto-guess), Cues, and Spans
-              are always available — they don't need this flag.
-            </p>
-            <Toggle
-              label="Enable Eye annotation (second-observer pass)"
-              value={settings.experimentalEyeAnnotation}
-              onChange={(v) => update('experimentalEyeAnnotation', v)}
-            />
-            <p className="text-[11px] text-slate-500">
-              The <span className="font-medium text-slate-400">Eye</span> tab adds an independent
-              second pass over the same structural sections (separate from Manual). When off, the
-              Eye sub-tab under Boundaries, the Eye visibility checkbox, and the canvas overlay
-              are all hidden.
+              <span className="font-medium text-slate-400">Riff Patterns</span> compose
+              reusable motif nodes into instances placed on the timeline. Backend supports
+              both; the UI is still being built and won't show until this flag is on.
+              Boundaries (Manual/Auto-guess), Cues, and Spans are always available — they
+              don't need this flag.
             </p>
             <Toggle
               label="Enable SPAN-family detectors (Silero-VAD, JDCNet)"
@@ -1330,7 +1443,7 @@ export function SettingsPage() {
               model weights, no GPU, no special install — works on every platform that runs
               the existing TimeCues stack. Outputs <code className="font-mono text-slate-400">LoopItem[]</code> —
               labeled intervals representing seamless N-bar phrases. Distinct from the
-              <em>Loops + Patterns</em> flag above which gates the <em>manual</em> annotation tab.
+              <em>Loops + Riff Patterns</em> flag above which gates the <em>manual</em> annotation tabs.
             </p>
             {!expAvail.loopFamily && <ExpUnavailableNote />}
             <Toggle
@@ -1346,11 +1459,42 @@ export function SettingsPage() {
               alignment with WhisperX / ctc-forced-aligner is the planned follow-up.
             </p>
             {!expAvail.lyricsFamily && <ExpUnavailableNote />}
+            <Toggle
+              label="Enable PATTERN-family detectors (LoCoMotif motif discovery)"
+              value={settings.experimentalPatternFamily}
+              onChange={(v) => update('experimentalPatternFamily', v)}
+              disabled={!expAvail.patternFamily}
+            />
+            <p className="text-[11px] text-slate-500">
+              <a href="https://github.com/ML-KULeuven/locomotif" target="_blank" rel="noopener noreferrer"
+                 className="text-emerald-400/80 hover:text-emerald-300 underline">LoCoMotif</a>{' '}
+              (MIT, KU Leuven) finds variable-length repeating motifs in beat-synchronous chroma via DTW-warped
+              matching. Detected motifs are cached in{' '}
+              <code className="font-mono text-slate-400">data/algorithm-outputs/pattern/</code> and
+              surface in Algorithm Inspect; they have no manual annotation layer of their own.
+              No model weights — pure DSP + numba JIT (one-time ~15 s warm-up on first call after server boot).
+            </p>
+            {!expAvail.patternFamily && <ExpUnavailableNote />}
+            <Toggle
+              label="Enable Setlist workspace (algorithmic DJ-style ordering)"
+              value={settings.experimentalSetlist}
+              onChange={(v) => update('experimentalSetlist', v)}
+            />
+            <p className="text-[11px] text-slate-500">
+              Adds a top-level <span className="font-medium text-slate-400">Setlist</span>{' '}
+              workspace at <code className="font-mono text-slate-400">/setlist</code> that orders
+              your corpus into a play sequence. v0 uses cached BPM (median across the 5 detectors)
+              with a greedy nearest-neighbour pass; meter and energy scorers join next. Saved
+              setlists persist per-annotator under{' '}
+              <code className="font-mono text-slate-400">data/setlists/&lt;you&gt;/&lt;name&gt;.json</code>.
+              No new model dependencies.
+            </p>
             <ExperimentalModelsPanel
               spanFamilyEnabled={settings.experimentalSpanFamily}
               cueExtrasEnabled={settings.experimentalCueExtras}
               loopFamilyEnabled={settings.experimentalLoopFamily}
               lyricsFamilyEnabled={settings.experimentalLyricsFamily}
+              patternFamilyEnabled={settings.experimentalPatternFamily}
             />
           </Section>
         </Group>
@@ -1403,16 +1547,59 @@ export function SettingsPage() {
           </Section>
 
           <Section
+            title="Stem separation"
+            hint="Demucs splits a song into isolated tracks. Per-stem detectors, stem audition, and stem-scoped exports all read from them."
+          >
+            <Toggle
+              label="Separate stems automatically after upload"
+              value={settings.autoStemOnUpload}
+              onChange={(v) => update('autoStemOnUpload', v)}
+            />
+            <p className="text-[11px] text-slate-500">
+              Newly uploaded songs are queued for Demucs in the background — one at a
+              time, while you keep working. Songs that already have stems on disk are
+              skipped, and nothing runs at all when the Demucs tooling isn't installed.
+              Dataset Prep's sidebar shows what's running and what's still waiting.
+            </p>
+            <Field label="Stems per song">
+              <div className="flex items-center gap-2 flex-wrap">
+                {DEMUCS_MODEL_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => update('defaultStemModel', opt.id)}
+                    title={opt.hint}
+                    className={`px-3 py-1.5 rounded-lg border text-xs transition-colors ${
+                      settings.defaultStemModel === opt.id
+                        ? 'border-sky-500/60 bg-sky-500/15 text-sky-100'
+                        : 'border-white/10 text-slate-300 hover:border-white/20'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <p className="text-[11px] text-slate-500">
+              <span className="font-medium text-slate-400">6 stems</span> (htdemucs_6s) adds
+              guitar and piano on their own tracks; <span className="font-medium text-slate-400">4 stems</span>{' '}
+              (htdemucs) leaves both inside <em>other</em> and finishes sooner. This is the
+              starting point for automatic runs — Dataset Prep's SOURCE row can pick either
+              model per re-stem.
+            </p>
+          </Section>
+
+          <Section
             title="Evaluation"
             hint="How the dataset-evaluation tables score detector output against your reference layers."
           >
             <Toggle
-              label="Score region layers as multiple candidates (spans / loops / patterns)"
+              label="Score region layers as multiple candidates (spans / loops)"
               value={settings.evalRegionLayersAsCandidates}
               onChange={(v) => update('evalRegionLayersAsCandidates', v)}
             />
             <p className="text-[11px] text-slate-500">
-              When on, every span, loop, and pattern layer is scored as one set of
+              When on, every span and loop layer is scored as one set of
               interchangeable alternatives for the same event: a detector that hits{' '}
               <em>any</em> item in the layer satisfies it, and the rest aren't counted as
               misses. Overrides each layer's per-layer{' '}
@@ -1756,11 +1943,22 @@ export function SettingsPage() {
             />
           </Section>
         </Group>
+        </SectionControlCtx.Provider>
 
         <footer className="text-[10px] text-slate-600 pt-2">
           Settings key: <code>timecues.settings.v1</code> · Defaults version matches {Object.keys(DEFAULT_SETTINGS).length} fields.
         </footer>
       </div>
+
+      <VocabularyRemovalDialog
+        open={vocabRemoval !== null}
+        onOpenChange={(open) => { if (!open) setVocabRemoval(null); }}
+        removed={vocabRemoval?.removed ?? []}
+        onConfirm={() => {
+          if (vocabRemoval) commitVocabulary(vocabRemoval.vocab, vocabRemoval.genres);
+          setVocabRemoval(null);
+        }}
+      />
 
       {/* Shared confirmation dialog for the three corpus-wide destructive actions.
           Each scope has its own typed confirmation word so a slip on one option
@@ -1895,7 +2093,7 @@ function Group({
   }[accent];
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 [&:not(:has(section))]:hidden">
       <div className={`flex items-start gap-3 rounded border ${accentMap.border} ${accentMap.bg} px-4 py-3`}>
         <GroupIcon kind={icon} className={`w-5 h-5 mt-0.5 shrink-0 ${accentMap.text}`} />
         <div className="flex-1 min-w-0">
@@ -2050,9 +2248,40 @@ function Section({
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const { searchQuery, expandSeq, collapseSeq } = useContext(SectionControlCtx);
   const [open, setOpen] = useState(defaultOpen);
+
+  const prevExpandSeq = useRef(expandSeq);
+  const prevCollapseSeq = useRef(collapseSeq);
+
+  useEffect(() => {
+    if (expandSeq === prevExpandSeq.current) return;
+    prevExpandSeq.current = expandSeq;
+    setOpen(true);
+  }, [expandSeq]);
+
+  useEffect(() => {
+    if (collapseSeq === prevCollapseSeq.current) return;
+    prevCollapseSeq.current = collapseSeq;
+    setOpen(false);
+  }, [collapseSeq]);
+
+  const searchLower = searchQuery.toLowerCase();
+  const matches =
+    searchLower.length > 0 &&
+    (title.toLowerCase().includes(searchLower) ||
+      (hint ?? '').toLowerCase().includes(searchLower));
+
+  useEffect(() => {
+    if (matches) setOpen(true);
+  }, [matches]);
+
+  if (searchQuery.length > 0 && !matches) return null;
+
   return (
-    <section className="bg-[#14171d] border border-white/[0.08] rounded">
+    <section className={`bg-[#14171d] border rounded transition-colors ${
+      matches ? 'border-amber-400/40 ring-1 ring-amber-400/20' : 'border-white/[0.08]'
+    }`}>
       <div className="flex items-start gap-3 p-4">
         <button
           type="button"

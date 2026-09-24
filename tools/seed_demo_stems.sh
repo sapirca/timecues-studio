@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Encode the four Demucs stems (vocals, drums, bass, other) for each demo
-# track to 192 kbps MP3 and stage them under data-default/stems/<slug>/ so
+# Encode the six Demucs stems (vocals, drums, bass, other, guitar, piano) for
+# each demo track to 192 kbps MP3 and stage them under data-default/stems/<slug>/ so
 # they ship inside the docker image. Without this seed step the demo
 # visitor has to wait for Demucs to run on first stem-button click (which
 # also isn't available to anonymous users since /api/run-demucs is admin-
@@ -8,7 +8,7 @@
 # URLs that the Inspector consumes.
 #
 # Expects the source WAV stems to already exist under web-app/public/stems/
-# (run tools/python/tools/demucs_separator.py first).
+# (run tools/python/tools/demucs_separator.py first — htdemucs_6s model).
 #
 # Usage:  bash tools/seed_demo_stems.sh
 set -euo pipefail
@@ -18,7 +18,7 @@ SRC_DIR="$ROOT/web-app/public/stems"
 DST_DIR="$ROOT/data-default/stems"
 
 SLUGS=("edm-at-midnight" "pantheon" "phonk-remix")
-STEMS=("vocals" "drums" "bass" "other")
+STEMS=("vocals" "drums" "bass" "other" "guitar" "piano")
 
 for slug in "${SLUGS[@]}"; do
   src="$SRC_DIR/$slug"
@@ -27,6 +27,8 @@ for slug in "${SLUGS[@]}"; do
     echo "SKIP $slug: no source dir $src" >&2
     continue
   fi
+  # Clear any stale 4-stem set so the demo never serves a mix of old + new.
+  rm -f "$dst"/*.mp3 "$dst"/manifest.json
   mkdir -p "$dst"
   for stem in "${STEMS[@]}"; do
     if [[ ! -f "$src/$stem.wav" ]]; then
@@ -51,7 +53,7 @@ for slug in "${SLUGS[@]}"; do
 
   cat > "$dst/manifest.json" <<EOF
 {
-  "model": "htdemucs",
+  "model": "htdemucs_6s",
   "audioFile": "$audio_file",
   "slug": "$slug",
   "shipped": true,
@@ -59,7 +61,9 @@ for slug in "${SLUGS[@]}"; do
     "drums": "/stems/$slug/drums.mp3",
     "bass": "/stems/$slug/bass.mp3",
     "other": "/stems/$slug/other.mp3",
-    "vocals": "/stems/$slug/vocals.mp3"
+    "vocals": "/stems/$slug/vocals.mp3",
+    "guitar": "/stems/$slug/guitar.mp3",
+    "piano": "/stems/$slug/piano.mp3"
   }
 }
 EOF

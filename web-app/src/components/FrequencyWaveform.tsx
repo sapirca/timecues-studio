@@ -20,38 +20,32 @@
  * its own offsets.
  */
 
-import { useEffect, useRef, useCallback, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
 import { visibleGridLines, snapTimeToGrid } from '../utils/beatGrid';
+import type { ResolvedSegment } from '../utils/gridSegments';
+import { TiledStrip, type TileGeom } from './TiledStrip';
+import { GridLines } from './GridLines';
 import { getBandColors } from '../utils/bandPalettes';
 import { useSettings } from '../context/SettingsContext';
+import { useRegionSelectDrag, preventPressDefault } from '../hooks/useTimelineDrag';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const CANVAS_HEIGHT = 70;          // px
 const RENDER_SAMPLE_RATE = 11025;  // Hz — Nyquist 5512 > 2500 Hz HP crossover
-// Clamp the canvas internal buffer so it stays under the browser's max-canvas
-// size at Ultra zoom (Chrome caps at ~32 767 px; Firefox/Safari lower — 32 000
-// is safe across browsers). Past this, CSS stretches a smaller buffer to the
-// full row width — the bands appear softer rather than the canvas dropping to
-// a broken-image placeholder.
-const MAX_BUFFER_PX = 32_000;
+// Peak resolution kept per band, in peaks per second of audio. The old scheme
+// stored a fixed 32 000 peaks for the WHOLE track, so a 3-minute song was
+// summarized at ~5 ms per peak no matter how far you zoomed — the row could
+// not show detail it had never kept. Storing a fixed RATE instead makes the
+// row's detail independent of track length: 2 000/s is 0.5 ms per peak, finer
+// than one screen pixel until about ×300, and costs 8 KB per second of audio
+// per band (~1.4 MB per band for a 3-minute track).
+const PEAKS_PER_SECOND = 2_000;
+const MIN_PEAKS = 32_000;
+const MAX_PEAKS = 2_000_000;   // ~8 MB per band, i.e. a 16-minute track at full rate
 
 function isLightTheme(): boolean {
   return document.documentElement.getAttribute('data-theme') === 'light';
-}
-
-// Small in-canvas activity badge shown while the buffer is being soft-clamped
-// at Ultra zoom. Replaces the browser's broken-image placeholder that used to
-// surface when canvas dimensions exceeded the max-canvas size.
-function SoftClampSpinner() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-      <circle cx="7" cy="7" r="5" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
-      <path d="M 7 2 A 5 5 0 0 1 12 7" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="1.5" strokeLinecap="round">
-        <animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.9s" repeatCount="indefinite" />
-      </path>
-    </svg>
-  );
 }
 
 // ─── Audio helpers ───────────────────────────────────────────────────────────
@@ -140,12 +134,14 @@ export interface FrequencyWaveformProps {
   bpm?: number;
   beatOffset?: number;
   beatsPerBar?: number;
-  /** Optional tempo anchors (Dynamic / Manual modes). When provided, snap
-   *  uses the per-segment tempo. */
-  anchors?: readonly import('../types/songInfo').TempoAnchor[];
   /** Optional per-beat overrides (Manual mode). When a snap target has a
    *  pinned position, snap returns the pinned time. */
   beatOverrides?: Readonly<Record<string, number>>;
+  /** Resolved grid segments (Mapped mode, and Hand-placed riding a Mapped
+   *  base). Every other surface draws and snaps against these; this row has
+   *  to receive them too, or on a split song it paints a different grid from
+   *  the one beside it and snaps region edges to lines it never drew. */
+  segments?: readonly ResolvedSegment[];
   barGroupSize?: number;
   /** Subdivide each beat (2 = 1/2, 3 = triplet, 4 = 1/4, 6 = 16th triplet, 8 = 1/8). Ignored when barGroupSize is set. */
   subBeatDivision?: number;
@@ -159,6 +155,13 @@ export interface FrequencyWaveformProps {
   onGridOffsetDragStart?: (currentOffset: number) => void;
   /** When true (and bpm is set), snap the drag-selection highlight and emitted region to the beat grid. */
   snapToGrid?: boolean;
+  /** Replaces the built-in whole-beat snap entirely, `snapToGrid` included.
+   *  Set by a layer type that owns its own granularity — Lyrics, whose times
+   *  describe a sung performance and so follow the layer's SnapMode rather
+   *  than the global switches. Returning `t` unchanged means "don't snap". */
+  snapTimeOverride?: (t: number) => number;
+  /** Strip height in px. The row sheet's S/M/L/XL sizes scale it. */
+  height?: number;
 }
 
 export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWaveformProps>(function FrequencyWaveform({
@@ -168,6 +171,8 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
   onSeek,
   onRegion,
   onRegionDragStart,
+  snapTimeOverride,
+  height = CANVAS_HEIGHT,
   bpm,
   beatOffset = 0,
   beatsPerBar = 4,
@@ -175,8 +180,8 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
   subBeatDivision,
   beatGroupSize,
   gridThickness = 1,
-  anchors,
   beatOverrides,
+  segments,
   onGridOffsetChange,
   onGridOffsetDragStart,
   snapToGrid = false,
@@ -185,12 +190,10 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
   const bandPalette = settings.bandPalette;
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef    = useRef<HTMLCanvasElement>(null);
   const cursorRef    = useRef<HTMLDivElement>(null);
 
-  // Drag-selection state
-  const [selection, setSelection] = useState<{ s: number; e: number } | null>(null);
-  const dragRef = useRef<{ time: number; x: number } | null>(null);
+  // Drag-selection lives in useRegionSelectDrag (document-level tracking, so
+  // the gesture survives leaving the canvas) — see the hook wiring below.
 
   // Alt-drag-to-slide-grid state. Separate from selection drag because the modifier
   // changes the meaning of the gesture.
@@ -201,14 +204,26 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
   const renderingRef = useRef(false);
   const pendingRef   = useRef<AudioBuffer | null>(null);
 
-  // Surfaces the buffer-clamp spinner. True while the canvas is being repainted
-  // at a zoom level past the safe-buffer cap. Auto-clears ~250 ms after the
-  // last paint completes so it never sticks during idle.
-  const [softening, setSoftening] = useState(false);
-  const softenTimerRef = useRef<number | null>(null);
+  // Whole-track peak maxima, so every tile scales its bands identically.
+  const scalesRef = useRef<{ low: number; mid: number; high: number } | null>(null);
 
   useImperativeHandle(ref, () => ({
-    getCanvasDataURL: () => canvasRef.current?.toDataURL('image/png') ?? null,
+    // The bands are a strip of tiles; composite what is mounted into one image.
+    getCanvasDataURL: () => {
+      const host = containerRef.current;
+      if (!host) return null;
+      const tiles = [...host.querySelectorAll('canvas')];
+      if (tiles.length === 0) return null;
+      const w = Math.max(...tiles.map((c) => c.offsetLeft + c.width));
+      const h = Math.max(...tiles.map((c) => c.height));
+      if (w <= 0 || h <= 0 || w > 16_384) return tiles[0].toDataURL('image/png');
+      const out = document.createElement('canvas');
+      out.width = w; out.height = h;
+      const octx = out.getContext('2d');
+      if (!octx) return null;
+      for (const c of tiles) octx.drawImage(c, c.offsetLeft * (c.width / Math.max(1, c.offsetWidth)), 0);
+      return out.toDataURL('image/png');
+    },
   }));
 
   const effectiveDuration = duration ?? audioBuffer?.duration ?? 0;
@@ -224,76 +239,79 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
       barGroupSize: barGroupSize ?? null,
       subBeatDivision,
       beatGroupSize,
+      beatOverrides,
+      segments,
     });
-  }, [bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, effectiveDuration]);
+  }, [bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, effectiveDuration, beatOverrides, segments]);
 
   // ── Cursor: direct DOM mutation — no React re-render on every tick ─────────
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: a passive effect is free to run a frame
+  // after the commit that scheduled it, and at ultra zoom (heavy canvases in
+  // the same tree) it does. Measured at ×128 during playback, this cursor sat
+  // 22 px left of every lane-row cursor — it was showing a time 35 ms older
+  // than theirs. A layout effect lands before paint, in the same frame the
+  // inline `left: pct%` cursors are committed, so they all show one time.
+  useLayoutEffect(() => {
     const cursor = cursorRef.current;
     if (!cursor || effectiveDuration <= 0) return;
     const pct = Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100));
     cursor.style.left = `${pct}%`;
   }, [currentTime, effectiveDuration]);
 
-  // ── Paint cached peaks onto canvas ────────────────────────────────────────
-  const paintPeaks = useCallback(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container || !peaksRef.current) return;
+  // ── Paint one tile's slice of the bands ───────────────────────────────────
+  // Bumped when a new set of peaks lands, so the tiles repaint (peaksRef is a
+  // ref — the tiles cannot see it change on their own).
+  const [peaksVersion, setPeaksVersion] = useState(0);
+  const [themeVersion, setThemeVersion] = useState(0);
 
-    const cssW = container.clientWidth || 800;
-    // Soft-clamp the internal buffer: at Ultra zoom the CSS width can exceed
-    // the browser's max-canvas limit, which makes the element render as a
-    // broken-image placeholder. Keeping the buffer ≤ MAX_BUFFER_PX while
-    // leaving CSS width unbounded lets the browser stretch the smaller buffer
-    // over the full row — softer texture, but always painted.
-    const bufW = Math.min(cssW, MAX_BUFFER_PX);
-    canvas.width  = bufW;
-    canvas.height = CANVAS_HEIGHT;
-    // CSS width stays driven by Tailwind's `w-full` on the <canvas>, so the
-    // browser stretches the (possibly smaller) buffer to fill the row.
+  const paint = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom) => {
+    // The peaks and the theme are read at draw time rather than closed over,
+    // so these two counters are what gives this callback a new identity when
+    // either changes — that is what makes the mounted tiles repaint.
+    void peaksVersion; void themeVersion;
+    const peaks = peaksRef.current;
+    if (!peaks) return;
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    const colOffset = Math.round(tile.x0 * tile.dpr);
+    const colCount = Math.max(1, Math.round(tile.w * tile.dpr));
 
-    const { low, mid, high } = peaksRef.current;
-    const numCols = bufW;
+    // Max-reduce the stored peaks over each of this tile's columns. Once the
+    // column is narrower than one stored peak this stops gaining detail —
+    // that's the 0.5 ms floor, and it is the only floor left.
+    // One column of overdraw on each side: a filled band is antialiased where
+    // it meets the edge of its canvas, so without it every tile boundary shows
+    // a faint darker line down the row. The extra columns are drawn just off
+    // the tile and clipped away.
+    const OVER = 1;
+    const slice = (src: Float32Array): Float32Array => {
+      const out = new Float32Array(colCount + 2 * OVER);
+      const step = src.length / totalPx;
+      for (let c = 0; c < out.length; c++) {
+        const g = colOffset - OVER + c;
+        const a = Math.max(0, Math.min(src.length - 1, Math.floor(g * step)));
+        const b = Math.max(a + 1, Math.min(src.length, Math.floor((g + 1) * step)));
+        let m = 0;
+        for (let i = a; i < b; i++) { const v = src[i]; if (v > m) m = v; }
+        out[c] = m;
+      }
+      return out;
+    };
 
-    const lowP  = buildPeaks(low,  numCols);
-    const midP  = buildPeaks(mid,  numCols);
-    const highP = buildPeaks(high, numCols);
-
-    let lowMax = 0, midMax = 0, highMax = 0;
-    for (let i = 0; i < numCols; i++) {
-      if (lowP[i]  > lowMax)  lowMax  = lowP[i];
-      if (midP[i]  > midMax)  midMax  = midP[i];
-      if (highP[i] > highMax) highMax = highP[i];
-    }
-    const lowScale  = lowMax  > 0 ? 1 / lowMax  : 1;
-    const midScale  = midMax  > 0 ? 1 / midMax  : 1;
-    const highScale = highMax > 0 ? 1 / highMax : 1;
-
-    const ctx2d = canvas.getContext('2d');
-    if (!ctx2d) return;
-
-    ctx2d.clearRect(0, 0, bufW, CANVAS_HEIGHT);
-    ctx2d.globalCompositeOperation = 'source-over';
+    // Band scaling is global (computed once with the peaks), not per tile —
+    // scaling each tile to its own loudest moment would step the levels at
+    // every seam.
+    const scales = scalesRef.current ?? { low: 1, mid: 1, high: 1 };
     const colors = getBandColors(bandPalette, isLightTheme() ? 'light' : 'dark');
-    drawBand(ctx2d, lowP,  colors.low,  lowScale,  CANVAS_HEIGHT);
-    drawBand(ctx2d, midP,  colors.mid,  midScale,  CANVAS_HEIGHT);
-    drawBand(ctx2d, highP, colors.high, highScale, CANVAS_HEIGHT);
-
-    // Spinner only spins when the buffer was actually clamped. Steady-state
-    // zoom levels don't trigger it; Ultra-zoom repaints flash it for ~250 ms.
-    if (bufW < cssW) {
-      setSoftening(true);
-      if (softenTimerRef.current != null) window.clearTimeout(softenTimerRef.current);
-      softenTimerRef.current = window.setTimeout(() => setSoftening(false), 250);
-    } else if (softening) {
-      setSoftening(false);
-    }
-  }, [bandPalette, softening]);
-
-  useEffect(() => () => {
-    if (softenTimerRef.current != null) window.clearTimeout(softenTimerRef.current);
-  }, []);
+    ctx.clearRect(0, 0, colCount, H);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.translate(-OVER, 0);
+    drawBand(ctx, slice(peaks.low), colors.low, scales.low, H);
+    drawBand(ctx, slice(peaks.mid), colors.mid, scales.mid, H);
+    drawBand(ctx, slice(peaks.high), colors.high, scales.high, H);
+    ctx.restore();
+  }, [bandPalette, peaksVersion, themeVersion]);
 
   // ── Process a new AudioBuffer ──────────────────────────────────────────────
   const processBuffer = useCallback(async (buf: AudioBuffer) => {
@@ -301,13 +319,28 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
     renderingRef.current = true;
     pendingRef.current = null;
     try {
-      const [lowData, midData, highData] = await Promise.all([
+      // Render all three bands concurrently, then immediately downsample to
+      // MAX_BUFFER_PX peaks. Storing the full 11025 Hz PCM would cost ~13 MB
+      // per band (~39 MB total) that grows with song length; storing only 32 K
+      // peak values per band keeps it under 400 KB regardless of duration.
+      const [lowPcm, midPcm, highPcm] = await Promise.all([
         renderBand(buf, [{ type: 'lowpass',  frequency: 150 }]),
         renderBand(buf, [{ type: 'highpass', frequency: 150 }, { type: 'lowpass', frequency: 2500 }]),
         renderBand(buf, [{ type: 'highpass', frequency: 2500 }]),
       ]);
-      peaksRef.current = { low: lowData, mid: midData, high: highData };
-      paintPeaks();
+      const numPeaks = Math.max(MIN_PEAKS, Math.min(MAX_PEAKS, Math.round(buf.duration * PEAKS_PER_SECOND)));
+      const low  = buildPeaks(lowPcm,  numPeaks);
+      const mid  = buildPeaks(midPcm,  numPeaks);
+      const high = buildPeaks(highPcm, numPeaks);
+      peaksRef.current = { low, mid, high };
+      const maxOf = (a: Float32Array) => { let m = 0; for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i]; return m; };
+      const lowMax = maxOf(low), midMax = maxOf(mid), highMax = maxOf(high);
+      scalesRef.current = {
+        low:  lowMax  > 0 ? 1 / lowMax  : 1,
+        mid:  midMax  > 0 ? 1 / midMax  : 1,
+        high: highMax > 0 ? 1 / highMax : 1,
+      };
+      setPeaksVersion((v) => v + 1);
     } finally {
       renderingRef.current = false;
       if (pendingRef.current) {
@@ -316,107 +349,92 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
         processBuffer(next);
       }
     }
-  }, [paintPeaks]);
+  }, []);
 
   useEffect(() => {
     if (!audioBuffer) {
+      // No bump needed: the row is display:none without a buffer, and the next
+      // buffer's peaks bump it anyway.
       peaksRef.current = null;
-      const canvas = canvasRef.current;
-      if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+      scalesRef.current = null;
       return;
     }
     processBuffer(audioBuffer);
   }, [audioBuffer, processBuffer]);
 
+  // Resize and palette changes reach the tiles on their own — the strip
+  // re-measures itself, and `paint`'s identity carries the palette. Theme is
+  // the one input read at draw time rather than closed over, so it needs a
+  // version bump of its own: all three band colors swap so peaks stay
+  // readable on both dark and light canvases.
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const ro = new ResizeObserver(() => paintPeaks());
-    ro.observe(container);
-    return () => ro.disconnect();
-  }, [paintPeaks]);
-
-  // Repaint when the user flips theme — all three band colors swap so peaks
-  // stay readable on both dark and light canvases.
-  useEffect(() => {
-    const obs = new MutationObserver(() => paintPeaks());
+    const obs = new MutationObserver(() => setThemeVersion((v) => v + 1));
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     return () => obs.disconnect();
-  }, [paintPeaks]);
+  }, []);
 
-  // Repaint when the palette setting changes.
-  useEffect(() => {
-    paintPeaks();
-  }, [bandPalette, paintPeaks]);
-
-  const timeAt = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const timeAt = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     return Math.max(0, Math.min(effectiveDuration, ((e.clientX - rect.left) / rect.width) * effectiveDuration));
   }, [effectiveDuration]);
 
   // Snap to the nearest beat when snap-to-grid is on and a valid BPM is known.
   // Raw time falls through otherwise — keeps click-to-seek pixel-precise.
+  // An override wins outright: it already encodes both whether to snap and how
+  // finely, so consulting `snapToGrid` on top of it would re-impose the global
+  // switch on a layer that opted out of it.
   const snap = useCallback((t: number) => {
+    if (snapTimeOverride) return snapTimeOverride(t);
     if (!snapToGrid || !bpm || bpm <= 0) return t;
-    return snapTimeToGrid(t, bpm, beatOffset, beatsPerBar, 'beat', anchors, beatOverrides);
-  }, [snapToGrid, bpm, beatOffset, beatsPerBar, anchors, beatOverrides]);
+    return snapTimeToGrid(t, bpm, beatOffset, beatsPerBar, 'beat', beatOverrides, undefined, segments);
+  }, [snapTimeOverride, snapToGrid, bpm, beatOffset, beatsPerBar, beatOverrides, segments]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (effectiveDuration <= 0) return;
-    const t = timeAt(e);
+  const regionDrag = useRegionSelectDrag({
+    containerRef,
+    durationGetter: () => effectiveDuration,
+    transform: snap,
+    onDragStart: onRegionDragStart,
+    onClick: (t) => onSeek?.(t),
+    onRegion: (t1, t2) => onRegion?.(t1, t2),
+  });
+  const selection = regionDrag.preview;
+
+  // Pointer events throughout, so a finger can paint a selection on the
+  // waveform (the region drag) as well as a mouse; the grid slide needs Alt,
+  // so it stays a keyboard-and-mouse gesture in practice.
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (effectiveDuration <= 0 || e.isPrimary === false) return;
+    // Alt-drag slides the beat grid instead of selecting — the modifier
+    // changes the meaning of the gesture, so it branches before the region
+    // drag ever starts.
     if (e.altKey && onGridOffsetChange) {
-      gridDragRef.current = { startTime: t, startOffset: beatOffset };
+      gridDragRef.current = { startTime: timeAt(e), startOffset: beatOffset };
       setGridDragging(true);
       onGridOffsetDragStart?.(beatOffset);
-      e.preventDefault();
+      preventPressDefault(e);
       return;
     }
-    dragRef.current = { time: t, x: e.clientX };
-    const ts = snap(t);
-    setSelection({ s: ts, e: ts });
-    onRegionDragStart?.();
-    e.preventDefault();
-  }, [effectiveDuration, timeAt, beatOffset, onGridOffsetChange, onGridOffsetDragStart, onRegionDragStart, snap]);
+    regionDrag.onPointerDown(e);
+  }, [effectiveDuration, timeAt, beatOffset, onGridOffsetChange, onGridOffsetDragStart, regionDrag]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (gridDragRef.current && onGridOffsetChange) {
-      const dt = timeAt(e) - gridDragRef.current.startTime;
-      const next = gridDragRef.current.startOffset + dt;
-      onGridOffsetChange(Math.max(0, next));
-      return;
-    }
-    if (!dragRef.current || effectiveDuration <= 0) return;
-    setSelection({ s: snap(dragRef.current.time), e: snap(timeAt(e)) });
-  }, [effectiveDuration, timeAt, onGridOffsetChange, snap]);
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!gridDragRef.current || !onGridOffsetChange || e.isPrimary === false) return;
+    const dt = timeAt(e) - gridDragRef.current.startTime;
+    onGridOffsetChange(Math.max(0, gridDragRef.current.startOffset + dt));
+  }, [timeAt, onGridOffsetChange]);
 
-  const handleMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (gridDragRef.current) {
-      gridDragRef.current = null;
-      setGridDragging(false);
-      return;
-    }
-    const drag = dragRef.current;
-    if (!drag || effectiveDuration <= 0) { dragRef.current = null; setSelection(null); return; }
-    const endT = timeAt(e);
-    const dragPx = Math.abs(e.clientX - drag.x);
-    const rawT1 = Math.min(drag.time, endT);
-    const rawT2 = Math.max(drag.time, endT);
-    const t1 = snap(rawT1);
-    const t2 = snap(rawT2);
-    if (onRegion && dragPx > 6 && t2 - t1 > 0.1) {
-      onRegion(t1, t2);
-    } else {
-      onSeek?.(drag.time);
-    }
-    dragRef.current = null;
-    setSelection(null);
-  }, [effectiveDuration, timeAt, onRegion, onSeek, snap]);
-
-  const handleMouseLeave = useCallback(() => {
-    dragRef.current = null;
+  const handlePointerUp = useCallback(() => {
+    if (!gridDragRef.current) return;
     gridDragRef.current = null;
     setGridDragging(false);
-    setSelection(null);
+  }, []);
+
+  const handlePointerLeave = useCallback(() => {
+    // Only the grid-slide gesture is bound to this element; the region drag
+    // tracks on the document and deliberately keeps going off-canvas. Also
+    // wired to pointercancel, which ends a grid slide the same way.
+    gridDragRef.current = null;
+    setGridDragging(false);
   }, []);
 
   const interactive = !!(onSeek || onRegion || onGridOffsetChange);
@@ -427,13 +445,16 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
   return (
     <div
       ref={containerRef}
-      className="relative w-full rounded overflow-hidden bg-gray-900/60"
+      // touch-pan-y on an interactive waveform: a vertical swipe still
+      // scrolls the page on a phone, a horizontal one paints a selection.
+      className={`relative w-full rounded overflow-hidden bg-gray-900/60 ${interactive ? 'touch-pan-y' : ''}`}
       title={onGridOffsetChange ? 'Alt-drag to slide the beat grid' : undefined}
-      style={{ cursor, height: CANVAS_HEIGHT }}
-      onMouseDown={interactive ? handleMouseDown : undefined}
-      onMouseMove={interactive ? handleMouseMove : undefined}
-      onMouseUp={interactive ? handleMouseUp : undefined}
-      onMouseLeave={interactive ? handleMouseLeave : undefined}
+      style={{ cursor, height }}
+      onPointerDown={interactive ? handlePointerDown : undefined}
+      onPointerMove={interactive ? handlePointerMove : undefined}
+      onPointerUp={interactive ? handlePointerUp : undefined}
+      onPointerLeave={interactive ? handlePointerLeave : undefined}
+      onPointerCancel={interactive ? handlePointerLeave : undefined}
     >
       {/* Frequency bands canvas */}
       {!audioBuffer && (
@@ -441,20 +462,9 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
           waveform loads with audio
         </div>
       )}
-      <canvas
-        ref={canvasRef}
-        height={CANVAS_HEIGHT}
-        className="w-full block"
-        style={{ display: audioBuffer ? 'block' : 'none', height: `${CANVAS_HEIGHT}px` }}
-      />
-
-      {/* Soft-clamp spinner: shown briefly during Ultra-zoom repaints, while
-          the internal buffer is being scaled to stay under the browser's max. */}
-      {softening && (
-        <div className="absolute top-1 left-1 z-30 pointer-events-none">
-          <SoftClampSpinner />
-        </div>
-      )}
+      <div style={{ display: audioBuffer ? 'block' : 'none' }}>
+        <TiledStrip height={height} paint={paint} />
+      </div>
 
       {/* Drag selection highlight */}
       {selection && effectiveDuration > 0 && (
@@ -474,23 +484,9 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
       )}
 
       {/* Beat / bar grid overlay */}
-      {beatLines.map((line, i) => (
-        <div
-          key={i}
-          className="absolute top-0 bottom-0 pointer-events-none z-10"
-          style={{
-            left: `${(line.t / effectiveDuration) * 100}%`,
-            width: (line.isBar ? 1 : 0.5) * gridThickness,
-            background: line.isPhrase
-              ? 'rgba(251,191,36,0.70)'
-              : line.isBar
-                ? 'rgba(239,68,68,0.70)'
-                : line.isSubBeat
-                  ? 'rgba(255,255,255,0.08)'
-                  : 'rgba(255,255,255,0.18)',
-          }}
-        />
-      ))}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
+        <GridLines lines={beatLines} duration={effectiveDuration} thickness={gridThickness} />
+      </div>
 
       {/* Playhead cursor */}
       {audioBuffer && effectiveDuration > 0 && (

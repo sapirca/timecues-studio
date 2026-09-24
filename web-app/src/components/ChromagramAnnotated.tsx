@@ -12,9 +12,10 @@
  * Row 0 (bottom) = C, row 11 (top) = B. Matches librosa.display.specshow convention.
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { useExtendedZoom, effectiveDpr } from '../hooks/useExtendedZoom';
-import { visibleGridLines } from '../utils/beatGrid';
+import { useCallback, useRef } from 'react';
+import { TiledStrip, type TileGeom } from './TiledStrip';
+import { drawBeatGrid } from '../utils/gridLineStyle';
+import { frameAxis, frameAtColumn, type FrameAxis } from '../utils/frameTime';
 
 export interface Props {
   /** Row-major chroma matrix: length = frameCount × nChroma. Index = frame * nChroma + pc. */
@@ -22,6 +23,12 @@ export interface Props {
   nChroma: number;
   frameCount: number;
   duration: number;
+  /** Framing of the analysis run. Without it the component falls back to the
+   *  old even-spread mapping, which is off by -23 ms at the start of the track
+   *  drifting to +12 ms at the end — see utils/frameTime. */
+  hopSize?: number;
+  fftSize?: number;
+  sampleRate?: number;
   beatTimes?: number[];
   bpm?: number;
   beatOffset?: number;
@@ -60,20 +67,27 @@ function magmaRGB(t: number): [number, number, number] {
 }
 
 function buildChromagramImage(
-  chroma: Float32Array, nChroma: number, frameCount: number,
+  chroma: Float32Array, nChroma: number,
   W: number, H: number,
   ctx: CanvasRenderingContext2D,
+  axis: FrameAxis, duration: number,
+  colOffset = 0, colCount = W,
 ): ImageData {
-  const img = ctx.createImageData(W, H);
-  for (let col = 0; col < W; col++) {
-    const srcFrame = Math.min(frameCount - 1, Math.floor((col / W) * frameCount));
+  // W is the WHOLE strip's pixel width — the time↔column mapping has to stay
+  // global — while the image covers only [colOffset, colOffset + colCount).
+  const img = ctx.createImageData(colCount, H);
+  for (let col = 0; col < colCount; col++) {
+    // Each column is a time; ask the frame axis which frame describes it.
+    // Spreading frame indices evenly across W instead skews the picture against
+    // the waveform by -23 ms at the start drifting to +12 ms at the end.
+    const srcFrame = frameAtColumn(colOffset + col, W, duration, axis);
     const fOff = srcFrame * nChroma;
     for (let row = 0; row < H; row++) {
       // Top row = B (pc 11), bottom = C (pc 0).
       const pc = (nChroma - 1) - Math.floor((row / H) * nChroma);
       const v = chroma[fOff + pc];
       const [r, g, b] = magmaRGB(v);
-      const idx = (row * W + col) * 4;
+      const idx = (row * colCount + col) * 4;
       img.data[idx]     = r;
       img.data[idx + 1] = g;
       img.data[idx + 2] = b;
@@ -97,42 +111,6 @@ function drawPitchLabels(ctx: CanvasRenderingContext2D, W: number, H: number, nC
   }
 }
 
-function drawBeatGrid(
-  ctx: CanvasRenderingContext2D, W: number, H: number,
-  duration: number, beatTimes?: number[], bpm?: number, beatOffset = 0, beatsPerBar = 4, barGroupSize?: number,
-  beatGroupSize?: number,
-  dpr = 1,
-  gridThickness = 1,
-) {
-  if (!duration || !bpm) return;
-  const anchor = beatOffset > 0 ? beatOffset : (beatTimes && beatTimes.length > 0 ? beatTimes[0] : 0);
-  const lines = visibleGridLines({
-    bpm, gridOffset: anchor, beatsPerBar,
-    startTime: 0, endTime: duration,
-    barGroupSize: barGroupSize ?? null,
-    beatGroupSize,
-  });
-  if (lines.length < 2) return;
-  const pxPerBeat = ((60 / bpm) / duration) * W;
-  const step = (barGroupSize == null) ? Math.max(1, Math.ceil(5 / pxPerBeat)) : 1;
-  ctx.save();
-  for (let i = 0; i < lines.length; i++) {
-    if (step > 1 && i % step !== 0) continue;
-    const { t, isBar, isPhrase } = lines[i];
-    const x = (t / duration) * W;
-    if (barGroupSize != null) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.5)';
-      ctx.lineWidth   = 2 * dpr * gridThickness;
-    } else {
-      ctx.strokeStyle = isPhrase ? 'rgba(251,191,36,0.50)'
-        : isBar ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.09)';
-      ctx.lineWidth = (isBar ? (1.5 * dpr) : (1 * dpr)) * gridThickness;
-    }
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  ctx.restore();
-}
-
 function drawPlayhead(ctx: CanvasRenderingContext2D, W: number, H: number, t: number, duration: number, dpr = 1) {
   if (t < 0 || !duration) return;
   const x = Math.round((t / duration) * W);
@@ -150,21 +128,15 @@ function drawPlayhead(ctx: CanvasRenderingContext2D, W: number, H: number, t: nu
   ctx.restore();
 }
 
-// ── Cache ───────────────────────────────────────────────────────────────────────
-interface ChromaCache {
-  chromaRef: Float32Array;
-  imgData: ImageData;
-  W: number;
-  H: number;
-  dpr: number;
-}
-
 // ── Component ───────────────────────────────────────────────────────────────────
 export function ChromagramAnnotated({
   chroma,
   nChroma,
   frameCount,
   duration,
+  hopSize,
+  fftSize,
+  sampleRate,
   beatTimes,
   bpm,
   beatOffset = 0,
@@ -175,107 +147,62 @@ export function ChromagramAnnotated({
   currentTime = 0,
   height = 80,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cacheRef = useRef<ChromaCache | null>(null);
-  const [ready, setReady] = useState(false);
-  const { enabled: extendedZoom } = useExtendedZoom();
-  // dpr is clamped by both the extended-zoom opt-in and the canvas-buffer cap
-  // so the cache and canvas always agree on dimensions even mid-zoom race.
-  const CHROMA_MAX_BUFFER_PX = 32_000;
-  const computeSafeDpr = useCallback((cssWidth: number) => {
-    const raw = effectiveDpr(Math.max(1, window.devicePixelRatio || 1), extendedZoom);
-    return Math.min(raw, CHROMA_MAX_BUFFER_PX / Math.max(1, cssWidth));
-  }, [extendedZoom]);
-  const [canvasSize, setCanvasSize] = useState(() => {
-    const cssWidth = 900;
-    return {
-      cssWidth,
-      cssHeight: Math.max(1, Math.round(height)),
-      dpr: computeSafeDpr(cssWidth),
-    };
-  });
+  const frameAxisRef = useRef<FrameAxis>(frameAxis(512, 2048, 44100, frameCount));
+  frameAxisRef.current = hopSize && fftSize && sampleRate
+    ? frameAxis(hopSize, fftSize, sampleRate, frameCount)
+    // No framing supplied: fall back to an axis that reproduces the old
+    // even-spread mapping exactly, so nothing shifts unexpectedly.
+    : { step: duration / Math.max(1, frameCount), offset: 0, count: frameCount };
+  const axis = frameAxisRef.current;
 
-  useEffect(() => {
-    const update = () => {
-      const cssWidth = Math.max(1, Math.round(containerRef.current?.clientWidth ?? 900));
-      const cssHeight = Math.max(1, Math.round(height));
-      const dpr = computeSafeDpr(cssWidth);
-      setCanvasSize((prev) => (
-        prev.cssWidth === cssWidth && prev.cssHeight === cssHeight && prev.dpr === dpr
-          ? prev
-          : { cssWidth, cssHeight, dpr }
-      ));
-    };
-    update();
-    const ro = containerRef.current ? new ResizeObserver(update) : null;
-    if (containerRef.current && ro) ro.observe(containerRef.current);
-    window.addEventListener('resize', update);
-    return () => { ro?.disconnect(); window.removeEventListener('resize', update); };
-  }, [height, computeSafeDpr]);
+  const hasData = frameCount > 0 && chroma.length > 0;
 
-  const pixelWidth  = Math.max(1, Math.round(canvasSize.cssWidth * canvasSize.dpr));
-  const pixelHeight = Math.max(1, Math.round(canvasSize.cssHeight * canvasSize.dpr));
+  // One tile's slice of the chromagram. Identity changes only with the data or
+  // the framing, so scrolling and playhead ticks never rebuild it.
+  const paint = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom) => {
+    if (!hasData) return;
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    const colOffset = Math.round(tile.x0 * tile.dpr);
+    const colCount = Math.max(1, Math.round(tile.w * tile.dpr));
+    const img = buildChromagramImage(chroma, nChroma, totalPx, H, ctx, axis, duration, colOffset, colCount);
+    ctx.putImageData(img, 0, 0);
+  }, [chroma, nChroma, duration, axis, hasData]);
 
-  const overlayRef = useRef({ duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, beatGroupSize, gridThickness });
-  useEffect(() => { overlayRef.current = { duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, beatGroupSize, gridThickness }; });
-
-  const drawFrame = useCallback((headTime: number) => {
-    const canvas = canvasRef.current;
-    const cache  = cacheRef.current;
-    if (!canvas || !cache) return;
-    const ctx = canvas.getContext('2d')!;
-    const { imgData, W, H, dpr } = cache;
-    const { duration: dur, beatTimes: bt, bpm: b, beatOffset: bo, beatsPerBar: bpb, barGroupSize: bgs, beatGroupSize: bgrp, gridThickness: gt } = overlayRef.current;
-    ctx.putImageData(imgData, 0, 0);
-    drawPitchLabels(ctx, W, H, nChroma, dpr);
-    drawBeatGrid(ctx, W, H, dur, bt, b, bo, bpb, bgs, bgrp, dpr, gt);
-    drawPlayhead(ctx, W, H, headTime, dur, dpr);
-  }, [nChroma]);
-
-  // Phase 1: build ImageData when source data / canvas size changes.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    if (frameCount <= 0 || chroma.length === 0) { setReady(false); return; }
-    setReady(false);
-    let cancelled = false;
-
-    const timer = setTimeout(() => {
-      if (cancelled) return;
-      const W = canvas.width, H = canvas.height;
-      const ctx = canvas.getContext('2d')!;
-      const img = buildChromagramImage(chroma, nChroma, frameCount, W, H, ctx);
-      if (cancelled) return;
-      cacheRef.current = {
-        chromaRef: chroma, imgData: img, W, H, dpr: canvasSize.dpr,
-      };
-      setReady(true);
-    }, 16);
-
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [chroma, nChroma, frameCount, canvasSize.cssWidth, canvasSize.cssHeight, canvasSize.dpr]);
-
-  // Phase 2: redraw overlays on time / grid change.
-  useEffect(() => {
-    if (!ready) return;
-    drawFrame(currentTime);
-  }, [ready, currentTime, duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, beatGroupSize, gridThickness, drawFrame]);
+  // Grid, pitch labels and playhead, in strip-global coordinates: translate by
+  // the tile's own offset and draw as if this canvas were the whole strip.
+  const overlay = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => {
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    ctx.save();
+    ctx.translate(-Math.round(tile.x0 * tile.dpr), 0);
+    drawPitchLabels(ctx, totalPx, H, nChroma, tile.dpr);
+    drawBeatGrid(ctx, {
+      W: totalPx, H, dpr: tile.dpr, thickness: gridThickness,
+      duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, beatGroupSize,
+    });
+    // focusX is already the playhead's x on the strip; feeding it as
+    // (t=focusX, duration=totalW) reuses drawPlayhead's t/duration*W without
+    // making this callback depend on currentTime.
+    if (focusX != null) drawPlayhead(ctx, totalPx, H, focusX, tile.totalW, tile.dpr);
+    ctx.restore();
+  }, [nChroma, gridThickness, duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, beatGroupSize]);
 
   return (
-    <div ref={containerRef} className="relative w-full min-w-0">
-      <canvas
-        ref={canvasRef}
-        width={pixelWidth}
-        height={pixelHeight}
-        className="rounded bg-gray-900 block w-full"
-        style={{ height: `${canvasSize.cssHeight}px` }}
-      />
-      {!ready && (
+    <TiledStrip
+      height={Math.max(1, Math.round(height))}
+      paint={paint}
+      overlay={overlay}
+      overlayFocus={duration > 0 ? currentTime / duration : null}
+      className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
+    >
+      {!hasData && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900/70 rounded text-xs text-gray-400 animate-pulse pointer-events-none">
           Computing chromagram…
         </div>
       )}
-    </div>
+    </TiledStrip>
   );
 }

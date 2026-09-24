@@ -60,7 +60,6 @@ import json
 import math
 import sys
 import warnings
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -78,6 +77,7 @@ from paths import (  # noqa: E402
     MIR_FEATURES_DIR as CACHE_DIR,
     SPAN_OUTPUTS_DIR,
 )
+from server_common import cached_result, cors_headers, now_iso  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -824,8 +824,10 @@ def extract(slug: str, force: bool = False,
             sections: list[str] | None = None) -> dict:
     """Run every feature section for `slug` and cache the result."""
     cache_path = CACHE_DIR / f"{slug}.json"
-    if cache_path.exists() and not force and not sections:
-        return json.loads(cache_path.read_text())
+    if not sections:
+        hit = cached_result(cache_path, force)
+        if hit is not None:
+            return hit
 
     if not _LIBROSA_OK:
         raise RuntimeError("librosa is required but not installed")
@@ -869,7 +871,7 @@ def extract(slug: str, force: bool = False,
                         "essentia":   _ESSENTIA_OK},
         "features":    features,
         "errors":      errors,
-        "computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "computed_at": now_iso(),
     }
 
     if not sections:  # only cache full extractions
@@ -882,12 +884,45 @@ def extract(slug: str, force: bool = False,
 
 # ─── HTTP handler ────────────────────────────────────────────────────────────
 
-def _cors():
-    return {
-        "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    }
+# ─── Route handlers ──────────────────────────────────────────────────────────
+# Shared by the standalone server below and the consolidated dsp_server.py.
+# Each returns (status_code, body) or None when the path isn't a mir route.
+
+def handle_get(full_path: str):
+    path = full_path.split("?")[0]
+    if path == "/api/mir/health":
+        return 200, {
+            "ok":            _LIBROSA_OK,
+            "librosaOk":     _LIBROSA_OK,
+            "scipyOk":       _SCIPY_OK,
+            "pyloudnormOk":  _PYLOUDNORM_OK,
+            "essentiaOk":    _ESSENTIA_OK,
+            "sections":      list(_SECTIONS.keys()) + ["highlevel"],
+        }
+    if path.startswith("/api/mir/features/"):
+        slug = path[len("/api/mir/features/"):]
+        cache_path = CACHE_DIR / f"{slug}.json"
+        if cache_path.exists():
+            return 200, json.loads(cache_path.read_text())
+        return 200, None
+    return None
+
+
+def handle_post(full_path: str, body: dict):
+    path = full_path.split("?")[0]
+    if path == "/api/mir/extract":
+        slug     = safe_segment(str(body.get("slug", "")).strip())
+        force    = bool(body.get("force", False))
+        sections = body.get("sections") or None
+        if not slug:
+            return 400, {"error": "invalid or missing slug"}
+        try:
+            return 200, extract(slug, force=force, sections=sections)
+        except FileNotFoundError as e:
+            return 404, {"error": str(e)}
+        except Exception as e:
+            return 500, {"error": f"extraction failed: {type(e).__name__}: {e}"}
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -899,7 +934,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body):
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -908,58 +943,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        for k, v in _cors().items():
+        for k, v in cors_headers().items():
             self.send_header(k, v)
         self.end_headers()
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-
-        if path == "/api/mir/health":
-            self._send(200, {
-                "ok":            _LIBROSA_OK,
-                "librosaOk":     _LIBROSA_OK,
-                "scipyOk":       _SCIPY_OK,
-                "pyloudnormOk":  _PYLOUDNORM_OK,
-                "essentiaOk":    _ESSENTIA_OK,
-                "sections":      list(_SECTIONS.keys()) + ["highlevel"],
-            })
-            return
-
-        if path.startswith("/api/mir/features/"):
-            slug = path[len("/api/mir/features/"):]
-            cache_path = CACHE_DIR / f"{slug}.json"
-            if cache_path.exists():
-                self._send(200, json.loads(cache_path.read_text()))
-            else:
-                self._send(200, None)
-            return
-
-        self._send(404, {"error": "not found"})
+        self._send(*(handle_get(self.path) or (404, {"error": "not found"})))
 
     def do_POST(self):
-        path   = self.path.split("?")[0]
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length)) if length else {}
         except json.JSONDecodeError as e:
             self._send(400, {"error": f"invalid JSON: {e}"}); return
-
-        if path == "/api/mir/extract":
-            slug     = safe_segment(str(body.get("slug", "")).strip())
-            force    = bool(body.get("force", False))
-            sections = body.get("sections") or None
-            if not slug:
-                self._send(400, {"error": "invalid or missing slug"}); return
-            try:
-                self._send(200, extract(slug, force=force, sections=sections))
-            except FileNotFoundError as e:
-                self._send(404, {"error": str(e)})
-            except Exception as e:
-                self._send(500, {"error": f"extraction failed: {type(e).__name__}: {e}"})
-            return
-
-        self._send(404, {"error": "not found"})
+        self._send(*(handle_post(self.path, body) or (404, {"error": "not found"})))
 
 
 # ─── Entrypoint ──────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # Optional pip deps for the Phase-1+ experimental MIR sidecars
-# (span / beatnet / pitch / panns / cue-extras / lyrics).
+# (span / beatnet / pitch / panns / cue-extras / lyrics / pattern).
 #
 # Every server's heavy imports are guarded by try/except, so each
 # sidecar starts even without these deps installed — it just reports
@@ -18,13 +18,28 @@
 # --- SPAN family -----------------------------------------------------------
 # (torch + torchaudio installed separately; see header above)
 # Silero-VAD: pulled at first use via torch.hub — no pip dep needed here.
-# JDCNet: pure-PyTorch port lives in tools/python/jdcnet_torch.py;
-# weights are baked into docker/span.Dockerfile and re-fetched at first
-# call on bare-metal hosts.
+# torchcodec: torchaudio >= 2.9 delegates audio decoding to torchcodec, so
+# loading the vocals stem raises "torchaudio … requires torchcodec" without
+# it. Needed by the SPAN (silero-vad) detect; harmless on older torchaudio.
+torchcodec
+# JDCNet: pure-PyTorch port lives in tools/python/jdcnet_torch.py; reads
+# the original Keras .hdf5 checkpoint via h5py. Docker bakes the weights
+# into the span image; run.sh fetches them into .cache/jdcnet/ on
+# bare-metal. We explicitly pin h5py here so the pure-bare-metal path
+# doesn't rely on tensorflow / matplotlib pulling it transitively.
+h5py>=3.10.0
 panns_inference
 
 # --- CUE family ------------------------------------------------------------
 BeatNet
+# Beat This! (MIT, CPJKU/beat_this) — ISMIR 2024 transformer beat/downbeat
+# tracker. Unlike the CPJKU madmom checkpoints, BOTH its code and its
+# published weights are MIT, so it adds no license footnote to NOTICE.md.
+# Needs torch >= 2.0 (installed separately, see the header above); the
+# checkpoint is fetched on first use into the shared model cache. Pure CPU
+# inference is fine — beat_this_server lazy-imports it, so absence is a
+# graceful "Deps missing" state.
+beat-this
 # basic-pitch pins tensorflow<2.15.1, which has no Linux wheels for Python
 # 3.12+. The env marker keeps modern interpreters from trying to build the
 # unsatisfiable TF version (which would take the whole `-r` install down
@@ -37,3 +52,24 @@ basic-pitch ; python_version < "3.12"
 
 # --- LYRICS family ---------------------------------------------------------
 openai-whisper
+# ctc-forced-aligner (MIT, MahmoudAshraf97/ctc-forced-aligner) — word-level
+# CTC forced alignment of a reference transcript. We pin it to
+# facebook/wav2vec2-base-960h (Apache-2.0, English-only) so the integration
+# stays fully permissively-licensed; the package's DEFAULT MMS_FA model
+# is CC-BY-NC and is NOT used by lyrics_server.py.
+# Pulls transformers + torchaudio (transformers shared with whisper, torchaudio
+# shared with span/beatnet).
+#
+# MUST install from git: the PyPI name `ctc-forced-aligner` was taken over by
+# an unrelated package (deskpai.com) whose API exports `Alignment`/
+# `AlignmentSingleton`, NOT the `load_alignment_model` / `generate_emissions`
+# / `get_alignments` functions lyrics_server.py is written against. A bare
+# `pip install ctc-forced-aligner` pulls the wrong package and fails at import.
+ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+
+# --- PATTERN family --------------------------------------------------------
+# dtai-locomotif (MIT, KU Leuven) — DTW-warped variable-length motif discovery.
+# Pulls numba + matplotlib transitively; numba JIT warm-up is ~15 s on the
+# first call after server boot. pattern_server lazy-imports it so absence
+# is a graceful "Deps missing" state.
+dtai-locomotif

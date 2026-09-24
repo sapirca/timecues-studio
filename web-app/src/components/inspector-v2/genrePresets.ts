@@ -1,10 +1,10 @@
 /**
  * Genre presets — single source of truth for both the "Section vocabulary" picker
- * (multi-select, in Settings) and the "⚡ Fill default" bar layout (single-select).
+ * (multi-select, in Settings) and the "✨ Fill default" bar layout (single-select).
  *
  * Each preset bundles:
  *   - `vocabulary` — the section names exposed in Manual/Eye dropdowns
- *   - `layout` — the bar layout the ⚡ Fill default button applies
+ *   - `layout` — the bar layout the ✨ Fill default button applies
  *
  * Invariant: every type used in `layout` must appear in the same preset's `vocabulary`,
  * so picking a genre for fill-default never inserts a section type the user can't edit.
@@ -19,8 +19,12 @@ export interface GenrePreset {
   readonly layout: readonly BarEntry[];
 }
 
+/** Shared by every four-on-the-floor genre card. `verse` / `chorus` are in here
+ *  because vocal-led club tracks have both, and a producer marking one should
+ *  not have to leave the genre cards for Custom mode to say so. Kept in sync
+ *  with `DEFAULT_VOCABULARY` in sectionConstants.ts — they are the same list. */
 const CANONICAL_VOCAB: readonly string[] =
-  ['intro', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence'];
+  ['intro', 'verse', 'chorus', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence'];
 
 export const GENRE_PRESETS = {
   edm: {

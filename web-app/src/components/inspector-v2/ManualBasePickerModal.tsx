@@ -1,12 +1,13 @@
 // Modal that asks the curator which base grid Manual adjustment should
 // ride on top of. Opens on first entry into Manual mode (when
 // `songInfo.manualBaseGridMode` is undefined) and can be re-opened from
-// the GridModeControls "Change base…" button.
+// the tempo-mode picker's "Change base…" button.
 //
-// Static = global BPM + offset; existing tempoAnchors are ignored while
-// in Manual mode (the data is preserved, just not applied).
-// Dynamic = tempoAnchors are applied as the underlying tempo curve;
-// pinned beats sit on top of that piecewise tempo.
+// Static = global BPM + offset; pinned beats sit on top of a single-tempo
+// grid.
+// Mapped = the song's grid segments are applied; pinned beats sit on top of
+// a grid that restarts its bar 1 at each marker. Offered so that entering
+// Hand-placed never silently discards a tempo map the curator has built.
 
 import * as Dialog from '@radix-ui/react-dialog';
 import type { ManualBaseGridMode } from '../../types/songInfo';
@@ -17,11 +18,12 @@ export interface ManualBasePickerModalProps {
   /** Current selection — undefined when first entering Manual mode and
    *  the modal is forced open by the absence of a choice. */
   current?: ManualBaseGridMode;
-  /** Anchor count, shown so the curator sees what "Dynamic" would carry. */
-  anchorCount: number;
   /** Pinned beat count, shown so the curator knows their micro edits
-   *  survive a base switch (they ride on top of either base). */
+   *  survive a base switch (they ride on top of any base). */
   overrideCount: number;
+  /** How many grids the song's tempo map divides it into. 1 = no map yet,
+   *  which greys the Mapped card out — there would be nothing to ride. */
+  segmentCount: number;
   onPick: (base: ManualBaseGridMode) => void;
   /** Cancel — closes the modal without changing anything. When `current`
    *  is undefined (must-choose first entry), Cancel acts as an *abort*:
@@ -34,8 +36,8 @@ export function ManualBasePickerModal({
   open,
   onOpenChange,
   current,
-  anchorCount,
   overrideCount,
+  segmentCount,
   onPick,
   onCancel,
 }: ManualBasePickerModalProps) {
@@ -57,7 +59,7 @@ export function ManualBasePickerModal({
         >
           <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
             <Dialog.Title className="text-[12px] font-semibold tracking-[0.18em] uppercase text-emerald-300">
-              Manual adjustment — pick base grid
+              Hand-placed — pick base grid
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -92,39 +94,45 @@ export function ManualBasePickerModal({
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-mono font-semibold uppercase tracking-wider">Static BPM</span>
+                  <span className="text-[11px] font-mono font-semibold uppercase tracking-wider">Steady</span>
                   <span className="text-[9px] font-mono uppercase text-slate-500">global tempo</span>
                 </div>
                 <div className="mt-1 text-[11px] text-slate-400 leading-snug">
                   Pinned beats sit on top of a single-tempo grid built from BPM
-                  + grid offset. The {anchorCount} existing anchor{anchorCount === 1 ? '' : 's'} {anchorCount === 0 ? 'are' : 'is'} preserved on disk but ignored while you're in Manual mode.
+                  + grid offset.
                 </div>
               </button>
 
               <button
                 type="button"
-                onClick={() => onPick('dynamic')}
-                className={`text-left rounded-md border-2 px-3 py-2.5 transition-all ${
-                  current === 'dynamic'
-                    ? 'border-cyan-200 bg-cyan-400/15 text-cyan-100 ring-2 ring-cyan-300/30'
-                    : 'border-cyan-700/40 bg-transparent text-cyan-300/90 hover:border-cyan-500/70 hover:bg-cyan-500/[0.06]'
+                onClick={() => onPick('mapped')}
+                disabled={segmentCount <= 1}
+                title={segmentCount <= 1
+                  ? 'This song has no tempo map yet — split the grid in Mapped mode first.'
+                  : undefined}
+                className={`text-left rounded-md border-2 px-3 py-2.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                  current === 'mapped'
+                    ? 'border-violet-200 bg-violet-400/15 text-violet-100 ring-2 ring-violet-300/30'
+                    : 'border-violet-700/40 bg-transparent text-violet-300/90 enabled:hover:border-violet-500/70 enabled:hover:bg-violet-500/[0.06]'
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-mono font-semibold uppercase tracking-wider">Dynamic</span>
-                  <span className="text-[9px] font-mono uppercase text-cyan-500/70">{anchorCount} anchor{anchorCount === 1 ? '' : 's'}</span>
+                  <span className="text-[11px] font-mono font-semibold uppercase tracking-wider">Mapped</span>
+                  <span className="text-[9px] font-mono uppercase text-violet-500/70">
+                    {segmentCount <= 1 ? 'no map yet' : `${segmentCount} grids`}
+                  </span>
                 </div>
-                <div className="mt-1 text-[11px] text-cyan-200/70 leading-snug">
-                  Pinned beats sit on top of the piecewise tempo curve defined by
-                  the anchors. Use this when the song speeds up or slows down and
-                  you want the underlying grid to follow.
+                <div className="mt-1 text-[11px] text-violet-200/70 leading-snug">
+                  Pinned beats sit on top of the song&apos;s tempo map, where each
+                  marker restarts bar 1 with its own tempo and meter. Use this when
+                  the song changes meter or the count restarts partway through.
                 </div>
               </button>
             </div>
 
             {mustChoose && (
               <p className="text-[10px] text-amber-300/80 italic">
-                Pick one to enter Manual adjustment — or press <kbd className="px-1 py-0.5 rounded bg-white/[0.08] font-mono not-italic">Esc</kbd> / click ✕ to cancel and stay on your current grid mode.
+                Pick one to enter Hand-placed mode — or press <kbd className="px-1 py-0.5 rounded bg-white/[0.08] font-mono not-italic">Esc</kbd> / click ✕ to cancel and stay on your current grid mode.
               </p>
             )}
           </div>

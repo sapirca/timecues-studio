@@ -1,5 +1,5 @@
 // Shared snap-to-grid logic used across all annotation types (Manual, Eye, Cue,
-// Span, Loop, Pattern) so the on-canvas "snapped to grid" indicator and the
+// Span, Loop) so the on-canvas "snapped to grid" indicator and the
 // snap behavior itself stay consistent.
 
 /**

@@ -7,17 +7,9 @@ import argparse, os, sys, subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "python"))
-from paths import SONGS_DIR, ANALYSIS_DIR  # noqa: E402
+from paths import SONGS_DIR, ANALYSIS_DIR, slugify  # noqa: E402
 
 RUNNER = Path(__file__).parent / "run_allin1.py"
-
-
-def slugify(name: str) -> str:
-    import re
-    name = re.sub(r'\.[^.]+$', '', name)
-    name = name.lower()
-    name = re.sub(r'[^a-z0-9]+', '-', name)
-    return name.strip('-')
 
 
 def find_audio(song_dir: Path):

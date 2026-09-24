@@ -1,0 +1,103 @@
+{
+  "algorithm": "olda",
+  "algoName": "OLDA (Optimal Linear Discriminant)",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 0.325,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.2194,
+      "centroid": 0.6112
+    },
+    {
+      "time": 0.325,
+      "endTime": 11.935,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6706,
+      "centroid": 0.4828
+    },
+    {
+      "time": 11.935,
+      "endTime": 37.988,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9178,
+      "centroid": 0.3844
+    },
+    {
+      "time": 37.988,
+      "endTime": 44.164,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9056,
+      "centroid": 1.0
+    },
+    {
+      "time": 44.164,
+      "endTime": 84.381,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9865,
+      "centroid": 0.6984
+    },
+    {
+      "time": 84.381,
+      "endTime": 102.493,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9085,
+      "centroid": 0.3357
+    },
+    {
+      "time": 102.493,
+      "endTime": 106.44,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8829,
+      "centroid": 0.4991
+    },
+    {
+      "time": 106.44,
+      "endTime": 144.382,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.6912
+    },
+    {
+      "time": 144.382,
+      "endTime": 192.401,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8828,
+      "centroid": 0.6067
+    },
+    {
+      "time": 192.401,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    0.325,
+    11.935,
+    37.988,
+    44.164,
+    84.381,
+    102.493,
+    106.44,
+    144.382,
+    192.401,
+    192.409
+  ],
+  "computedAt": 1780118855,
+  "elapsedSec": 31.89
+}

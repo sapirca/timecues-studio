@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { useSettings } from '../../context/SettingsContext';
-import { loadAnnotation, loadEyeAnnotation } from '../../services/manualAnnotations';
+import { loadBoundaryItems } from '../../services/annotationLayers';
 import {
   fetchMirEvalPairs,
   isMirEvalResult,
@@ -13,8 +13,12 @@ import { CustomEvalControls, DEFAULT_CUSTOM_EVAL_SETTINGS, type CustomEvalSettin
 import { EvalReferenceDropdown, type EvalReferenceMode } from './EvalReferenceDropdown';
 import { GlobalEvalSpanTable } from './GlobalEvalSpanTable';
 import { GlobalEvalLoopTable } from './GlobalEvalLoopTable';
+import { GlobalEvalLyricsTable } from './GlobalEvalLyricsTable';
+import { GlobalEvalCueTable } from './GlobalEvalCueTable';
 import type { ToolResultData, AllIn1Result } from '../../tools/runTool';
-import type { AutoGuessCentroidMethod, ManualSection } from '../../types/manualAnnotation';
+import type { SectionBlock } from '../../types/sectionBlock';
+import type { AutoGuessCentroidMethod } from '../../types/autoGuess';
+import { clusterPoints, computeClusterTime } from '../../utils/boundaryClustering';
 
 // ── Algo registry (mirrors InspectorPageV2) ─────────────────────────────────
 
@@ -127,9 +131,7 @@ interface RawSongData {
   songId: string;
   songName: string;
   manualTimes: number[];
-  eyeTimes: number[];
-  manualSections: ManualSection[];
-  eyeSections: ManualSection[];
+  manualSections: SectionBlock[];
   algoTimes: Record<string, number[]>;
 }
 
@@ -156,7 +158,7 @@ type SortKey =
   | 'algo' | 'group' | 'songs'
   | 'precision' | 'recall' | 'f1' | 'minF1' | 'maxF1'
   | 'cPrecision' | 'cRecall' | 'cF1' | 'mnbd' | 'csr';
-type EvalRef = Extract<EvalReferenceMode, 'manual' | 'eye'>;
+type EvalRef = Extract<EvalReferenceMode, 'manual'>;
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
 
@@ -222,73 +224,6 @@ const CENTROID_METHODS: { id: AutoGuessCentroidMethod; short: string; tooltip: s
   { id: 'nearraw', short: 'NearRaw', tooltip: 'Raw timestamp with smallest total L1 distance to all others' },
 ];
 
-function computeClusterTime(
-  members: { algorithmId: string; time: number }[],
-  method: AutoGuessCentroidMethod,
-): number {
-  const ts = [...members.map((m) => m.time)].sort((a, b) => a - b);
-  const n = ts.length;
-  const mean = ts.reduce((s, t) => s + t, 0) / n;
-  if (method === 'mean' || n === 1) return mean;
-
-  const mid = Math.floor(n / 2);
-  const median = n % 2 === 1 ? ts[mid] : (ts[mid - 1] + ts[mid]) / 2;
-
-  let trimmed = mean;
-  if (n > 2) {
-    const fi = ts.reduce((bi, t, i) => Math.abs(t - mean) > Math.abs(ts[bi] - mean) ? i : bi, 0);
-    const arr = ts.filter((_, i) => i !== fi);
-    trimmed = arr.reduce((s, t) => s + t, 0) / arr.length;
-  }
-
-  let tightest = ts[0];
-  {
-    const majority = Math.ceil(n / 2);
-    let bestSpan = Infinity;
-    for (let i = 0; i <= n - majority; i++) {
-      const span = ts[i + majority - 1] - ts[i];
-      if (span < bestSpan) { bestSpan = span; tightest = (ts[i] + ts[i + majority - 1]) / 2; }
-    }
-  }
-
-  let eqgroup = mean;
-  {
-    const gm = new Map<string, number[]>();
-    for (const m of members) {
-      if (!gm.has(m.algorithmId)) gm.set(m.algorithmId, []);
-      gm.get(m.algorithmId)!.push(m.time);
-    }
-    const reps = [...gm.values()].map((gts) => gts.reduce((s, t) => s + t, 0) / gts.length);
-    eqgroup = reps.reduce((s, t) => s + t, 0) / reps.length;
-  }
-
-  if (method === 'eqgroup') return eqgroup;
-
-  if (method === 'nearraw') {
-    return ts.reduce((best, t) => {
-      const sd = ts.reduce((s, u) => s + Math.abs(t - u), 0);
-      const bd = ts.reduce((s, u) => s + Math.abs(best - u), 0);
-      return sd < bd ? t : best;
-    }, ts[0]);
-  }
-
-  const cands = [median, trimmed, tightest, eqgroup];
-
-  if (method === 'metamed') {
-    const sorted = [...cands].sort((a, b) => a - b);
-    const mm = sorted.length % 2 === 1
-      ? sorted[Math.floor(sorted.length / 2)]
-      : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
-    return cands.reduce((best, v) => Math.abs(v - mm) < Math.abs(best - mm) ? v : best, cands[0]);
-  }
-
-  // plural
-  const scores = cands.map((v) => cands.filter((u) => Math.abs(u - v) <= 0.5).length);
-  const maxS = Math.max(...scores);
-  const winners = cands.filter((_, i) => scores[i] === maxS);
-  return winners.reduce((best, v) => Math.abs(v - mean) < Math.abs(best - mean) ? v : best, winners[0]);
-}
-
 // Compute consensus boundary times for one song.
 function computeConsensusTimes(
   algoTimes: Record<string, number[]>,
@@ -302,26 +237,7 @@ function computeConsensusTimes(
     if (!includedAlgos.has(id)) continue;
     for (const t of algoTimes[id]) allPoints.push({ algorithmId: id, time: t });
   }
-  if (!allPoints.length) return [];
-
-  const sorted = [...allPoints].sort((a, b) => a.time - b.time);
-  const clusters: { sum: number; count: number; members: { algorithmId: string; time: number }[] }[] = [];
-  for (const pt of sorted) {
-    let bestIdx = -1, bestDist = Infinity;
-    for (let k = clusters.length - 1; k >= 0; k--) {
-      const cent = clusters[k].sum / clusters[k].count;
-      if (pt.time - cent > toleranceSec) break;
-      const dist = Math.abs(pt.time - cent);
-      if (dist <= toleranceSec && dist < bestDist) { bestDist = dist; bestIdx = k; }
-    }
-    if (bestIdx >= 0) {
-      clusters[bestIdx].members.push(pt); clusters[bestIdx].sum += pt.time; clusters[bestIdx].count += 1;
-    } else {
-      clusters.push({ sum: pt.time, count: 1, members: [pt] });
-    }
-  }
-
-  return clusters
+  return clusterPoints(allPoints, toleranceSec)
     .filter((c) => new Set(c.members.map((m) => m.algorithmId)).size >= minAgreement)
     .map((c) => computeClusterTime(c.members, method));
 }
@@ -333,13 +249,12 @@ function computeConsensusTimes(
 // covers that case separately via `evaluateCustom`.
 async function evaluateConsensusForDataset(
   rawData: RawSongData[],
-  evalRef: EvalRef,
   params: { tolEval: number; clusterTol: number; minAgreement: number; method: AutoGuessCentroidMethod; algos: Set<string> },
 ): Promise<{ precision: number; recall: number; f1: number; minF1: number; maxF1: number; songCount: number; meanBoundaries: number } | null> {
   const pairs: MirEvalPairWithId[] = [];
   const pairBoundaryCount = new Map<string, number>();
   for (const song of rawData) {
-    const refTimes = evalRef === 'manual' ? song.manualTimes : song.eyeTimes;
+    const refTimes = song.manualTimes;
     if (!refTimes.length) continue;
     const cons = computeConsensusTimes(song.algoTimes, params.algos, params.clusterTol, params.minAgreement, params.method);
     if (!cons.length) continue;
@@ -440,7 +355,6 @@ type EvalMode = 'per-algo' | 'consensus';
 
 export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   const { settings } = useSettings();
-  const eyeEnabled = settings.experimentalEyeAnnotation;
   const [evalRef, setEvalRef] = useState<EvalRef>('manual');
   const [tolerance, setTolerance] = useState(0.5);
   const [sortKey, setSortKey] = useState<SortKey>('f1');
@@ -490,13 +404,15 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   // Close unified consensus-params popover on outside click
   useEffect(() => {
     if (!showParamsPopover) return;
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (paramsPopoverRef.current && !paramsPopoverRef.current.contains(e.target as Node)) {
         setShowParamsPopover(false);
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
   }, [showParamsPopover]);
 
   // Clamp minAgreement when selection shrinks
@@ -504,12 +420,6 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
     const max = Math.max(1, selectedAlgos.size);
     if (minAgreement > max) setMinAgreement(max);
   }, [selectedAlgos.size, minAgreement]);
-
-  // If the experimental Eye flag flips off while the eval reference was Eye,
-  // fall back to manual so the (hidden) Eye option can't stay selected.
-  useEffect(() => {
-    if (!eyeEnabled && evalRef === 'eye') setEvalRef('manual');
-  }, [eyeEnabled, evalRef]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -523,9 +433,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
       const results: RawSongData[] = [];
       for (const song of audioFiles) {
         if (cancelled) break;
-        const [manualAnn, eyeAnn, ...algoResults] = await Promise.all([
-          loadAnnotation(song.id),
-          loadEyeAnnotation(song.id),
+        const [manualSections, ...algoResults] = await Promise.all([
+          loadBoundaryItems(song.id),
           ...ALGO_ORDER.map((toolId) => loadAlgoJson(song.id, toolId)),
         ]);
         const algoTimes: Record<string, number[]> = {};
@@ -536,18 +445,11 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
             if (secs.length) algoTimes[toolId] = secs.map((s) => s.time);
           }
         });
-        // Defensive optional chain on `.sections` — some annotation files
-        // (e.g. early stubs that only record metadata like `time_spent_seconds`)
-        // have no sections field; without the chain `.map` throws on undefined.
-        const manualSections = manualAnn?.sections ?? [];
-        const eyeSections  = eyeAnn?.sections  ?? [];
         results.push({
           songId: song.id,
           songName: song.name,
           manualTimes: manualSections.map((s) => s.time),
-          eyeTimes:  eyeSections.map((s) => s.time),
           manualSections,
-          eyeSections,
           algoTimes,
         });
         if (!cancelled) {
@@ -571,7 +473,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   const songAlgoPairs = useMemo<MirEvalPairWithId[] | null>(() => {
     const pairs: MirEvalPairWithId[] = [];
     for (const song of rawData) {
-      const refTimes = evalRef === 'manual' ? song.manualTimes : song.eyeTimes;
+      const refTimes = song.manualTimes;
       if (!refTimes.length) continue;
       for (const [toolId, estTimes] of Object.entries(song.algoTimes)) {
         if (!estTimes.length) continue;
@@ -589,8 +491,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
   const songMetrics = useMemo(() => {
     return rawData.map((song) => {
-      const refTimes = evalRef === 'manual' ? song.manualTimes : song.eyeTimes;
-      const refSections = evalRef === 'manual' ? song.manualSections : song.eyeSections;
+      const refTimes = song.manualTimes;
+      const refSections = song.manualSections;
       const algoResults: Record<string, { mir: MirEvalResult | null; custom: AlgoEvalResult }> = {};
       if (refTimes.length) {
         for (const [toolId, estTimes] of Object.entries(song.algoTimes)) {
@@ -753,7 +655,6 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
   }, [sortedAggregates, sortKey]);
 
   const songsWithManual = rawData.filter((d) => d.manualTimes.length > 0).length;
-  const songsWithEye  = rawData.filter((d) => d.eyeTimes.length  > 0).length;
 
   // ── Consensus per-song & aggregate (for consensus mode) ───────────────
   // Pre-compute consensus times per song (no mir_eval yet), then batch P/R/F
@@ -763,8 +664,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
       songId: song.songId,
       songName: song.songName,
       cons: computeConsensusTimes(song.algoTimes, selectedAlgos, clusterTol, minAgreement, centroidMethod),
-      refTimes: evalRef === 'manual' ? song.manualTimes : song.eyeTimes,
-      refSections: evalRef === 'manual' ? song.manualSections : song.eyeSections,
+      refTimes: song.manualTimes,
+      refSections: song.manualSections,
     }));
   }, [rawData, evalRef, selectedAlgos, clusterTol, minAgreement, centroidMethod]);
 
@@ -963,7 +864,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
         for (const m of methods) {
           for (const tauE of evalTauGrid) {
             if (searchCancelRef.current) break;
-            const r = await evaluateConsensusForDataset(rawData, evalRef, {
+            const r = await evaluateConsensusForDataset(rawData, {
               tolEval: tauE, clusterTol: tolC, minAgreement: minA, method: m, algos,
             });
             if (r) {
@@ -996,7 +897,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
   async function runOnceConsensus() {
     if (!rawData.length || selectedAlgos.size === 0) return;
-    const r = await evaluateConsensusForDataset(rawData, evalRef, {
+    const r = await evaluateConsensusForDataset(rawData, {
       tolEval: tolerance,
       clusterTol,
       minAgreement: Math.min(minAgreement, selectedAlgos.size),
@@ -1085,11 +986,10 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
               <EvalReferenceDropdown
                 value={evalRef}
                 onChange={(mode) => {
-                  if (mode === 'manual' || mode === 'eye') setEvalRef(mode);
+                  if (mode === 'manual') setEvalRef(mode);
                 }}
                 options={[
                   { mode: 'manual',    hasData: songsWithManual > 0 },
-                  ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: songsWithEye > 0 }] : []),
                   { mode: 'autoGuess', hasData: false },
                 ]}
               />
@@ -1229,8 +1129,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
         </div>
       ) : (
         <div className="text-[11px] text-gray-600">
-          {totalSongs} songs · {songsWithManual} with Manual
-          {eyeEnabled && <> · {songsWithEye} with Eye</>} ·{' '}
+          {totalSongs} songs · {songsWithManual} with Manual ·{' '}
           evaluating against <span className="text-gray-400">{evalRef}</span> at τ = {tolerance}s
         </div>
       )}
@@ -1244,8 +1143,8 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
       {loadState === 'done' && !mirLoading && !mirError && rawData.length > 0 && songAlgoPairs === null && (
         <div className="rounded border border-amber-900/50 bg-amber-900/10 px-3 py-1.5 text-[11px] text-amber-400 leading-relaxed">
-          {(evalRef === 'manual' ? songsWithManual : songsWithEye) === 0 ? (
-            <>No <span className="text-amber-300">{evalRef === 'manual' ? 'Manual' : 'Eye'}</span> annotations to evaluate against.</>
+          {songsWithManual === 0 ? (
+            <>No <span className="text-amber-300">Manual</span> annotations to evaluate against.</>
           ) : (
             <>No algorithms cache — please run algorithms.</>
           )}
@@ -1694,7 +1593,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
                 outputs section boundaries (in seconds). We pool all those timestamps across algorithms,
                 merge nearby ones into clusters, and keep only the clusters that enough <em>different</em> algorithms
                 voted for. Each surviving cluster becomes one consensus boundary at a single moment in time.
-                Then we score those consensus boundaries against the manual/eye reference (precision/recall/F1)
+                Then we score those consensus boundaries against the manual reference (precision/recall/F1)
                 with the standard tolerance τ.
               </div>
               <ul className="space-y-1 list-disc pl-5 text-gray-400">
@@ -1803,7 +1702,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
 
       {/* ── Consensus aggregate result ──────────────────────────────────── */}
       {evalMode === 'consensus' && rawData.length > 0 && (() => {
-        const refSongCount = rawData.filter((s) => (evalRef === 'manual' ? s.manualTimes : s.eyeTimes).length > 0).length;
+        const refSongCount = rawData.filter((s) => s.manualTimes.length > 0).length;
         const songsWithBoundaries = consensusPerSong.filter((s) => s.consensusTimes.length > 0).length;
         const noConsensusReason = !consensusAggregate
           ? (refSongCount === 0
@@ -2392,12 +2291,20 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
           table because Phase 2's per-family split is incremental (eventually
           every family gets its own table; for now boundary is still the
           mixed-shape default). */}
+      {settings.experimentalCueExtras && (
+        <GlobalEvalCueTable audioFiles={audioFiles} />
+      )}
+
       {settings.experimentalSpanFamily && (
         <GlobalEvalSpanTable audioFiles={audioFiles} />
       )}
 
       {settings.experimentalLoopFamily && (
         <GlobalEvalLoopTable audioFiles={audioFiles} />
+      )}
+
+      {settings.experimentalLyricsFamily && (
+        <GlobalEvalLyricsTable audioFiles={audioFiles} />
       )}
 
       <p className="text-[10px] text-gray-700 leading-relaxed">

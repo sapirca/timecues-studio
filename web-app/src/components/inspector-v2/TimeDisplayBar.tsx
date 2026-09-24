@@ -92,14 +92,21 @@ export function TimeDisplayBar({ currentTime, pendingSelection, previewRegion, s
             <TimeReadout seconds={end} showMs dim={!hasSel} />
           </div>
         </div>
-        {hasSel && (
-          <div className="flex flex-col items-end pl-2 ml-1 border-l border-white/[0.06]">
-            <span className="text-[9px] uppercase tracking-wider text-slate-500">Length</span>
-            <span className="text-xs font-mono tabular-nums text-slate-300">
-              {(end - start).toFixed(3)}s
-            </span>
-          </div>
-        )}
+        {/* Always rendered (just hidden when there's no selection) so the bar's
+            width — and therefore whether it wraps to a second line — stays
+            constant. Otherwise creating/clearing a selection (e.g. a plain
+            click on the 3-Band) would change the bar's height and visibly
+            jump everything below it. */}
+        <div
+          className="flex flex-col items-end pl-2 ml-1 border-l border-white/[0.06]"
+          style={{ visibility: hasSel ? 'visible' : 'hidden' }}
+          aria-hidden={!hasSel}
+        >
+          <span className="text-[9px] uppercase tracking-wider text-slate-500">Length</span>
+          <span className="text-xs font-mono tabular-nums text-slate-300">
+            {(end - start).toFixed(3)}s
+          </span>
+        </div>
       </div>
     </div>
   );

@@ -21,7 +21,7 @@ const ANNOTATIONS = '/api/custom-annotations';
  *  `includeExperimentalLoopsAndPatterns` mirrors the
  *  `experimentalLoopsAndPatterns` Settings flag. When false (the default),
  *  the server filters out detectors whose `output_kind` is `loop` or
- *  `pattern`, matching how the Loops/Patterns annotation tabs are hidden in
+ *  matching how the Loops annotation tab is hidden in
  *  the UI when the flag is off. */
 export interface ListDetectorsOpts {
   includeExperimentalLoopsAndPatterns?: boolean;
@@ -61,18 +61,43 @@ export async function uploadDetector(name: string, code: string): Promise<Custom
   return body.detector as CustomRegistryEntry;
 }
 
-export async function deleteDetector(name: string): Promise<boolean> {
-  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  return res.ok;
+/**
+ * Soft-delete a detector. The server moves the `.py` into the in-app trash
+ * (`tools/python/custom/.trash/`) rather than unlinking it, and wipes the
+ * detector's cached algorithm results. Returns `{ message, trashed_to }` so
+ * the caller can tell the user where the source landed on disk.
+ */
+export async function deleteDetector(
+  name: string,
+): Promise<{ message: string; trashed_to: string }> {
+  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: annotatorHeaders(),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(body?.message ?? body?.error ?? `delete failed: ${res.status}`);
+  }
+  return {
+    message: body?.message ?? `"${name}" moved to the app trash.`,
+    trashed_to: body?.trashed_to ?? '',
+  };
 }
 
 /**
  * Wipe one detector's algorithm cache + the current annotator's annotation
  * files. The .py source is preserved. Other annotators' annotations are
  * untouched.
+ *
+ * Pass `slug` to scope the wipe to a single song; omit it to clear every
+ * song's output for the detector.
  */
-export async function deleteDetectorOutputs(name: string): Promise<{ annotations_removed: number }> {
-  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}/outputs`, {
+export async function deleteDetectorOutputs(
+  name: string,
+  slug?: string,
+): Promise<{ annotations_removed: number }> {
+  const query = slug ? `?slug=${encodeURIComponent(slug)}` : '';
+  const res = await fetch(`${SCRIPTS}/${encodeURIComponent(name)}/outputs${query}`, {
     method: 'DELETE',
     headers: annotatorHeaders(),
   });

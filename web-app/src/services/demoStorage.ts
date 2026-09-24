@@ -10,14 +10,16 @@
 // Keys are namespaced under "tc:demo:" + kind + ":" + slug to keep demo
 // data clearly separated from any other localStorage we own.
 
-import type {
-  ManualAnnotation,
-  AutoGuessManualAnnotation,
-  AnnotationStatus,
-} from '../types/manualAnnotation';
+import type { AutoGuessManualAnnotation } from '../types/autoGuess';
+import type { AutoGuessSongStatus } from './autoGuessAnnotations';
 import type { SongInfo } from '../types/songInfo';
 
-type Kind = 'manual' | 'eye' | 'autoGuess' | 'songInfo';
+// Annotation LAYERS (boundaries, cues, spans, …) are deliberately absent:
+// they were never mirrored here, and a demo visitor's layers go to the server
+// under the `demo-anonymous` annotator id like any other annotator's would.
+// Only the two kinds that have their own document and no layer equivalent
+// live in localStorage.
+type Kind = 'autoGuess' | 'songInfo';
 
 function key(kind: Kind, slug: string): string {
   return `tc:demo:${kind}:${slug}`;
@@ -51,29 +53,7 @@ function safeDel(k: string): boolean {
   }
 }
 
-// ─── Manual ────────────────────────────────────────────────────────────────────
-
-export function demoLoadManual(slug: string): ManualAnnotation | null {
-  return safeGet<ManualAnnotation>(key('manual', slug));
-}
-export function demoSaveManual(slug: string, ann: ManualAnnotation): boolean {
-  return safeSet(key('manual', slug), ann);
-}
-export function demoDeleteManual(slug: string): boolean {
-  return safeDel(key('manual', slug));
-}
-
-// ─── Eye ─────────────────────────────────────────────────────────────────────
-
-export function demoLoadEye(slug: string): ManualAnnotation | null {
-  return safeGet<ManualAnnotation>(key('eye', slug));
-}
-export function demoSaveEye(slug: string, ann: ManualAnnotation): boolean {
-  return safeSet(key('eye', slug), ann);
-}
-export function demoDeleteEye(slug: string): boolean {
-  return safeDel(key('eye', slug));
-}
+// ─── Auto-guess ────────────────────────────────────────────────────────────────
 
 // ─── Auto-guess ──────────────────────────────────────────────────────────────
 
@@ -100,22 +80,26 @@ export function demoSaveSongInfo(slug: string, info: SongInfo): boolean {
   return safeSet(key('songInfo', slug), info);
 }
 
-// ─── Status sweep (for loadAllStatuses parity) ───────────────────────────────
+// ─── Status sweep (for loadAllAutoGuessStatuses parity) ──────────────────────
 
-/** Build the same {slug → AnnotationStatus} map the server's bulk endpoint
+/** Build the same {slug → AutoGuessSongStatus} map the server's LIST endpoint
  *  returns, but from localStorage. Used by Demo mode so the sidebar's
  *  has-annotation indicator behaves correctly. */
-export function demoLoadAllStatuses(): Record<string, AnnotationStatus> {
-  const out: Record<string, AnnotationStatus> = {};
-  const prefix = 'tc:demo:manual:';
+export function demoLoadAllAutoGuessStatuses(): Record<string, AutoGuessSongStatus> {
+  const out: Record<string, AutoGuessSongStatus> = {};
+  const prefix = 'tc:demo:autoGuess:';
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k || !k.startsWith(prefix)) continue;
       const slug = k.slice(prefix.length);
-      const ann = safeGet<ManualAnnotation>(k);
+      const ann = safeGet<AutoGuessManualAnnotation>(k);
       if (!ann) continue;
-      out[slug] = { slug, reviewed: false };
+      out[slug] = {
+        slug,
+        auto_guess_status: ann.auto_guess_status,
+        points_count: ann.points?.length ?? 0,
+      };
     }
   } catch {
     // ignore — caller treats {} as "no annotations".
@@ -123,13 +107,14 @@ export function demoLoadAllStatuses(): Record<string, AnnotationStatus> {
   return out;
 }
 
-/** Count distinct song slugs that have any user-authored demo work
- *  (manual, eye, or songInfo). Auto-guess is excluded because it's cached
- *  algorithm output, not something the user typed. Used to decide whether
+/** Count distinct song slugs that have any user-authored demo work held in
+ *  localStorage. Auto-guess is excluded because it's cached algorithm output,
+ *  not something the user typed; annotation layers are excluded because they
+ *  live on the server under `demo-anonymous`, not here. Used to decide whether
  *  exiting demo needs a confirmation prompt. */
 export function demoCountSavedWork(): number {
   const slugs = new Set<string>();
-  const userKinds: Kind[] = ['manual', 'eye', 'songInfo'];
+  const userKinds: Kind[] = ['songInfo'];
   const prefixes = userKinds.map((k) => `tc:demo:${k}:`);
   try {
     for (let i = 0; i < localStorage.length; i++) {

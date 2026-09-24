@@ -1,5 +1,7 @@
 import type { LoopItem } from '../../types/annotationLayer';
 import { intervalBars, type BarGrid } from '../../utils/barSnap';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
+import { ProminenceBadge } from './shared/ProminenceControl';
 import {
   ItemCardShell,
   ItemCardHeader,
@@ -8,13 +10,7 @@ import {
   ItemCardActionRow,
   ItemCardIconButton,
 } from './ItemCard';
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
-}
+import { LoopPlayIcon } from './LoopPlayIcon';
 
 export interface LoopItemCardProps {
   index: number;
@@ -36,6 +32,8 @@ export interface LoopItemCardProps {
   onDelete: () => void;
   onInsertAfter?: () => void;
   isLast?: boolean;
+  /** Override time formatter — used in Grid Lock to show bar·beat instead of mm:ss. */
+  fmt?: (t: number) => string;
 }
 
 /** Loop card — same shell as SectionCard, with start + end times, halve/double,
@@ -45,7 +43,9 @@ export function LoopItemCard({
   grid, onSelect, onChangeLabel,
   onSnapStart, onSnapEnd, onResize, onToggleImportance,
   onPlay, onStop, onDelete, onInsertAfter, isLast,
+  fmt: fmtOverride,
 }: LoopItemCardProps) {
+  const fmt = fmtOverride ?? fmtTime;
   const isCritical = loop.importance !== 'optional';
   const bars = intervalBars(loop.start, loop.end, grid ?? null);
   const barsBadge = bars !== null
@@ -72,18 +72,20 @@ export function LoopItemCard({
 
       <ItemCardLabel value={loop.label} onChange={onChangeLabel} />
 
+      <ProminenceBadge points={loop.prominence} color={color} />
+
       <SnapTimeRow
         time={loop.start}
-        fmt={fmtTime}
+        fmt={fmt}
         onSnap={onSnapStart}
-        snapTitle="Set start to playhead (snaps to nearest beat when Snap-to-grid is on)"
+        snapTitle="Set start to playhead (snaps to the grid unit when Snap-to-grid is on)"
       />
 
       <SnapTimeRow
         time={loop.end}
-        fmt={fmtTime}
+        fmt={fmt}
         onSnap={onSnapEnd}
-        snapTitle="Set end to playhead (snaps to nearest beat when Snap-to-grid is on)"
+        snapTitle="Set end to playhead (snaps to the grid unit when Snap-to-grid is on)"
         prefix="–"
         variant="secondary"
         badge={barsBadge}
@@ -113,7 +115,7 @@ export function LoopItemCard({
               : 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-400/30 hover:bg-fuchsia-500/25'
           }`}
           title={isPlaying ? 'Stop looping (P)' : 'Loop-play this interval seamlessly (P)'}
-        >{isPlaying ? '⏹' : '↻'}</button>
+        >{isPlaying ? '⏹' : <LoopPlayIcon />}</button>
         <ItemCardIconButton
           onClick={onToggleImportance}
           title={isCritical ? 'Mark optional' : 'Mark critical'}

@@ -1,18 +1,18 @@
-import type { ManualSection, SectionImportance } from '../types/manualAnnotation';
+import type { SectionBlock } from '../types/sectionBlock';
 import type {
+  ItemImportance,
   CueItem,
   SpanItem,
   LoopItem,
-  PatternItem,
   LyricsItem,
   LayerEvalMode,
 } from '../types/annotationLayer';
 
 // ─── Input types ─────────────────────────────────────────────────────────────
 
-export interface ManualSectionInput {
+export interface RefSectionInput {
   time: number;
-  importance?: SectionImportance;
+  importance?: ItemImportance;
   candidates?: number[];
 }
 
@@ -46,7 +46,7 @@ export const DEFAULT_LYRICS_TOLERANCE_SEC = 0.05;
 
 // ─── Enriched manual section ────────────────────────────────────────────────────
 
-export interface ManualSectionWithDurs {
+export interface RefSectionWithDurs {
   time: number;
   candidates?: number[];
   importance: 'critical' | 'optional';
@@ -67,9 +67,9 @@ export interface ManualSectionWithDurs {
  * hitting (and including) the next critical section.
  */
 export function attachDurations(
-  manual: ManualSectionInput[],
+  manual: RefSectionInput[],
   trackDuration: number,
-): ManualSectionWithDurs[] {
+): RefSectionWithDurs[] {
   return manual.map((g, j) => {
     const durations: number[] = [];
     for (let k = j + 1; k < manual.length; k++) {
@@ -148,21 +148,21 @@ export interface AlgoEvalResult {
 
 /** Minimum distance from a predicted time to any valid start of a manual section.
  *  When useSecondary=false, only the primary time (g.time) is considered. */
-function manualDist(pTime: number, g: ManualSectionWithDurs, useSecondary: boolean): number {
+function manualDist(pTime: number, g: RefSectionWithDurs, useSecondary: boolean): number {
   const allTimes = useSecondary ? [g.time, ...(g.candidates ?? [])] : [g.time];
   return Math.min(...allTimes.map((t) => Math.abs(pTime - t)));
 }
 
 /** The closest valid start time of manual section g to a predicted time.
  *  When useSecondary=false, always returns g.time. */
-function closestManualTime(pTime: number, g: ManualSectionWithDurs, useSecondary: boolean): number {
+function closestManualTime(pTime: number, g: RefSectionWithDurs, useSecondary: boolean): number {
   const allTimes = useSecondary ? [g.time, ...(g.candidates ?? [])] : [g.time];
   return allTimes.reduce((best, t) => Math.abs(pTime - t) < Math.abs(pTime - best) ? t : best);
 }
 
 export function evaluateAlgorithm(
   predicted: PredSection[],
-  manual: ManualSectionWithDurs[],
+  manual: RefSectionWithDurs[],
   toleranceSec: number = DEFAULT_TOLERANCE_SEC,
   useSecondary: boolean = DEFAULT_USE_SECONDARY,
   optionalWeight: number = DEFAULT_OPTIONAL_WEIGHT,
@@ -257,7 +257,7 @@ export interface CustomEvalOptions {
  * `endTime` falls back to the next prediction's time (or trackDuration).
  */
 export function evaluateCustom(
-  refSections: ManualSection[],
+  refSections: SectionBlock[],
   estTimes: number[],
   trackDuration: number,
   opts: CustomEvalOptions = {},
@@ -308,10 +308,10 @@ export function evaluateCueLayer(
   trackDuration: number,
   toleranceSec: number = DEFAULT_CUE_TOLERANCE_SEC,
 ): AlgoEvalResult {
-  // Build a synthetic ManualSection[] from cue items so we can reuse
+  // Build a synthetic SectionBlock[] from cue items so we can reuse
   // evaluateCustom verbatim. Every cue is treated as a critical, candidate-
   // free section starting at its timestamp.
-  const refSections: ManualSection[] = reference.map((c) => ({
+  const refSections: SectionBlock[] = reference.map((c) => ({
     time: c.time,
     type: 'default',
     label: c.label,
@@ -329,7 +329,7 @@ export function evaluateCueLayer(
 // ─── Span eval (Phase 2 of the integration plan) ─────────────────────────────
 
 /** Tuple representing one valid `[start, end]` interval. Shared by SpanItem,
- *  LoopItem, PatternItem candidates. */
+ *  LoopItem candidates. */
 export type SpanInterval = [number, number];
 
 /** Result of scoring SPAN-family predictions against a SPAN reference.
@@ -359,7 +359,7 @@ export interface SpanEvalResult {
   frameSec: number;
 }
 
-/** Resolve the evaluation mode for a region layer (spans / loops / patterns).
+/** Resolve the evaluation mode for a region layer (spans / loops).
  *  The global `evalRegionLayersAsCandidates` Setting, when ON, forces every
  *  region layer to `'multiple-candidates'` regardless of its per-layer picker —
  *  the annotator wants any item in the layer to count as a valid alternative of
@@ -532,38 +532,179 @@ export function evaluateSpans(
   };
 }
 
-// ─── Loop / pattern / lyrics stubs (Phase 4–5) ───────────────────────────────
+// ─── Loop / lyrics stubs (Phase 4–5) ───────────────────────────────────────
 //
 // Surface placeholders so consumers can import these names today; the bodies
 // reuse `evaluateSpans` for now since all three are interval-shaped. When the
 // dedicated metrics land (bar-grid snap for loops, cycle alignment for
-// patterns, word-level WER for lyrics) replace the body, not the signature.
+// word-level WER for lyrics) replace the body, not the signature.
 
-export interface LoopEvalResult extends SpanEvalResult { /* phase-4 extras land here */ }
-export interface PatternEvalResult extends SpanEvalResult { /* phase-5 extras land here */ }
-export interface LyricsEvalResult extends SpanEvalResult { /* word-level metrics land here */ }
+/** Loop-specific quality metrics on top of the inherited interval/edge eval.
+ *  Both are fractions of the PREDICTED loop set — annotators care about
+ *  "do the predictions land on the grid?" rather than "did we recover
+ *  every reference loop?". NaN when no bar grid is provided (the all-songs
+ *  loop table renders '—' in that case). */
+export interface LoopEvalResult extends SpanEvalResult {
+  /** Fraction of predicted loops whose `start` AND `end` snap to a bar
+   *  boundary within `barTolSec`. Phase-4 contract: "bar-grid snap fraction". */
+  barSnapFraction: number;
+  /** Fraction of predicted loops whose duration is an integer multiple of
+   *  the bar length (within `barTolSec`). Phase-4 contract:
+   *  "phase-pop-free fraction" — non-integer-bar loops audibly pop when
+   *  the playback engine wraps. */
+  phasePopFreeFraction: number;
+  estLoopCount: number;
+}
+
+export interface BarGridForEval {
+  bpm: number;
+  beatsPerBar: number;
+  gridOffsetSec?: number;
+}
+
+export interface LoopEvalOptions extends SpanEvalOptions {
+  /** When set, populates `barSnapFraction` + `phasePopFreeFraction`. Without
+   *  it, both metrics are NaN and the all-songs table shows '—'. */
+  barGrid?: BarGridForEval;
+  /** Tolerance for "on the bar grid" — defaults to 50 ms. */
+  barTolSec?: number;
+}
+
+/** Word-level lyrics metrics on top of the line-level span eval inherited from
+ *  SpanEvalResult. WER is the classic Levenshtein word distance ÷ ref word
+ *  count, normalised text (lowercase, alphanumeric+apostrophe only). The onset
+ *  F1 counts a tp only when ref and est share a normalised word AND the
+ *  prediction's onset falls within `toleranceSec` of the reference's. */
+export interface LyricsEvalResult extends SpanEvalResult {
+  wer: number;
+  wordOnsetF1: number;
+  refWordCount: number;
+  estWordCount: number;
+  matchedWords: number;
+}
+
+/** Frequency-domain "near zero" check for floating-point bar arithmetic. */
+function nearMultiple(value: number, unit: number, tol: number): boolean {
+  if (unit <= 0) return false;
+  const rounded = Math.round(value / unit) * unit;
+  return Math.abs(value - rounded) <= tol;
+}
 
 export function evaluateLoops(
   reference: LoopItem[],
   predicted: LoopItem[],
   trackDuration: number,
-  opts: SpanEvalOptions = {},
+  opts: LoopEvalOptions = {},
 ): LoopEvalResult {
   // Loops share the SpanItem shape (start/end/label/candidates). Reuse.
   const refSpans = reference.map((l) => ({ ...l, candidates: l.candidates }));
   const estSpans = predicted.map((l) => ({ ...l, candidates: l.candidates }));
-  return evaluateSpans(refSpans as unknown as SpanItem[], estSpans as unknown as SpanItem[], trackDuration, opts);
+  const spanResult = evaluateSpans(
+    refSpans as unknown as SpanItem[],
+    estSpans as unknown as SpanItem[],
+    trackDuration,
+    opts,
+  );
+
+  let barSnapFraction = NaN;
+  let phasePopFreeFraction = NaN;
+  if (opts.barGrid && opts.barGrid.bpm > 0 && opts.barGrid.beatsPerBar > 0 && predicted.length > 0) {
+    const barLen = (60 / opts.barGrid.bpm) * opts.barGrid.beatsPerBar;
+    const gridOffset = opts.barGrid.gridOffsetSec ?? 0;
+    const tol = opts.barTolSec ?? 0.05;
+    let snapped = 0;
+    let phasePopFree = 0;
+    for (const l of predicted) {
+      const startOffsetFromGrid = l.start - gridOffset;
+      const endOffsetFromGrid = l.end - gridOffset;
+      const startOnGrid = nearMultiple(startOffsetFromGrid, barLen, tol);
+      const endOnGrid   = nearMultiple(endOffsetFromGrid,   barLen, tol);
+      if (startOnGrid && endOnGrid) snapped++;
+      if (nearMultiple(l.end - l.start, barLen, tol)) phasePopFree++;
+    }
+    barSnapFraction = snapped / predicted.length;
+    phasePopFreeFraction = phasePopFree / predicted.length;
+  }
+
+  return {
+    ...spanResult,
+    barSnapFraction,
+    phasePopFreeFraction,
+    estLoopCount: predicted.length,
+  };
 }
 
-export function evaluatePatterns(
-  reference: PatternItem[],
-  predicted: PatternItem[],
-  trackDuration: number,
-  opts: SpanEvalOptions = {},
-): PatternEvalResult {
-  const refSpans = reference.map((p) => ({ ...p, candidates: p.candidates }));
-  const estSpans = predicted.map((p) => ({ ...p, candidates: p.candidates }));
-  return evaluateSpans(refSpans as unknown as SpanItem[], estSpans as unknown as SpanItem[], trackDuration, opts);
+function normalizeLyricWord(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9']+/g, '');
+}
+
+interface WordMetrics {
+  wer: number;
+  wordOnsetF1: number;
+  matchedWords: number;
+}
+
+/** Wagner-Fischer word-Levenshtein with backtracked alignment. ALIGN ops
+ *  (matching normalised words) become the matched-pair set used for the
+ *  onset-F1 numerator. SUB / INS / DEL all count as errors in WER and miss
+ *  the onset metric entirely. */
+function evaluateLyricWords(
+  refWords: LyricsItem[],
+  estWords: LyricsItem[],
+  toleranceSec: number,
+): WordMetrics {
+  if (refWords.length === 0 && estWords.length === 0) {
+    return { wer: 0, wordOnsetF1: 1, matchedWords: 0 };
+  }
+  const refNorm = refWords.map((w) => normalizeLyricWord(w.text));
+  const estNorm = estWords.map((w) => normalizeLyricWord(w.text));
+  const m = refNorm.length;
+  const n = estNorm.length;
+
+  // dp[i][j] = edit distance between ref[..i] and est[..j].
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = refNorm[i - 1] === estNorm[j - 1] && refNorm[i - 1] !== '' ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,      // deletion
+        dp[i][j - 1] + 1,      // insertion
+        dp[i - 1][j - 1] + cost, // substitution / align
+      );
+    }
+  }
+  const editDistance = dp[m][n];
+  const wer = m === 0 ? (n === 0 ? 0 : 1) : editDistance / m;
+
+  // Backtrack to recover the aligned (ref, est) word-pair set.
+  const alignedPairs: { ref: LyricsItem; est: LyricsItem }[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 && j > 0) {
+    const isAlign = refNorm[i - 1] === estNorm[j - 1] && refNorm[i - 1] !== '' && dp[i][j] === dp[i - 1][j - 1];
+    if (isAlign) {
+      alignedPairs.push({ ref: refWords[i - 1], est: estWords[j - 1] });
+      i--; j--;
+    } else if (dp[i][j] === dp[i - 1][j - 1] + 1) {
+      i--; j--; // substitution
+    } else if (dp[i][j] === dp[i - 1][j] + 1) {
+      i--; // deletion
+    } else {
+      j--; // insertion
+    }
+  }
+
+  let tp = 0;
+  for (const { ref, est } of alignedPairs) {
+    if (Math.abs(est.time - ref.time) <= toleranceSec) tp++;
+  }
+  const precision = n > 0 ? tp / n : (tp === 0 ? 1 : 0);
+  const recall    = m > 0 ? tp / m : (tp === 0 ? 1 : 0);
+  const wordOnsetF1 = (precision + recall) > 0 ? (2 * precision * recall) / (precision + recall) : 0;
+
+  return { wer, wordOnsetF1, matchedWords: alignedPairs.length };
 }
 
 export function evaluateLyrics(
@@ -572,19 +713,34 @@ export function evaluateLyrics(
   trackDuration: number,
   opts: SpanEvalOptions = {},
 ): LyricsEvalResult {
-  // Phase 5 will replace this with word-level WER + onset/offset F1 at 50 ms;
-  // until then map LyricsItem.kind === 'word' to point-cues and 'line' to spans
-  // so consumers get reasonable numbers from a partially-typed corpus.
+  const tolerance = opts.toleranceSec ?? DEFAULT_LYRICS_TOLERANCE_SEC;
+  // Lines → span eval (interval IoU + edge F1 on rasterised mask).
+  const refLines = reference.filter((l) => l.kind === 'line');
+  const estLines = predicted.filter((l) => l.kind === 'line');
   const toIntervalItem = (l: LyricsItem): SpanItem => ({
     id: l.id,
     start: l.time,
     end: l.end ?? l.time + 0.2,
     label: l.text,
   });
-  const refIntervals = reference.map(toIntervalItem);
-  const estIntervals = predicted.map(toIntervalItem);
-  return evaluateSpans(
-    refIntervals, estIntervals, trackDuration,
-    { ...opts, toleranceSec: opts.toleranceSec ?? DEFAULT_LYRICS_TOLERANCE_SEC },
+  const lineResult = evaluateSpans(
+    refLines.map(toIntervalItem),
+    estLines.map(toIntervalItem),
+    trackDuration,
+    { ...opts, toleranceSec: tolerance },
   );
+
+  // Words → text-aware DP alignment + WER + 50 ms onset F1.
+  const refWords = reference.filter((l) => l.kind === 'word');
+  const estWords = predicted.filter((l) => l.kind === 'word');
+  const wordMetrics = evaluateLyricWords(refWords, estWords, tolerance);
+
+  return {
+    ...lineResult,
+    wer: wordMetrics.wer,
+    wordOnsetF1: wordMetrics.wordOnsetF1,
+    refWordCount: refWords.length,
+    estWordCount: estWords.length,
+    matchedWords: wordMetrics.matchedWords,
+  };
 }

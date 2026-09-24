@@ -26,8 +26,7 @@ import {
 type Tab = 'annotators' | 'agreement' | 'members';
 
 const SOURCE_TONE = {
-  manual: 'text-amber-300',
-  eye: 'text-cyan-300',
+  boundaries: 'text-amber-300',
   autoGuess: 'text-violet-300',
 } as const;
 
@@ -64,8 +63,8 @@ export function TeamPage() {
   }, [adminStatus]);
 
   return (
-    <div className="min-h-screen bg-[#0a0b0d] text-slate-200 px-6 pb-6 pt-3">
-      <div className="max-w-5xl mx-auto space-y-5">
+    <div className="min-h-screen bg-[#0a0b0d] text-slate-200 px-4 sm:px-6 pb-6 pt-3">
+      <div className="max-w-5xl mx-auto space-y-5 min-w-0">
         <InfoBanner id="team.v1" title="Team" accent="pink">
           See <strong>who annotated what</strong>, inter-annotator agreement, and manage access for collaborators.
         </InfoBanner>
@@ -76,13 +75,13 @@ export function TeamPage() {
           </p>
         </header>
 
-        <nav className="flex gap-1 text-xs uppercase tracking-wider">
+        <nav className="flex flex-wrap gap-1 text-xs uppercase tracking-wider">
           {(['annotators', 'agreement', 'members'] as Tab[]).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTab(t)}
-              className={`px-3 py-1.5 rounded transition-colors ${
+              className={`px-3 py-2.5 sm:py-1.5 rounded transition-colors ${
                 tab === t
                   ? 'bg-cyan-500/15 text-cyan-200 border border-cyan-400/40'
                   : 'bg-white/[0.03] text-slate-500 hover:text-slate-300 border border-transparent'
@@ -124,15 +123,14 @@ function AnnotatorsTab({
   tiersByEmail: Record<string, AccessTier>;
 }) {
   const totals = useMemo(() => {
-    let manual = 0, eye = 0, autoGuess = 0, custom = 0, time = 0;
+    let boundaries = 0, autoGuess = 0, custom = 0, time = 0;
     for (const a of data.annotators) {
-      manual += a.manual.count;
-      eye += a.eye.count;
+      boundaries += a.boundaries.count;
       autoGuess += a.autoGuess.count;
       custom += a.custom.count;
       time += a.totalTimeSeconds;
     }
-    return { manual, eye, autoGuess, custom, time, annotators: data.annotators.length };
+    return { boundaries, autoGuess, custom, time, annotators: data.annotators.length };
   }, [data.annotators]);
 
   if (data.annotators.length === 0) {
@@ -151,8 +149,7 @@ function AnnotatorsTab({
         </header>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <Stat label="Annotators" value={totals.annotators.toString()} />
-          <Stat label="Boundaries" value={totals.manual.toString()} tone="text-amber-300" />
-          <Stat label="Eye" value={totals.eye.toString()} tone="text-cyan-300" />
+          <Stat label="Boundaries" value={totals.boundaries.toString()} tone="text-amber-300" />
           <Stat label="Auto-guess" value={totals.autoGuess.toString()} tone="text-violet-300" />
           <Stat label="Custom" value={totals.custom.toString()} tone="text-emerald-300" />
           <Stat label="Time logged" value={fmtDuration(totals.time)} />
@@ -205,9 +202,8 @@ function AnnotatorCard({ a, isMe, tier }: { a: TeamStatsAnnotator; isMe: boolean
         </div>
       </header>
 
-      <div className="grid grid-cols-3 gap-2">
-        <SourceCell label="Boundaries" stats={a.manual} tone={SOURCE_TONE.manual} />
-        <SourceCell label="Eye" stats={a.eye} tone={SOURCE_TONE.eye} />
+      <div className="grid grid-cols-2 gap-2">
+        <SourceCell label="Boundaries" stats={a.boundaries} tone={SOURCE_TONE.boundaries} />
         <SourceCell label="Auto-guess" stats={a.autoGuess} tone={SOURCE_TONE.autoGuess} />
       </div>
 
@@ -300,7 +296,7 @@ function AgreementTab({ slugs }: { slugs: string[] }) {
               key={slug}
               type="button"
               onClick={() => setSelected(slug)}
-              className={`px-2.5 py-1 rounded text-xs transition-colors ${
+              className={`max-w-full truncate px-2.5 py-2 sm:py-1 rounded text-xs transition-colors ${
                 slug === selected
                   ? 'bg-cyan-500/20 text-cyan-100 border border-cyan-400/40'
                   : 'bg-white/[0.03] text-slate-300 hover:text-slate-100 border border-white/[0.04]'
@@ -478,13 +474,13 @@ function MembersTab({ currentAnnotatorId }: { currentAnnotatorId: string | null 
           <div className="text-xs uppercase tracking-wider text-slate-200">
             People ({people.length})
           </div>
-          <div className="flex gap-1 text-xs uppercase tracking-wider">
+          <div className="flex flex-wrap gap-1 text-xs uppercase tracking-wider">
             {(['all', 'admin', 'researcher', 'team'] as TierFilter[]).map((t) => (
               <button
                 key={t}
                 type="button"
                 onClick={() => setFilter(t)}
-                className={`px-2.5 py-1 rounded border transition-colors ${
+                className={`px-2.5 py-2.5 sm:py-1 rounded border transition-colors ${
                   filter === t
                     ? 'bg-white/[0.08] text-slate-100 border-white/20'
                     : 'bg-transparent text-slate-400 hover:text-slate-200 border-white/[0.06]'
@@ -530,7 +526,7 @@ function MembersTab({ currentAnnotatorId }: { currentAnnotatorId: string | null 
         title="Remove user"
         description={
           pendingRemove
-            ? `This permanently deletes ${pendingRemove.email}'s membership AND every annotation they have ever saved (manual, eye, auto-guess, and per-script custom) plus their saved profile. There is no undo.`
+            ? `This permanently deletes ${pendingRemove.email}'s membership AND every annotation they have ever saved (layers, auto-guess, and per-script custom) plus their saved profile. There is no undo.`
             : undefined
         }
         confirmWord="DELETE_USER"
@@ -575,7 +571,7 @@ function PersonRow({
           disabled={busy || isLastAdmin}
           onChange={(e) => onChangeTier(e.target.value as AccessTier)}
           title={isLastAdmin ? 'Cannot change the last admin' : 'Change tier'}
-          className={`px-2.5 py-1.5 rounded bg-[#0e1015] border border-white/10 text-sm font-mono ${tone.text} disabled:opacity-50 disabled:cursor-not-allowed`}
+          className={`px-2.5 py-2.5 sm:py-1.5 rounded bg-[#0e1015] border border-white/10 text-base sm:text-sm font-mono ${tone.text} disabled:opacity-50 disabled:cursor-not-allowed`}
         >
           <option value="admin">Admin</option>
           <option value="researcher">Researcher</option>
@@ -592,7 +588,7 @@ function PersonRow({
           disabled={busy || isLastAdmin}
           onClick={onRemove}
           title={isLastAdmin ? 'Cannot remove the last admin' : 'Remove from dataset and delete all of their annotation data'}
-          className="px-2.5 py-1.5 rounded text-sm border border-white/10 text-slate-300 hover:text-rose-300 hover:border-rose-500/40 disabled:opacity-30 disabled:cursor-not-allowed"
+          className="px-3 sm:px-2.5 py-2.5 sm:py-1.5 rounded text-sm border border-white/10 text-slate-300 hover:text-rose-300 hover:border-rose-500/40 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Remove
         </button>
@@ -719,7 +715,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
 
   return (
     <section className="rounded-lg border border-violet-500/20 bg-[#14171d]/60 p-4 space-y-3">
-      <header className="flex items-baseline justify-between gap-3">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="text-xs uppercase tracking-wider text-violet-300">
           Invite annotator
         </div>
@@ -751,7 +747,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
             value={identity}
             onChange={(e) => setIdentity(e.target.value)}
             placeholder={authMethod === 'google' ? 'jane@example.com' : 'jane or jane@example.com'}
-            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-sm font-mono transition-colors"
+            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-base sm:text-sm font-mono transition-colors"
           />
           {/* Inline auth-method toggle — sits right under the input so the
               label, validation, and preview id all read top-to-bottom. */}
@@ -759,7 +755,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
             <button
               type="button"
               onClick={() => setAuthMethod('identity')}
-              className={`px-2.5 py-1 transition-colors ${authMethod === 'identity' ? 'bg-violet-500/20 text-violet-200' : 'text-slate-400 hover:text-slate-200'}`}
+              className={`px-2.5 py-2.5 sm:py-1 transition-colors ${authMethod === 'identity' ? 'bg-violet-500/20 text-violet-200' : 'text-slate-400 hover:text-slate-200'}`}
             >
               Local
             </button>
@@ -768,7 +764,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
               onClick={() => setAuthMethod('google')}
               disabled={identityHasInput && !looksLikeEmail}
               title={identityHasInput && !looksLikeEmail ? 'Google sign-in needs a valid email' : undefined}
-              className={`px-2.5 py-1 border-l border-white/[0.08] transition-colors ${authMethod === 'google' ? 'bg-violet-500/20 text-violet-200' : 'text-slate-400 hover:text-slate-200 disabled:text-slate-600 disabled:hover:text-slate-600 disabled:cursor-not-allowed'}`}
+              className={`px-2.5 py-2.5 sm:py-1 border-l border-white/[0.08] transition-colors ${authMethod === 'google' ? 'bg-violet-500/20 text-violet-200' : 'text-slate-400 hover:text-slate-200 disabled:text-slate-600 disabled:hover:text-slate-600 disabled:cursor-not-allowed'}`}
             >
               Google verified
             </button>
@@ -806,7 +802,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder={existing?.displayName ?? (identityValid ? trimmedIdentity : 'Jane Doe')}
-            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-sm font-mono transition-colors"
+            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-base sm:text-sm font-mono transition-colors"
           />
           <span className="block mt-1.5 text-xs text-slate-400 font-mono">
             Optional — defaults to the identity above.
@@ -819,7 +815,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
             value={role}
             onChange={(e) => setRole(e.target.value)}
             placeholder="PhD student (optional)"
-            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-sm font-mono transition-colors"
+            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-base sm:text-sm font-mono transition-colors"
           />
         </label>
         <label className="block">
@@ -829,7 +825,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
             value={affiliation}
             onChange={(e) => setAffiliation(e.target.value)}
             placeholder="Tel Aviv University (optional)"
-            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-sm font-mono transition-colors"
+            className="mt-1 w-full px-3 py-2 rounded bg-[#0e1015] border border-white/10 focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-100 text-base sm:text-sm font-mono transition-colors"
           />
         </label>
       </div>
@@ -846,12 +842,12 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
       )}
 
       <div className="flex flex-wrap items-end gap-3">
-        <label className="block">
+        <label className="block w-full sm:w-auto min-w-0">
           <span className="text-xs uppercase tracking-wider text-slate-400">Tier</span>
           <select
             value={tier}
             onChange={(e) => setTier(e.target.value as AccessTier)}
-            className="mt-1 px-3 py-2 rounded bg-[#0e1015] border border-white/10 text-sm text-slate-100"
+            className="mt-1 w-full sm:w-auto max-w-full px-3 py-2.5 sm:py-2 rounded bg-[#0e1015] border border-white/10 text-base sm:text-sm text-slate-100"
           >
             <option value="team">Team — annotate full corpus, see own work only</option>
             <option value="researcher">Researcher — full data access, no member mgmt</option>
@@ -862,7 +858,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
           type="button"
           disabled={!identityValid || busy}
           onClick={() => void submit()}
-          className="ml-auto px-4 py-2 rounded border border-violet-700/50 bg-violet-900/30 text-violet-100 hover:bg-violet-900/50 disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium"
+          className="ml-auto px-4 py-2.5 sm:py-2 rounded border border-violet-700/50 bg-violet-900/30 text-violet-100 hover:bg-violet-900/50 disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium"
         >
           {busy ? 'Inviting…' : 'Invite'}
         </button>
@@ -879,7 +875,7 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
           <div className="mt-2 space-y-1">
             {profiles.map((p) => (
               <div key={p.id} className="flex items-center gap-2 text-sm py-1.5 border-b border-white/[0.04] last:border-b-0">
-                <span className="text-slate-200 truncate flex-1" title={p.id}>
+                <span className="text-slate-200 truncate flex-1 min-w-0" title={p.id}>
                   <span className="font-medium">{p.displayName}</span>
                   {p.email && <span className="text-slate-400"> · {p.email}</span>}
                 </span>

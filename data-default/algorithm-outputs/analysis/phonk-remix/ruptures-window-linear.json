@@ -1,0 +1,45 @@
+{
+  "algorithm": "ruptures-window-linear",
+  "algoName": "Window \u00b7 linear",
+  "search": "Window",
+  "model": "linear",
+  "suffix": "window-linear",
+  "paperSection": "\u00a75.2.1",
+  "methodType": "approximate",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 77.973,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9701,
+      "centroid": 0.7728
+    },
+    {
+      "time": 77.973,
+      "endTime": 136.649,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.9019
+    },
+    {
+      "time": 136.649,
+      "endTime": 169.465,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.6068,
+      "centroid": 1.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    77.973,
+    136.649,
+    169.465
+  ],
+  "computedAt": 1780119225,
+  "elapsedSec": 3.03
+}

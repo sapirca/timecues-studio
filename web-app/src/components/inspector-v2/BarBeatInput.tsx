@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
-import type { TempoAnchor } from '../../types/songInfo';
 import { timeToBarBeat, barBeatToTime } from '../../utils/beatGrid';
+import { barBeatHelpTitle } from '../../utils/beatTimeFormat';
+import { useBarBeatOrigin } from '../../context/SettingsContext';
 
 export interface BarBeatInputProps {
   /** Time in seconds — derived from / written back to the same source-of-truth as the seconds input. */
@@ -9,9 +10,10 @@ export interface BarBeatInputProps {
   bpm?: number;
   gridOffset?: number;
   beatsPerBar?: number;
-  /** Optional tempo anchors — when present, bar.beat walks per-segment BPM
-   *  (Dynamic / Manual grids). When omitted, falls back to a global BPM. */
-  anchors?: readonly TempoAnchor[];
+  /** Resolved grid segments. When the song is split, bar.beat counts in each
+   *  segment's own meter from its own bar 1 — so this readout agrees with the
+   *  ruler the annotator is looking at. */
+  segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
   disabled?: boolean;
   className?: string;
   title?: string;
@@ -19,32 +21,32 @@ export interface BarBeatInputProps {
   minSeconds?: number;
 }
 
-const HELP_TITLE =
-  'bar.beat — e.g. 2.3 = bar 2 beat 3; 2.3.5 = halfway between beat 3 and 4';
-
 export function BarBeatInput({
   value,
   onChange,
   bpm,
   gridOffset = 0,
   beatsPerBar = 4,
-  anchors,
+  segments,
   disabled,
   className,
   title,
   minSeconds,
 }: BarBeatInputProps) {
+  const barBeatOrigin = useBarBeatOrigin();
   const ready = !!bpm && bpm > 0 && beatsPerBar > 0;
   const [editText, setEditText] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const derived = ready ? timeToBarBeat(value, bpm!, gridOffset, beatsPerBar, 3, anchors) ?? '' : '';
+  const derived = ready
+    ? timeToBarBeat(value, bpm!, gridOffset, beatsPerBar, 3, barBeatOrigin, segments) ?? ''
+    : '';
   const display = editText ?? derived;
 
   const commit = () => {
     if (editText == null) return;
     if (!ready) { setEditText(null); return; }
-    const t = barBeatToTime(editText, bpm!, gridOffset, beatsPerBar, anchors);
+    const t = barBeatToTime(editText, bpm!, gridOffset, beatsPerBar, barBeatOrigin, segments);
     if (t != null && Number.isFinite(t)) {
       const clamped = minSeconds != null ? Math.max(minSeconds, t) : t;
       // Only fire onChange if the parsed value differs from current (avoid no-op edits).
@@ -59,7 +61,7 @@ export function BarBeatInput({
       type="text"
       inputMode="decimal"
       value={display}
-      placeholder={ready ? '1.1' : '— BPM —'}
+      placeholder={ready ? `${barBeatOrigin}.${barBeatOrigin}` : '— BPM —'}
       disabled={disabled || !ready}
       onChange={(e) => setEditText(e.target.value)}
       onBlur={commit}
@@ -73,7 +75,7 @@ export function BarBeatInput({
         }
       }}
       className={className}
-      title={title ?? (ready ? HELP_TITLE : 'Set BPM in Song Info to use bar.beat input')}
+      title={title ?? (ready ? barBeatHelpTitle(barBeatOrigin) : 'Set BPM in Song Info to use bar.beat input')}
     />
   );
 }

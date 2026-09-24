@@ -14,7 +14,6 @@ data-default/
   song-info/<slug>.json            # metadata (bpm, time signature, license)
   annotations/
     manual/<annotator>/<slug>.json
-    eye/<annotator>/<slug>.json
     auto-guess/<annotator>/<slug>.json
 ```
 

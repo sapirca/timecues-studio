@@ -84,6 +84,46 @@ def test_job_initial_state():
     assert j.cancel.is_set() is False
     assert isinstance(j.started_at, int) and j.started_at > 0
     assert isinstance(j.id, str) and len(j.id) > 0
+    # 6 stems unless the caller asks otherwise — the UI's default too.
+    assert j.model == stems_server.DEFAULT_MODEL == "6s"
+
+
+def test_job_records_requested_model():
+    assert Job("a-slug", model="4s").model == "4s"
+
+
+# ─── Model selection reaches the CLI ─────────────────────────────────────────
+
+
+def _capture_demucs_cmd(monkeypatch, job: Job) -> list[str]:
+    """Run `_run_separation` with a stubbed Popen and return the argv it built."""
+    captured: list[list[str]] = []
+
+    class _FakeProc:
+        def __init__(self, cmd):
+            captured.append(cmd)
+            self.stdout = iter(["done\n"])
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(
+        stems_server.subprocess, "Popen",
+        lambda cmd, **kwargs: _FakeProc(cmd),
+    )
+    _force_audio(monkeypatch, Path("/songs/song.mp3"))
+    _run_separation(job, force=False)
+    assert captured, "Popen was never called"
+    return captured[0]
+
+
+@pytest.mark.parametrize("model", ["6s", "4s"])
+def test_run_separation_passes_model_to_cli(monkeypatch, model):
+    """The job's model must reach demucs_separator.py as --model, otherwise a
+    4-stem request silently runs the 6-stem model (and takes ~1.5x as long)."""
+    cmd = _capture_demucs_cmd(monkeypatch, Job("song", model=model))
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == model
 
 
 # ─── Edge: no audio → status=error before separator is invoked ───────────────
@@ -119,9 +159,10 @@ def test_status_payload_shape_matches_handler_path():
         "status": job.status,
         "logs": job.logs,
         "startedAt": job.started_at,
+        "model": job.model,
     }
     if job.finished_at is not None:
         payload["finishedAt"] = job.finished_at
-    assert set(payload.keys()) == {"status", "logs", "startedAt", "finishedAt"}
+    assert set(payload.keys()) == {"status", "logs", "startedAt", "finishedAt", "model"}
     assert payload["status"] == "done"
     assert payload["finishedAt"] >= payload["startedAt"]

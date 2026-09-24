@@ -1,4 +1,6 @@
-import type { ManualAnnotation, AutoGuessManualAnnotation } from '../types/manualAnnotation';
+import type { AutoGuessManualAnnotation } from '../types/autoGuess';
+import type { AnnotationLayersDocument } from '../types/annotationLayer';
+import { primaryBoundaryItems } from '../services/annotationLayers';
 
 export interface BoundaryF1 {
   precision: number;
@@ -44,10 +46,11 @@ export function pairwiseBoundaryF1(
   return { precision, recall, f1, hits, refCount: refSorted.length, estCount: estSorted.length };
 }
 
-/** Boundary times from a manual/eye annotation (section start times). */
-export function manualBoundaries(ann: ManualAnnotation | null | undefined): number[] {
-  if (!ann?.sections?.length) return [];
-  return ann.sections.map((s) => s.time).filter((t) => Number.isFinite(t));
+/** Boundary times from an annotator's reference boundaries layer. Agreement
+ *  compares one reading per annotator, so this takes the primary layer — the
+ *  first in document order — rather than merging every layer they drew. */
+export function manualBoundaries(doc: AnnotationLayersDocument | null | undefined): number[] {
+  return primaryBoundaryItems(doc).map((s) => s.time).filter((t) => Number.isFinite(t));
 }
 
 /** Boundary times from an auto-guess annotation: only points marked

@@ -11,7 +11,14 @@
 export const DB_FLOOR = -48;
 const MIN_AMP = Math.pow(10, DB_FLOOR / 20);
 const CLIP_THRESHOLD = 0.99;
-const DEFAULT_BUCKET_SIZE = 512;
+// 64 samples ≈ 1.45 ms at 44.1 kHz. `aggregateRange` snaps to whole buckets,
+// so this is the finest detail the summary path can ever show — at 512 the
+// envelope visibly staircased in ~11.6 ms plateaus once one pixel spanned
+// less than a bucket (roughly 86 px/s, i.e. any real zoom). Cost is 9 bytes
+// per bucket: ~3.6 MB for a 10-minute track, and the build pass is O(samples)
+// either way. Below one bucket per column the renderer stops using the
+// summary altogether — see aggregateExactRange.
+const DEFAULT_BUCKET_SIZE = 64;
 
 export type ScaleMode = 'lin' | 'db';
 
@@ -25,8 +32,6 @@ export interface WaveformSummary {
   bucketSize: number;
   sampleRate: number;
   totalSamples: number;
-  /** Mono PCM (float32, [-1, 1]) — used for sub-sample zoom */
-  mono: Float32Array;
 }
 
 export interface WindowStats {
@@ -35,25 +40,10 @@ export interface WindowStats {
   clipped: boolean;
 }
 
-function toMono(buf: AudioBuffer): Float32Array {
-  const channels = buf.numberOfChannels;
-  const length = buf.length;
-  if (channels === 1) {
-    return new Float32Array(buf.getChannelData(0));
-  }
-  const out = new Float32Array(length);
-  for (let c = 0; c < channels; c++) {
-    const data = buf.getChannelData(c);
-    for (let i = 0; i < length; i++) out[i] += data[i];
-  }
-  const inv = 1 / channels;
-  for (let i = 0; i < length; i++) out[i] *= inv;
-  return out;
-}
-
 export function buildSummary(buf: AudioBuffer, bucketSize = DEFAULT_BUCKET_SIZE): WaveformSummary {
-  const mono = toMono(buf);
-  const total = mono.length;
+  const ch0 = buf.getChannelData(0);
+  const nCh = buf.numberOfChannels;
+  const total = buf.length;
   const numBuckets = Math.ceil(total / bucketSize);
   const peak = new Float32Array(numBuckets);
   const rms = new Float32Array(numBuckets);
@@ -66,7 +56,11 @@ export function buildSummary(buf: AudioBuffer, bucketSize = DEFAULT_BUCKET_SIZE)
     let sumSq = 0;
     let clip = 0;
     for (let i = start; i < end; i++) {
-      const v = mono[i];
+      let v = ch0[i];
+      if (nCh > 1) {
+        for (let c = 1; c < nCh; c++) v += buf.getChannelData(c)[i];
+        v /= nCh;
+      }
       const a = v < 0 ? -v : v;
       if (a > p) p = a;
       sumSq += v * v;
@@ -77,15 +71,7 @@ export function buildSummary(buf: AudioBuffer, bucketSize = DEFAULT_BUCKET_SIZE)
     clipped[b] = clip;
   }
 
-  return {
-    peak,
-    rms,
-    clipped,
-    bucketSize,
-    sampleRate: buf.sampleRate,
-    totalSamples: total,
-    mono,
-  };
+  return { peak, rms, clipped, bucketSize, sampleRate: buf.sampleRate, totalSamples: total };
 }
 
 export function linearToDb(x: number): number {
@@ -114,23 +100,6 @@ export function aggregateRange(s: WaveformSummary, s0: number, s1: number): Wind
   if (b <= a) return { peak: 0, rms: 0, clipped: false };
 
   const bs = s.bucketSize;
-
-  // Short ranges → walk raw samples (avoids edge-quantization error from buckets)
-  if (b - a <= bs * 2) {
-    let p = 0;
-    let sumSq = 0;
-    let clip = false;
-    for (let i = a; i < b; i++) {
-      const v = s.mono[i];
-      const av = v < 0 ? -v : v;
-      if (av > p) p = av;
-      sumSq += v * v;
-      if (av >= CLIP_THRESHOLD) clip = true;
-    }
-    return { peak: p, rms: Math.sqrt(sumSq / (b - a)), clipped: clip };
-  }
-
-  // Wider ranges → use the precomputed summary (fast, slight bucket-edge slop)
   const firstBucket = Math.floor(a / bs);
   const lastBucket = Math.min(s.peak.length, Math.ceil(b / bs));
   let p = 0;
@@ -151,4 +120,40 @@ export function aggregateRange(s: WaveformSummary, s0: number, s1: number): Wind
     rms: count > 0 ? Math.sqrt(sumSq / count) : 0,
     clipped: clip,
   };
+}
+
+/** Exact peak/RMS/clip over [s0, s1) straight from the decoded channels,
+ *  channel-averaged the same way `buildSummary` mixes down.
+ *
+ *  Used when a pixel column spans fewer samples than a summary bucket: there
+ *  `aggregateRange` would round the column out to whole buckets, so several
+ *  neighbouring columns read the same value and the envelope turns into a
+ *  staircase. The visible window at those zooms is a fraction of a second, so
+ *  scanning it per redraw is cheap. */
+export function aggregateExactRange(
+  channels: readonly Float32Array[],
+  s0: number,
+  s1: number,
+  totalSamples: number,
+): WindowStats {
+  const a = Math.max(0, Math.floor(s0));
+  const b = Math.min(totalSamples, Math.ceil(s1));
+  if (b <= a || channels.length === 0) return { peak: 0, rms: 0, clipped: false };
+
+  const nCh = channels.length;
+  let p = 0;
+  let sumSq = 0;
+  let clip = false;
+  for (let i = a; i < b; i++) {
+    let v = channels[0][i];
+    if (nCh > 1) {
+      for (let c = 1; c < nCh; c++) v += channels[c][i];
+      v /= nCh;
+    }
+    const amp = v < 0 ? -v : v;
+    if (amp > p) p = amp;
+    if (amp >= CLIP_THRESHOLD) clip = true;
+    sumSq += v * v;
+  }
+  return { peak: p, rms: Math.sqrt(sumSq / (b - a)), clipped: clip };
 }

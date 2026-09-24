@@ -17,17 +17,11 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   listSpanAlgorithms,
   initializeSpanAlgorithm,
-  type SpanAlgorithmInfo,
 } from '../services/spanDetection';
 import {
   beatnetHealth,
   initializeBeatnet,
-  type BeatnetHealth,
 } from '../services/beatnetDetection';
-import {
-  listLoopAlgorithms,
-  initializeLoopAlgorithm,
-} from '../services/loopDetection';
 import {
   listPannsAlgorithms,
   initializePannsAlgorithm,
@@ -48,12 +42,16 @@ import {
   listLyricsAlgorithms,
   initializeLyricsAlgorithm,
 } from '../services/lyricsDetection';
+import {
+  listPatternAlgorithms,
+  initializePatternAlgorithm,
+} from '../services/patternDetection';
 
 type RowStatus = 'idle' | 'warming' | 'ready' | 'error' | 'unreachable';
 
 interface Row {
   id: string;
-  family: 'span' | 'cue' | 'loop' | 'pitch' | 'panns' | 'cue-extras' | 'percussive' | 'lyrics';
+  family: 'span' | 'cue' | 'loop' | 'pitch' | 'panns' | 'cue-extras' | 'percussive' | 'lyrics' | 'pattern';
   name: string;
   description: string;
   /** Approximate weight size, surfaced before download so the user can opt out. */
@@ -67,6 +65,7 @@ export interface ExperimentalModelsPanelProps {
   cueExtrasEnabled: boolean;
   loopFamilyEnabled: boolean;
   lyricsFamilyEnabled: boolean;
+  patternFamilyEnabled: boolean;
 }
 
 const SPAN_SIZE_BY_ID: Record<string, string> = {
@@ -78,10 +77,6 @@ const PANNS_SIZE_BY_ID: Record<string, string> = {
   'panns-cnn14':     '~80 MB',
 };
 
-const LOOP_SIZE_BY_ID: Record<string, string> = {
-  'chroma-autocorr': 'pure DSP',
-};
-
 const PITCH_SIZE_BY_ID: Record<string, string> = {
   'basic-pitch':     '~5 MB (bundled)',
 };
@@ -90,6 +85,7 @@ const CUE_EXTRAS_SIZE_BY_ID: Record<string, string> = {
   'librosa-key':      'pure DSP',
   'autochord-chords': '~2 MB (pip)',
   'librosa-onsets':   'pure DSP',
+  'drum-transients':  'pure DSP',
 };
 
 const PERCUSSIVE_SIZE_BY_ID: Record<string, string> = {
@@ -97,7 +93,12 @@ const PERCUSSIVE_SIZE_BY_ID: Record<string, string> = {
 };
 
 const LYRICS_SIZE_BY_ID: Record<string, string> = {
-  'whisper-base':     '~140 MB',
+  'whisper-base':       '~140 MB',
+  'ctc-forced-aligner': '~360 MB',
+};
+
+const PATTERN_SIZE_BY_ID: Record<string, string> = {
+  'locomotif':        'pure DSP',
 };
 
 export function ExperimentalModelsPanel({
@@ -105,6 +106,7 @@ export function ExperimentalModelsPanel({
   cueExtrasEnabled,
   loopFamilyEnabled,
   lyricsFamilyEnabled,
+  patternFamilyEnabled,
 }: ExperimentalModelsPanelProps) {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
@@ -177,33 +179,6 @@ export function ExperimentalModelsPanel({
             size: PITCH_SIZE_BY_ID[a.id] ?? '?',
             status: a.available ? 'ready' : 'error',
             error: a.available ? undefined : 'basic_pitch missing in sidecar',
-          });
-        }
-      }
-    }
-
-    if (loopFamilyEnabled) {
-      const loopAlgos = await listLoopAlgorithms();
-      if (loopAlgos === null) {
-        next.push({
-          id: 'loop:unreachable',
-          family: 'loop',
-          name: 'LOOP family server',
-          description: 'Chroma-autocorrelation loop finder.',
-          size: '—',
-          status: 'unreachable',
-          error: 'docker compose --profile experimental-models up --build loop',
-        });
-      } else {
-        for (const a of loopAlgos) {
-          next.push({
-            id: `loop:${a.id}`,
-            family: 'loop',
-            name: a.name,
-            description: a.description,
-            size: LOOP_SIZE_BY_ID[a.id] ?? '?',
-            status: a.available ? 'ready' : 'error',
-            error: a.available ? undefined : 'librosa / numpy missing in sidecar',
           });
         }
       }
@@ -319,9 +294,36 @@ export function ExperimentalModelsPanel({
       }
     }
 
+    if (patternFamilyEnabled) {
+      const patternAlgos = await listPatternAlgorithms();
+      if (patternAlgos === null) {
+        next.push({
+          id: 'pattern:server',
+          family: 'pattern',
+          name: 'PATTERN family server',
+          description: 'LoCoMotif — DTW-warped motif discovery on beat-synchronous chroma.',
+          size: '—',
+          status: 'unreachable',
+          error: 'docker compose --profile experimental-models up --build pattern',
+        });
+      } else {
+        for (const a of patternAlgos) {
+          next.push({
+            id: `pattern:${a.id}`,
+            family: 'pattern',
+            name: a.name,
+            description: a.description,
+            size: PATTERN_SIZE_BY_ID[a.id] ?? '?',
+            status: a.available ? 'ready' : 'error',
+            error: a.available ? undefined : 'dtai-locomotif / librosa missing in sidecar',
+          });
+        }
+      }
+    }
+
     setRows(next);
     setLoading(false);
-  }, [spanFamilyEnabled, cueExtrasEnabled, loopFamilyEnabled, lyricsFamilyEnabled]);
+  }, [spanFamilyEnabled, cueExtrasEnabled, loopFamilyEnabled, lyricsFamilyEnabled, patternFamilyEnabled]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -332,11 +334,11 @@ export function ExperimentalModelsPanel({
     switch (row.family) {
       case 'span':       res = await initializeSpanAlgorithm(algoId); break;
       case 'panns':      res = await initializePannsAlgorithm(algoId); break;
-      case 'loop':       res = await initializeLoopAlgorithm(algoId); break;
       case 'pitch':      res = await initializePitchAlgorithm(algoId); break;
       case 'cue-extras': res = await initializeCueExtrasAlgorithm(algoId); break;
       case 'percussive': res = await initializePercussiveAlgorithm(algoId); break;
       case 'lyrics':     res = await initializeLyricsAlgorithm(algoId); break;
+      case 'pattern':    res = await initializePatternAlgorithm(algoId); break;
       default:           res = await initializeBeatnet();
     }
     setRows((prev) => prev.map((r) => r.id === row.id
@@ -351,7 +353,7 @@ export function ExperimentalModelsPanel({
     }
   }, [rows, initOne]);
 
-  if (!spanFamilyEnabled && !cueExtrasEnabled && !loopFamilyEnabled && !lyricsFamilyEnabled) return null;
+  if (!spanFamilyEnabled && !cueExtrasEnabled && !loopFamilyEnabled && !lyricsFamilyEnabled && !patternFamilyEnabled) return null;
 
   // Sum the MB hint baked into each row's `size` string so the user knows
   // the rough bandwidth cost before clicking "Initialize all". Rows that

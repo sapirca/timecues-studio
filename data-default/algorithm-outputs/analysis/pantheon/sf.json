@@ -1,0 +1,94 @@
+{
+  "algorithm": "sf",
+  "algoName": "Structural Features (SF)",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 0.325,
+      "type": "intro",
+      "label": "Intro",
+      "energy": 0.2224,
+      "centroid": 0.8716
+    },
+    {
+      "time": 0.325,
+      "endTime": 11.378,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.665,
+      "centroid": 0.6983
+    },
+    {
+      "time": 11.378,
+      "endTime": 47.044,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9466,
+      "centroid": 0.7443
+    },
+    {
+      "time": 47.044,
+      "endTime": 65.712,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9995,
+      "centroid": 1.0
+    },
+    {
+      "time": 65.712,
+      "endTime": 82.709,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9795,
+      "centroid": 0.9545
+    },
+    {
+      "time": 82.709,
+      "endTime": 100.217,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9222,
+      "centroid": 0.5477
+    },
+    {
+      "time": 100.217,
+      "endTime": 125.156,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.8749
+    },
+    {
+      "time": 125.156,
+      "endTime": 192.401,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.926,
+      "centroid": 0.9073
+    },
+    {
+      "time": 192.401,
+      "endTime": 192.409,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    0.325,
+    11.378,
+    47.044,
+    65.712,
+    82.709,
+    100.217,
+    125.156,
+    192.401,
+    192.409
+  ],
+  "computedAt": 1780118810,
+  "elapsedSec": 21.34
+}

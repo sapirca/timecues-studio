@@ -12,14 +12,14 @@
  *   • REAPER region/marker CSV (.csv) — detected by header sniff
  *
  * Audacity / Sonic Vis / mir_eval / REAPER are flat boundary-list formats,
- * so the parser returns plain `ManualSection[]` and the caller wraps it into
+ * so the parser returns plain `SectionBlock[]` and the caller wraps it into
  * the right annotation shape. JSON returns the full parsed object so
- * callers can preserve unknown fields (e.g. `eye_status`, `ready_for_review`).
+ * callers can preserve unknown fields (e.g. `auto_guess_status`, `ready_for_review`).
  * JAMS keeps just the segments — the `file_metadata` block is discarded
  * because it does not map onto any TimeCues field.
  */
 
-import type { ManualSection } from '../types/manualAnnotation';
+import type { SectionBlock } from '../types/sectionBlock';
 
 const ALLOWED_TYPES = new Set([
   'intro', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence',
@@ -39,8 +39,8 @@ function titleCase(s: string): string {
 // ─── TimeCues JSON ───────────────────────────────────────────────────────────
 
 export interface ParsedJsonAnnotation {
-  sections: ManualSection[];
-  /** Remaining top-level fields (song, reviewed, annotated_at, eye_status, …). */
+  sections: SectionBlock[];
+  /** Remaining top-level fields (song, reviewed, annotated_at, auto_guess_status, …). */
   rest: Record<string, unknown>;
 }
 
@@ -52,13 +52,13 @@ export function parseTimeCuesJson(text: string): ParsedJsonAnnotation {
   if (!Array.isArray(obj.sections)) {
     throw new Error('JSON has no `sections` array.');
   }
-  const sections: ManualSection[] = obj.sections
-    .map((s: Record<string, unknown>): ManualSection | null => {
+  const sections: SectionBlock[] = obj.sections
+    .map((s: Record<string, unknown>): SectionBlock | null => {
       const time = Number(s.time);
       if (!Number.isFinite(time)) return null;
       const type = normalizeType(typeof s.type === 'string' ? s.type : undefined);
       const label = typeof s.label === 'string' && s.label ? s.label : titleCase(type);
-      const out: ManualSection = { time, type, label };
+      const out: SectionBlock = { time, type, label };
       if (s.importance === 'optional' || s.importance === 'critical') out.importance = s.importance;
       if (Array.isArray(s.candidates)) {
         const cands = s.candidates.map(Number).filter(Number.isFinite);
@@ -66,7 +66,7 @@ export function parseTimeCuesJson(text: string): ParsedJsonAnnotation {
       }
       return out;
     })
-    .filter((s: ManualSection | null): s is ManualSection => s !== null);
+    .filter((s: SectionBlock | null): s is SectionBlock => s !== null);
   if (!sections.length) throw new Error('JSON contains no valid sections.');
   sections.sort((a, b) => a.time - b.time);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -76,8 +76,8 @@ export function parseTimeCuesJson(text: string): ParsedJsonAnnotation {
 
 // ─── Audacity Label Track ────────────────────────────────────────────────────
 
-export function parseAudacity(text: string): ManualSection[] {
-  const sections: ManualSection[] = [];
+export function parseAudacity(text: string): SectionBlock[] {
+  const sections: SectionBlock[] = [];
   for (const rawLine of text.split('\n')) {
     const line = rawLine.replace(/\r$/, '').trim();
     if (!line) continue;
@@ -96,8 +96,8 @@ export function parseAudacity(text: string): ManualSection[] {
 
 // ─── Sonic Visualiser CSV ────────────────────────────────────────────────────
 
-export function parseSonicVisualiser(text: string): ManualSection[] {
-  const sections: ManualSection[] = [];
+export function parseSonicVisualiser(text: string): SectionBlock[] {
+  const sections: SectionBlock[] = [];
   for (const rawLine of text.split('\n')) {
     const line = rawLine.replace(/\r$/, '');
     if (!line.trim()) continue;
@@ -142,11 +142,11 @@ function parseCsvRow(line: string): string[] {
 //
 // Reads the first segment-style annotation (`segment_open`,
 // `segment_salami_*`, or anything starting with `segment`) and converts each
-// observation's `time` + `value` to a ManualSection. JAMS may carry
-// `duration` on each observation; we drop it because ManualSection encodes
+// observation's `time` + `value` to a SectionBlock. JAMS may carry
+// `duration` on each observation; we drop it because SectionBlock encodes
 // duration implicitly via the *next* section's time. Tolerant of empty
 // `value` (falls back to inferred type label).
-export function parseJams(text: string): ManualSection[] {
+export function parseJams(text: string): SectionBlock[] {
   let obj: unknown;
   try { obj = JSON.parse(text); }
   catch { throw new Error('Not valid JSON — JAMS files are JSON.'); }
@@ -167,7 +167,7 @@ export function parseJams(text: string): ManualSection[] {
     throw new Error('No `segment_*` annotation found in JAMS file.');
   }
   const data = ann.data as unknown[];
-  const sections: ManualSection[] = [];
+  const sections: SectionBlock[] = [];
   for (const obs of data) {
     if (!obs || typeof obs !== 'object') continue;
     const time = Number((obs as Record<string, unknown>).time);
@@ -194,8 +194,8 @@ export function parseJams(text: string): ManualSection[] {
 // Rejects rows that look like Audacity intervals (3+ tab-separated columns
 // where columns 1 and 2 both parse as numbers) so the user does not pick
 // the wrong importer accidentally.
-export function parseMirEvalLab(text: string): ManualSection[] {
-  const sections: ManualSection[] = [];
+export function parseMirEvalLab(text: string): SectionBlock[] {
+  const sections: SectionBlock[] = [];
   for (const rawLine of text.split('\n')) {
     const line = rawLine.replace(/\r$/, '').trim();
     if (!line) continue;
@@ -224,15 +224,15 @@ export function parseMirEvalLab(text: string): ManualSection[] {
 // Header: `#,Name,Start,End,Length,Color`. Row kinds are `R<n>` (region:
 // has End + Length) or `M<n>` (marker: empty End/Length). Time format is
 // `H:MM:SS.mmm`, but REAPER also accepts `M:SS.mmm` and plain seconds, so
-// we are lenient. Duration is dropped (ManualSection encodes it via the next
+// we are lenient. Duration is dropped (SectionBlock encodes it via the next
 // row's time).
-export function parseReaperCsv(text: string): ManualSection[] {
+export function parseReaperCsv(text: string): SectionBlock[] {
   const lines = text.split('\n')
     .map((l) => l.replace(/\r$/, ''))
     .filter((l) => l.trim());
   if (!lines.length) throw new Error('Empty REAPER CSV.');
 
-  const sections: ManualSection[] = [];
+  const sections: SectionBlock[] = [];
   for (const line of lines) {
     const fields = parseCsvRow(line);
     if (fields.length < 3) continue;

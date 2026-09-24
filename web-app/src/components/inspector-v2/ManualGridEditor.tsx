@@ -1,4 +1,4 @@
-// Interactive beat-line editor for DataPrep's "Manual adjustment" mode.
+// Interactive beat-line editor for DataPrep's "Hand-placed" grid mode.
 //
 // A thin horizontal track sitting above the main waveform. Each visible
 // beat from the current grid is grabbable — pointer-down on a line tracks
@@ -21,15 +21,11 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { visibleGridLines } from '../../utils/beatGrid';
-import type { TempoAnchor } from '../../types/songInfo';
 
 export interface ManualGridEditorProps {
   bpm: number;
   gridOffset: number;
   beatsPerBar: number;
-  /** Current anchors. The grid lines render with these in effect, so the
-   *  user sees the live state and grabs from where it is now. */
-  anchors?: readonly TempoAnchor[];
   /** Current per-beat overrides — included so the rendered grid shows
    *  pinned beats at their override positions (and so the right-click
    *  clear knows what's currently pinned). */
@@ -74,7 +70,6 @@ export function ManualGridEditor({
   bpm,
   gridOffset,
   beatsPerBar,
-  anchors,
   beatOverrides,
   duration,
   height = 28,
@@ -97,10 +92,9 @@ export function ManualGridEditor({
       beatsPerBar,
       startTime: 0,
       endTime: duration,
-      anchors,
       beatOverrides,
     });
-  }, [bpm, gridOffset, beatsPerBar, anchors, beatOverrides, duration]);
+  }, [bpm, gridOffset, beatsPerBar, beatOverrides, duration]);
 
   if (duration <= 0 || lines.length === 0) return null;
 

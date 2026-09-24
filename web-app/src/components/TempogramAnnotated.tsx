@@ -13,14 +13,22 @@
  * by snapping each target to the nearest log-spaced row.
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { visibleGridLines } from '../utils/beatGrid';
+import { useCallback, useRef } from 'react';
+import { TiledStrip, type TileGeom } from './TiledStrip';
+import { drawBeatGrid } from '../utils/gridLineStyle';
+import { frameAxis, derivedAxis, frameAtColumn, type FrameAxis } from '../utils/frameTime';
 
 export interface Props {
   /** Row-major tempogram matrix: length = tempogramFrameCount × nTempo. Index = tempoFrame * nTempo + bin. */
   tempogram: Float32Array;
   nTempo: number;
   tempogramFrameCount: number;
+  /** Framing of the underlying STFT run — see utils/frameTime. The tempogram's
+   *  own axis is derived from it (one output frame every 4 input frames, each
+   *  autocorrelation window centred on its input frame). */
+  hopSize?: number;
+  fftSize?: number;
+  sampleRate?: number;
   /** BPM value at each tempo row (length = nTempo). Used for y-axis labelling. */
   tempoBpm: Float32Array;
   duration: number;
@@ -64,20 +72,23 @@ function magmaRGB(t: number): [number, number, number] {
 }
 
 function buildTempogramImage(
-  tempogram: Float32Array, nTempo: number, tempogramFrameCount: number,
+  tempogram: Float32Array, nTempo: number,
   W: number, H: number,
   ctx: CanvasRenderingContext2D,
+  axis: FrameAxis, duration: number,
+  colOffset = 0, colCount = W,
 ): ImageData {
-  const img = ctx.createImageData(W, H);
-  for (let col = 0; col < W; col++) {
-    const srcFrame = Math.min(tempogramFrameCount - 1, Math.floor((col / W) * tempogramFrameCount));
+  // W is the whole strip; the image covers [colOffset, colOffset + colCount).
+  const img = ctx.createImageData(colCount, H);
+  for (let col = 0; col < colCount; col++) {
+    const srcFrame = frameAtColumn(colOffset + col, W, duration, axis);
     const fOff = srcFrame * nTempo;
     for (let row = 0; row < H; row++) {
       // Top row = highest BPM (last index in tempoBpm), bottom = slowest.
       const bin = (nTempo - 1) - Math.floor((row / H) * nTempo);
       const v = tempogram[fOff + bin];
       const [r, g, b] = magmaRGB(v);
-      const idx = (row * W + col) * 4;
+      const idx = (row * colCount + col) * 4;
       img.data[idx]     = r;
       img.data[idx + 1] = g;
       img.data[idx + 2] = b;
@@ -121,42 +132,6 @@ function drawBpmLabels(ctx: CanvasRenderingContext2D, W: number, H: number, nTem
   }
 }
 
-function drawBeatGrid(
-  ctx: CanvasRenderingContext2D, W: number, H: number,
-  duration: number, beatTimes?: number[], bpm?: number, beatOffset = 0, beatsPerBar = 4, barGroupSize?: number,
-  beatGroupSize?: number,
-  dpr = 1,
-  gridThickness = 1,
-) {
-  if (!duration || !bpm) return;
-  const anchor = beatOffset > 0 ? beatOffset : (beatTimes && beatTimes.length > 0 ? beatTimes[0] : 0);
-  const lines = visibleGridLines({
-    bpm, gridOffset: anchor, beatsPerBar,
-    startTime: 0, endTime: duration,
-    barGroupSize: barGroupSize ?? null,
-    beatGroupSize,
-  });
-  if (lines.length < 2) return;
-  const pxPerBeat = ((60 / bpm) / duration) * W;
-  const step = (barGroupSize == null) ? Math.max(1, Math.ceil(5 / pxPerBeat)) : 1;
-  ctx.save();
-  for (let i = 0; i < lines.length; i++) {
-    if (step > 1 && i % step !== 0) continue;
-    const { t, isBar, isPhrase } = lines[i];
-    const x = (t / duration) * W;
-    if (barGroupSize != null) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.5)';
-      ctx.lineWidth   = 2 * dpr * gridThickness;
-    } else {
-      ctx.strokeStyle = isPhrase ? 'rgba(251,191,36,0.50)'
-        : isBar ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.09)';
-      ctx.lineWidth = (isBar ? (1.5 * dpr) : (1 * dpr)) * gridThickness;
-    }
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  ctx.restore();
-}
-
 function drawPlayhead(ctx: CanvasRenderingContext2D, W: number, H: number, t: number, duration: number, dpr = 1) {
   if (t < 0 || !duration) return;
   const x = Math.round((t / duration) * W);
@@ -174,20 +149,14 @@ function drawPlayhead(ctx: CanvasRenderingContext2D, W: number, H: number, t: nu
   ctx.restore();
 }
 
-// ── Cache ───────────────────────────────────────────────────────────────────────
-interface TempoCache {
-  tempogramRef: Float32Array;
-  imgData: ImageData;
-  W: number;
-  H: number;
-  dpr: number;
-}
-
 // ── Component ───────────────────────────────────────────────────────────────────
 export function TempogramAnnotated({
   tempogram,
   nTempo,
   tempogramFrameCount,
+  hopSize,
+  fftSize,
+  sampleRate,
   tempoBpm,
   duration,
   beatTimes,
@@ -200,96 +169,58 @@ export function TempogramAnnotated({
   currentTime = 0,
   height = 90,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cacheRef = useRef<TempoCache | null>(null);
-  const [ready, setReady] = useState(false);
-  const [canvasSize, setCanvasSize] = useState(() => ({
-    cssWidth: 900,
-    cssHeight: Math.max(1, Math.round(height)),
-    dpr: window.devicePixelRatio || 1,
-  }));
+  const baseAxis = hopSize && fftSize && sampleRate
+    ? frameAxis(hopSize, fftSize, sampleRate, 0)
+    : null;
+  // One output frame every 4 input frames, each autocorrelation window centred
+  // on its input frame — so groupSize is 1, not 4.
+  const frameAxisRef = useRef<FrameAxis>({ step: 0, offset: 0, count: 0 });
+  frameAxisRef.current = baseAxis
+    ? derivedAxis(baseAxis, 4, tempogramFrameCount, 1)
+    : { step: duration / Math.max(1, tempogramFrameCount), offset: 0, count: tempogramFrameCount };
+  const axis = frameAxisRef.current;
 
-  useEffect(() => {
-    const update = () => {
-      const cssWidth = Math.max(1, Math.round(containerRef.current?.clientWidth ?? 900));
-      const cssHeight = Math.max(1, Math.round(height));
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      setCanvasSize((prev) => (
-        prev.cssWidth === cssWidth && prev.cssHeight === cssHeight && prev.dpr === dpr
-          ? prev
-          : { cssWidth, cssHeight, dpr }
-      ));
-    };
-    update();
-    const ro = containerRef.current ? new ResizeObserver(update) : null;
-    if (containerRef.current && ro) ro.observe(containerRef.current);
-    window.addEventListener('resize', update);
-    return () => { ro?.disconnect(); window.removeEventListener('resize', update); };
-  }, [height]);
+  const hasData = tempogramFrameCount > 0 && tempogram.length > 0;
 
-  const pixelWidth  = Math.max(1, Math.round(canvasSize.cssWidth * canvasSize.dpr));
-  const pixelHeight = Math.max(1, Math.round(canvasSize.cssHeight * canvasSize.dpr));
+  const paint = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom) => {
+    if (!hasData) return;
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    const colOffset = Math.round(tile.x0 * tile.dpr);
+    const colCount = Math.max(1, Math.round(tile.w * tile.dpr));
+    const img = buildTempogramImage(tempogram, nTempo, totalPx, H, ctx, axis, duration, colOffset, colCount);
+    ctx.putImageData(img, 0, 0);
+  }, [tempogram, nTempo, axis, duration, hasData]);
 
-  const overlayRef = useRef({ duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, beatGroupSize, gridThickness });
-  useEffect(() => { overlayRef.current = { duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, beatGroupSize, gridThickness }; });
-
-  const drawFrame = useCallback((headTime: number) => {
-    const canvas = canvasRef.current;
-    const cache  = cacheRef.current;
-    if (!canvas || !cache) return;
-    const ctx = canvas.getContext('2d')!;
-    const { imgData, W, H, dpr } = cache;
-    const { duration: dur, beatTimes: bt, bpm: b, beatOffset: bo, beatsPerBar: bpb, barGroupSize: bgs, beatGroupSize: bgrp, gridThickness: gt } = overlayRef.current;
-    ctx.putImageData(imgData, 0, 0);
-    drawBpmLabels(ctx, W, H, nTempo, tempoBpm, dpr);
-    drawBeatGrid(ctx, W, H, dur, bt, b, bo, bpb, bgs, bgrp, dpr, gt);
-    drawPlayhead(ctx, W, H, headTime, dur, dpr);
-  }, [nTempo, tempoBpm]);
-
-  // Phase 1: build ImageData when source data / canvas size changes.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    if (tempogramFrameCount <= 0 || tempogram.length === 0) { setReady(false); return; }
-    setReady(false);
-    let cancelled = false;
-
-    const timer = setTimeout(() => {
-      if (cancelled) return;
-      const W = canvas.width, H = canvas.height;
-      const ctx = canvas.getContext('2d')!;
-      const img = buildTempogramImage(tempogram, nTempo, tempogramFrameCount, W, H, ctx);
-      if (cancelled) return;
-      cacheRef.current = {
-        tempogramRef: tempogram, imgData: img, W, H, dpr: canvasSize.dpr,
-      };
-      setReady(true);
-    }, 16);
-
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [tempogram, nTempo, tempogramFrameCount, canvasSize.cssWidth, canvasSize.cssHeight, canvasSize.dpr]);
-
-  // Phase 2: redraw overlays on time / grid change.
-  useEffect(() => {
-    if (!ready) return;
-    drawFrame(currentTime);
-  }, [ready, currentTime, duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, beatGroupSize, gridThickness, drawFrame]);
+  const overlay = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => {
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    ctx.save();
+    ctx.translate(-Math.round(tile.x0 * tile.dpr), 0);
+    drawBpmLabels(ctx, totalPx, H, nTempo, tempoBpm, tile.dpr);
+    drawBeatGrid(ctx, {
+      W: totalPx, H, dpr: tile.dpr, thickness: gridThickness,
+      duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, beatGroupSize,
+    });
+    if (focusX != null) drawPlayhead(ctx, totalPx, H, focusX, tile.totalW, tile.dpr);
+    ctx.restore();
+  }, [nTempo, tempoBpm, gridThickness, duration, beatTimes, bpm, beatOffset,
+      beatsPerBar, barGroupSize, beatGroupSize]);
 
   return (
-    <div ref={containerRef} className="relative w-full min-w-0">
-      <canvas
-        ref={canvasRef}
-        width={pixelWidth}
-        height={pixelHeight}
-        className="rounded bg-gray-900 block w-full"
-        style={{ height: `${canvasSize.cssHeight}px` }}
-      />
-      {!ready && (
+    <TiledStrip
+      height={Math.max(1, Math.round(height))}
+      paint={paint}
+      overlay={overlay}
+      overlayFocus={duration > 0 ? currentTime / duration : null}
+      className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
+    >
+      {!hasData && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900/70 rounded text-xs text-gray-400 animate-pulse pointer-events-none">
           Computing tempogram…
         </div>
       )}
-    </div>
+    </TiledStrip>
   );
 }

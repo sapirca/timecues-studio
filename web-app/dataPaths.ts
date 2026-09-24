@@ -29,10 +29,20 @@ const ANNOTATIONS_ROOT       = path.join(DATA_ROOT, 'annotations')
 const ALGORITHM_OUTPUTS_ROOT = path.join(DATA_ROOT, 'algorithm-outputs')
 const DEFAULT_ANNOTATIONS_ROOT = path.join(DEFAULT_DATA_ROOT, 'annotations')
 
+// The shipped twin of ALGORITHM_OUTPUTS_ROOT. Detector output for the three
+// CC0 demo songs is committed under data-default/ so a deployment that runs no
+// experimental sidecars can still SHOW their lanes — the hosted demo runs none
+// of them (they don't fit the VM), and without this it answers 503 for every
+// cue/span/pattern family even though the answers are sitting in the image.
+// Exported as a root, not a per-family map, so the family's own subdirectory
+// name is derived from DATA_DIRS rather than spelled twice.
+export const ALGO_OUTPUTS_ROOTS = {
+  data:    ALGORITHM_OUTPUTS_ROOT,
+  shipped: path.join(DEFAULT_DATA_ROOT, 'algorithm-outputs'),
+} as const
+
 export const DATA_DIRS = {
   // Annotation folders (per-annotator subdirs: <dir>/<annotator>/<slug>.json)
-  manualAnnotations:      path.join(ANNOTATIONS_ROOT, 'manual'),
-  eyeAnnotations:       path.join(ANNOTATIONS_ROOT, 'eye'),
   autoGuessAnnotations: path.join(ANNOTATIONS_ROOT, 'auto-guess'),
 
   // Custom-script annotations (per-script subdir + per-annotator subdir):
@@ -42,6 +52,17 @@ export const DATA_DIRS = {
   // Annotation-layers documents (per-annotator subdir, one file per song):
   // <dir>/<annotator>/<slug>.json — holds cues/spans/loops/patterns together.
   annotationLayers:     path.join(ANNOTATIONS_ROOT, 'layers'),
+
+  // Shared (collaboratively edited) songs — one FOLDER per slug, not a file:
+  // <dir>/<slug>/layers.json plus <dir>/<slug>/.git, a real repo carrying one
+  // commit per hand-off of the edit lease. The folder's existence is what
+  // makes a song shared. See web-app/server/sharedAnnotations.ts.
+  sharedAnnotations:    path.join(ANNOTATIONS_ROOT, 'shared'),
+
+  // Edit leases for shared songs: <dir>/<slug>.json. Deliberately OUTSIDE the
+  // per-song git repos — locking and unlocking happens constantly and changes
+  // no annotation, so it must not appear in the version history.
+  annotationLocks:      path.join(ANNOTATIONS_ROOT, 'locks'),
 
   // Algorithm output caches (flat: <dir>/<slug>.json)
   analysis:       path.join(ALGORITHM_OUTPUTS_ROOT, 'analysis'),
@@ -62,6 +83,13 @@ export const DATA_DIRS = {
   span:            path.join(ALGORITHM_OUTPUTS_ROOT, 'span'),
   // BeatNet (experimental CUE-family). Flat layout, one file per slug.
   beatnet:         path.join(ALGORITHM_OUTPUTS_ROOT, 'beatnet'),
+  // Beat This! (experimental CUE-family). Flat layout, one file per slug.
+  // Its payload also carries fitted grid segments, which no other detector
+  // produces — see tools/python/beat_segments.py.
+  beatThis:        path.join(ALGORITHM_OUTPUTS_ROOT, 'beat-this'),
+  // Beat Transformer (experimental CUE-family). Flat layout, one file per
+  // slug. The only detector that reads Demucs STEMS rather than the mix.
+  beatTransformer: path.join(ALGORITHM_OUTPUTS_ROOT, 'beat-transformer'),
   // PANNs AudioSet tagging (SPAN family, separate sidecar). Per-slug subdir.
   panns:           path.join(ALGORITHM_OUTPUTS_ROOT, 'panns'),
   // LOOP family — chroma autocorrelation v0. Per-slug subdir.
@@ -74,6 +102,8 @@ export const DATA_DIRS = {
   percussive:      path.join(ALGORITHM_OUTPUTS_ROOT, 'percussive'),
   // Whisper-base lyrics transcription (LYRICS family).
   lyrics:          path.join(ALGORITHM_OUTPUTS_ROOT, 'lyrics'),
+  // LoCoMotif motif discovery (PATTERN family). Per-slug subdir.
+  pattern:         path.join(ALGORITHM_OUTPUTS_ROOT, 'pattern'),
 
   // Per-song metadata (<dir>/<slug>.json)
   songInfo: path.join(DATA_ROOT, 'song-info'),
@@ -92,6 +122,12 @@ export const DATA_DIRS = {
   // alignment source for SOFA / ctc-forced-aligner when those land.
   // Experimental: gated by `experimentalLyricsFamily` user setting.
   lyricsText: path.join(DATA_ROOT, 'lyrics-text'),
+
+  // Saved Setlists (per-annotator: <dir>/<annotator>/<name>.json). Each file
+  // is an ordered list of slugs + the scoring strategy that produced it. New
+  // top-level workspace at /setlist, gated by the `experimentalSetlist`
+  // user setting.
+  setlists: path.join(DATA_ROOT, 'setlists'),
 } as const
 
 // Single-file paths (not directories). Stored under DATA_ROOT.
@@ -104,8 +140,6 @@ export const DATA_FILES = {
 // shipped seed content; other entries are intentionally undefined so the
 // resolver below falls through cleanly.
 export const DEFAULT_DATA_DIRS = {
-  manualAnnotations:      path.join(DEFAULT_ANNOTATIONS_ROOT, 'manual'),
-  eyeAnnotations:       path.join(DEFAULT_ANNOTATIONS_ROOT, 'eye'),
   autoGuessAnnotations: path.join(DEFAULT_ANNOTATIONS_ROOT, 'auto-guess'),
   songInfo:             path.join(DEFAULT_DATA_ROOT, 'song-info'),
   songs:                path.join(DEFAULT_DATA_ROOT, 'songs'),
@@ -120,9 +154,11 @@ export const DEFAULT_DATA_DIRS = {
 // plugins. These are decoupled from on-disk paths so we can rename folders
 // without breaking the wire format.
 export const API_PATHS = {
-  manualAnnotations:      '/api/manual-annotations',
-  eyeAnnotations:       '/api/eye-annotations',
   autoGuessAnnotations: '/api/auto-guess-annotations',
+  annotationLayers:     '/api/annotation-layers',
+  annotationLocks:      '/api/annotation-locks',
+  annotationHistory:    '/api/annotation-history',
+  sharedAnnotations:    '/api/shared-annotations',
   annotationTimes:      '/api/annotation-times',
   songInfo:             '/api/song-info',
   datasetConfig:        '/api/dataset-config',

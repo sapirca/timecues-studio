@@ -1,7 +1,7 @@
 """BPM-server detector + cache tests.
 
 The web app reads beat times and BPM straight out of these dicts to populate
-SongInfo / TempoAnchors. Schema drift here breaks the entire beat grid
+SongInfo. Schema drift here breaks the entire beat grid
 silently, so this test pins:
 
   * Each enabled detector function returns the dict shape the web side
@@ -36,7 +36,6 @@ librosa = pytest.importorskip("librosa")
 
 import bpm_server  # noqa: E402
 from bpm_server import (  # noqa: E402
-    compute_tempo_curve,
     detect_librosa_beat_track,
     detect_librosa_tempo_dynamic,
     detect_librosa_tempo_static,
@@ -128,23 +127,6 @@ def test_librosa_tempo_dynamic_schema(click_120):
     _assert_response_shape(r, _OK_FIELDS_TEMPO)
 
 
-def test_compute_tempo_curve_schema(click_120):
-    y, sr = click_120
-    r = compute_tempo_curve(y, sr)
-    assert r["source"] == "librosa-tempo-curve"
-    assert r["ok"] in (True, False)
-    if r["ok"]:
-        assert isinstance(r["frame_times"], list)
-        assert isinstance(r["bpms"], list)
-        assert len(r["frame_times"]) == len(r["bpms"])
-        assert len(r["frame_times"]) > 0
-        assert r["hop_length"] == 512
-        assert r["sr"] == sr
-
-
-# ─── Numerical sanity: detectors find 120 BPM on the synthetic click ─────────
-
-
 def test_tempo_static_detects_120_bpm(click_120):
     """tempo_static is the reliable BPM detector on synthetic input.
     Octave errors (60/240) are a known librosa weakness — accept any
@@ -213,3 +195,185 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
     assert fail_result["ok"] is False
     assert "error" in fail_result
     assert "bpm" not in fail_result
+
+
+# ─── Ranged detection (one grid segment, not the whole song) ────────────────
+#
+# DataPrep's Mapped grid mode splits a song into segments that each restart
+# the count with their own tempo. Detecting from the whole file answers about
+# neither half of a song that changes tempo, so /api/bpm/detect takes an
+# optional {start, end} and the detectors see only that span. What has to
+# hold, and is easy to get silently wrong:
+#
+#   * the span is validated, so a segment too short to read a tempo from gets
+#     an error instead of a confident wrong number;
+#   * the file-based detectors get a real file holding only the span, and it
+#     is cleaned up;
+#   * every timestamp comes back in SONG time, not span-local time — an
+#     unshifted result drops the segment's beats at 0:00;
+#   * a ranged result never touches the whole-song cache, in either direction.
+
+
+from server_common import (  # noqa: E402
+    MIN_RANGE_SECONDS, parse_range, shift_times, trimmed_audio,
+)
+
+soundfile = pytest.importorskip("soundfile")
+
+
+def test_parse_range_absent_means_whole_song():
+    assert parse_range({"slug": "x"}) is None
+    assert parse_range({"slug": "x", "force": True}) is None
+
+
+def test_parse_range_reads_a_span():
+    assert parse_range({"start": 10.5, "end": 41.25}) == (10.5, 41.25)
+    # Strings are what a JSON body from a form-ish client actually carries.
+    assert parse_range({"start": "10.5", "end": "41.25"}) == (10.5, 41.25)
+
+
+@pytest.mark.parametrize("body", [
+    {"start": 10.0, "end": 10.5},          # shorter than the floor
+    {"start": 10.0, "end": 9.0},           # inverted
+    {"start": -1.0, "end": 20.0},          # before the song
+    {"start": 10.0, "end": None},          # half a range
+    {"start": "soon", "end": 20.0},        # not a number
+    {"start": 0.0, "end": float("inf")},   # unbounded
+])
+def test_parse_range_rejects_unusable_spans(body):
+    """A bad range must raise, not fall back to the whole song — a whole-song
+    tempo silently attributed to a segment is the exact bug this endpoint
+    exists to prevent."""
+    with pytest.raises(ValueError):
+        parse_range(body)
+
+
+def test_shift_times_moves_timestamps_into_song_time():
+    r = {"beat_times": [0.0, 0.5, 1.0], "downbeats": [0.0, 1.0], "bpm": 120.0}
+    shift_times(r, 41.108)
+    assert r["beat_times"] == pytest.approx([41.108, 41.608, 42.108])
+    assert r["downbeats"] == pytest.approx([41.108, 42.108])
+    assert r["bpm"] == 120.0  # not a timestamp — untouched
+
+
+def test_shift_times_is_a_noop_at_zero():
+    r = {"beat_times": [0.0, 0.5]}
+    assert shift_times(r, 0.0)["beat_times"] == [0.0, 0.5]
+
+
+def _write_wav(path: Path, y: np.ndarray, sr: int) -> Path:
+    soundfile.write(str(path), y, sr)
+    return path
+
+
+def test_trimmed_audio_holds_only_the_span(tmp_path, click_120):
+    y, sr = click_120  # 8 s
+    src = _write_wav(tmp_path / "song.wav", y, sr)
+    with trimmed_audio(src, 2.0, 5.0) as trimmed:
+        assert trimmed.exists()
+        assert trimmed != src
+        assert librosa.get_duration(path=str(trimmed)) == pytest.approx(3.0, abs=0.05)
+    assert not trimmed.exists()   # cleaned up
+    assert src.exists()           # and the song itself is untouched
+
+
+def test_trimmed_audio_cleans_up_when_the_detector_raises(tmp_path, click_120):
+    y, sr = click_120
+    src = _write_wav(tmp_path / "song.wav", y, sr)
+    leaked = None
+    with pytest.raises(RuntimeError):
+        with trimmed_audio(src, 1.0, 4.0) as trimmed:
+            leaked = trimmed
+            raise RuntimeError("detector blew up")
+    assert leaked is not None and not leaked.exists()
+
+
+def _two_tempo_song(sr: int = 22050) -> tuple[np.ndarray, int]:
+    """24 s: 100 BPM for the first 12, then 150 BPM. A single whole-song
+    estimate is wrong for both halves — which is the whole reason segments
+    get their own detection."""
+    halves = []
+    rng = np.random.RandomState(7)
+    win = np.cos(np.linspace(-np.pi / 2, np.pi / 2, 2048)) ** 2
+    for bpm in (100.0, 150.0):
+        n = int(sr * 12.0)
+        y = (0.2 * np.sin(2 * np.pi * 220 * (np.arange(n) / sr))).astype(np.float32)
+        for click_t in np.arange(0.0, 12.0, 60.0 / bpm):
+            start = int(click_t * sr)
+            end = min(start + len(win), n)
+            y[start:end] += rng.randn(end - start).astype(np.float32) * win[: end - start] * 0.7
+        halves.append(y)
+    return np.concatenate(halves), sr
+
+
+def _octave_equal(got: float, want: float, tol: float = 6.0) -> bool:
+    """True when `got` matches `want` up to a factor-of-two error. Every beat
+    tracker halves or doubles sometimes; that is not what these tests are
+    about."""
+    return any(abs(got * k - want) < tol for k in (0.5, 1.0, 2.0))
+
+
+@pytest.fixture
+def two_tempo_slug(tmp_path, monkeypatch) -> str:
+    y, sr = _two_tempo_song()
+    path = _write_wav(tmp_path / "two-tempo.wav", y, sr)
+    monkeypatch.setattr(bpm_server, "_find_audio", lambda slug: path)
+    monkeypatch.setattr(bpm_server, "CACHE_DIR", tmp_path / "cache")
+    (tmp_path / "cache").mkdir()
+    return "two-tempo"
+
+
+def _first_ok_bpm(result: dict) -> float:
+    for a in result["algorithms"]:
+        if a["ok"] and a.get("bpm"):
+            return float(a["bpm"])
+    pytest.skip("no detector returned a usable BPM in this environment")
+
+
+def test_ranged_detection_reads_each_half_its_own_tempo(two_tempo_slug):
+    first = bpm_server.detect_all(two_tempo_slug, span=(0.0, 12.0))
+    second = bpm_server.detect_all(two_tempo_slug, span=(12.0, 24.0))
+
+    assert _octave_equal(_first_ok_bpm(first), 100.0), first["algorithms"]
+    assert _octave_equal(_first_ok_bpm(second), 150.0), second["algorithms"]
+
+
+def test_ranged_detection_reports_beats_in_song_time(two_tempo_slug):
+    """The detector saw a file starting at zero. If the shift is dropped, the
+    second half's beats all land at the top of the song and the grid silently
+    lies about where the segment's downbeats are."""
+    result = bpm_server.detect_all(two_tempo_slug, span=(12.0, 24.0))
+    beats = next(
+        (a["beat_times"] for a in result["algorithms"] if a["ok"] and a.get("beat_times")),
+        None,
+    )
+    if not beats:
+        pytest.skip("no detector returned beat times in this environment")
+    assert min(beats) >= 12.0 - 0.05
+    assert max(beats) <= 24.0 + 0.05
+
+
+def test_ranged_detection_carries_its_range_and_skips_the_cache(two_tempo_slug):
+    result = bpm_server.detect_all(two_tempo_slug, span=(12.0, 24.0))
+    assert result["range"] == {"start": 12.0, "end": 24.0}
+    assert result["duration"] == pytest.approx(12.0, abs=0.05)
+    # Nothing written: a segment's answer must never become the song's.
+    assert list(bpm_server.CACHE_DIR.iterdir()) == []
+
+
+def test_ranged_detection_never_reads_the_whole_song_cache(two_tempo_slug):
+    """A cached whole-song result must not be served as a segment's answer."""
+    (bpm_server.CACHE_DIR / f"{two_tempo_slug}.json").write_text(json.dumps({
+        "slug": two_tempo_slug, "audio_file": "two-tempo.wav", "duration": 24.0,
+        "algorithms": [{"source": "librosa-beat-track", "ok": True, "bpm": 999.0}],
+        "computed_at": "1970-01-01T00:00:00+00:00",
+    }))
+    result = bpm_server.detect_all(two_tempo_slug, span=(0.0, 12.0))
+    assert all(a.get("bpm") != 999.0 for a in result["algorithms"])
+    assert "range" in result
+
+
+def test_min_range_is_the_floor_the_ui_disables_on():
+    """The web side greys out "Detect from this segment" below this many
+    seconds; if it moves here, that copy moves too."""
+    assert MIN_RANGE_SECONDS == 2.0

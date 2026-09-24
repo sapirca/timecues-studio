@@ -23,9 +23,9 @@ export function DemoPage() {
   return (
     <div className="min-h-screen bg-[#0a0b0d] text-slate-200 flex flex-col">
       <AppPageHeader back={{ label: 'Back to main' }} />
-      <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-lg bg-[#14171d] border border-violet-500/20 rounded-md shadow-2xl shadow-black/60 p-6 space-y-5">
-          <div className="flex items-center justify-center gap-2 text-[10px] font-semibold tracking-[0.2em] uppercase text-violet-300">
+      <main className="flex-1 flex items-center justify-center px-4 py-6 sm:p-6">
+        <div className="w-full max-w-lg min-w-0 bg-[#14171d] border border-violet-500/20 rounded-md shadow-2xl shadow-black/60 p-5 sm:p-6 space-y-5">
+          <div className="flex items-center justify-center gap-2 text-[12px] sm:text-[10px] font-semibold tracking-[0.2em] uppercase text-violet-300">
             <span className="tc-led tc-led-mute !bg-violet-400 !shadow-[0_0_6px_rgba(167,139,250,0.55)]" />
             Demo Mode
           </div>
@@ -36,7 +36,7 @@ export function DemoPage() {
             workspace tab strip — see what the tool can do without signing up.
           </p>
 
-          <ul className="text-[11px] text-slate-400 leading-relaxed space-y-1.5 bg-black/30 border border-white/[0.05] rounded p-3">
+          <ul className="text-[12px] sm:text-[11px] text-slate-400 leading-relaxed space-y-1.5 bg-black/30 border border-white/[0.05] rounded p-3">
             <li><span className="text-emerald-300">✓</span> Your edits are saved to <strong>this browser only</strong> and never reach the server.</li>
             <li><span className="text-amber-300">✗</span> Uploading new songs is disabled.</li>
             <li><span className="text-amber-300">✗</span> Downloading or exporting the corpus is disabled.</li>
@@ -46,7 +46,7 @@ export function DemoPage() {
           <div className="flex flex-col gap-2 pt-1">
             <button
               onClick={startDemo}
-              className="w-full px-4 py-2 rounded text-[11px] uppercase tracking-wider bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-violet-100 font-medium transition-colors"
+              className="w-full px-4 py-3 sm:py-2 rounded text-[12px] sm:text-[11px] uppercase tracking-wider bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-violet-100 font-medium transition-colors"
             >
               Start Demo →
             </button>

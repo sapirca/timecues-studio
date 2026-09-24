@@ -1,3 +1,12 @@
+# Custom detectors are TRACKED here and kept out of the public bundle by
+# export-ignore in .gitattributes, not by being untracked: they should be
+# backed up and reviewable in this repo, just never shipped. The rule there is
+# directory-wide (`tools/python/custom/**`) with the folder's docs and package
+# marker re-included by name — never a list of the detectors themselves, which
+# is the form that has silently missed a new file before. Only the UI's
+# soft-delete bin is ignored: those are sources on their way out.
+tools/python/custom/.trash/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -28,13 +37,18 @@ Thumbs.db
 
 # Node
 node_modules/
+.vite/
 
 # allin1 byproducts (stems + spectrograms)
 demix/
 spec/
 
-# Release-tree derived features (regenerate via archive/release/scripts/prepare_features.py)
-archive/release/features/mel-spectrogram/*.npy
+# Release-tree corpus data (annotations, features, song roster). These are
+# derived from copyrighted/licensed tracks; export-ignore alone only filters
+# `git archive` output, so this must also be a real gitignore entry to stop
+# it being tracked/pushed. See archive/release/scripts/ for the (tracked)
+# tooling that regenerates this from data/.
+archive/release-data/
 
 # Tmp / cache files
 .features_msaf_tmp.json
@@ -50,6 +64,9 @@ data/*
 !data/.gitkeep
 archive/data/
 
+# Generated timing exports (tools/export-timing-files.mjs). Regenerable output.
+exports/
+
 # Paper release zips (regenerated via archive/paper_release/README.md)
 archive/paper_release/*.zip
 archive/paper/release/*.zip
@@ -64,10 +81,31 @@ archive/paper/*.fls
 archive/paper/*.fdb_latexmk
 archive/paper/*.synctex.gz
 
+# Screencast artifacts — regenerable / destined for external hosting (YouTube,
+# Cloudflare). Keep the recorder tooling under archive/videos/capture/ tracked,
+# but not the heavy media or exploration scratch.
+archive/videos/recordings/
+archive/videos/capture/out/
+archive/videos/capture/_vo/
+archive/videos/capture/_voices/
+archive/videos/capture/frames/
+archive/videos/capture/sheet-*.jpg
+archive/videos/capture/check-*.jpg
+archive/videos/capture/ff*.jpg
+archive/videos/capture/contact-sheet.jpg
+archive/videos/capture/voice-samples/
+archive/videos/capture/narration-test*.mp3
+archive/videos/capture/_profile/
+
+# YouTube OAuth secret + cached token + video-id map — NEVER commit.
+archive/videos/*client_secret*.json
+archive/videos/client_secret.json
+archive/videos/.yt_token.pickle
+archive/videos/ids.json
+
 # Docker / local secrets — never commit these (use .env.example as template).
-# GCP secrets live under archive/gcp/.gcloud.env after the 2026-05-26 move.
 .env
 .env.local
 web-app/.env.local
-archive/gcp/.gcloud.env
-archive/gcp/.gcloud.env.arm64
+# Local-only secret env files used by the export-ignored deploy tooling.
+archive/**/*.env*

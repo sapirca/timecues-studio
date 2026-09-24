@@ -8,6 +8,8 @@
  * harmonic/percussive energy separation (HPSS via moving-average Wiener masks).
  */
 
+import type { FrameAxis } from '../utils/frameTime';
+
 export interface MIRFeatures {
   energy: Float32Array;      // Composite: 40% RMS + 25% bandwidth + 35% onsets
   rms: Float32Array;         // Raw RMS energy (normalized 0-1)
@@ -40,6 +42,10 @@ export interface MIRFeatures {
   ssmFrameCount: number;
   frameCount: number;
   hopSize: number;
+  /** STFT window length. With `hopSize` and `sampleRate` this fixes the frame
+   *  time axis — see utils/frameTime. Frames are windows: frame i is centred at
+   *  `(i*hopSize + fftSize/2) / sampleRate`, not at `i*hopSize / sampleRate`. */
+  fftSize: number;
   sampleRate: number;
 }
 
@@ -143,7 +149,13 @@ function buildDctMatrix(nCoef: number, nBands: number): Float32Array {
 }
 
 // Hann window
-function createHannWindow(size: number): Float32Array {
+/** Exported alongside `fft`/`magnitudeSpectrum` for the one other place that
+ *  needs a spectrum: `utils/energySpan.ts` measures spectral centroid over a
+ *  single selected span. It runs on a slice, on demand, for whichever stem the
+ *  ⚡ Energy popover is pointed at — so it cannot ride on this module's
+ *  whole-song cached pass — but a second copy of a radix-2 FFT in the tree is
+ *  how the two silently drift apart. */
+export function createHannWindow(size: number): Float32Array {
   const window = new Float32Array(size);
   for (let i = 0; i < size; i++) {
     window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
@@ -153,7 +165,7 @@ function createHannWindow(size: number): Float32Array {
 
 // In-place radix-2 Cooley-Tukey FFT
 // real and imag arrays are modified in place
-function fft(real: Float32Array, imag: Float32Array): void {
+export function fft(real: Float32Array, imag: Float32Array): void {
   const n = real.length;
   // Bit-reversal permutation
   let j = 0;
@@ -194,7 +206,7 @@ function fft(real: Float32Array, imag: Float32Array): void {
 }
 
 // Compute magnitude spectrum from real/imag
-function magnitudeSpectrum(real: Float32Array, imag: Float32Array, out: Float32Array): void {
+export function magnitudeSpectrum(real: Float32Array, imag: Float32Array, out: Float32Array): void {
   const n = out.length;
   for (let i = 0; i < n; i++) {
     out[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
@@ -302,7 +314,7 @@ export function computeMIRFeatures(
         chroma: empty, nChroma: N_CHROMA,
         tempogram: empty, nTempo: N_TEMPO_BINS, tempogramFrameCount: 0, tempoBpm: empty,
         ssm: empty, ssmFrameCount: 0,
-        frameCount: 0, hopSize: HOP_SIZE, sampleRate,
+        frameCount: 0, hopSize: HOP_SIZE, fftSize: FFT_SIZE, sampleRate,
       });
       return;
     }
@@ -718,7 +730,7 @@ export function computeMIRFeatures(
           chroma, nChroma: N_CHROMA,
           tempogram, nTempo: N_TEMPO_BINS, tempogramFrameCount, tempoBpm,
           ssm, ssmFrameCount,
-          frameCount, hopSize: HOP_SIZE, sampleRate,
+          frameCount, hopSize: HOP_SIZE, fftSize: FFT_SIZE, sampleRate,
         });
       }
     }
@@ -739,4 +751,166 @@ function normalizeInPlace(arr: Float32Array): void {
       arr[i] *= scale;
     }
   }
+}
+
+// ─── Windowed onset envelope ────────────────────────────────────────────────
+/**
+ * Onset strength over one slice of a buffer, for a source the page never
+ * decodes in full.
+ *
+ * `computeMIRFeatures` is the right tool for the track the player is on: it
+ * runs once, off the buffer that already exists, and hands back every curve.
+ * It is the wrong tool for "show me the drum stem's onsets under this node" —
+ * that would spend a chunked second on MFCCs, a tempogram and an SSM nothing
+ * is going to draw, all to read a few seconds of flux. This runs the same
+ * half-wave-rectified spectral flux on the same 2048/512 framing, over just
+ * the frames the caller asked for, and returns synchronously because a couple
+ * of hundred frames is microseconds.
+ *
+ * Frame `i` covers samples `[i·HOP, i·HOP + FFT)` and is dated at its centre,
+ * so the frames describing `[startSec, endSec]` are the ones whose centres
+ * land inside it — and the returned `axis` says exactly that, offset by the
+ * first frame's position in the buffer. One frame BEFORE the range is analysed
+ * too and then dropped: flux is a difference against the previous spectrum,
+ * and without a real predecessor the first reported frame would read as one
+ * enormous onset — the whole spectrum appearing at once. At the very start of
+ * the buffer there is no predecessor to borrow, so that frame reports 0 rather
+ * than a fiction.
+ *
+ * Values are RAW (not normalised): the window is re-normalised against its own
+ * loudest onset by `sampleOnsetWindow`, so normalising here would only scale a
+ * curve that is about to be scaled again.
+ */
+export function computeOnsetEnvelopeWindow(
+  audioBuffer: AudioBuffer,
+  startSec: number,
+  endSec: number,
+): { values: Float32Array; level: Float32Array; axis: FrameAxis } {
+  const empty = {
+    values: new Float32Array(0), level: new Float32Array(0),
+    axis: { step: 0, offset: 0, count: 0 },
+  };
+  const sampleRate = audioBuffer.sampleRate;
+  if (!(sampleRate > 0) || audioBuffer.length < FFT_SIZE || !(endSec > startSec)) return empty;
+
+  const range = onsetFrameRange(audioBuffer.length, sampleRate, startSec, endSec);
+  if (!range) return empty;
+
+  // Only the samples those frames actually read get downmixed — a whole stem
+  // is tens of millions of samples, and this asks about a few seconds of it.
+  const from = range.seed * HOP_SIZE;
+  const to = Math.min(audioBuffer.length, range.last * HOP_SIZE + FFT_SIZE);
+  const mono = new Float32Array(to - from);
+  const channels = audioBuffer.numberOfChannels;
+  for (let ch = 0; ch < channels; ch++) {
+    const data = audioBuffer.getChannelData(ch);
+    for (let i = 0; i < mono.length; i++) mono[i] += data[from + i];
+  }
+  if (channels > 1) {
+    const scale = 1 / channels;
+    for (let i = 0; i < mono.length; i++) mono[i] *= scale;
+  }
+
+  return onsetEnvelopeFromMono(mono, sampleRate, startSec, endSec, from);
+}
+
+/** The frames of a `length`-sample buffer that describe `[startSec, endSec]`,
+ *  plus the seed frame in front of them. `null` when the buffer is too short
+ *  to hold a single frame. */
+function onsetFrameRange(
+  length: number,
+  sampleRate: number,
+  startSec: number,
+  endSec: number,
+): { seed: number; first: number; last: number } | null {
+  const totalFrames = Math.floor((length - FFT_SIZE) / HOP_SIZE) + 1;
+  if (totalFrames < 1) return null;
+  const frameAt = (t: number) => (t * sampleRate - FFT_SIZE / 2) / HOP_SIZE;
+  const first = Math.min(totalFrames - 1, Math.max(0, Math.floor(frameAt(startSec))));
+  const last = Math.min(totalFrames - 1, Math.max(first, Math.ceil(frameAt(endSec))));
+  return { seed: Math.max(0, first - 1), first, last };
+}
+
+/**
+ * The frame loop behind `computeOnsetEnvelopeWindow`, on a mono signal —
+ * separated out so it can be driven by a plain array in a test.
+ *
+ * `monoStartSample` is where `mono[0]` sits in the buffer the times refer to;
+ * pass 0 when `mono` is the whole thing. Frames are counted from the buffer's
+ * start either way, so the window lands at the same place whether the caller
+ * sliced the audio first or not.
+ *
+ * `level` rides along beside the flux: per-frame RMS of the same frames, raw.
+ * Flux answers "did something start here?" and says nothing about how long it
+ * lasts — it is a *difference* between spectra, so it spikes at the attack and
+ * is back at the floor while the note is still ringing. Anything that wants a
+ * hit's DURATION (how long a block should run) has to read the level instead,
+ * and reading it here costs a sum of squares over samples already in cache.
+ */
+export function onsetEnvelopeFromMono(
+  mono: Float32Array,
+  sampleRate: number,
+  startSec: number,
+  endSec: number,
+  monoStartSample = 0,
+): { values: Float32Array; level: Float32Array; axis: FrameAxis } {
+  const empty = {
+    values: new Float32Array(0), level: new Float32Array(0),
+    axis: { step: 0, offset: 0, count: 0 },
+  };
+  if (!(sampleRate > 0) || !(endSec > startSec)) return empty;
+
+  const range = onsetFrameRange(monoStartSample + mono.length, sampleRate, startSec, endSec);
+  if (!range) return empty;
+  const { seed, first, last } = range;
+
+  const hannWindow = createHannWindow(FFT_SIZE);
+  const fftReal = new Float32Array(FFT_SIZE);
+  const fftImag = new Float32Array(FFT_SIZE);
+  const halfSpectrum = FFT_SIZE / 2 + 1;
+  const mag = new Float32Array(halfSpectrum);
+  const prevMag = new Float32Array(halfSpectrum);
+
+  const values = new Float32Array(last - first + 1);
+  const level = new Float32Array(last - first + 1);
+  for (let f = seed; f <= last; f++) {
+    const offset = f * HOP_SIZE - monoStartSample;
+    let sumSq = 0;
+    for (let i = 0; i < FFT_SIZE; i++) {
+      const s = mono[offset + i];
+      const sample = s === undefined ? 0 : s;
+      sumSq += sample * sample;
+      fftReal[i] = sample * hannWindow[i];
+      fftImag[i] = 0;
+    }
+    fft(fftReal, fftImag);
+    magnitudeSpectrum(fftReal, fftImag, mag);
+    if (f >= first) {
+      // `f === seed` here only for the buffer's very first frame — nothing
+      // precedes it, so it reports 0 instead of the whole spectrum arriving.
+      let onset = 0;
+      if (f > seed) {
+        for (let i = 0; i < halfSpectrum; i++) {
+          const diff = mag[i] - prevMag[i];
+          if (diff > 0) onset += diff;
+        }
+      }
+      values[f - first] = onset;
+      // Off the raw samples, not the windowed copy: a Hann taper is there to
+      // stop the FFT smearing, and it would report the same steady tone as
+      // quieter simply for sitting at the edge of a frame.
+      level[f - first] = Math.sqrt(sumSq / FFT_SIZE);
+    }
+    prevMag.set(mag);
+  }
+
+  return {
+    values,
+    level,
+    axis: {
+      step: HOP_SIZE / sampleRate,
+      offset: (first * HOP_SIZE + FFT_SIZE / 2) / sampleRate,
+      count: values.length,
+    },
+  };
 }

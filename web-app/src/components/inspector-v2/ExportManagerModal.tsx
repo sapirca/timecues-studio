@@ -6,17 +6,16 @@
  *
  * Behaviour
  *  - Scope: current track | selected tracks (multi-select) | entire dataset
- *  - Layers: manual / eye / auto-guess / cues / spans / loops / patterns
+ *  - Layers: manual / auto-guess / cues / spans / loops
  *    (any subset, must pick at least one)
  *  - Formats: any subset of TimeCues JSON | Audacity Label Track |
  *    Sonic Visualiser CSV | JAMS | mir_eval | MIDI markers | REAPER regions.
  *    Picking >1 format duplicates each emitted file across the chosen formats
- *    (forces a .zip). Patterns are JSON-only — non-JSON formats just skip
- *    pattern files.
+ *    (forces a .zip).
  *  - Auto-bundle: any time we'd produce >1 file, output is forced into a
  *    single .zip with a per-song directory layout:
- *      <slug>/boundaries/{manual|eye|auto-guess}/<slug>.<ext>
- *      <slug>/{cues|spans|loops|patterns}/<layer-name>.<ext>
+ *      <slug>/boundaries/{manual|auto-guess}/<slug>.<ext>
+ *      <slug>/{cues|spans|loops}/<layer-name>.<ext>
  *      <slug>/{song-info.json, audio.<ext>, algos/…, stems/…}
  *    Multi-annotator corpus dumps (Entire dataset + researcher tier) insert an
  *    <annotator-id> sub-dir inside the type dir per (slug, type) when more
@@ -26,13 +25,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import JSZip from 'jszip';
-import type {
-  ManualAnnotation,
-  AutoGuessManualAnnotation,
-} from '../../types/manualAnnotation';
+import type { AutoGuessManualAnnotation } from '../../types/autoGuess';
 import type {
   AnnotationLayersDocument,
   AnnotationLayer,
+  BoundaryItem,
   CueItem,
   SpanItem,
   LoopItem,
@@ -47,25 +44,26 @@ import {
   convertToMirEval,
   convertToReaper,
   convertToSonicVisualiser,
-  manualToExportSections,
+  boundaryItemsToExportSections,
   autoGuessAcceptedToExportSections,
   cueItemsToExportSections,
   spanItemsToExportSections,
   loopItemsToExportSections,
   gridToExportSections,
 } from '../../utils/exportSerializers';
+import type { ExportSection, JamsLayerKind, GridExportGranularity } from '../../utils/exportSerializers';
 import { loadSongInfo } from '../../services/songInfo';
 import type { SongInfo } from '../../types/songInfo';
 import { loadAllAnnotatorLayers, loadLayers } from '../../services/annotationLayers';
-import type { BoundarySource } from './shared/tabConfig';
 
 type Scope = 'current' | 'selected' | 'all';
-/** Built-in single-document layers (server has per-kind APIs + bulk endpoint).
- *  Same shape as `BoundarySource` — re-aliased here for export-modal semantics. */
-type ManualLayer = BoundarySource;
-/** User-created layer types persisted in annotation-layers documents.
- *  `loops` and `patterns` are gated by `experimentalLoopsAndPatterns`. */
-type UserLayer = 'cues' | 'spans' | 'loops' | 'patterns';
+/** Auto-guess is the one annotation kind still stored as its own single
+ *  document with its own API — everything else is a layer. */
+type ManualLayer = 'autoGuess';
+/** Layer types persisted in annotation-layers documents. A song may hold
+ *  several layers of one type, each exported as its own file named after the
+ *  layer. `loops` is gated by `experimentalLoopsAndPatterns`. */
+type UserLayer = 'boundaries' | 'cues' | 'spans' | 'loops';
 type Layer = ManualLayer | UserLayer;
 type Format = 'json' | 'audacity' | 'sonicVis' | 'jams' | 'mirEval' | 'midi' | 'reaper';
 
@@ -79,49 +77,29 @@ const FORMAT_EXT: Record<Format, string> = {
   reaper: 'csv',
 };
 
-const JAMS_LAYER_KIND: Record<ManualLayer, 'manual' | 'eye' | 'auto-guess'> = {
-  manual: 'manual',
-  eye: 'eye',
-  autoGuess: 'auto-guess',
-};
-
-/** In-zip directory for each layer type. Boundary kinds (manual/eye/
- *  auto-guess) are nested under `boundaries/` so all three sit together inside
- *  each song folder; user-layer kinds (cues/spans/loops/patterns) sit as
- *  siblings of `boundaries/`. */
+/** In-zip directory for each layer type — one per kind, siblings inside the
+ *  song folder. A layer kind that can hold several named layers puts the
+ *  layer's own name in the FILE name, not another directory level. */
 const LAYER_DIR: Record<Layer, string> = {
-  manual: 'boundaries/manual',
-  eye: 'boundaries/eye',
-  autoGuess: 'boundaries/auto-guess',
+  boundaries: 'boundaries',
+  autoGuess: 'auto-guess',
   cues: 'cues',
   spans: 'spans',
   loops: 'loops',
-  patterns: 'patterns',
 };
 
 const LAYER_LABEL: Record<Layer, string> = {
-  manual: 'Boundaries (ground truth)',
-  eye: 'Eye (visual only)',
+  boundaries: 'Boundaries (ground truth)',
   autoGuess: 'Auto-Guess (algorithm clustering)',
   cues: 'Cues (timestamped events)',
   spans: 'Spans (labeled intervals)',
   loops: 'Loops (bar-quantised regions)',
-  patterns: 'Patterns (repeating motifs)',
 };
 
-const ALL_LAYERS: Layer[] = ['manual', 'eye', 'autoGuess', 'cues', 'spans', 'loops', 'patterns'];
+const ALL_LAYERS: Layer[] = ['boundaries', 'autoGuess', 'cues', 'spans', 'loops'];
 
-/** Whether a (layer, format) pair has a sensible serializer.
- *  - Marker formats (audacity/sonicVis/jams/mirEval/midi/reaper) work for any
- *    point or interval layer.
- *  - Patterns are inherently cyclical with sub-beat highlights; no flat marker
- *    format expresses that, so we restrict them to TimeCues JSON.
- *  - JSON works for everything (it's the layer's own document shape). */
-function layerSupportsFormat(layer: Layer, format: Format): boolean {
-  if (format === 'json') return true;
-  if (layer === 'patterns') return false;
-  return true;
-}
+/** The kinds that live in the annotation-layers document, in emit order. */
+const USER_LAYERS: UserLayer[] = ['boundaries', 'cues', 'spans', 'loops'];
 
 interface SongEntry {
   id: string;
@@ -140,11 +118,10 @@ export interface ExportManagerModalProps {
   currentSong: SongEntry | null;
   /** Full song catalogue (from manifest) for the multi-select. */
   allSongs: SongEntry[];
-  /** Already-loaded annotations for the current song, used for the fast single-song path. */
-  manualAnnotation: ManualAnnotation | null;
-  eyeAnnotation: ManualAnnotation | null;
+  /** Already-loaded auto-guess annotation for the current song, used for the
+   *  fast single-song path. Boundaries come through `layersDocument`. */
   autoGuessAnnotation: AutoGuessManualAnnotation | null;
-  /** Already-loaded user layers for the current song (cues/spans/loops/patterns).
+  /** Already-loaded user layers for the current song (cues/spans/loops).
    *  When null the modal lazy-loads them for the current-song scope path. */
   layersDocument?: AnnotationLayersDocument | null;
   /** UI variant. `'single'` locks scope to the current track and hides the
@@ -201,7 +178,7 @@ interface BulkAllAnnotators<T> {
 }
 
 /** Bulk fetch annotations for the *current* annotator. Returns slug → ann. */
-async function fetchBulkMine<T>(kind: 'manual' | 'eye' | 'auto-guess'): Promise<Record<string, T>> {
+async function fetchBulkMine<T>(kind: 'auto-guess'): Promise<Record<string, T>> {
   const res = await fetch(`/api/bulk-annotations/${kind}`, {
     headers: annotatorHeaders(),
   });
@@ -213,7 +190,7 @@ async function fetchBulkMine<T>(kind: 'manual' | 'eye' | 'auto-guess'): Promise<
 /** Bulk fetch annotations across every annotator (researcher/admin only).
  *  Returns slug → annotator → ann. Empty `{}` on auth failure — caller is
  *  expected to fall back to the current-annotator shape. */
-async function fetchBulkAll<T>(kind: 'manual' | 'eye' | 'auto-guess'): Promise<Record<string, Record<string, T>>> {
+async function fetchBulkAll<T>(kind: 'auto-guess'): Promise<Record<string, Record<string, T>>> {
   const res = await fetch(`/api/bulk-annotations/${kind}?scope=all`, {
     headers: annotatorHeaders(),
   });
@@ -253,6 +230,28 @@ function probeAudioDuration(url: string): Promise<number | null> {
   });
 }
 
+// Run an async mapper over items with a bounded number of in-flight tasks.
+// Large-audio exports were fetching every song's full body at once via an
+// unbounded Promise.all; under that load individual fetches/res.blob() calls
+// abort, and because each failure was caught-and-skipped the archive shipped
+// silently without the songs. Capping concurrency keeps each transfer healthy.
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await mapper(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function triggerBlobDownload(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -271,13 +270,17 @@ function formatBytes(bytes: number): string {
 
 // ─── Per-format serialization (any layer → string) ───────────────────────────
 
-function serializeManual(
-  ann: ManualAnnotation,
-  format: Format,
-  ctx: { slug: string; layer: ManualLayer; annotatorId: string | null; bpm?: number },
+/** The single place that maps already-flattened ExportSections to a flat
+ *  marker format. Every layer serializer + the grid-labels sidecar route
+ *  through here, so a format's quirks (column order, precision, JAMS metadata)
+ *  live in exactly one spot and can't drift between callers. JSON is excluded
+ *  because each layer emits its own native document shape — callers handle it
+ *  before reaching this. */
+function sectionsToMarkerFormat(
+  sections: ExportSection[],
+  format: Exclude<Format, 'json'>,
+  ctx: { slug: string; jamsLayer: JamsLayerKind; annotatorId: string | null; bpm?: number },
 ): string | Uint8Array {
-  if (format === 'json') return JSON.stringify(ann, null, 2);
-  const sections = manualToExportSections(ann);
   if (format === 'audacity') return convertToAudacity(sections);
   if (format === 'sonicVis') return convertToSonicVisualiser(sections);
   if (format === 'mirEval') return convertToMirEval(sections);
@@ -285,7 +288,7 @@ function serializeManual(
   if (format === 'reaper') return convertToReaper(sections);
   return convertToJams(sections, {
     slug: ctx.slug,
-    layer: JAMS_LAYER_KIND[ctx.layer],
+    layer: ctx.jamsLayer,
     annotatorId: ctx.annotatorId,
   });
 }
@@ -300,32 +303,28 @@ function filterUserLayers<T extends UserLayer>(
   return doc.layers.filter((l) => l.type === type);
 }
 
-/** Serialize a single user layer. Patterns + JSON return the layer document
- *  itself; everything else flattens through the shared ExportSection helpers
- *  in exportSerializers.ts. */
+/** Serialize a single user layer. JSON returns the layer document itself;
+ *  every other format flattens through the shared ExportSection helpers in
+ *  exportSerializers.ts. */
 function serializeUserLayer(
   layer: AnnotationLayer,
   format: Format,
   ctx: { slug: string; annotatorId: string | null; bpm?: number },
 ): string | Uint8Array | null {
   if (format === 'json') return JSON.stringify(layer, null, 2);
-  if (layer.type === 'patterns') return null;
   let sections;
-  if (layer.type === 'cues') sections = cueItemsToExportSections(layer.items as CueItem[]);
+  if (layer.type === 'boundaries') sections = boundaryItemsToExportSections(layer.items as BoundaryItem[]);
+  else if (layer.type === 'cues') sections = cueItemsToExportSections(layer.items as CueItem[]);
   else if (layer.type === 'spans') sections = spanItemsToExportSections(layer.items as SpanItem[]);
   else if (layer.type === 'loops') sections = loopItemsToExportSections(layer.items as LoopItem[]);
   else return null;
-  if (format === 'audacity') return convertToAudacity(sections);
-  if (format === 'sonicVis') return convertToSonicVisualiser(sections);
-  if (format === 'mirEval') return convertToMirEval(sections);
-  if (format === 'midi') return convertToMidiMarkers(sections, { bpm: ctx.bpm });
-  if (format === 'reaper') return convertToReaper(sections);
-  return convertToJams(sections, {
+  return sectionsToMarkerFormat(sections, format, {
     slug: ctx.slug,
-    // JAMS namespace is open-vocab segment_open; reusing the manual kind keeps
+    // JAMS namespace is open-vocab segment_open; the 'manual' kind keeps
     // downstream tooling happy. The layer name is in the file path.
-    layer: 'manual',
+    jamsLayer: 'manual',
     annotatorId: ctx.annotatorId,
+    bpm: ctx.bpm,
   });
 }
 
@@ -346,16 +345,11 @@ function serializeAutoGuess(
   ctx: { slug: string; annotatorId: string | null; bpm?: number },
 ): string | Uint8Array {
   if (format === 'json') return JSON.stringify(ann, null, 2);
-  const sections = autoGuessAcceptedToExportSections(ann);
-  if (format === 'audacity') return convertToAudacity(sections);
-  if (format === 'sonicVis') return convertToSonicVisualiser(sections);
-  if (format === 'mirEval') return convertToMirEval(sections);
-  if (format === 'midi') return convertToMidiMarkers(sections, { bpm: ctx.bpm });
-  if (format === 'reaper') return convertToReaper(sections);
-  return convertToJams(sections, {
+  return sectionsToMarkerFormat(autoGuessAcceptedToExportSections(ann), format, {
     slug: ctx.slug,
-    layer: 'auto-guess',
+    jamsLayer: 'auto-guess',
     annotatorId: ctx.annotatorId,
+    bpm: ctx.bpm,
   });
 }
 
@@ -366,15 +360,12 @@ export function ExportManagerModal({
   onOpenChange,
   currentSong,
   allSongs,
-  manualAnnotation,
-  eyeAnnotation,
   autoGuessAnnotation,
   layersDocument,
   presentation = 'multi',
 }: ExportManagerModalProps) {
   const { settings } = useSettings();
   const showLoopsAndPatterns = settings.experimentalLoopsAndPatterns;
-  const showEye = settings.experimentalEyeAnnotation;
 
   // Single-presentation locks scope to the current track. The selectable
   // layer set still allows everything available for the current song.
@@ -385,8 +376,8 @@ export function ExportManagerModal({
 
   const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(() => new Set());
   const [layers, setLayers] = useState<Record<Layer, boolean>>({
-    manual: true, eye: false, autoGuess: false,
-    cues: true, spans: true, loops: true, patterns: true,
+    boundaries: true, autoGuess: false,
+    cues: true, spans: true, loops: true,
   });
   const [selectedFormats, setSelectedFormats] = useState<Set<Format>>(() => new Set(['json']));
   const toggleFormat = (fmt: Format) => {
@@ -415,8 +406,14 @@ export function ExportManagerModal({
   // Defaults to true because annotations are timing-meaningless without the
   // grid that produced them.
   const [includeSongInfo, setIncludeSongInfo] = useState(true);
+  // Resolution of the grid-labels sidecar (one marker per bar / beat / sub-beat
+  // / phrase). 'off' suppresses the sidecar entirely; 'beats' matches the
+  // historic one-label-per-beat behaviour and is the default.
+  const [gridGranularity, setGridGranularity] = useState<GridExportGranularity | 'off'>('beats');
   const [busy, setBusy] = useState(false);
+  const [zipProgress, setZipProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [trackFilter, setTrackFilter] = useState('');
   // Per-slug audio byte counts (null = HEAD failed / no content-length).
@@ -430,7 +427,9 @@ export function ExportManagerModal({
   useEffect(() => {
     if (open) {
       setError(null);
+      setWarning(null);
       setBusy(false);
+      setZipProgress(null);
       setTrackPickerOpen(false);
     }
   }, [open]);
@@ -462,7 +461,7 @@ export function ExportManagerModal({
           const entry = songsById.get(slug);
           if (!entry?.url) { next.set(slug, null); return; }
           try {
-            const res = await fetch(entry.url, { method: 'HEAD' });
+            const res = await fetch(entry.url, { method: 'HEAD', headers: annotatorHeaders() });
             const len = res.headers.get('content-length');
             next.set(slug, len ? Number.parseInt(len, 10) : null);
           } catch {
@@ -489,22 +488,12 @@ export function ExportManagerModal({
     return { bytes, known, unknown };
   }, [audioSizes]);
 
-  // Layer kinds currently surfaced in the UI. Patterns/Loops and Eye are
-  // hidden when their experimental flag is off so we don't tease the UI.
-  const visibleLayerKinds: Layer[] = useMemo(() => {
-    return ALL_LAYERS.filter((k) => {
-      if ((k === 'loops' || k === 'patterns') && !showLoopsAndPatterns) return false;
-      if (k === 'eye' && !showEye) return false;
-      // Patterns can't be expressed in any flat marker format. With multiple
-      // formats, the layer stays visible as long as at least one selected
-      // format can carry it (i.e. JSON is in the set when Patterns is the
-      // layer in question).
-      if (formatsArr.length > 0 && !formatsArr.some((f) => layerSupportsFormat(k, f))) {
-        return false;
-      }
-      return true;
-    });
-  }, [showLoopsAndPatterns, showEye, formatsArr]);
+  // Layer kinds currently surfaced in the UI. Loops are hidden when their
+  // experimental flag is off so we don't tease the UI.
+  const visibleLayerKinds: Layer[] = useMemo(
+    () => ALL_LAYERS.filter((k) => !(k === 'loops' && !showLoopsAndPatterns)),
+    [showLoopsAndPatterns],
+  );
 
   const activeLayers: Layer[] = useMemo(
     () => visibleLayerKinds.filter((k) => layers[k]),
@@ -513,16 +502,11 @@ export function ExportManagerModal({
 
   const targetSongCount = inScopeSlugs.length;
 
-  // Annotation file count accounts for per-layer format support: a (slug,
-  // layer) emits one file per selected format that actually serializes for
-  // that layer (Patterns × any-non-JSON contributes zero).
-  const annotationFileCount = useMemo(() => {
-    let n = 0;
-    for (const l of activeLayers) {
-      n += targetSongCount * formatsArr.filter((f) => layerSupportsFormat(l, f)).length;
-    }
-    return n;
-  }, [activeLayers, targetSongCount, formatsArr]);
+  // Every active layer emits one file per selected format.
+  const annotationFileCount = useMemo(
+    () => activeLayers.length * targetSongCount * formatsArr.length,
+    [activeLayers, targetSongCount, formatsArr],
+  );
 
   // The spec's auto-bundle test: more than one file is produced. Includes
   // per-format duplication, so picking >1 format always forces a .zip.
@@ -560,6 +544,7 @@ export function ExportManagerModal({
   // ─── Export action ─────────────────────────────────────────────────────────
   const runExport = async () => {
     setError(null);
+    setWarning(null);
     setBusy(true);
     try {
       const stamp = todayStamp();
@@ -574,16 +559,11 @@ export function ExportManagerModal({
       // emit loop can decide per (slug, kind) whether to insert an annotator
       // dir in the zip path (only when more than one annotator contributed).
       const currentAnnotatorId = getCurrentAnnotatorId() ?? 'unknown';
-      const manualMap: Record<string, Record<string, ManualAnnotation>> = {};
-      const eyeMap: Record<string, Record<string, ManualAnnotation>> = {};
       const autoGuessMap: Record<string, Record<string, AutoGuessManualAnnotation>> = {};
       const layerDocs: Record<string, Record<string, AnnotationLayersDocument>> = {};
       const needAnyUserLayer =
-        (layers.cues || layers.spans || layers.loops || layers.patterns) &&
-        // Patterns drop out of every non-JSON format — skip the fetch if the
-        // only requested user layer is patterns and the user picked, say,
-        // Audacity. layerSupportsFormat would otherwise have un-checked it.
-        activeLayers.some((l) => l === 'cues' || l === 'spans' || l === 'loops' || l === 'patterns');
+        (layers.boundaries || layers.cues || layers.spans || layers.loops) &&
+        activeLayers.some((l) => USER_LAYERS.includes(l as UserLayer));
 
       const wrapSingle = <T,>(map: Record<string, Record<string, T>>, slug: string, ann: T) => {
         if (!map[slug]) map[slug] = {};
@@ -591,8 +571,6 @@ export function ExportManagerModal({
       };
 
       if (scope === 'current' && currentSong) {
-        if (layers.manual && manualAnnotation) wrapSingle(manualMap, currentSong.id, manualAnnotation);
-        if (layers.eye && eyeAnnotation) wrapSingle(eyeMap, currentSong.id, eyeAnnotation);
         if (layers.autoGuess && autoGuessAnnotation) wrapSingle(autoGuessMap, currentSong.id, autoGuessAnnotation);
         if (needAnyUserLayer) {
           // Prefer the already-loaded layers document so we don't re-hit the
@@ -624,7 +602,7 @@ export function ExportManagerModal({
           }
         };
         const fetchKind = async <T,>(
-          kind: 'manual' | 'eye' | 'auto-guess',
+          kind: 'auto-guess',
           map: Record<string, Record<string, T>>,
         ) => {
           if (wantsAllAnnotators) {
@@ -635,8 +613,6 @@ export function ExportManagerModal({
           ingestMine(map, await fetchBulkMine<T>(kind));
         };
 
-        if (layers.manual) fetches.push(fetchKind<ManualAnnotation>('manual', manualMap));
-        if (layers.eye) fetches.push(fetchKind<ManualAnnotation>('eye', eyeMap));
         if (layers.autoGuess) fetches.push(fetchKind<AutoGuessManualAnnotation>('auto-guess', autoGuessMap));
 
         if (needAnyUserLayer) {
@@ -673,13 +649,14 @@ export function ExportManagerModal({
       }
 
       // MIDI export wants per-song BPM (from song-info) so DAW bar-grid
-      // positions match the annotator's grid. Audacity export also needs it
-      // for the grid-labels sidecar (one label per beat across the song).
-      // Pre-fetch song-info up-front whenever the user opted into the bundle
-      // or any format needs it.
+      // positions match the annotator's grid. The grid-labels sidecar (one
+      // label per beat across the song) is now emitted for every selected
+      // format, so song-info — which carries the BPM / time-signature /
+      // tempo-anchors the grid is expanded from — is needed whenever any
+      // format is selected. Pre-fetch it up-front.
       const songInfoMap: Record<string, SongInfo> = {};
       const songInfoFailures: string[] = [];
-      if (includeSongInfo || selectedFormats.has('midi') || selectedFormats.has('audacity')) {
+      if (includeSongInfo || selectedFormats.size > 0) {
         await Promise.all(slugs.map(async (slug) => {
           try {
             songInfoMap[slug] = await loadSongInfo(slug);
@@ -711,26 +688,18 @@ export function ExportManagerModal({
       for (const slug of slugs) {
         const bpm = songInfoMap[slug]?.bpm;
 
-        // Boundary kinds — one document per annotator per song, per format.
-        for (const kind of ['manual', 'eye', 'autoGuess'] as ManualLayer[]) {
-          if (!layers[kind]) continue;
-          const byAnn =
-            kind === 'manual' ? manualMap[slug] :
-            kind === 'eye' ? eyeMap[slug] :
-            autoGuessMap[slug];
-          if (!byAnn) continue;
-          const annotatorIds = Object.keys(byAnn);
+        // Auto-guess — one document per annotator per song, per format.
+        if (layers.autoGuess) {
+          const byAnn = autoGuessMap[slug];
+          const annotatorIds = byAnn ? Object.keys(byAnn) : [];
           for (const annId of annotatorIds) {
-            const ann = byAnn[annId];
-            const dir = dirFor(slug, kind, annId, annotatorIds.length);
+            const dir = dirFor(slug, 'autoGuess', annId, annotatorIds.length);
             const ctx = { slug, annotatorId: annId, bpm };
             for (const fmt of requestedFormats) {
-              if (!layerSupportsFormat(kind, fmt)) continue;
-              const fmtExt = FORMAT_EXT[fmt];
-              const body = kind === 'autoGuess'
-                ? serializeAutoGuess(ann as AutoGuessManualAnnotation, fmt, ctx)
-                : serializeManual(ann as ManualAnnotation, fmt, { ...ctx, layer: kind });
-              entries.push({ path: `${dir}/${slug}.${fmtExt}`, body });
+              entries.push({
+                path: `${dir}/${slug}.${FORMAT_EXT[fmt]}`,
+                body: serializeAutoGuess(byAnn![annId], fmt, ctx),
+              });
             }
           }
         }
@@ -740,10 +709,9 @@ export function ExportManagerModal({
         // (e.g. "Kick hits" + "FX triggers" Cues); each becomes its own file.
         const byAnnLayers = layerDocs[slug];
         if (byAnnLayers) {
-          for (const userKind of ['cues', 'spans', 'loops', 'patterns'] as UserLayer[]) {
+          for (const userKind of USER_LAYERS) {
             if (!layers[userKind]) continue;
-            const fmtsForKind = requestedFormats.filter((f) => layerSupportsFormat(userKind, f));
-            if (fmtsForKind.length === 0) continue;
+            if (requestedFormats.length === 0) continue;
             // Only annotators with ≥1 layer of this kind count as contributors
             // — keeps the {annotator} dir collapsed when one person did Cues
             // and another did Spans (no overlap on this kind).
@@ -761,14 +729,10 @@ export function ExportManagerModal({
                 usedNames.set(baseName, collisions + 1);
                 const finalName = collisions === 0 ? baseName : `${baseName}-${collisions + 1}`;
                 const dir = dirFor(slug, userKind, annId, annotatorCount);
-                for (const fmt of fmtsForKind) {
+                for (const fmt of requestedFormats) {
                   const body = serializeUserLayer(layer, fmt, { slug, annotatorId: annId, bpm });
                   if (body == null) continue;
-                  // Patterns are JSON-only — fmtsForKind already filters out
-                  // non-JSON formats, but the per-layer ext override stays as
-                  // defensive belt-and-braces.
-                  const layerExt = userKind === 'patterns' ? 'json' : FORMAT_EXT[fmt];
-                  entries.push({ path: `${dir}/${finalName}.${layerExt}`, body });
+                  entries.push({ path: `${dir}/${finalName}.${FORMAT_EXT[fmt]}`, body });
                 }
               }
             }
@@ -791,14 +755,22 @@ export function ExportManagerModal({
         }
       }
 
-      // Audacity grid-labels sidecar — one label per beat (bar.beat) across
-      // the song. Active grid mode (static / dynamic / manual) is resolved
-      // by gridToExportSections via visibleGridLines, so anchors and per-
-      // beat overrides are honored without branching here. Duration is
-      // probed from the audio URL using HTMLAudioElement metadata; skipped
-      // silently for songs with no URL, no BPM, or a failed probe.
+      // Grid-labels sidecar — one marker per bar / beat / sub-beat / phrase
+      // (user-chosen via gridGranularity) across the song, emitted as an
+      // individual labels file once per selected format (not just Audacity).
+      // The grid is expanded once per song via gridToExportSections — active
+      // grid mode (static / dynamic / manual) is resolved through
+      // visibleGridLines, so anchors and per-beat overrides are honored without
+      // branching here — then each format serializes through the same shared
+      // path the layers use (sectionsToMarkerFormat / the cue-list JSON shape),
+      // so there's a single source of truth per format. JSON ships the expanded
+      // grid as a re-importable cue list, complementing (not replacing) the
+      // grid params in song-info.json. Duration is probed from the audio URL
+      // using HTMLAudioElement metadata; skipped silently for songs with no
+      // URL, no BPM, or a failed probe. 'off' suppresses the sidecar entirely.
       const gridFailures: string[] = [];
-      if (selectedFormats.has('audacity')) {
+      const gridFormats = [...selectedFormats];
+      if (gridGranularity !== 'off' && gridFormats.length > 0) {
         const songsById = new Map(allSongs.map((s) => [s.id, s] as const));
         if (currentSong) songsById.set(currentSong.id, currentSong);
         await Promise.all(slugs.map(async (slug) => {
@@ -808,12 +780,23 @@ export function ExportManagerModal({
           if (!entry?.url) { gridFailures.push(`${slug} (no url)`); return; }
           const duration = await probeAudioDuration(entry.url);
           if (duration == null) { gridFailures.push(`${slug} (duration probe failed)`); return; }
-          const sections = gridToExportSections(info, duration);
+          const sections = gridToExportSections(info, duration, gridGranularity);
           if (sections.length === 0) return;
-          entries.push({
-            path: `${slug}/grid/${slug}.txt`,
-            body: convertToAudacity(sections),
-          });
+          for (const fmt of gridFormats) {
+            const body = fmt === 'json'
+              ? JSON.stringify(
+                  sections.map((s) => ({ time: s.start, label: s.section })),
+                  null,
+                  2,
+                )
+              : sectionsToMarkerFormat(sections, fmt, {
+                  slug,
+                  jamsLayer: 'grid',
+                  annotatorId: null,
+                  bpm: info.bpm,
+                });
+            entries.push({ path: `${slug}/grid/${slug}.${FORMAT_EXT[fmt]}`, body });
+          }
         }));
       }
 
@@ -826,11 +809,11 @@ export function ExportManagerModal({
       const cacheFailures: string[] = [];
       const stemFailures: string[] = [];
       if ((includeAlgos || includeStems) && presentation === 'multi') {
-        const listings = await Promise.all(slugs.map(async (slug) => ({
+        const listings = await mapWithConcurrency(slugs, 6, async (slug) => ({
           slug,
           listing: await fetchSongCacheListing(slug),
-        })));
-        await Promise.all(listings.map(async ({ slug, listing }) => {
+        }));
+        await mapWithConcurrency(listings, 4, async ({ slug, listing }) => {
           if (includeAlgos) {
             await Promise.all(listing.analysis.map(async (entry) => {
               // Inline entries (data/algorithm-outputs/*) ship as plain JSON.
@@ -840,7 +823,7 @@ export function ExportManagerModal({
               }
               if (!entry.url) return;
               try {
-                const res = await fetch(entry.url);
+                const res = await fetch(entry.url, { headers: annotatorHeaders() });
                 if (!res.ok) { cacheFailures.push(`${slug} ${entry.url}`); return; }
                 const blob = await res.blob();
                 entries.push({ path: `${slug}/algos/${entry.name}`, body: blob });
@@ -854,7 +837,7 @@ export function ExportManagerModal({
             await Promise.all(listing.stems.map(async (entry) => {
               if (!entry.url) return;
               try {
-                const res = await fetch(entry.url);
+                const res = await fetch(entry.url, { headers: annotatorHeaders() });
                 if (!res.ok) { stemFailures.push(`${slug} ${entry.url}`); return; }
                 const blob = await res.blob();
                 entries.push({ path: `${slug}/stems/${entry.name}`, body: blob });
@@ -864,7 +847,7 @@ export function ExportManagerModal({
               }
             }));
           }
-        }));
+        });
       }
 
       // Bundle audio for each in-scope song, in parallel. Skipped silently for
@@ -874,11 +857,11 @@ export function ExportManagerModal({
       if (includeAudio) {
         const songsById = new Map(allSongs.map((s) => [s.id, s] as const));
         if (currentSong) songsById.set(currentSong.id, currentSong);
-        const audioFetches = slugs.map(async (slug) => {
+        const fetched = (await mapWithConcurrency(slugs, 4, async (slug) => {
           const entry = songsById.get(slug);
           if (!entry?.url) { audioFailures.push(`${slug} (no url)`); return null; }
           try {
-            const res = await fetch(entry.url);
+            const res = await fetch(entry.url, { headers: annotatorHeaders() });
             if (!res.ok) { audioFailures.push(`${slug} (HTTP ${res.status})`); return null; }
             const blob = await res.blob();
             const audioExt = (entry.file?.match(/\.[a-z0-9]+$/i)?.[0]
@@ -887,11 +870,10 @@ export function ExportManagerModal({
             return { path: `${slug}/audio${audioExt}`, body: blob } as Entry;
           } catch (err) {
             console.error('[export-audio]', slug, err);
-            audioFailures.push(`${slug} (network)`);
+            audioFailures.push(`${slug} (${err instanceof Error ? err.message : 'network'})`);
             return null;
           }
-        });
-        const fetched = (await Promise.all(audioFetches)).filter((e): e is Entry => e !== null);
+        })).filter((e): e is Entry => e !== null);
         entries.push(...fetched);
       }
 
@@ -903,8 +885,23 @@ export function ExportManagerModal({
 
       if (willZip) {
         const zip = new JSZip();
-        for (const e of entries) zip.file(e.path, e.body);
-        const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+        for (const e of entries) {
+          // Audio/stems/algo binaries make up the bulk of large exports and are
+          // already compact (mp3/flac/wav blobs). DEFLATE-ing ~1GB of them in
+          // single-threaded JS takes minutes and makes the tab look frozen — the
+          // classic "stuck export". Store binaries uncompressed (near-instant,
+          // just CRC + concat) and only DEFLATE the tiny text bodies (JSON/CSV/
+          // markers), where compression actually pays off.
+          const compression = typeof e.body === 'string' ? 'DEFLATE' : 'STORE';
+          zip.file(e.path, e.body, { compression });
+        }
+        setZipProgress(0);
+        const blob = await zip.generateAsync(
+          // streamFiles avoids buffering each entry twice while packing.
+          { type: 'blob', streamFiles: true },
+          (meta) => setZipProgress(meta.percent),
+        );
+        setZipProgress(null);
         setLastZipBytes(blob.size);
         const tag = includeAudio ? 'with-audio' : 'export';
         triggerBlobDownload(`timecues-${tag}-${stamp}.zip`, blob);
@@ -913,6 +910,19 @@ export function ExportManagerModal({
         if (gridFailures.length > 0) console.warn('[export] grid-labels skipped for:', gridFailures);
         if (cacheFailures.length > 0) console.warn('[export] algo caches skipped for:', cacheFailures);
         if (stemFailures.length > 0) console.warn('[export] stems skipped for:', stemFailures);
+        // Surface dropped content so a partial archive is never mistaken for a
+        // complete one. Audio especially — a "with-audio" zip that quietly
+        // shipped without songs is the bug we're guarding against here.
+        const skips: string[] = [];
+        if (audioFailures.length > 0) skips.push(`${audioFailures.length} audio`);
+        if (stemFailures.length > 0) skips.push(`${stemFailures.length} stem file(s)`);
+        if (cacheFailures.length > 0) skips.push(`${cacheFailures.length} algo file(s)`);
+        if (skips.length > 0) {
+          setWarning(
+            `Exported, but skipped ${skips.join(', ')} (fetch failed). `
+            + 'See the browser console for the list. The archive is incomplete.',
+          );
+        }
       } else {
         // Exactly one file — flatten the path so the user gets just <slug>.<ext>.
         const only = entries[0];
@@ -935,11 +945,15 @@ export function ExportManagerModal({
 
       setBusy(false);
       // Keep the modal open after an audio bundle so the user can see the
-      // resulting zip size; otherwise close it as before.
-      if (!includeAudio) onOpenChange(false);
+      // resulting zip size, or whenever something was skipped so the warning is
+      // visible; otherwise close it as before.
+      const hadSkips =
+        audioFailures.length > 0 || stemFailures.length > 0 || cacheFailures.length > 0;
+      if (!includeAudio && !hadSkips) onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed.');
       setBusy(false);
+      setZipProgress(null);
     }
   };
 
@@ -1088,13 +1102,7 @@ export function ExportManagerModal({
               )}
               {anyNonJsonFormat && !showLoopsAndPatterns && (
                 <p className="mt-2 text-[10px] leading-snug text-slate-500 italic">
-                  Loops &amp; Patterns are hidden (experimental — enable in Settings).
-                </p>
-              )}
-              {anyNonJsonFormat && showLoopsAndPatterns && (
-                <p className="mt-2 text-[10px] leading-snug text-slate-500 italic">
-                  Patterns export as TimeCues JSON only — flat formats can&apos;t
-                  represent the per-cycle sub-beat grid.
+                  Loops are hidden (experimental — enable in Settings).
                 </p>
               )}
             </Column>
@@ -1180,6 +1188,29 @@ export function ExportManagerModal({
                       BPM / time signature / grid offset per song. Recommended.
                     </span>
                   </span>
+                </label>
+                <label
+                  className="flex items-start gap-2 text-[11px] text-slate-300"
+                  title="Expands the song's beat grid into an individual labels file at <slug>/grid/<slug>.<ext>, written once per selected format. Pick the resolution: bars (downbeats), beats, sub-beats (8th/16th), or phrases (every 4 bars)."
+                >
+                  <span className="flex-1">
+                    Grid labels
+                    <span className="block text-[10px] text-slate-500 leading-tight">
+                      Expanded grid markers at <code className="text-slate-400">grid/&lt;slug&gt;</code>, one file per selected format.
+                    </span>
+                  </span>
+                  <select
+                    value={gridGranularity}
+                    onChange={(e) => setGridGranularity(e.target.value as GridExportGranularity | 'off')}
+                    className="shrink-0 bg-[#0a0b0d] border border-white/10 rounded px-1.5 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer"
+                  >
+                    <option value="bars">Bars (1, 2, 3…)</option>
+                    <option value="beats">Beats (1.1, 1.2…)</option>
+                    <option value="subbeats-8">Sub-beats · 8th</option>
+                    <option value="subbeats-16">Sub-beats · 16th</option>
+                    <option value="phrases">Phrases (P1, P2…)</option>
+                    <option value="off">Off</option>
+                  </select>
                 </label>
                 <label
                   className="flex items-start gap-2 text-[11px] text-slate-300 cursor-pointer"
@@ -1276,6 +1307,12 @@ export function ExportManagerModal({
             </div>
           )}
 
+          {warning && (
+            <div className="mx-5 mb-3 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-200">
+              {warning}
+            </div>
+          )}
+
           {/* Footer */}
           <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-white/[0.06]">
             <div className="text-[10px] text-slate-600 uppercase tracking-wider">
@@ -1308,7 +1345,11 @@ export function ExportManagerModal({
                     : 'bg-white/[0.03] text-slate-600 border border-white/[0.04] cursor-not-allowed'
                 }`}
               >
-                {busy ? 'Exporting…' : 'Export'}
+                {busy
+                  ? zipProgress != null
+                    ? `Zipping ${Math.round(zipProgress)}%`
+                    : 'Exporting…'
+                  : 'Export'}
               </button>
             </div>
           </div>

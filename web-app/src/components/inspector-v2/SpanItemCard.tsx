@@ -1,4 +1,8 @@
 import type { SpanItem } from '../../types/annotationLayer';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
+import { isEnergySpan } from '../../utils/energySpan';
+import { ProminenceBadge } from './shared/ProminenceControl';
+import { PulseBadge } from './shared/PulseControl';
 import {
   ItemCardShell,
   ItemCardHeader,
@@ -7,13 +11,6 @@ import {
   ItemCardActionRow,
   ItemCardIconButton,
 } from './ItemCard';
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
-}
 
 export interface SpanItemCardProps {
   index: number;
@@ -31,6 +28,8 @@ export interface SpanItemCardProps {
   isLast?: boolean;
   /** Optional datalist id for label autocomplete (span taxonomy). */
   labelTaxonomyId?: string;
+  /** Override time formatter — used in Grid Lock to show bar·beat instead of mm:ss. */
+  fmt?: (t: number) => string;
 }
 
 /** Span card — same shell as SectionCard with start + end times, duration
@@ -39,8 +38,9 @@ export function SpanItemCard({
   index, span, color, isSelected = false, onSelect,
   onChangeLabel, onSnapStart, onSnapEnd, onToggleImportance,
   onPlay, onDelete, onInsertAfter, isLast,
-  labelTaxonomyId,
+  labelTaxonomyId, fmt: fmtOverride,
 }: SpanItemCardProps) {
+  const fmt = fmtOverride ?? fmtTime;
   const isCritical = span.importance !== 'optional';
   const duration = Math.max(0, span.end - span.start);
   const durationBadge = (
@@ -69,16 +69,23 @@ export function SpanItemCard({
         listId={labelTaxonomyId}
       />
 
+      <div className="flex flex-wrap items-center gap-1">
+        <ProminenceBadge points={span.prominence} color={color} />
+        {/* An ⚡ Energy span is never offered a pulse in its card, so it never
+          * shows one here either — see SpanEditPopover. */}
+        {!isEnergySpan(span.description) && <PulseBadge rate={span.pulse} color={color} />}
+      </div>
+
       <SnapTimeRow
         time={span.start}
-        fmt={fmtTime}
+        fmt={fmt}
         onSnap={onSnapStart}
         snapTitle="Snap start to playhead"
       />
 
       <SnapTimeRow
         time={span.end}
-        fmt={fmtTime}
+        fmt={fmt}
         onSnap={onSnapEnd}
         snapTitle="Snap end to playhead"
         prefix="–"

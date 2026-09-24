@@ -35,8 +35,9 @@ RUN pip install --no-cache-dir \
         "Cython>=0.29" \
     && pip install --no-cache-dir "msaf>=0.1.80"
 
-COPY tools/python/paths.py       /app/tools/python/paths.py
-COPY tools/python/msaf_server.py /app/tools/python/msaf_server.py
+COPY tools/python/paths.py          /app/tools/python/paths.py
+COPY tools/python/server_common.py  /app/tools/python/server_common.py
+COPY tools/python/msaf_server.py    /app/tools/python/msaf_server.py
 
 # Read-only seed dataset so MSAF can analyse the shipped default tracks even
 # when the user's data/ is empty.

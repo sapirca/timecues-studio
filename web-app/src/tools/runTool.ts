@@ -13,6 +13,7 @@ import {
 } from '../services/audioAnalysis';
 import { computeMIRFeatures, type MIRFeatures } from '../services/mirAnalysis';
 import { runBandGradient, type BandGradientResult, type BandGradientParams } from '../utils/bandGradient';
+import { cueToSection, type CueSection } from '../utils/drumHits';
 
 // ─── MIR feature cache ─────────────────────────────────────────────────────────
 // WeakMap keyed on AudioBuffer — GC'd automatically when the buffer is released.
@@ -107,7 +108,7 @@ export interface HPSResult {
 
 // Demucs stem separation result (offline-cached, loaded from /stems/<slug>/manifest.json)
 export interface DemucsResult {
-  stems: { vocals: string; drums: string; bass: string; other: string };
+  stems: { vocals: string; drums: string; bass: string; other: string; guitar?: string; piano?: string };
   model: string;
   audioFile: string;
   computedAt: number;
@@ -182,11 +183,14 @@ export interface SpanStructureResult {
 
 export type SpanToolId = 'silero-vad' | 'jdcnet-voicing' | 'panns-cnn14';
 
-/** LOOP-family detector result (experimental — gated by `experimentalLoopFamily`).
- *  Stored under data/algorithm-outputs/loop/<slug>/<algo>.json. Sections shape
- *  matches the BOUNDARY-family inspector so the row visualization works without
- *  a separate render path. */
-export interface LoopStructureResult {
+/** PATTERN-family detector result (experimental — gated by `experimentalPatternFamily`).
+ *  Stored under data/algorithm-outputs/pattern/<slug>/<algo>.json. Each detected
+ *  motif occurrence becomes one section so the inspector row can render them
+ *  individually (LoCoMotif motif occurrences are variable-length and not
+ *  evenly spaced — the contiguous-tile model of PatternItem.repeatCount would
+ *  misrepresent them). The `type` field carries `motif-<id>` so the renderer
+ *  can color same-motif tiles consistently. */
+export interface PatternStructureResult {
   algorithm: string;
   algoName: string;
   audioFile: string;
@@ -196,7 +200,7 @@ export interface LoopStructureResult {
   elapsedSec: number;
 }
 
-export type LoopToolId = 'chroma-autocorr';
+export type PatternToolId = 'locomotif';
 
 /** CUE-family note-onset detector result (basic-pitch). Each transcribed note
  *  collapses to a single cue at its onset time, labeled with the pitch name
@@ -224,14 +228,14 @@ export interface CueExtrasResult {
   algoName: string;
   audioFile: string;
   duration: number;
-  sections: { time: number; endTime: number; type: string; label: string }[];
+  sections: CueSection[];
   computedAt: number;
   elapsedSec: number;
   /** Optional global key, set only by `librosa-key`. */
   key?: string | null;
 }
 
-export type CueExtrasToolId = 'librosa-key' | 'autochord-chords' | 'librosa-onsets';
+export type CueExtrasToolId = 'librosa-key' | 'autochord-chords' | 'librosa-onsets' | 'drum-transients';
 
 /** HPSS percussive-span result (SPAN family). Same shape as SpanStructureResult. */
 export type PercussiveToolId = 'hpss-percussive';
@@ -250,7 +254,7 @@ export interface LyricsToolResult {
   elapsedSec: number;
 }
 
-export type LyricsToolId = 'whisper-base';
+export type LyricsToolId = 'whisper-base' | 'ctc-forced-aligner';
 
 // Re-export for use in InspectorPage
 export type { BandGradientResult };
@@ -283,13 +287,15 @@ export type ToolResultData =
   | { toolId: 'silero-vad';     result: SpanStructureResult }
   | { toolId: 'jdcnet-voicing'; result: SpanStructureResult }
   | { toolId: 'panns-cnn14';    result: SpanStructureResult }
-  | { toolId: 'chroma-autocorr'; result: LoopStructureResult }
   | { toolId: 'basic-pitch';    result: PitchNoteCueResult }
   | { toolId: 'librosa-key';      result: CueExtrasResult }
   | { toolId: 'autochord-chords'; result: CueExtrasResult }
   | { toolId: 'librosa-onsets';   result: CueExtrasResult }
+  | { toolId: 'drum-transients'; result: CueExtrasResult }
   | { toolId: 'hpss-percussive';  result: SpanStructureResult }
-  | { toolId: 'whisper-base';     result: LyricsToolResult };
+  | { toolId: 'whisper-base';         result: LyricsToolResult }
+  | { toolId: 'ctc-forced-aligner';   result: LyricsToolResult }
+  | { toolId: 'locomotif';        result: PatternStructureResult };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -593,20 +599,20 @@ async function loadOrRunPanns(audioSlug: string): Promise<SpanStructureResult> {
   };
 }
 
-/** Load a LOOP-family detector's cached result via the python loop_server
- *  (/api/loop). Falls back to POST on cache miss. Sections are the `loops`
- *  array projected onto the boundary inspector's row shape. */
-async function loadOrRunLoop(audioSlug: string): Promise<LoopStructureResult> {
-  const toolId = 'chroma-autocorr';
-  const cacheUrl = `/api/loop/detect/${encodeURIComponent(audioSlug)}/${encodeURIComponent(toolId)}`;
+/** Load a LoCoMotif PATTERN-family motif cache via /api/pattern. Each motif
+ *  occurrence projects to one section with `type = "motif-<id>"` so the
+ *  inspector colors occurrences of the same motif consistently. */
+async function loadOrRunPattern(audioSlug: string): Promise<PatternStructureResult> {
+  const toolId = 'locomotif';
+  const cacheUrl = `/api/pattern/detect/${encodeURIComponent(audioSlug)}/${encodeURIComponent(toolId)}`;
   let raw: unknown = null;
   try {
     const cacheRes = await fetch(cacheUrl);
     if (cacheRes.ok) raw = await cacheRes.json();
   } catch { raw = null; }
 
-  if (!raw || typeof raw !== 'object' || !('loops' in raw)) {
-    const post = await fetch('/api/loop/detect', {
+  if (!raw || typeof raw !== 'object' || !('patterns' in raw)) {
+    const post = await fetch('/api/pattern/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ slug: audioSlug, algo: toolId }),
@@ -614,21 +620,28 @@ async function loadOrRunLoop(audioSlug: string): Promise<LoopStructureResult> {
     if (!post.ok) {
       const err = await post.json().catch(() => ({ error: `HTTP ${post.status}` }));
       if (post.status === 503) {
-        throw new Error('LOOP sidecar is not running. Start it with:\n  docker compose --profile experimental-models up --build loop');
+        throw new Error('PATTERN sidecar is not running. Start it with:\n  docker compose --profile experimental-models up --build pattern');
       }
-      throw new Error((err as { error?: string }).error ?? `LOOP detect failed (${post.status})`);
+      throw new Error((err as { error?: string }).error ?? `PATTERN detect failed (${post.status})`);
     }
     raw = await post.json();
   }
-  const payload = raw as { audio_file?: string; duration?: number; loops?: { start: number; end: number; label: string; bars: number | null }[]; ms?: number; ok?: boolean; error?: string };
-  if (payload.ok === false) throw new Error(payload.error ?? 'LOOP returned ok=false');
+  const payload = raw as {
+    audio_file?: string;
+    duration?: number;
+    patterns?: { start: number; end: number; label: string; motif_id: number }[];
+    ms?: number;
+    ok?: boolean;
+    error?: string;
+  };
+  if (payload.ok === false) throw new Error(payload.error ?? 'PATTERN returned ok=false');
   return {
     algorithm:  toolId,
     algoName:   toolId,
     audioFile:  payload.audio_file ?? `${audioSlug}.mp3`,
     duration:   payload.duration ?? 0,
-    sections:   (payload.loops ?? []).map((l) => ({
-      time: l.start, endTime: l.end, type: 'loop', label: l.label,
+    sections:   (payload.patterns ?? []).map((p) => ({
+      time: p.start, endTime: p.end, type: `motif-${p.motif_id}`, label: p.label,
     })),
     computedAt: Date.now(),
     elapsedSec: (payload.ms ?? 0) / 1000,
@@ -706,7 +719,7 @@ async function loadOrRunCueExtras(toolId: CueExtrasToolId, audioSlug: string): P
   }
   const payload = raw as {
     audio_file?: string; duration?: number; ms?: number; key?: string | null; ok?: boolean; error?: string;
-    cues?: { time: number; label: string }[];
+    cues?: { time: number; label: string; velocity?: number; levelDb?: number }[];
   };
   if (payload.ok === false) throw new Error(payload.error ?? `${toolId} returned ok=false`);
   return {
@@ -714,9 +727,7 @@ async function loadOrRunCueExtras(toolId: CueExtrasToolId, audioSlug: string): P
     algoName:   toolId,
     audioFile:  payload.audio_file ?? `${audioSlug}.mp3`,
     duration:   payload.duration ?? 0,
-    sections:   (payload.cues ?? []).map((c) => ({
-      time: c.time, endTime: c.time, type: 'cue', label: c.label,
-    })),
+    sections:   (payload.cues ?? []).map(cueToSection),
     computedAt: Date.now(),
     elapsedSec: (payload.ms ?? 0) / 1000,
     key:        payload.key ?? null,
@@ -765,11 +776,15 @@ async function loadOrRunPercussive(audioSlug: string): Promise<SpanStructureResu
   };
 }
 
-/** Whisper-base lyrics loader. Projects per-word entries into per-word cues
- *  for the boundary inspector; full payload (lines, language) is preserved
- *  on `LyricsToolResult` for downstream consumers that need the structure. */
-async function loadOrRunLyrics(audioSlug: string): Promise<LyricsToolResult> {
-  const toolId = 'whisper-base';
+/** Lyrics-family loader. Projects per-word entries into per-word cues for the
+ *  boundary inspector; full payload (lines, language) is preserved on
+ *  `LyricsToolResult` for downstream consumers that need the structure.
+ *
+ *  For `ctc-forced-aligner`, the loader also pulls the per-song reference text
+ *  from `/api/lyrics-text/<slug>` and posts it along with the detect request.
+ *  Without a transcript on disk the sidecar returns ok=false with a clear
+ *  error message asking the annotator to fill the Lyrics text panel first. */
+async function loadOrRunLyrics(audioSlug: string, toolId: LyricsToolId): Promise<LyricsToolResult> {
   const cacheUrl = `/api/lyrics/detect/${encodeURIComponent(audioSlug)}/${encodeURIComponent(toolId)}`;
   let raw: unknown = null;
   try {
@@ -778,10 +793,17 @@ async function loadOrRunLyrics(audioSlug: string): Promise<LyricsToolResult> {
   } catch { raw = null; }
 
   if (!raw || typeof raw !== 'object' || !('words' in raw)) {
+    const body: Record<string, unknown> = { slug: audioSlug, algo: toolId };
+    if (toolId === 'ctc-forced-aligner') {
+      try {
+        const txtRes = await fetch(`/api/lyrics-text/${encodeURIComponent(audioSlug)}`);
+        if (txtRes.ok) body.text = await txtRes.text();
+      } catch { /* sidecar returns a clear error when text is missing */ }
+    }
     const post = await fetch('/api/lyrics/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug: audioSlug, algo: toolId }),
+      body: JSON.stringify(body),
     });
     if (!post.ok) {
       const err = await post.json().catch(() => ({ error: `HTTP ${post.status}` }));
@@ -1067,12 +1089,6 @@ export async function runTool(
       return { toolId: 'panns-cnn14', result };
     }
 
-    case 'chroma-autocorr': {
-      if (!audioSlug) throw new Error('LOOP tools require an audioSlug.');
-      const result = await loadOrRunLoop(audioSlug);
-      return { toolId: 'chroma-autocorr', result };
-    }
-
     case 'basic-pitch': {
       if (!audioSlug) throw new Error('basic-pitch requires an audioSlug.');
       const result = await loadOrRunPitch(audioSlug);
@@ -1081,7 +1097,8 @@ export async function runTool(
 
     case 'librosa-key':
     case 'autochord-chords':
-    case 'librosa-onsets': {
+    case 'librosa-onsets':
+    case 'drum-transients': {
       if (!audioSlug) throw new Error('CUE-extras tools require an audioSlug.');
       const result = await loadOrRunCueExtras(toolId as CueExtrasToolId, audioSlug);
       return { toolId: toolId as CueExtrasToolId, result };
@@ -1095,8 +1112,20 @@ export async function runTool(
 
     case 'whisper-base': {
       if (!audioSlug) throw new Error('Whisper-base requires an audioSlug.');
-      const result = await loadOrRunLyrics(audioSlug);
+      const result = await loadOrRunLyrics(audioSlug, 'whisper-base');
       return { toolId: 'whisper-base', result };
+    }
+
+    case 'ctc-forced-aligner': {
+      if (!audioSlug) throw new Error('CTC forced aligner requires an audioSlug.');
+      const result = await loadOrRunLyrics(audioSlug, 'ctc-forced-aligner');
+      return { toolId: 'ctc-forced-aligner', result };
+    }
+
+    case 'locomotif': {
+      if (!audioSlug) throw new Error('PATTERN tools require an audioSlug.');
+      const result = await loadOrRunPattern(audioSlug);
+      return { toolId: 'locomotif', result };
     }
 
     default:

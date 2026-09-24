@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Batch MIR evaluation across all reviewed manual annotations.
+Batch MIR evaluation across every song whose boundaries layer is reviewed.
 
 For each reviewed song, loads every available algorithm result from
     data/algorithm-outputs/analysis/<slug>/<algo>.json
-and evaluates it against the manual annotation using mir_eval.
+and evaluates it against the song's first boundaries layer using mir_eval.
 
 Usage:
     python tools/python/evaluate_reviewed.py [--tolerance 0.5] [--tolerance2 3.0]
@@ -20,7 +20,7 @@ import mir_eval.segment
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from paths import ANALYSIS_DIR, REPO_ROOT, MANUAL_ANNOTATIONS_DIR as ANNOTATIONS_DIR  # noqa: E402
+from paths import ANALYSIS_DIR, REPO_ROOT, ANNOTATION_LAYERS_DIR as ANNOTATIONS_DIR  # noqa: E402
 
 ALGO_FILES = {
     "allin1":       "allin1.json",
@@ -40,16 +40,31 @@ ALGO_FILES = {
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+def boundary_items(doc: dict) -> list[dict]:
+    """Items of the FIRST boundaries layer, time-sorted.
+
+    A song may carry several boundary layers (a second reading of the same
+    structure); the first is the reference, matching canvas order.
+    """
+    layers = doc.get("layers")
+    if not isinstance(layers, list):
+        return []
+    for layer in layers:
+        if isinstance(layer, dict) and layer.get("type") == "boundaries":
+            items = [i for i in layer.get("items") or [] if isinstance(i, dict) and "time" in i]
+            return sorted(items, key=lambda i: float(i["time"]))
+    return []
+
+
 def load_manual(path: Path):
-    data = json.loads(path.read_text())
-    sections = data.get("sections", [])
-    # Infer endTimes from the next section's start (track duration unknown → use last+60)
-    track_duration = sections[-1]["time"] + 60 if sections else 300.0
+    items = boundary_items(json.loads(path.read_text()))
+    # Infer endTimes from the next item's start (track duration unknown → last+60)
+    track_duration = float(items[-1]["time"]) + 60 if items else 300.0
     result = []
-    for i, s in enumerate(sections):
+    for i, s in enumerate(items):
         result.append({
             "time":    float(s["time"]),
-            "endTime": float(sections[i + 1]["time"]) if i + 1 < len(sections) else track_duration,
+            "endTime": float(items[i + 1]["time"]) if i + 1 < len(items) else track_duration,
             "label":   s.get("type", s.get("label", f"seg{i}")),
         })
     return result, track_duration
@@ -162,12 +177,13 @@ def main():
     parser.add_argument("--tolerance2", type=float, default=3.0,  help="Secondary tolerance (default 3.0s)")
     args = parser.parse_args()
 
-    # Load all reviewed annotations
+    # Every layers document whose boundaries layer is marked reviewed. The
+    # glob is recursive because documents live under <annotator>/<slug>.json.
     reviewed = []
-    for f in sorted(ANNOTATIONS_DIR.glob("*.json")):
+    for f in sorted(ANNOTATIONS_DIR.glob("**/*.json")):
         try:
             data = json.loads(f.read_text())
-            if data.get("reviewed"):
+            if (data.get("statusByType") or {}).get("boundaries") == "reviewed":
                 reviewed.append((f.stem, f))
         except Exception:
             pass

@@ -23,10 +23,15 @@ if str(_TOOLS_PY) not in sys.path:
 
 @pytest.fixture
 def isolated_custom_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Redirect CUSTOM_DIR to tmp_path for the duration of a test."""
+    """Redirect CUSTOM_DIR to a tmp dir for the duration of a test, and
+    DEFAULT_CUSTOM_DIR to an empty sibling so the shipped examples stay out."""
     import custom_loader
-    monkeypatch.setattr(custom_loader, "CUSTOM_DIR", tmp_path)
-    return tmp_path
+    user, default = tmp_path / "custom", tmp_path / "custom-default"
+    user.mkdir()
+    default.mkdir()
+    monkeypatch.setattr(custom_loader, "CUSTOM_DIR", user)
+    monkeypatch.setattr(custom_loader, "DEFAULT_CUSTOM_DIR", default)
+    return user
 
 
 def write(dir_: Path, fname: str, body: str) -> Path:
@@ -394,3 +399,70 @@ class NeedsMissing2(CustomDetector):
     assert info.value.hint is not None
     assert info.value.hint["missing_module"] == _MISSING_MODULE
     assert info.value.hint["suggested_install"] == f"pip install {_MISSING_MODULE}"
+
+
+# ─── custom/ over custom-default/ ────────────────────────────────────────────
+
+
+def _detector_src(name: str, label: str) -> str:
+    return f"""
+from custom_api import CustomDetector, Boundary
+
+class D(CustomDetector):
+    name = "{name}"
+    label = "{label}"
+    output_kind = "boundary"
+    is_algorithm = True
+
+    def detect(self, ctx):
+        return [Boundary(time_ms=1000)]
+"""
+
+
+def test_scan_includes_shipped_defaults(isolated_custom_dir):
+    from custom_loader import DEFAULT_CUSTOM_DIR, scan
+    write(DEFAULT_CUSTOM_DIR, "shipped.py", _detector_src("shipped", "Shipped"))
+    write(isolated_custom_dir, "mine.py", _detector_src("mine", "Mine"))
+    assert sorted(e.name for e in scan()) == ["mine", "shipped"]
+
+
+def test_user_file_shadows_default_with_same_filename(isolated_custom_dir):
+    from custom_loader import DEFAULT_CUSTOM_DIR, scan
+    write(DEFAULT_CUSTOM_DIR, "shipped.py", _detector_src("shipped", "Original"))
+    write(isolated_custom_dir, "shipped.py", _detector_src("shipped", "Edited"))
+    entries = scan()
+    assert len(entries) == 1
+    assert entries[0].status == "ok"
+    assert entries[0].label == "Edited"
+    assert Path(entries[0].file).parent == isolated_custom_dir
+
+
+def test_editing_a_default_writes_a_copy_and_leaves_the_original(isolated_custom_dir, monkeypatch):
+    import custom_loader
+    import custom_server
+    monkeypatch.setattr(custom_server, "CUSTOM_DIR", isolated_custom_dir)
+    original = write(custom_loader.DEFAULT_CUSTOM_DIR, "shipped.py", _detector_src("shipped", "Original"))
+
+    entry = custom_server.write_script("shipped", _detector_src("shipped", "Edited"))
+
+    assert Path(entry["file"]) == isolated_custom_dir / "shipped.py"
+    assert entry["label"] == "Edited"
+    assert "Original" in original.read_text()
+
+
+def test_deleting_a_default_is_refused_but_its_copy_can_go(isolated_custom_dir, monkeypatch):
+    import custom_loader
+    import custom_server
+    monkeypatch.setattr(custom_server, "CUSTOM_DIR", isolated_custom_dir)
+    monkeypatch.setattr(custom_server, "TRASH_DIR", isolated_custom_dir / ".trash")
+    monkeypatch.setattr(custom_server, "delete_results_for", lambda name: None)
+    original = write(custom_loader.DEFAULT_CUSTOM_DIR, "shipped.py", _detector_src("shipped", "Original"))
+
+    with pytest.raises(custom_server.ShippedDetectorError):
+        custom_server.delete_script("shipped")
+    assert original.is_file()
+
+    write(isolated_custom_dir, "shipped.py", _detector_src("shipped", "Edited"))
+    assert custom_server.delete_script("shipped") is not None
+    [entry] = custom_loader.scan()
+    assert entry.label == "Original"

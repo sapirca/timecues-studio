@@ -6,10 +6,8 @@ Per-song hierarchy:
   ├── audio/              — Audio files
   ├── song-info/          — Per-annotator metadata: <annotator>.json
   ├── annotations/        — All annotation types grouped by slug
-  │   ├── manual/<annotator>/<slug>.json
-  │   ├── eye/<annotator>/<slug>.json
-  │   ├── auto-guess/<annotator>/<slug>.json
-  │   └── layers/<annotator>/<slug>.json
+  │   ├── layers/<annotator>/<slug>.json
+  │   └── auto-guess/<annotator>/<slug>.json
   ├── stems/              — Demix stems
   └── analysis/           — Algorithm outputs
       ├── algo-clusters.json
@@ -63,6 +61,13 @@ def safe_segment(raw: Optional[str]) -> Optional[str]:
         return None
     return v
 
+def slugify(name: str) -> str:
+    """Convert a display name / filename to a URL-safe slug."""
+    name = re.sub(r"\.[^.]+$", "", name)          # strip extension
+    name = name.lower()
+    name = re.sub(r"[^a-z0-9]+", "-", name)
+    return name.strip("-")
+
 DATA_DIR         = REPO_ROOT / "data"
 DEFAULT_DATA_DIR = REPO_ROOT / "data-default"
 
@@ -78,54 +83,65 @@ def song_dir(slug: str) -> Path:
     """Get the base directory for a song."""
     return SONGS_DIR / slug
 
-def default_song_dir(slug: str) -> Path:
-    """Get the default data directory for a song."""
-    return DEFAULT_SONGS_DIR / slug
-
-def annotations_dir(slug: str) -> Path:
-    """Get annotations directory for a song: songs/<slug>/annotations"""
-    return song_dir(slug) / "annotations"
-
-def analysis_dir(slug: str) -> Path:
-    """Get analysis directory for a song: songs/<slug>/analysis"""
-    return song_dir(slug) / "analysis"
-
 def stems_dir(slug: str) -> Path:
     """Get stems directory for a song: songs/<slug>/stems"""
     return song_dir(slug) / "stems"
 
-def song_info_dir(slug: str) -> Path:
-    """Get song-info directory for a song: songs/<slug>/song-info"""
-    return song_dir(slug) / "song-info"
+# Demucs stems do NOT live under songs/<slug>/stems (that legacy per-song dir is
+# unused). Their location depends on the environment:
+#   * dev / run.sh:  web-app/public/stems/<slug>/  (stems daemon default;
+#                    Vite serves them at /stems/...).
+#   * prod docker:   data/stems/<slug>/  — the single /var/lib/timecues/data
+#                    volume holds everything; the web container re-maps
+#                    data/stems → /app/web-app/public/stems, but the
+#                    experimental sidecars only mount data, so inside a sidecar
+#                    the stems are reachable solely at data/stems.
+#   * shipped seeds: data-default/stems/<slug>/  (read-only CC0 demo tracks).
+# Search all three (user/dev trees first) so a per-stem detector run finds the
+# stem regardless of which environment it runs in.
+WEB_STEMS_DIR     = REPO_ROOT / "web-app" / "public" / "stems"
+DATA_STEMS_DIR    = DATA_DIR / "stems"
+DEFAULT_STEMS_DIR = DEFAULT_DATA_DIR / "stems"
 
-# Annotation type directories (per-song)
-def manual_annotations_dir(slug: str) -> Path:
-    return annotations_dir(slug) / "manual"
+# The six Demucs stems (htdemucs_6s). "mix" is the full track (the default,
+# non-stem run) and is intentionally NOT in this set — callers treat stem in
+# (None, "mix") as the full-mix path through find_audio(). `guitar` and `piano`
+# are the 6-source split of the old single `other` stem.
+STEM_NAMES = ("vocals", "drums", "bass", "other", "guitar", "piano")
 
-def eye_annotations_dir(slug: str) -> Path:
-    return annotations_dir(slug) / "eye"
 
-def auto_guess_annotations_dir(slug: str) -> Path:
-    return annotations_dir(slug) / "auto-guess"
+def stem_audio(slug: str, stem: str) -> Optional[Path]:
+    """Return the cached Demucs stem file for (slug, stem), or None.
 
-def annotation_layers_dir(slug: str) -> Path:
-    return annotations_dir(slug) / "layers"
+    Searches web-app/public/stems/<slug>/ (locally-generated) then
+    data-default/stems/<slug>/ (shipped seed). The stems daemon writes .wav;
+    the CC0 seeds ship as .mp3 — accept either. Validates both segments with
+    safe_segment() so a forgotten validator at a caller can't traverse out of
+    the stems dirs, and rejects any stem outside STEM_NAMES.
+    """
+    if safe_segment(slug) is None:
+        return None
+    if stem not in STEM_NAMES:
+        return None
+    for base in (WEB_STEMS_DIR, DATA_STEMS_DIR, DEFAULT_STEMS_DIR):
+        slug_dir = base / slug
+        if not slug_dir.is_dir():
+            continue
+        for ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a"):
+            cand = slug_dir / f"{stem}{ext}"
+            if cand.is_file():
+                return cand
+    return None
 
-# Analysis output directories (per-song)
-def algo_clusters_dir(slug: str) -> Path:
-    return analysis_dir(slug) / "algo-clusters.json"
 
-def bpm_detections_dir(slug: str) -> Path:
-    return analysis_dir(slug) / "bpm-detections.json"
-
-def mir_features_dir(slug: str) -> Path:
-    return analysis_dir(slug) / "mir-features.json"
-
-def msaf_dir(slug: str) -> Path:
-    return analysis_dir(slug) / "msaf"
-
-def custom_results_dir(slug: str) -> Path:
-    return analysis_dir(slug) / "custom"
+def cache_name(algo: str, stem: Optional[str] = None) -> str:
+    """Cache-file stem for a (algo, stem) pair: bare `<algo>` for the full mix
+    (stem None/"mix"), `<algo>__<stem>` for a per-stem run. This composite id is
+    the unit of work end-to-end — same string keys the on-disk JSON, the
+    /api/<fam>/detect/<slug>/<id> read URL, and the UI overlay set."""
+    if not stem or stem == "mix":
+        return algo
+    return f"{algo}__{stem}"
 
 # Legacy: These were top-level before the per-song migration
 _DEPRECATED_ANNOTATIONS_DIR = DATA_DIR / "annotations"
@@ -184,14 +200,10 @@ _ALGO_OUTPUTS_DIR    = DATA_DIR / "algorithm-outputs"
 _DEFAULT_ANNOTATIONS_DIR = DEFAULT_DATA_DIR / "annotations"
 
 # Annotation folders (per-annotator subdirs: <dir>/<annotator>/<slug>.json)
-MANUAL_ANNOTATIONS_DIR       = _ANNOTATIONS_DIR / "manual"
-EYE_ANNOTATIONS_DIR        = _ANNOTATIONS_DIR / "eye"
 AUTO_GUESS_ANNOTATIONS_DIR = _ANNOTATIONS_DIR / "auto-guess"
 ANNOTATION_TIMES_DIR       = _ANNOTATIONS_DIR / "timing"
 
 # Default annotation folders shipped with the container (parallel layout).
-DEFAULT_MANUAL_ANNOTATIONS_DIR       = _DEFAULT_ANNOTATIONS_DIR / "manual"
-DEFAULT_EYE_ANNOTATIONS_DIR        = _DEFAULT_ANNOTATIONS_DIR / "eye"
 DEFAULT_AUTO_GUESS_ANNOTATIONS_DIR = _DEFAULT_ANNOTATIONS_DIR / "auto-guess"
 
 # Custom-script annotation folders (per-script subdir + per-annotator subdir).
@@ -221,6 +233,11 @@ MIR_FEATURES_DIR   = _ALGO_OUTPUTS_DIR / "mir-features"
 
 # Custom-script result cache (algorithm-mode): <dir>/<script_name>/<slug>.json
 CUSTOM_RESULTS_DIR = _ALGO_OUTPUTS_DIR / "custom"
+# Read-only data-default seed for the above, shipped inside the image. Lets the
+# demo corpus's curated outputs render on a fresh data dir without a writable
+# cache (parallels DEFAULT_SONGS_DIR / DEFAULT_SONG_INFO_DIR). User data at
+# CUSTOM_RESULTS_DIR always takes precedence.
+DEFAULT_CUSTOM_RESULTS_DIR = DEFAULT_DATA_DIR / "algorithm-outputs" / "custom"
 
 # MSAF raw outputs (per-slug folder: msaf/<slug>/msaf-{algo}.json + estimations.jams)
 MSAF_DIR             = _ALGO_OUTPUTS_DIR / "msaf"
@@ -232,6 +249,14 @@ SPAN_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "span"
 # Experimental: BeatNet CUE-family detector. Same shape as bpm-detections,
 # kept in its own dir so the existing bpm cache doesn't get re-keyed.
 BEATNET_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "beatnet"
+# Experimental: Beat This! CUE-family detector (ISMIR 2024 transformer).
+# Same flat layout as beatnet, and the only detector whose payload also
+# carries fitted grid `segments` (see tools/python/beat_segments.py).
+BEAT_THIS_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "beat-this"
+# Experimental: Beat Transformer (ISMIR 2022) — demixed beat/downbeat
+# tracking. Like beat-this it also carries fitted grid `segments`, and it is
+# the only detector that reads Demucs STEMS rather than the mix.
+BEAT_TRANSFORMER_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "beat-transformer"
 # Experimental: LOOP-family detector outputs (chroma autocorrelation v0).
 # One file per (slug, algorithm): loop/<slug>/<algo>.json.
 LOOP_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "loop"
@@ -250,3 +275,15 @@ CUE_EXTRAS_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "cue-extras"
 PERCUSSIVE_OUTPUTS_DIR = _ALGO_OUTPUTS_DIR / "percussive"
 # Experimental: Whisper-base vocal transcription (LYRICS family).
 LYRICS_OUTPUTS_DIR     = _ALGO_OUTPUTS_DIR / "lyrics"
+# Experimental: LoCoMotif motif discovery (PATTERN family).
+# One file per (slug, algorithm): pattern/<slug>/<algo>.json.
+PATTERN_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "pattern"
+
+# Curated end-products: the five distilled outputs the project ships, each
+# built by an orchestrating generator (tools/python/generators/) that
+# combines the raw caches above (allin1, panns, lyrics, pattern, …) and
+# stems into one clean, importable layer. Distinct from the raw caches so a
+# generator never clobbers the algorithm output it consumes.
+#   curated/<family>/<slug>.json   family in
+#   {phrases, instruments, cues, drum-pattern, lyrics}
+CURATED_OUTPUTS_DIR    = _ALGO_OUTPUTS_DIR / "curated"

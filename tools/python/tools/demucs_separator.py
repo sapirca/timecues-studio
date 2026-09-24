@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Demucs v4 stem separator (htdemucs model).
+"""Demucs v4 stem separator (htdemucs_6s / htdemucs).
 
-Separates audio files into 4 stems: vocals, drums, bass, other.
+Two models are selectable with --model:
+  6s (htdemucs_6s, default) → vocals, drums, bass, other, guitar, piano
+  4s (htdemucs)             → vocals, drums, bass, other
+
+The 6-source model splits the old single `other` stem into guitar + piano +
+a thinner `other` (synths / leads / pads / FX), so melodic content that used
+to be lumped together is now selectable on its own. It costs roughly 1.5x the
+wall time of the 4-source model, which is why 4s stays on offer for a quick
+pass (and for hosts where the extra two stems aren't worth the wait).
 Writes WAV files to public/stems/<slug>/ and a manifest.json consumed by the Inspector UI.
 
 Audio is loaded via librosa (no ffmpeg needed). To stay within the ~2GB
@@ -23,6 +31,8 @@ Cache location (served statically by Vite and used by the web app):
     web-app/public/stems/<slug>/drums.wav
     web-app/public/stems/<slug>/bass.wav
     web-app/public/stems/<slug>/other.wav
+    web-app/public/stems/<slug>/guitar.wav
+    web-app/public/stems/<slug>/piano.wav
     web-app/public/stems/<slug>/manifest.json
 """
 
@@ -38,7 +48,31 @@ import numpy as np
 import soundfile as sf
 import torch
 
-MODEL_NAME = "htdemucs"
+# The two separation models the UI can pick between. `MODEL_NAME` stays the
+# default (and the name other scripts import) so existing callers are unchanged.
+MODEL_6S = "htdemucs_6s"
+MODEL_4S = "htdemucs"
+MODEL_NAME = MODEL_6S
+# Short aliases the HTTP layer passes through, plus the real names so either
+# spelling resolves. Anything else is rejected before a job starts.
+MODEL_ALIASES = {
+    "6s": MODEL_6S, "6": MODEL_6S, MODEL_6S: MODEL_6S,
+    "4s": MODEL_4S, "4": MODEL_4S, MODEL_4S: MODEL_4S,
+}
+
+
+def resolve_model(name: str | None) -> str:
+    """Map a UI/CLI model token onto a demucs pretrained-model name."""
+    if not name:
+        return MODEL_NAME
+    resolved = MODEL_ALIASES.get(str(name).strip().lower())
+    if resolved is None:
+        raise ValueError(
+            f"unknown model {name!r} — expected one of {sorted(set(MODEL_ALIASES))}"
+        )
+    return resolved
+
+
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".ogg", ".m4a"}
 
 # Process at most this many seconds per chunk to stay within ~2 GB RAM.
@@ -63,17 +97,19 @@ if str(TOOLS_DIR) not in sys.path:
 
 from stem_paths import write_manifest
 
-_model = None
+# One cache entry per model name — a session that separates one song with 6s
+# and the next with 4s keeps both loaded rather than re-downloading each swap.
+_models: dict = {}
 
 
-def get_model():
-    global _model
-    if _model is None:
+def get_model(model_name: str = MODEL_NAME):
+    if model_name not in _models:
         from demucs.pretrained import get_model as _get
-        print(f"  Loading {MODEL_NAME} model…")
-        _model = _get(MODEL_NAME)
-        _model.eval()
-    return _model
+        print(f"  Loading {model_name} model…")
+        model = _get(model_name)
+        model.eval()
+        _models[model_name] = model
+    return _models[model_name]
 
 
 def _run_chunk(model, chunk_np: np.ndarray, segment: float | None = None) -> np.ndarray:
@@ -95,8 +131,17 @@ def _run_chunk(model, chunk_np: np.ndarray, segment: float | None = None) -> np.
     return result
 
 
-def separate(audio_path: Path, output_dir: Path, force: bool = False) -> dict:
-    """Separate a single audio file into stems and write manifest. Returns the manifest dict."""
+def separate(
+    audio_path: Path,
+    output_dir: Path,
+    force: bool = False,
+    model: str | None = None,
+) -> dict:
+    """Separate a single audio file into stems and write manifest. Returns the manifest dict.
+
+    ``model`` picks the source count — "6s" (default) or "4s"; see MODEL_ALIASES.
+    """
+    model_name = resolve_model(model)
     slug = audio_path.stem
     stem_dir = output_dir / slug
     manifest_path = stem_dir / "manifest.json"
@@ -108,9 +153,9 @@ def separate(audio_path: Path, output_dir: Path, force: bool = False) -> dict:
 
     stem_dir.mkdir(parents=True, exist_ok=True)
 
-    model = get_model()
+    model = get_model(model_name)
     sr = model.samplerate          # 44100
-    sources = model.sources        # ['drums', 'bass', 'other', 'vocals']
+    sources = model.sources        # 6s: ['drums','bass','other','vocals','guitar','piano']
 
     print(f"  Separating: {audio_path.name}")
     t0 = time.time()
@@ -174,7 +219,15 @@ def separate(audio_path: Path, output_dir: Path, force: bool = False) -> dict:
 
     elapsed = round(time.time() - t0, 2)
 
-    manifest = write_manifest(stem_dir, audio_path.name, sources, elapsed, model_name=MODEL_NAME)
+    # Re-stemming 6s → 4s leaves guitar.wav / piano.wav behind. The manifest no
+    # longer references them, so the UI is already correct, but the orphans burn
+    # disk on a corpus-sized re-run — drop any stem WAV this model didn't write.
+    for stale in stem_dir.glob("*.wav"):
+        if stale.stem not in sources:
+            print(f"    Removing stale stem from a previous model: {stale.name}")
+            stale.unlink(missing_ok=True)
+
+    manifest = write_manifest(stem_dir, audio_path.name, sources, elapsed, model_name=model_name)
 
     print(f"  Done in {elapsed}s  →  {stem_dir}/")
     return manifest
@@ -190,7 +243,19 @@ def main() -> None:
     parser.add_argument("--input", default=str(DEFAULT_INPUT), help="Input directory (for --all)")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Output stems directory")
     parser.add_argument("--force", action="store_true", help="Re-run even if cache already exists")
+    parser.add_argument(
+        "--model",
+        default=MODEL_NAME,
+        help=f"Separation model: 6s ({MODEL_6S}, 6 stems, default) or 4s ({MODEL_4S}, 4 stems)",
+    )
     args = parser.parse_args()
+
+    try:
+        model_name = resolve_model(args.model)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(f"Model: {model_name}")
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,7 +266,7 @@ def main() -> None:
             import sys
             print(f"Error: file not found: {audio_path}", file=sys.stderr)
             sys.exit(1)
-        separate(audio_path, output_dir, force=args.force)
+        separate(audio_path, output_dir, force=args.force, model=model_name)
     else:
         input_dir = Path(args.input)
         files = sorted(p for p in input_dir.iterdir() if p.suffix.lower() in AUDIO_EXTS)
@@ -211,7 +276,7 @@ def main() -> None:
             sys.exit(1)
         print(f"Found {len(files)} file(s) in {input_dir}")
         for f in files:
-            separate(f, output_dir, force=args.force)
+            separate(f, output_dir, force=args.force, model=model_name)
 
     print("All done.")
 

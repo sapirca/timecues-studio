@@ -32,6 +32,26 @@ export interface ConsensusClusterControlsProps<TCentroid extends string = string
 
   extraPopoverSection?: ReactNode;
   popoverAlign?: 'left' | 'right';
+
+  /** 'full' (default) is the historic shape: one Settings button whose popover
+   *  carries algorithms + centroid + min-consensus, plus an always-visible
+   *  cluster-window slider beside it.
+   *
+   *  'detectors' is for surfaces that surface those sliders themselves — the
+   *  Consensus Inspect panel puts window / agreement / centroid in its own
+   *  control strip under the preview they move, so printing them on this
+   *  button too is the duplication that made the panel hard to read. Here the
+   *  button is just the detector picker. */
+  variant?: 'full' | 'detectors';
+  /** Appended after the detector count on the 'detectors' button — the one
+   *  parameter that lives in this popover and nowhere else on the strip, so
+   *  the button says which it is without opening. */
+  buttonSuffix?: string;
+  /** Display-only count of selected algorithms. `selectedAlgoIds` can outlive
+   *  the rows it names (a hand-off, or a detector whose result unloaded), so a
+   *  caller that knows how many are actually live passes it here rather than
+   *  letting the button print a number bigger than the total. */
+  selectedCount?: number;
 }
 
 export function ConsensusClusterControls<TCentroid extends string = string>({
@@ -49,6 +69,9 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
   minConsensusLabel = 'Min consensus',
   extraPopoverSection,
   popoverAlign = 'left',
+  variant = 'full',
+  selectedCount,
+  buttonSuffix,
 }: ConsensusClusterControlsProps<TCentroid>) {
   const [open, setOpen] = useState(false);
   const [hoveredCentroidId, setHoveredCentroidId] = useState<TCentroid | null>(null);
@@ -56,15 +79,19 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
   }, [open]);
 
   const totalAlgos = algoRows.length;
+  const shownSelected = selectedCount ?? selectedAlgoIds.size;
   const selectableMin = Math.max(1, selectedAlgoIds.size);
+  const detectorsOnly = variant === 'detectors';
   const activeCentroid = centroidOptions.find((m) => m.id === (hoveredCentroidId ?? centroidMethod));
 
   return (
@@ -77,16 +104,25 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
               ? 'bg-violet-500/15 border-violet-400/40 text-violet-200'
               : 'bg-white/[0.04] border-white/[0.06] text-slate-300 hover:border-white/[0.12]'
           }`}
-          title="Cluster settings — algorithms, centroid, consensus"
+          title={detectorsOnly ? 'Choose which detectors feed the consensus' : 'Cluster settings — algorithms, centroid, consensus'}
         >
           <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
           </svg>
-          Settings
-          <span className="text-slate-500 font-mono normal-case tracking-normal">
-            {selectedAlgoIds.size}/{totalAlgos} · {clusterWindow}s · {centroidOptions.find((m) => m.id === centroidMethod)?.short}
-            {minConsensus > 1 && ` · ≥${minConsensus}`}
-          </span>
+          {detectorsOnly ? (
+            <span className="font-mono normal-case tracking-normal">
+              {shownSelected} of {totalAlgos} detectors
+              {buttonSuffix && <span className="text-slate-500"> · {buttonSuffix}</span>}
+            </span>
+          ) : (
+            <>
+              Settings
+              <span className="text-slate-500 font-mono normal-case tracking-normal">
+                {shownSelected}/{totalAlgos} · {clusterWindow}s · {centroidOptions.find((m) => m.id === centroidMethod)?.short}
+                {minConsensus > 1 && ` · ≥${minConsensus}`}
+              </span>
+            </>
+          )}
           <svg className={`w-3 h-3 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
           </svg>
@@ -98,7 +134,7 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
             <div className="space-y-1.5">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] uppercase tracking-wider text-slate-500">Algorithms</span>
-                <span className="text-[10px] font-mono text-slate-600">{selectedAlgoIds.size}/{totalAlgos}</span>
+                <span className="text-[10px] font-mono text-slate-600">{shownSelected}/{totalAlgos}</span>
                 <span className="ml-auto flex items-center gap-1.5">
                   <button onClick={() => onSelectedAlgoIdsChange(new Set(algoRows.map((r) => r.id)))} className="text-[10px] uppercase tracking-wider text-violet-400 hover:text-violet-200 transition-colors">all</button>
                   <span className="text-[10px] text-slate-700">·</span>
@@ -167,7 +203,7 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
             </div>
 
             {/* Min consensus / agreement */}
-            {totalAlgos > 0 && (
+            {totalAlgos > 0 && !detectorsOnly && (
               <div className="flex items-center gap-2" title="Show only clusters where at least this many distinct algorithms agree.">
                 <label className="text-[10px] uppercase tracking-wider text-slate-500 w-28 shrink-0">{minConsensusLabel}</label>
                 <input
@@ -190,7 +226,9 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
         )}
       </div>
 
-      {/* Inline cluster window slider — pulled out so the time tolerance is always visible */}
+      {/* Inline cluster window slider — pulled out so the time tolerance is always
+          visible. The 'detectors' variant omits it: that surface draws its own. */}
+      {!detectorsOnly && (
       <div className="flex items-center gap-1.5 text-[11px] text-slate-500" title="Time tolerance for grouping algorithm boundaries into a cluster">
         <span className="uppercase tracking-wider text-[10px]">Cluster window</span>
         <input
@@ -204,6 +242,7 @@ export function ConsensusClusterControls<TCentroid extends string = string>({
         />
         <span className="font-mono text-violet-300 w-10 tabular-nums text-right">{clusterWindow}s</span>
       </div>
+      )}
     </>
   );
 }

@@ -12,6 +12,7 @@ import type { Annotator } from '../types/annotator';
 import { fetchProfileById } from '../services/annotatorProfile';
 import { checkAccess } from '../services/datasetConfig';
 import { AppPageHeader } from './AppPageHeader';
+import { gsiButtonOptions, gsiButtonWidth } from './gsiButton';
 
 type Tab = 'google' | 'identity';
 
@@ -81,11 +82,11 @@ export function LoginScreen() {
     <div className="min-h-screen bg-[#0a0b0d] text-slate-200 flex flex-col">
       <AppPageHeader back={{ title: 'Back to home' }} />
 
-      <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md bg-[#14171d] border border-white/[0.06] rounded-md shadow-2xl shadow-black/60 p-6 space-y-5">
+      <main className="flex-1 flex items-center justify-center px-4 py-6 sm:p-6">
+        <div className="w-full max-w-md min-w-0 bg-[#14171d] border border-white/[0.06] rounded-md shadow-2xl shadow-black/60 p-5 sm:p-6 space-y-5">
         <header className="text-center space-y-1.5 pb-3 border-b border-white/[0.05]">
           <h1 className="text-base font-medium text-slate-100">Sign in to annotate</h1>
-          <p className="text-[11px] text-slate-500">Pick how you'd like to identify yourself.</p>
+          <p className="text-[12px] sm:text-[11px] text-slate-500">Pick how you'd like to identify yourself.</p>
         </header>
 
         {denied ? (
@@ -102,7 +103,7 @@ export function LoginScreen() {
                     key={t}
                     type="button"
                     onClick={() => setTab(t)}
-                    className={`px-2 py-1.5 rounded transition-colors ${
+                    className={`px-2 py-2.5 sm:py-1.5 rounded transition-colors ${
                       tab === t ? 'bg-violet-500/20 text-violet-200 border border-violet-400/40' : 'text-slate-500 hover:text-slate-200 border border-transparent'
                     }`}
                   >
@@ -117,7 +118,7 @@ export function LoginScreen() {
           </>
         )}
 
-        <p className="text-[10px] text-slate-600 text-center leading-relaxed">
+        <p className="text-[11px] sm:text-[10px] text-slate-600 text-center leading-relaxed">
           Your identity is attached to every annotation you save, so multiple annotators can be compared later.
         </p>
         </div>
@@ -140,7 +141,7 @@ function AccessDeniedPanel({
         <span className="text-red-300 text-base leading-none mt-0.5">⛔</span>
         <div className="space-y-1">
           <p className="text-[12px] font-medium text-red-200">Access denied</p>
-          <p className="text-[11px] text-slate-300 leading-relaxed">
+          <p className="text-[12px] sm:text-[11px] text-slate-300 leading-relaxed">
             <span className="font-mono text-slate-100 break-all">{attempted}</span> isn't on this
             dataset's access list. Contact your dataset admin to request access, then try signing in again.
           </p>
@@ -149,7 +150,7 @@ function AccessDeniedPanel({
       <button
         type="button"
         onClick={onReset}
-        className="w-full px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition-colors"
+        className="w-full px-3 py-2.5 sm:py-1.5 rounded text-[12px] sm:text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition-colors"
       >
         Try a different account
       </button>
@@ -160,6 +161,9 @@ function AccessDeniedPanel({
 export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
   const btnRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after every initialize() so the button is redrawn against the
+  // current callback, the way the old inline renderButton call was.
+  const [gsiInit, setGsiInit] = useState(0);
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) return;
@@ -209,12 +213,7 @@ export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
             }
           },
         });
-        window.google.accounts.id.renderButton(btnRef.current, {
-          theme: 'filled_black',
-          size: 'large',
-          width: 320,
-          shape: 'pill',
-        });
+        setGsiInit((n) => n + 1);
       })
       .catch((e: Error) => setError(e.message));
 
@@ -223,9 +222,40 @@ export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
     };
   }, [onSignIn]);
 
+  // Render (and re-render) the button at the width of the box it lives in.
+  // Rotating a phone or resizing a window changes that width, and Google's
+  // button never reflows on its own, so a ResizeObserver redraws it — only
+  // when the clamped width actually moves, since every renderButton call
+  // replaces the iframe.
+  useEffect(() => {
+    const el = btnRef.current;
+    if (!gsiInit || !el) return;
+    let lastWidth = -1;
+    let frame = 0;
+    const draw = () => {
+      frame = 0;
+      const gsi = window.google?.accounts?.id;
+      if (!gsi || !btnRef.current) return;
+      const width = gsiButtonWidth(btnRef.current.clientWidth);
+      if (width === lastWidth) return;
+      lastWidth = width;
+      gsi.renderButton(btnRef.current, gsiButtonOptions(width));
+    };
+    draw();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (!frame) frame = requestAnimationFrame(draw);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [gsiInit]);
+
   if (!GOOGLE_CLIENT_ID) {
     return (
-      <div className="text-[11px] text-slate-400 space-y-2 bg-[#0a0b0d] border border-white/[0.06] rounded p-3 leading-relaxed">
+      <div className="text-[12px] sm:text-[11px] text-slate-400 space-y-2 bg-[#0a0b0d] border border-white/[0.06] rounded p-3 leading-relaxed">
         <p>Google sign-in is not configured.</p>
         <p>
           Add <code className="bg-white/[0.06] px-1 rounded font-mono text-slate-300">VITE_GOOGLE_CLIENT_ID</code> to{' '}
@@ -238,8 +268,8 @@ export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
 
   return (
     <div className="space-y-2">
-      <div ref={btnRef} className="flex justify-center min-h-[40px]" />
-      {error && <p className="text-[11px] text-red-400 font-mono">{error}</p>}
+      <div ref={btnRef} className="w-full min-w-0 flex justify-center min-h-[40px]" />
+      {error && <p className="text-[12px] sm:text-[11px] text-red-400 font-mono">{error}</p>}
     </div>
   );
 }
@@ -350,44 +380,44 @@ export function IdentityPane({ onSignIn }: { onSignIn: (a: Annotator) => void })
       />
 
       {!hasInput && (
-        <p className="text-[10px] text-slate-500 leading-relaxed">
+        <p className="text-[12px] sm:text-[10px] text-slate-500 leading-relaxed">
           No password needed. Use letters, numbers, underscore, dot, hyphen, or <code className="font-mono">@</code>.
           Spaces and other characters aren't allowed.
         </p>
       )}
 
       {hasInput && !charsValid && (
-        <p className="text-[10px] text-red-400 font-mono">
+        <p className="text-[12px] sm:text-[10px] text-red-400 font-mono">
           Only letters, numbers, and <code>. _ - @</code> are allowed — no spaces.
         </p>
       )}
 
       {hasInput && charsValid && !lenValid && (
-        <p className="text-[10px] text-slate-500 font-mono">
+        <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono">
           At least {IDENTITY_MIN_LEN} characters.
         </p>
       )}
 
       {validForSubmit && (
-        <p className="text-[10px] text-slate-500 font-mono">
+        <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono">
           Stored as <code className="bg-white/[0.06] px-1 rounded text-slate-300">{previewId}</code>.
         </p>
       )}
 
       {validForSubmit && checking && (
-        <p className="text-[10px] text-slate-500 font-mono">Checking…</p>
+        <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono">Checking…</p>
       )}
 
       {validForSubmit && !checking && checkError && (
-        <p className="text-[10px] text-amber-400 font-mono">{checkError}</p>
+        <p className="text-[12px] sm:text-[10px] text-amber-400 font-mono">{checkError}</p>
       )}
 
       {validForSubmit && !checking && existing && (
         <div className="rounded border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
-          <p className="text-[11px] text-emerald-300 font-medium">
+          <p className="text-[12px] sm:text-[11px] text-emerald-300 font-medium">
             Welcome back, {existing.displayName}.
           </p>
-          <p className="text-[10px] text-slate-400 font-mono break-all">
+          <p className="text-[12px] sm:text-[10px] text-slate-400 font-mono break-all">
             Signed up as {existing.id}
             {existing.role ? ` · ${existing.role}` : ''}
             {existing.affiliation ? ` · ${existing.affiliation}` : ''}
@@ -396,12 +426,12 @@ export function IdentityPane({ onSignIn }: { onSignIn: (a: Annotator) => void })
       )}
 
       {validForSubmit && !checking && !existing && available === true && (
-        <p className="text-[10px] text-emerald-400 font-mono">✓ Available.</p>
+        <p className="text-[12px] sm:text-[10px] text-emerald-400 font-mono">✓ Available.</p>
       )}
 
       {validForSubmit && !checking && !existing && available === false && (
         <div className="rounded border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
-          <p className="text-[11px] text-amber-200">
+          <p className="text-[12px] sm:text-[11px] text-amber-200">
             ⚠ <span className="font-medium">{previewId}</span> already has annotations on file
             but no profile. If that's you, sign in to pick up your work; otherwise pick a
             different identity.
@@ -409,20 +439,20 @@ export function IdentityPane({ onSignIn }: { onSignIn: (a: Annotator) => void })
           <button
             type="button"
             onClick={() => onSignIn(buildNewAnnotator())}
-            className="w-full px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100"
+            className="w-full px-3 py-2.5 sm:py-1.5 rounded text-[12px] sm:text-[11px] uppercase tracking-wider bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100"
           >
             Continue as {trimmed}
           </button>
           {suggestions.length > 0 && (
             <div className="pt-1">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Or try:</div>
+              <div className="text-[12px] sm:text-[10px] uppercase tracking-wider text-slate-500 mb-1">Or try:</div>
               <div className="flex flex-wrap gap-1.5">
                 {suggestions.map((s) => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setValue(s)}
-                    className="px-2 py-1 rounded text-[11px] bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 font-mono"
+                    className="px-2 py-1 rounded text-[12px] sm:text-[11px] bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 font-mono"
                   >
                     {s}
                   </button>
@@ -437,7 +467,7 @@ export function IdentityPane({ onSignIn }: { onSignIn: (a: Annotator) => void })
         <button
           type="submit"
           disabled={checking}
-          className="w-full px-4 py-2 rounded text-[11px] uppercase tracking-wider bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 disabled:bg-white/[0.04] disabled:border-white/[0.06] disabled:text-slate-600 text-violet-100 font-medium transition-colors"
+          className="w-full px-4 py-3 sm:py-2 rounded text-[12px] sm:text-[11px] uppercase tracking-wider bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 disabled:bg-white/[0.04] disabled:border-white/[0.06] disabled:text-slate-600 text-violet-100 font-medium transition-colors"
         >
           {existing ? 'Sign in' : 'Continue'}
         </button>
@@ -465,7 +495,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] uppercase tracking-wider text-slate-500">
+      <span className="text-[12px] sm:text-[10px] uppercase tracking-wider text-slate-500">
         {label}
         {required && <span className="text-red-400 ml-0.5">*</span>}
       </span>
@@ -475,7 +505,7 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoFocus={autoFocus}
-        className="mt-1 w-full px-2.5 py-1.5 rounded bg-[#0a0b0d] border border-white/[0.08] focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-200 text-xs font-mono transition-colors"
+        className="mt-1 w-full px-2.5 py-2 sm:py-1.5 rounded bg-[#0a0b0d] border border-white/[0.08] focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/40 focus:outline-none text-slate-200 text-base sm:text-xs font-mono transition-colors"
       />
     </label>
   );

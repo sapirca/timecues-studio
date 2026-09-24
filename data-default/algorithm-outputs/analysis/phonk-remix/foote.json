@@ -1,0 +1,76 @@
+{
+  "algorithm": "foote",
+  "algoName": "Foote Self-Similarity",
+  "audioFile": "phonk-remix.mp3",
+  "duration": 169.465,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 11.146,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.6265,
+      "centroid": 0.5644
+    },
+    {
+      "time": 11.146,
+      "endTime": 35.619,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8617,
+      "centroid": 0.7294
+    },
+    {
+      "time": 35.619,
+      "endTime": 92.323,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9959,
+      "centroid": 0.7944
+    },
+    {
+      "time": 92.323,
+      "endTime": 107.973,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7466,
+      "centroid": 1.0
+    },
+    {
+      "time": 107.973,
+      "endTime": 140.574,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.8076
+    },
+    {
+      "time": 140.574,
+      "endTime": 169.459,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.4799,
+      "centroid": 0.9765
+    },
+    {
+      "time": 169.459,
+      "endTime": 169.465,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.0,
+      "centroid": 0.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    11.146,
+    35.619,
+    92.323,
+    107.973,
+    140.574,
+    169.459,
+    169.465
+  ],
+  "computedAt": 1780118879,
+  "elapsedSec": 5.11
+}

@@ -1,4 +1,5 @@
 import type { CueItem } from '../../types/annotationLayer';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import {
   ItemCardShell,
   ItemCardHeader,
@@ -8,13 +9,6 @@ import {
   ItemCardActionRow,
   ItemCardIconButton,
 } from './ItemCard';
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
-}
 
 export interface CueItemCardProps {
   index: number;
@@ -37,6 +31,8 @@ export interface CueItemCardProps {
   isLast?: boolean;
   /** Optional datalist id for label autocomplete (cue taxonomy). */
   labelTaxonomyId?: string;
+  /** Override time formatter — used in Grid Lock to show bar·beat instead of mm:ss. */
+  fmt?: (t: number) => string;
 }
 
 /** Cue card — same shell as SectionCard, no end time, no type dropdown. */
@@ -45,8 +41,9 @@ export function CueItemCard({
   onSnap, onChangeLabel, onToggleImportance,
   onAddCandidate, onRemoveCandidate,
   onPlay, onDelete, onInsertAfter, isLast,
-  labelTaxonomyId,
+  labelTaxonomyId, fmt: fmtOverride,
 }: CueItemCardProps) {
+  const fmt = fmtOverride ?? fmtTime;
   const isCritical = cue.importance !== 'optional';
   return (
     <ItemCardShell
@@ -67,14 +64,14 @@ export function CueItemCard({
 
       <SnapTimeRow
         time={cue.time}
-        fmt={fmtTime}
+        fmt={fmt}
         onSnap={onSnap}
         snapTitle="Snap to playhead"
       />
 
       <CandidateChips
         candidates={cue.candidates ?? []}
-        fmt={fmtTime}
+        fmt={fmt}
         onRemove={onRemoveCandidate}
       />
 

@@ -1,0 +1,45 @@
+{
+  "algorithm": "ruptures-pelt-rank",
+  "algoName": "PELT \u00b7 rank",
+  "search": "Pelt",
+  "model": "rank",
+  "suffix": "pelt-rank",
+  "paperSection": "\u00a75.1.2",
+  "methodType": "exact",
+  "audioFile": "pantheon.mp3",
+  "duration": 192.409,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 10.82,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.6779,
+      "centroid": 0.7124
+    },
+    {
+      "time": 10.82,
+      "endTime": 126.27,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.9257
+    },
+    {
+      "time": 126.27,
+      "endTime": 192.409,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9578,
+      "centroid": 1.0
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    10.82,
+    126.27,
+    192.409
+  ],
+  "computedAt": 1780119129,
+  "elapsedSec": 5.17
+}

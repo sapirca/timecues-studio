@@ -31,6 +31,10 @@ export interface BpmDetectionResult {
   duration: number;
   algorithms: BpmAlgorithmResult[];
   computed_at: string;
+  /** Present only on a ranged detection (one grid segment rather than the
+   *  whole song) — see segmentGridDetection.ts. Ranged results are never
+   *  cached, so this never appears on anything read back from disk. */
+  range?: { start: number; end: number };
 }
 
 /** Read a cached BPM detection result. Returns null if no cache exists or the
@@ -68,51 +72,3 @@ export async function getOrRunBpmDetection(slug: string): Promise<BpmDetectionRe
   return runBpmDetection(slug, false);
 }
 
-// ─── Tempo curve (per-frame BPM trace) ───────────────────────────────────────
-//
-// Returned by the Python server's /api/bpm/tempo-curve endpoint. Feeds the
-// Dynamic-mode anchor derivation in anchorEdit.ts (anchorsFromTempoCurve).
-
-export interface TempoCurveResult {
-  slug: string;
-  audio_file: string;
-  duration: number;
-  curve: {
-    source: string;
-    ok: boolean;
-    frame_times?: number[];
-    bpms?: number[];
-    hop_length?: number;
-    sr?: number;
-    error?: string;
-    ms?: number;
-  };
-  computed_at: string;
-}
-
-/** Read a cached tempo curve. null = no cache yet (or server unreachable). */
-export async function loadCachedTempoCurve(slug: string): Promise<TempoCurveResult | null> {
-  try {
-    const res = await fetch(`/api/bpm/tempo-curve/${encodeURIComponent(slug)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return (data && typeof data === 'object' && 'curve' in data) ? data as TempoCurveResult : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Compute (and cache) the tempo curve. `force=true` ignores the cache. */
-export async function runTempoCurve(slug: string, force = false): Promise<TempoCurveResult | null> {
-  try {
-    const res = await fetch('/api/bpm/tempo-curve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug, force }),
-    });
-    if (!res.ok) return null;
-    return await res.json() as TempoCurveResult;
-  } catch {
-    return null;
-  }
-}

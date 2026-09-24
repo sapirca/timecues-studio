@@ -3,7 +3,7 @@ import { annotatorHeaders } from '../../utils/annotatorHeaders';
 
 interface AnnotatorEntry {
   id: string;
-  has: { manual: boolean; eye: boolean; autoGuess: boolean };
+  has: { manual: boolean; autoGuess: boolean };
 }
 
 interface Props {
@@ -43,11 +43,13 @@ export function ReferenceAnnotatorPicker({ slug, currentAnnotatorId, value, onCh
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
   }, [open]);
 
   const others = (entries ?? [])

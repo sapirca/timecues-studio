@@ -16,7 +16,8 @@ _TOOLS_PY = Path(__file__).resolve().parents[1]
 if str(_TOOLS_PY) not in sys.path:
     sys.path.insert(0, str(_TOOLS_PY))
 
-from custom_api import Boundary, Cue, Span  # noqa: E402
+import numpy as np  # noqa: E402
+from custom_api import Boundary, Cue, DetectionContext, Span  # noqa: E402
 from custom_runner import _validate_items  # noqa: E402
 
 
@@ -183,6 +184,45 @@ def test_cue_intensity_out_of_range():
     assert any(e.field == "intensity" for e in errs)
 
 
+def test_cue_struck_hit_fields_pass_through():
+    items, errs = _validate_items(
+        [Cue(time_ms=100, label="kick", velocity=112, level_db=-3.2, color="#F87171",
+             note=36, decay_ms=180, importance="optional")],
+        "cue",
+        duration_ms=1000,
+    )
+    assert errs == []
+    assert items[0]["velocity"] == 112
+    assert items[0]["level_db"] == -3.2
+    assert items[0]["color"] == "#f87171"
+    assert items[0]["note"] == 36
+    assert items[0]["decay_ms"] == 180
+    assert items[0]["importance"] == "optional"
+
+
+def test_cue_without_struck_hit_fields_keeps_old_shape():
+    items, _ = _validate_items([Cue(time_ms=100)], "cue", duration_ms=1000)
+    assert set(items[0]) == {"time_ms", "label", "description", "intensity", "candidates"}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("velocity", 0), ("velocity", 128), ("velocity", 64.0), ("velocity", True),
+    ("level_db", 0.5), ("level_db", float("nan")), ("level_db", "loud"),
+    ("color", "red"), ("color", "#fff"), ("color", 0xff0000),
+    ("note", -1), ("note", 128), ("note", 60.0),
+    ("decay_ms", 0), ("decay_ms", -5), ("decay_ms", 12.5),
+    ("importance", "high"),
+])
+def test_cue_struck_hit_fields_rejected(field, value):
+    items, errs = _validate_items(
+        [Cue(time_ms=100, **{field: value})],
+        "cue",
+        duration_ms=1000,
+    )
+    assert items == []
+    assert [e.field for e in errs] == [field]
+
+
 def test_cue_rejects_span_instance():
     # Span passed where Cue is required → drop with error.
     items, errs = _validate_items(
@@ -293,9 +333,41 @@ class _BusyDetector:
 def test_isolation_happy_path():
     kind, payload = custom_runner._run_detect_isolated(_OkDetector(), None)
     assert kind == "ok"
-    assert len(payload) == 2
-    assert payload[0].time_ms == 100
-    assert payload[1].time_ms == 500
+    items = payload["items"]
+    assert len(items) == 2
+    assert items[0].time_ms == 100
+    assert items[1].time_ms == 500
+    assert payload["notes"] == []
+
+
+class _WarningDetector:
+    output_kind = "boundary"
+
+    def detect(self, ctx):
+        ctx.warn("thin-input", "measured almost nothing to go on")
+        ctx.warn("thin-input", "a second call with the same code")
+        return []
+
+
+@posix_only
+def test_a_warning_raised_inside_the_child_reaches_the_parent():
+    """detect() runs in a forked child, so anything it recorded on ctx dies
+    with that process unless it travels back with the items. A caveat that
+    silently evaporates is worse than none: the envelope then positively
+    asserts there was nothing to say."""
+    ctx = DetectionContext(
+        audio=np.zeros(1, dtype=np.float32), sr=22050, duration_ms=1000,
+        stems={}, features=None, energy_curve=np.zeros(1), tension_curve=np.zeros(1),
+        bpm=120.0, beat_times_ms=[0],
+    )
+    kind, payload = custom_runner._run_detect_isolated(_WarningDetector(), ctx)
+    assert kind == "ok"
+    # Deduplicated by code — a per-hit check can call warn() in a loop.
+    assert payload["notes"] == [
+        {"code": "thin-input", "message": "measured almost nothing to go on"},
+    ]
+    # The parent's own ctx is untouched: the child mutated its copy.
+    assert ctx.notes == []
 
 
 @posix_only

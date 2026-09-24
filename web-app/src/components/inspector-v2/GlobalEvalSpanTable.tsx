@@ -14,6 +14,7 @@ import { loadLayers } from '../../services/annotationLayers';
 import { evaluateSpans, effectiveLayerMode, type SpanEvalResult } from '../../utils/evaluation';
 import type { SpanItem, AnnotationLayer } from '../../types/annotationLayer';
 import { useSettings } from '../../context/SettingsContext';
+import { InfoDot } from './InfoDot';
 
 export interface SpanEvalAudioEntry {
   id: string;
@@ -107,23 +108,19 @@ export function GlobalEvalSpanTable({
         const doc = await loadLayers(a.id);
         const { items: ref, mode } = pickSpanReference(doc.layers);
         const results: Record<string, SpanEvalResult | null> = {};
-        for (const algo of SPAN_ALGO_IDS) {
+        await Promise.all(SPAN_ALGO_IDS.map(async (algo) => {
           const pred = await loadPredictedSpans(a.id, algo, false);
-          if (!pred || pred.ok === false) {
+          // ref.length === 0 means no reference yet — store a "computed"
+          // sentinel with refCount=0; eval columns will render '—' downstream.
+          if (!pred || pred.ok === false || ref.length === 0) {
             results[algo] = null;
-            continue;
-          }
-          if (ref.length === 0) {
-            // No reference yet — store a "computed" sentinel with refCount=0.
-            // Eval columns will render '—' downstream.
-            results[algo] = null;
-            continue;
+            return;
           }
           const duration = pred.duration || trackDurationFallback;
           results[algo] = evaluateSpans(ref, predsToSpanItems(pred), duration, {
             mode: effectiveLayerMode(mode, forceCandidates),
           });
-        }
+        }));
         return { songId: a.id, songName: a.name, refCount: ref.length, results };
       }));
       if (!cancelled) {
@@ -161,9 +158,11 @@ export function GlobalEvalSpanTable({
         <div>
           <h3 className="text-sm font-semibold text-violet-200">
             Span algorithms <span className="text-[10px] uppercase tracking-wider text-slate-500 ml-1">· experimental</span>
+            <InfoDot className="ml-1.5" label="How span algorithms are scored" align="left">
+              Evaluated against the first span layer in each song's annotation document.
+            </InfoDot>
           </h3>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Evaluated against the first span layer in each song's annotation document.{' '}
             {audioFiles.length === 0
               ? 'No songs loaded.'
               : `${songsWithRef}/${audioFiles.length} song${audioFiles.length === 1 ? '' : 's'} have a span reference.`}

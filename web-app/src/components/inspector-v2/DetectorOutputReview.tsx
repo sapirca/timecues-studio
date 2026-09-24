@@ -1,6 +1,6 @@
 /**
  * Read-only review of a custom detector's output for one annotation type
- * (cues / spans / loops / patterns / boundaries). Each row summarises the
+ * (cues / spans / loops / boundaries). Each row summarises the
  * item; clicking it opens the shared AnnotationPointCard in read-only mode,
  * with Accept ✓ / Reject ✗ buttons as footer extras and a Play preview
  * affordance.
@@ -27,45 +27,27 @@ import type {
   CustomCueItem,
   CustomSpanItem,
   CustomLoopItem,
-  CustomPatternItem,
+  CustomLyricsItem,
 } from '../../types/customScript';
-import type { TempoAnchor } from '../../types/songInfo';
 import { AnnotationPointCard, type AnnotationCardKind } from './shared/AnnotationPointCard';
 import { useAnnotationPopover } from './shared/useAnnotationPopover';
-import {
-  newId,
-  type CueItem,
-  type SpanItem,
-  type LoopItem,
-  type PatternItem,
-} from '../../types/annotationLayer';
+import { type ReviewableCategory } from './detectorConvert';
+import type { ResolvedSegment } from '../../utils/gridSegments';
 
 export type DetectorReviewStatus = 'accepted' | 'rejected';
-
-type ReviewableCategory = 'cues' | 'spans' | 'loops' | 'patterns' | 'boundaries';
 
 interface Props {
   detectorName: string;
   detectorLabel: string;
   category: ReviewableCategory;
   /** Items from the detector envelope. Shape depends on `category`. */
-  items: (CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem)[];
+  items: (CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomLyricsItem)[];
   /** Map keyed by item-id (`${index}:${primaryTimeField}`) → decision. */
   reviewState: Record<string, DetectorReviewStatus>;
   onAccept: (itemId: string) => void;
   onReject: (itemId: string) => void;
   /** Wipe the editable copy and revert to the read-only algorithm cache. */
   onResetReview?: () => void;
-  /** Copy this detector's items into a brand-new MANUAL annotation layer
-   *  (`source: 'user'`, `importedFrom: detectorName`). The parent appends
-   *  it to the song's AnnotationLayersDocument and persists. Omitted for
-   *  boundaries (which don't have a manual-layer equivalent yet). */
-  onCopyToManualLayer?: (params: {
-    type: 'cues' | 'spans' | 'loops' | 'patterns';
-    items: CueItem[] | SpanItem[] | LoopItem[] | PatternItem[];
-    layerName: string;
-    importedFrom: string;
-  }) => void;
   /** Audio wiring for the play button on the popover card. When omitted the
    *  card hides the play button. */
   onSeekAndPlay?: (time: number, stopTime?: number) => void;
@@ -79,7 +61,9 @@ interface Props {
   bpm?: number;
   gridOffset?: number;
   beatsPerBar?: number;
-  anchors?: readonly TempoAnchor[];
+  /** Resolved grid segments — keeps the card's bar.beat read-out in step with
+   *  a Mapped (split) grid, where a single bpm/gridOffset pair is not enough. */
+  segments?: readonly ResolvedSegment[];
 }
 
 /** Stable per-item id, identical to the seed used when the editable doc is
@@ -89,7 +73,7 @@ interface Props {
 function itemKey(
   category: ReviewableCategory,
   index: number,
-  item: CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem | CustomBoundaryItem,
+  item: CustomCueItem | CustomSpanItem | CustomLoopItem | CustomBoundaryItem | CustomLyricsItem,
 ): string {
   if (category === 'cues') {
     return `${index}:${(item as CustomCueItem).time_ms}`;
@@ -97,14 +81,17 @@ function itemKey(
   if (category === 'boundaries') {
     return `${index}:${(item as CustomBoundaryItem).time_ms}`;
   }
-  // spans / loops / patterns all keyed by start_ms
-  const start = (item as CustomSpanItem | CustomLoopItem | CustomPatternItem).start_ms;
+  if (category === 'lyrics') {
+    return `${index}:${(item as CustomLyricsItem).time_ms}`;
+  }
+  // spans / loops both keyed by start_ms
+  const start = (item as CustomSpanItem | CustomLoopItem).start_ms;
   return `${index}:${start}`;
 }
 
 /** Map review category → card kind. */
 const KIND_FROM_CATEGORY: Record<ReviewableCategory, AnnotationCardKind> = {
-  cues: 'cue', spans: 'span', loops: 'loop', patterns: 'pattern', boundaries: 'boundary',
+  cues: 'cue', spans: 'span', loops: 'loop', lyrics: 'lyrics', boundaries: 'boundary',
 };
 
 /** Neutral palette for detector-sourced cards (no layer to inherit from). */
@@ -119,7 +106,6 @@ export function DetectorOutputReview({
   onAccept,
   onReject,
   onResetReview,
-  onCopyToManualLayer,
   onSeekAndPlay,
   onPause,
   playerIsPlaying = false,
@@ -127,7 +113,7 @@ export function DetectorOutputReview({
   bpm,
   gridOffset,
   beatsPerBar,
-  anchors,
+  segments,
 }: Props) {
   const popover = useAnnotationPopover({ width: 360, height: 380 });
 
@@ -139,40 +125,6 @@ export function DetectorOutputReview({
     }
     return { accepted, rejected, pending: items.length - accepted - rejected };
   }, [reviewState, items.length]);
-
-  // Mapping from review category → user-layer type. Boundaries have no
-  // manual-layer equivalent (they live in ManualAnnotation, not the layers
-  // doc), so the Copy buttons are hidden in that case.
-  const manualLayerType: 'cues' | 'spans' | 'loops' | 'patterns' | null =
-    category === 'cues' ? 'cues'
-    : category === 'spans' ? 'spans'
-    : category === 'loops' ? 'loops'
-    : category === 'patterns' ? 'patterns'
-    : null;
-
-  const canCopy = !!onCopyToManualLayer && manualLayerType !== null && items.length > 0;
-
-  const handleCopy = (mode: 'accepted' | 'all') => {
-    if (!onCopyToManualLayer || !manualLayerType) return;
-    // Filter: 'accepted' = only ✓; 'all' = everything except explicit ✗.
-    // Pending items count as kept under 'all' so a single click can pull the
-    // raw detector output into an editable manual layer.
-    const keep: typeof items = items.filter((it, i) => {
-      const status = reviewState[itemKey(category, i, it)];
-      if (mode === 'accepted') return status === 'accepted';
-      return status !== 'rejected';
-    });
-    if (keep.length === 0) return;
-    const converted = convertDetectorItems(category, keep);
-    if (!converted) return;
-    const suffix = mode === 'accepted' ? ` (✓ accepted)` : '';
-    onCopyToManualLayer({
-      type: manualLayerType,
-      items: converted as CueItem[] | SpanItem[] | LoopItem[] | PatternItem[],
-      layerName: `${detectorLabel}${suffix}`,
-      importedFrom: detectorName,
-    });
-  };
 
   if (!items.length) {
     return (
@@ -212,32 +164,6 @@ export function DetectorOutputReview({
           )}
         </div>
         <div className="flex items-center gap-3">
-          {canCopy && (
-            <span className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500">
-              Copy to manual layer:
-              <button
-                type="button"
-                disabled={counts.accepted === 0}
-                onClick={() => handleCopy('accepted')}
-                className="px-1.5 py-0.5 rounded border border-emerald-400/30 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 disabled:hover:bg-transparent"
-                title={counts.accepted === 0
-                  ? 'Accept at least one item with ✓ before copying'
-                  : `Create a new manual layer containing the ${counts.accepted} accepted item${counts.accepted === 1 ? '' : 's'}`}
-              >
-                ✓ accepted
-              </button>
-              <button
-                type="button"
-                onClick={() => handleCopy('all')}
-                className="px-1.5 py-0.5 rounded border border-white/[0.12] text-slate-300 hover:bg-white/[0.04]"
-                title={counts.rejected > 0
-                  ? `Create a new manual layer containing every item except the ${counts.rejected} explicitly rejected`
-                  : `Create a new manual layer containing all ${items.length} items`}
-              >
-                all
-              </button>
-            </span>
-          )}
           {onResetReview && (counts.accepted + counts.rejected > 0) && (
             <button
               type="button"
@@ -296,7 +222,7 @@ export function DetectorOutputReview({
         const kind = KIND_FROM_CATEGORY[category];
         const id = popover.open!.itemId;
         const status = reviewState[id];
-        const { start, end, regionEnd, label, description } = detectorItemView(category, openItem.item);
+        const { start, end, label, description } = detectorItemView(category, openItem.item);
         const stopTime = end ?? start + 0.5;
         const itemIsPlaying = playerIsPlaying && playerTime >= start && playerTime < stopTime;
         return (
@@ -308,13 +234,13 @@ export function DetectorOutputReview({
             start={start}
             end={end}
             endEditable={false}
-            regionEnd={regionEnd}
+            rawOutput={openItem.item}
             label={label}
             description={description}
             bpm={bpm}
             gridOffset={gridOffset}
             beatsPerBar={beatsPerBar}
-            anchors={anchors}
+            segments={segments}
             readOnly
             hideImportance
             hideDelete
@@ -352,7 +278,6 @@ export function DetectorOutputReview({
 interface DetectorItemView {
   start: number;       // seconds
   end?: number;        // seconds — absent for cues/boundaries
-  regionEnd?: number;  // seconds — patterns only (start + repeats × cycle)
   label: string;
   description: string;
 }
@@ -360,7 +285,7 @@ interface DetectorItemView {
 /** Normalise a detector item to the shape AnnotationPointCard consumes. */
 function detectorItemView(
   category: ReviewableCategory,
-  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem,
+  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomLyricsItem,
 ): DetectorItemView {
   if (category === 'cues') {
     const c = item as CustomCueItem;
@@ -368,6 +293,15 @@ function detectorItemView(
       start: c.time_ms / 1000,
       label: c.label ?? '',
       description: c.description ?? '',
+    };
+  }
+  if (category === 'lyrics') {
+    const l = item as CustomLyricsItem;
+    return {
+      start: l.time_ms / 1000,
+      ...(l.end_ms != null ? { end: l.end_ms / 1000 } : {}),
+      label: l.text ?? '',
+      description: l.kind,
     };
   }
   if (category === 'boundaries') {
@@ -387,24 +321,12 @@ function detectorItemView(
       description: '',
     };
   }
-  if (category === 'loops') {
-    const l = item as CustomLoopItem;
-    return {
-      start: l.start_ms / 1000,
-      end: (l.start_ms + l.duration_ms) / 1000,
-      label: l.label ?? '',
-      description: '',
-    };
-  }
-  // patterns
-  const p = item as CustomPatternItem;
-  const start = p.start_ms / 1000;
-  const cycle = p.duration_ms / 1000;
+  // loops
+  const l = item as CustomLoopItem;
   return {
-    start,
-    end: start + cycle,
-    regionEnd: start + Math.max(1, p.repeat_count) * cycle,
-    label: p.label ?? '',
+    start: l.start_ms / 1000,
+    end: (l.start_ms + l.duration_ms) / 1000,
+    label: l.label ?? '',
     description: '',
   };
 }
@@ -414,52 +336,6 @@ function detectorItemView(
  *  All time fields are converted from ms (custom envelope) to seconds (layer
  *  doc). Per-item ids are minted fresh — the layer-doc id space is uuid, and
  *  the detector envelope's index-based keys would collide on a second copy. */
-function convertDetectorItems(
-  category: ReviewableCategory,
-  items: (CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem)[],
-): CueItem[] | SpanItem[] | LoopItem[] | PatternItem[] | null {
-  if (category === 'cues') {
-    return (items as CustomCueItem[]).map<CueItem>((c) => ({
-      id: newId(),
-      time: c.time_ms / 1000,
-      label: c.label ?? '',
-      description: c.description ?? undefined,
-      candidates: c.candidates && c.candidates.length > 0
-        ? c.candidates.map((ms) => ms / 1000)
-        : undefined,
-    }));
-  }
-  if (category === 'spans') {
-    return (items as CustomSpanItem[]).map<SpanItem>((s) => ({
-      id: newId(),
-      start: s.start_ms / 1000,
-      end: (s.start_ms + s.duration_ms) / 1000,
-      label: s.label ?? '',
-    }));
-  }
-  if (category === 'loops') {
-    return (items as CustomLoopItem[]).map<LoopItem>((l) => ({
-      id: newId(),
-      start: l.start_ms / 1000,
-      end: (l.start_ms + l.duration_ms) / 1000,
-      label: l.label ?? '',
-      snapZeroCross: l.snap_zero_cross ?? undefined,
-    }));
-  }
-  if (category === 'patterns') {
-    return (items as CustomPatternItem[]).map<PatternItem>((p) => ({
-      id: newId(),
-      start: p.start_ms / 1000,
-      end: (p.start_ms + p.duration_ms) / 1000,
-      label: p.label ?? '',
-      repeatCount: Math.max(1, Math.floor(p.repeat_count)),
-      highlightedBeats: p.highlighted_beats ?? [],
-      subbeatGrid: true,
-    }));
-  }
-  return null; // boundaries — no manual-layer equivalent
-}
-
 function ReviewChip({
   active, tone, title, onClick, children,
 }: {
@@ -488,9 +364,14 @@ function ReviewChip({
 
 function summarizeItem(
   category: ReviewableCategory,
-  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomPatternItem,
+  item: CustomBoundaryItem | CustomCueItem | CustomSpanItem | CustomLoopItem | CustomLyricsItem,
 ): string {
   const fmt = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
+  if (category === 'lyrics') {
+    const l = item as CustomLyricsItem;
+    const endStr = l.end_ms != null ? ` → ${fmt(l.end_ms)}` : '';
+    return `${fmt(l.time_ms)}${endStr} — ${l.text} [${l.kind}]`;
+  }
   if (category === 'cues') {
     const c = item as CustomCueItem;
     const lbl = c.label ?? '(unlabeled)';
@@ -505,11 +386,7 @@ function summarizeItem(
     const s = item as CustomSpanItem;
     return `${fmt(s.start_ms)} → ${fmt(s.start_ms + s.duration_ms)} — ${s.label ?? '(unlabeled)'}`;
   }
-  if (category === 'loops') {
-    const l = item as CustomLoopItem;
-    return `${fmt(l.start_ms)} (${fmt(l.duration_ms)}) — ${l.label ?? 'loop'}`;
-  }
-  // patterns
-  const p = item as CustomPatternItem;
-  return `${fmt(p.start_ms)} × ${p.repeat_count} cycles of ${fmt(p.duration_ms)} — ${p.label ?? 'pattern'}`;
+  // loops
+  const l = item as CustomLoopItem;
+  return `${fmt(l.start_ms)} (${fmt(l.duration_ms)}) — ${l.label ?? 'loop'}`;
 }

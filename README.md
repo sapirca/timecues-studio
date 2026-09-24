@@ -5,7 +5,30 @@ app lets annotators mark section boundaries on a waveform, compare them
 against algorithmic estimates (`allin1`, MSAF, ruptures, change-point
 detection), and run `mir_eval` metrics in-browser.
 
-License: [MIT](LICENSE) · Third-party notices: [NOTICE.md](NOTICE.md)
+Documentation & live demo: [TimeCues Studio site](https://sapirca.github.io/timecues-studio/)
+
+License: [MIT](LICENSE) · Third-party notices: [NOTICE.md](NOTICE.md) · Credits & acknowledgements: [CREDITS.md](CREDITS.md)
+
+## Screenshots
+
+**Annotate** — mark section boundaries on the waveform against a beat grid,
+with detector layers alongside.
+
+![Annotation view: waveform, beat grid, 3-band signal and a boundaries layer](docs/images/annotate-overview.png)
+
+**Signals** — spectrogram, MFCC, chroma, tempogram, self-similarity and
+onset/novelty curves, all aligned to the same timeline.
+
+![Signal rows: spectrogram, MFCC, chroma, tempo, SSM and feature curves](docs/images/viz-canvas-full.jpg)
+
+**Inspect** — score every algorithm against your annotation with `mir_eval`.
+
+![Algorithm leaderboard with mir_eval precision, recall and F1](docs/images/inspect-leaderboard.png)
+
+<p align="center">
+  <img src="docs/images/mobile-timeline.png" width="300" alt="Phone layout of the annotator">
+  <br><em>The same annotator on a phone.</em>
+</p>
 
 ## Quick start
 
@@ -25,11 +48,13 @@ experimental detector sidecars, troubleshooting — see [INSTALL.md](INSTALL.md)
 
 | If you want to… | Read |
 |---|---|
+| Browse the docs site (guides, tutorials, live demo) | [sapirca.github.io/timecues-studio](https://sapirca.github.io/timecues-studio/) |
 | Install or self-host the app | [INSTALL.md](INSTALL.md) |
 | Learn the app's features and UI | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | Use experimental detectors | [docs/EXPERIMENTAL_USER_GUIDE.md](docs/EXPERIMENTAL_USER_GUIDE.md) |
 | Understand the on-disk data layout | [DATA.md](DATA.md) |
 | Verify third-party licenses | [NOTICE.md](NOTICE.md) |
+| Credit the upstream projects we build on | [CREDITS.md](CREDITS.md) |
 
 ## Repository layout
 
@@ -37,11 +62,12 @@ experimental detector sidecars, troubleshooting — see [INSTALL.md](INSTALL.md)
 data/                 Runtime user data — annotations, algorithm caches, and
 │                      uploaded audio. Empty on a fresh clone; reads fall back
 │                      to data-default/ when a slug is absent.
-├── annotations/      Per-annotator labels — see DATA.md for the layered scheme.
-│   ├── manual/       Reviewed boundary annotations (the source of truth).
-│   ├── eye/          By-eye annotations from spectrogram inspection.
-│   ├── auto-guess/   AutoGuess clusters (per-point ✓/✗/@ review).
-│   └── timing/       Per-song annotation-time tracking.
+├── annotations/      Human labels — see DATA.md for the layered scheme.
+│   ├── layers/       Per-annotator documents (boundaries, cues, spans, …).
+│   ├── shared/       Collaboratively edited songs: one document per song
+│   │                  plus a git repo holding every hand-off as a version.
+│   ├── locks/        Edit leases for those shared songs.
+│   └── auto-guess/   AutoGuess clusters (per-point ✓/✗/@ review).
 ├── algorithm-outputs/ Cached algorithm runs.
 │   ├── algo-clusters/    MSAF cluster analysis (centroid linkage of 4 algos).
 │   ├── bpm-detections/   BPM estimator outputs (gitignored cache).
@@ -78,18 +104,29 @@ update only these:
 If you use TimeCues Studio in academic work, please cite:
 
 ```bibtex
-@inproceedings{timecues-studio,
-  title     = {TimeCues Studio: A Music Structure Annotation Workbench with
-               Algorithmic Inspection},
-  author    = {Caduri, Sapir and others},
-  booktitle = {Proceedings of the International Society for Music Information
-               Retrieval Conference (ISMIR)},
-  year      = {2026}
+@misc{timecues-studio,
+  title        = {TimeCues Studio: An Interactive Tool for Annotation, Algorithm
+                  Development, Evaluation, and Comparison in Time-Aligned Music
+                  Analysis},
+  author       = {Caduri, Sapir and Goldberg, Yoav},
+  year         = {2026},
+  howpublished = {\url{https://github.com/sapirca/timecues-studio}}
 }
 ```
 
-> Update the BibTeX entry with the final author list, venue year, and DOI
-> before publication.
+> Update the BibTeX entry with the final author list, and add venue/DOI if the
+> paper is published.
+
+## Acknowledgements
+
+TimeCues Studio builds on the open-source MIR ecosystem — `librosa`,
+`mir_eval`, `madmom`, `MSAF`, `ruptures`, `all-in-one`, `Demucs`,
+`Silero-VAD`, `BeatNet`, `JDCNet`, `PANNs`, `basic-pitch`, `LoCoMotif`,
+`Whisper`, `ctc-forced-aligner`, `wav2vec 2.0`, `wavesurfer.js`,
+`CodeMirror`, and the broader scientific-Python and web stacks.
+
+Full citation list with paper references and license details:
+[CREDITS.md](CREDITS.md).
 
 ## Contributing
 

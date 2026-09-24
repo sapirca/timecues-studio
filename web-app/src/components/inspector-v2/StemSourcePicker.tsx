@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { StemSource } from '../../pages/InspectorPageV2';
 import { useCapabilities } from '../../hooks/useCapabilities';
 import { GPU_TOOLS_UNAVAILABLE_HINT } from '../../services/capabilities';
+import { DEMUCS_MODEL_OPTIONS, type DemucsModel } from '../../hooks/useDemucsStems';
 
 interface StemSourcePickerProps {
   value: StemSource;
@@ -22,6 +23,18 @@ interface StemSourcePickerProps {
    * Intended for the Dataset Prep workspace.
    */
   onRunStems?: () => void;
+  /**
+   * How many stems a (re-)run should produce — '6s' (vocals/drums/bass/other/
+   * guitar/piano) or '4s' (vocals/drums/bass/other, quicker). Rendered as a
+   * two-button segmented control beside the stem button; the parent owns the
+   * value so it can seed it from Settings and reuse it for the automatic
+   * post-upload runs.
+   */
+  stemModel?: DemucsModel;
+  onStemModelChange?: (next: DemucsModel) => void;
+  /** Model of the job currently running — named in the progress pill so a
+   *  long 6-stem run is legible as such. */
+  runStemsModel?: DemucsModel;
   runStemsStatus?: 'idle' | 'running' | 'error';
   runStemsProgressPct?: number;
   runStemsElapsedSec?: number;
@@ -50,9 +63,16 @@ const STEM_LABELS: Record<StemSource, string> = {
   drums:  'Drums',
   bass:   'Bass',
   other:  'Other',
+  guitar: 'Guitar',
+  piano:  'Piano',
 };
 
-const ALL_STEMS: StemSource[] = ['mix', 'vocals', 'drums', 'bass', 'other'];
+const ALL_STEMS: StemSource[] = ['mix', 'vocals', 'drums', 'bass', 'other', 'guitar', 'piano'];
+
+/** "6 stems" / "4 stems" — the user-facing name of a separation model. */
+function modelLabel(model: DemucsModel): string {
+  return DEMUCS_MODEL_OPTIONS.find((o) => o.id === model)?.label ?? model;
+}
 
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -66,6 +86,9 @@ export function StemSourcePicker({
   onChange,
   hideWhenNoStems = false,
   onRunStems,
+  stemModel = '6s',
+  onStemModelChange,
+  runStemsModel,
   runStemsStatus = 'idle',
   runStemsProgressPct,
   runStemsElapsedSec,
@@ -152,12 +175,15 @@ export function StemSourcePicker({
                     ? 'Stop signal sent to the demucs subprocess group (SIGKILL). Should land within a second.'
                     : runStemsCancelMode === 'soft'
                       ? 'Cancel signal sent to demucs (SIGINT). It will exit at the next chunk boundary — usually a few seconds.'
-                      : 'Demucs is splitting this song into vocals/drums/bass/other. This usually takes a few minutes.'}
+                      : runStemsModel
+                        ? DEMUCS_MODEL_OPTIONS.find((o) => o.id === runStemsModel)?.hint
+                        : 'Demucs is splitting this song into vocals/drums/bass/other. This usually takes a few minutes.'}
                 >
                   <span aria-hidden="true">⏳</span>
                   <span>
                     {runStemsCancelMode === 'hard' ? 'Killing…'
                       : runStemsCancelMode === 'soft' ? 'Cancelling…'
+                      : runStemsModel ? `Stemming (${modelLabel(runStemsModel)})…`
                       : 'Stemming…'}
                   </span>
                   {runStemsProgressPct !== undefined && !runStemsCancelMode && (
@@ -241,17 +267,47 @@ export function StemSourcePicker({
               )}
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={onRunStems}
-              className="ml-1 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-500/60 transition-colors"
-              title={hasStems
-                ? 'Re-run Demucs stem separation for this song (will ask before overwriting existing stems).'
-                : 'Run Demucs stem separation for this song. Generates vocals/drums/bass/other WAVs (~a few minutes).'}
-            >
-              <span aria-hidden="true">▶</span>
-              <span>{hasStems ? 'Re-stem this song' : 'Stem this song'}</span>
-            </button>
+            <div className="ml-1 inline-flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onRunStems}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-500/60 transition-colors"
+                title={hasStems
+                  ? `Re-run Demucs stem separation for this song as ${modelLabel(stemModel)} (will ask before overwriting existing stems).`
+                  : `Run Demucs stem separation for this song as ${modelLabel(stemModel)} (~a few minutes).`}
+              >
+                <span aria-hidden="true">▶</span>
+                <span>{hasStems ? 'Re-stem this song' : 'Stem this song'}</span>
+              </button>
+              {/* How many stems that run should produce. Sits next to the button
+                  rather than behind a menu because it changes both how long the
+                  run takes and what the SOURCE row above will offer afterwards. */}
+              {onStemModelChange && (
+                <div
+                  className="inline-flex items-center rounded-full border border-white/10 bg-[#14171d] overflow-hidden"
+                  role="group"
+                  aria-label="Number of stems to separate into"
+                >
+                  {DEMUCS_MODEL_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => onStemModelChange(opt.id)}
+                      aria-pressed={stemModel === opt.id}
+                      className={[
+                        'px-2 py-1 text-[11px] transition-colors',
+                        stemModel === opt.id
+                          ? 'bg-slate-200 text-slate-900'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-white/5',
+                      ].join(' ')}
+                      title={opt.hint}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )
         )}
       </div>

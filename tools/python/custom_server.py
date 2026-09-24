@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Custom-Detector Server.
 
-Serves user-authored detector scripts dropped into tools/python/custom/.
+Serves user-authored detector scripts dropped into tools/python/custom/, plus
+the shipped examples in tools/python/custom-default/ (read-only from here).
 
 Endpoints
 ---------
@@ -9,7 +10,7 @@ Endpoints
   GET    /api/custom-scripts/file/:name         → raw source of <name>.py (for the UI editor)
   POST   /api/custom-scripts/reload             → re-scan tools/python/custom/
   POST   /api/custom-scripts/upload             → body {name, code} → write file + reload
-  DELETE /api/custom-scripts/:name              → remove file + cached results
+  DELETE /api/custom-scripts/:name              → move .py to custom/.trash + wipe cached results
   DELETE /api/custom-scripts/:name/outputs      → wipe algorithm cache + this annotator's
                                                    annotations for the detector (keeps the .py)
   POST   /api/custom-scripts/run/:name          → query ?slug=...&force=1 → run + persist
@@ -62,11 +63,13 @@ from custom_loader import (  # noqa: E402
     CUSTOM_DIR,
     EXPERIMENTAL_LOOPS_PATTERNS_KINDS,
     NAME_RE,
+    is_default_file,
     scan,
 )
 from custom_runner import (  # noqa: E402
     delete_results_for,
     get_cached,
+    result_path,
     run,
 )
 from paths import (  # noqa: E402
@@ -75,6 +78,7 @@ from paths import (  # noqa: E402
     DETECTOR_OUTPUTS_DIR,
     safe_segment,
 )
+from server_common import cors_headers  # noqa: E402
 
 DATASET_CONFIG_PATH = DATA_DIR / "dataset-config.json"
 
@@ -96,11 +100,10 @@ DEMO_ANNOTATOR_ID = "demo-anonymous"
 
 
 def _cors() -> dict:
-    return {
-        "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Headers": "Content-Type, X-Annotator-Id",
-        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    }
+    return cors_headers(
+        methods="GET, POST, DELETE, OPTIONS",
+        allow_headers="Content-Type, X-Annotator-Id",
+    )
 
 
 def _safe_annotator(raw: Optional[str]) -> Optional[str]:
@@ -218,7 +221,8 @@ def write_script(name: str, code: str) -> dict:
     `name` (e.g. a hand-created `blabla.py` whose class is named
     `my_detector`). Otherwise the file is created at `<name>.py`. This keeps
     the user's existing on-disk filename stable across edits without forcing
-    a rename.
+    a rename. A shipped example in custom-default/ is never rewritten: the
+    edit lands in custom/ under the same filename and shadows it.
 
     Validates the name + body length here; defers everything else to scan().
     """
@@ -233,8 +237,7 @@ def write_script(name: str, code: str) -> dict:
         raise ValueError(f"code exceeds {MAX_SCRIPT_BYTES} bytes.")
 
     CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
-    existing = _resolve_script_file(name)
-    target = existing if existing is not None else (CUSTOM_DIR / f"{name}.py")
+    target = _writable_target(_resolve_script_file(name), name)
     target.write_text(code, encoding="utf-8")
 
     for entry in scan():
@@ -245,6 +248,16 @@ def write_script(name: str, code: str) -> dict:
             "errors": [{"index": None, "field": None,
                         "message": "loader did not see the file after write — try /reload",
                         "value": None}]}
+
+
+def _writable_target(existing: Optional[Path], name: str) -> Path:
+    """Where a save of detector `name` goes: its own file, or — for a shipped
+    example in custom-default/ — a same-named copy in custom/."""
+    if existing is None:
+        return CUSTOM_DIR / f"{name}.py"
+    if is_default_file(existing):
+        return CUSTOM_DIR / existing.name
+    return existing
 
 
 _FLAG_RE = re.compile(
@@ -289,7 +302,8 @@ def patch_script_flags(name: str, *, is_algorithm: bool, is_annotation: bool) ->
         )
 
     if new_src != src:
-        target.write_text(new_src, encoding="utf-8")
+        CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
+        _writable_target(target, name).write_text(new_src, encoding="utf-8")
 
     for entry in scan():
         if entry.name == name or Path(entry.file).stem == name:
@@ -297,16 +311,44 @@ def patch_script_flags(name: str, *, is_algorithm: bool, is_annotation: bool) ->
     raise RuntimeError("loader did not see the file after patch — try /reload")
 
 
-def delete_script(name: str) -> bool:
+# Soft-deleted sources are moved here rather than unlinked, so a researcher
+# who deletes a detector by mistake can recover the .py from disk. The folder
+# is a dotfile, so scan() (which skips dotfiles and non-.py entries) never
+# surfaces trashed detectors back into the registry.
+TRASH_DIR = CUSTOM_DIR / ".trash"
+
+
+class ShippedDetectorError(PermissionError):
+    """Raised when asked to delete one of the shipped examples in custom-default/."""
+
+
+def delete_script(name: str) -> Optional[Path]:
+    """Soft-delete a detector: move its .py into CUSTOM_DIR/.trash and wipe
+    cached algorithm results. Returns the trash path, or None if no source
+    file backed the name (nothing to delete). Deleting an edited copy of a
+    shipped example brings the shipped one back; the shipped file itself
+    raises ShippedDetectorError."""
     if not _safe_name(name):
-        return False
+        return None
     target = _resolve_script_file(name)
-    removed = False
+    if target is not None and is_default_file(target):
+        raise ShippedDetectorError(
+            f'"{name}" is a shipped example in tools/python/custom-default/ and '
+            "can't be deleted from the app. Edit it to make your own copy instead."
+        )
+    trashed_to: Optional[Path] = None
     if target is not None:
-        target.unlink()
-        removed = True
-    delete_results_for(name)  # also wipes cached algorithm-mode results
-    return removed
+        TRASH_DIR.mkdir(parents=True, exist_ok=True)
+        dest = TRASH_DIR / target.name
+        # Avoid clobbering an earlier trashed file with the same stem.
+        suffix = 1
+        while dest.exists():
+            dest = TRASH_DIR / f"{target.stem}.{suffix}{target.suffix}"
+            suffix += 1
+        target.rename(dest)
+        trashed_to = dest
+    delete_results_for(name)  # cached results are regenerable; wipe them
+    return trashed_to
 
 
 def read_script(name: str) -> Optional[str]:
@@ -352,13 +394,32 @@ def delete_annotation(name: str, annotator: str, slug: str) -> bool:
     return True
 
 
-def delete_outputs_for(name: str, annotator: str) -> dict:
+def delete_outputs_for(name: str, annotator: str, slug: Optional[str] = None) -> dict:
     """Wipe one detector's algorithm cache + this annotator's annotation files.
 
     Leaves the .py source untouched. The algorithm cache is shared across
     annotators (it's just memoization of `run()`), so wiping it forces a
     re-run on next request — no other annotator loses authored work.
+
+    When `slug` is given, the wipe is scoped to that one song (its cached
+    envelope + this annotator's annotation file for that song). When `slug`
+    is None, every song's output for the detector is cleared.
     """
+    if slug is not None:
+        rp = result_path(name, slug)
+        if rp.is_file():
+            try:
+                rp.unlink()
+            except OSError:
+                pass
+            # Drop the detector's cache folder once its last envelope is gone.
+            try:
+                rp.parent.rmdir()
+            except OSError:
+                pass
+        removed = 1 if delete_annotation(name, annotator, slug) else 0
+        return {"annotations_removed": removed}
+
     delete_results_for(name)
 
     ann_dir = CUSTOM_ANNOTATIONS_DIR / name / annotator
@@ -787,7 +848,12 @@ class Handler(BaseHTTPRequestHandler):
             annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
             if not annotator:
                 self._send(401, {"error": "missing or invalid X-Annotator-Id header"}); return
-            info = delete_outputs_for(name, annotator)
+            # Optional ?slug=<song> scopes the wipe to a single song; absent,
+            # every song's output for the detector is cleared.
+            slug_q = parse_qs(url.query).get("slug", [None])[0]
+            if slug_q is not None and not _safe_slug(slug_q):
+                self._send(400, {"error": "invalid slug"}); return
+            info = delete_outputs_for(name, annotator, slug_q)
             self._send(200, {"ok": True, **info})
             return
 
@@ -798,8 +864,21 @@ class Handler(BaseHTTPRequestHandler):
             name = unquote(m.group(1))
             if not _safe_name(name):
                 self._send(400, {"error": "invalid name"}); return
-            removed = delete_script(name)
-            self._send(200 if removed else 404, {"ok": removed})
+            try:
+                trashed_to = delete_script(name)
+            except ShippedDetectorError as exc:
+                self._send(409, {"ok": False, "error": str(exc)}); return
+            if trashed_to is None:
+                self._send(404, {"ok": False, "error": "not found"}); return
+            self._send(200, {
+                "ok": True,
+                "trashed_to": str(trashed_to),
+                "message": (
+                    f'"{name}" moved to the app trash. The source file is kept '
+                    f"on disk at {trashed_to} — delete it manually if you want "
+                    "it gone for good."
+                ),
+            })
             return
 
         m = re.fullmatch(r"/api/custom-annotations/([^/]+)/(.+)", path)

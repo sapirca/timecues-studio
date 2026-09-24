@@ -8,14 +8,18 @@
  * Clicking a band opens the edit popover (same pattern as Cues + Manual).
  */
 
-import { useRef } from 'react';
-import type { LoopItem } from '../../types/annotationLayer';
-import { BeatGridOverlay } from './BeatGridOverlay';
+import { useMemo, useRef } from 'react';
+import { prominenceSummary, type LoopItem, type ProminenceEnvelope } from '../../types/annotationLayer';
+import { ProminenceFill, ProminenceStrip, prominenceBandBackground, PROMINENCE_EDIT_TOTAL_H } from './shared/ProminenceLane';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
+import { BeatGridOverlay, type LaneGridProps } from './BeatGridOverlay';
 import { isOnGridLine } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag, createEdgeItemClamp, useBodyMoveDrag } from '../../hooks/useTimelineDrag';
-import { PendingHighlightOverlay, type PendingSelection } from './AnnotationOverlays';
+import { PendingHighlightOverlay, RegionDragOverlay, type PendingSelection } from './AnnotationOverlays';
 import { ReviewControls, reviewBgFor, type ReviewStatus } from './ReviewControls';
+import { MIN_BAND_PX } from './shared/bandGeometry';
+import { BandEdgeHandle } from './shared/BandEdgeHandle';
 
 interface LoopLayerRowProps {
   items: LoopItem[];
@@ -23,7 +27,18 @@ interface LoopLayerRowProps {
   duration: number;
   currentTime: number;
   height?: number;
+  /** When true, the loop under the playhead is highlighted (karaoke mode). */
+  karaokeActive?: boolean;
   focusedItemId?: string | null;
+  /** Item whose edit popover is currently OPEN — gates the prominence editor.
+   *  Distinct from `focusedItemId`, which lingers after the popover closes. */
+  prominenceEditItemId?: string | null;
+  /** Prominence (front/back) edits from the band's breakpoint editor. */
+  onProminenceChange?: (itemId: string, points: ProminenceEnvelope | undefined) => void;
+  /** Snap a prominence breakpoint onto the beat grid as it's dragged or
+   *  placed. The page's own snap, so Snap to grid / Grid Lock govern it the
+   *  same way they govern moving the band itself. */
+  snapProminenceTime?: (trackSeconds: number) => number;
   /** Highlight the loop currently playing (different visual from focus). */
   playingItemId?: string | null;
   onLoopClick?: (itemId: string, anchor: { x: number; y: number }) => void;
@@ -36,8 +51,12 @@ interface LoopLayerRowProps {
    *  start and end shift by the same delta. */
   onLoopMove?: (itemId: string, newStart: number, newEnd: number) => void;
   onLoopMoveStart?: (itemId: string) => void;
-  gridProps?: { bpm?: number; gridOffset?: number; beatsPerBar?: number; barGroupSize?: number | null; anchors?: readonly import('../../types/songInfo').TempoAnchor[]; beatOverrides?: Readonly<Record<string, number>>; thickness?: number };
+  gridProps?: LaneGridProps;
   pendingSelection?: PendingSelection | null;
+  /** Empty-space click → seek; empty-space drag → create a pending highlight. */
+  onSeek?: (time: number) => void;
+  onRegion?: (t1: number, t2: number) => void;
+  onRegionDragStart?: () => void;
   /** Detector-review mode. When set, loops become read-only and render inline ✓/✗. */
   reviewState?: Record<string, ReviewStatus>;
   onAccept?: (itemId: string) => void;
@@ -46,16 +65,25 @@ interface LoopLayerRowProps {
 
 export function LoopLayerRow({
   items, color, duration, currentTime, height = 22,
-  focusedItemId, playingItemId, onLoopClick,
+  karaokeActive,
+  focusedItemId, prominenceEditItemId, onProminenceChange, snapProminenceTime, playingItemId, onLoopClick,
   onLoopEdgeDrag, onLoopEdgeDragStart,
   onLoopMove, onLoopMoveStart,
   gridProps,
   pendingSelection,
+  onSeek, onRegion, onRegionDragStart,
   reviewState, onAccept, onReject,
 }: LoopLayerRowProps) {
   const reviewMode = !!reviewState;
   const containerRef = useRef<HTMLDivElement>(null);
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
+  // Karaoke: the loop whose [start, end) contains currentTime.
+  const activeId = useMemo(() => {
+    if (!karaokeActive) return null;
+    return items.find((l) => l.start <= currentTime && currentTime < l.end)?.id ?? null;
+  }, [karaokeActive, items, currentTime]);
+
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const durationRef = useRef(duration);
@@ -78,24 +106,23 @@ export function LoopLayerRow({
   });
   const moveEnabled = !!onLoopMove && !reviewMode;
 
+  // The prominence editor only claims vertical space while a popover is open.
+  const prominenceTarget = useMemo(
+    () => (onProminenceChange && !reviewMode && prominenceEditItemId
+      ? items.find((it) => it.id === prominenceEditItemId) ?? null
+      : null),
+    [onProminenceChange, reviewMode, prominenceEditItemId, items],
+  );
+
   return (
     <div
       ref={containerRef}
       className="flex-1 relative rounded overflow-hidden bg-gray-950"
-      style={{ height }}
+      style={{ height: height + (prominenceTarget ? PROMINENCE_EDIT_TOTAL_H + 2 : 0) }}
       title={items.length === 0 ? 'No loops yet — add one from the Loops editor' : undefined}
     >
       {gridProps && (
-        <BeatGridOverlay
-          bpm={gridProps.bpm}
-          gridOffset={gridProps.gridOffset}
-          beatsPerBar={gridProps.beatsPerBar}
-          barGroupSize={gridProps.barGroupSize}
-          anchors={gridProps.anchors}
-          beatOverrides={gridProps.beatOverrides}
-          thickness={gridProps.thickness}
-          duration={duration}
-        />
+        <BeatGridOverlay {...gridProps} duration={duration} />
       )}
 
       {items.length === 0 && (
@@ -104,77 +131,84 @@ export function LoopLayerRow({
         </span>
       )}
 
+      {/* Behind the bands (z="") — empty space falls through to seek / highlight-drag. */}
+      {onSeek && onRegion && (
+        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onRegion} onRegionDragStart={onRegionDragStart} z="" />
+      )}
+
       {items.map((loop) => {
         const left  = duration > 0 ? (loop.start / duration) * 100 : 0;
-        const width = Math.max(0.5, duration > 0 ? ((loop.end - loop.start) / duration) * 100 : 0);
+        const width = duration > 0 ? ((loop.end - loop.start) / duration) * 100 : 0;
         const isFocused = loop.id === focusedItemId;
         const isPlaying = loop.id === playingItemId;
+        const isActive = loop.id === activeId;
         const status = reviewState?.[loop.id];
         const bandColor = reviewMode ? reviewBgFor(color, status) : color;
         const boxShadow = isPlaying
           ? `inset 0 0 0 2px ${bandColor}, 0 0 12px ${bandColor}aa`
-          : isFocused
-            ? `inset 0 0 0 1px ${bandColor}, 0 0 6px ${bandColor}66`
-            : undefined;
+          : isActive
+            ? `inset 0 0 0 2px ${bandColor}cc, 0 0 10px ${bandColor}88`
+            : isFocused
+              ? `inset 0 0 0 1px ${bandColor}, 0 0 6px ${bandColor}66`
+              : undefined;
         const startSnapped = isOnGridLine(loop.start, gridProps?.bpm, gridProps?.gridOffset, gridProps?.beatsPerBar);
         const endSnapped   = isOnGridLine(loop.end,   gridProps?.bpm, gridProps?.gridOffset, gridProps?.beatsPerBar);
         return (
           <div key={loop.id} className="contents">
             <button
-              onMouseDown={(e) => {
+              onPointerDown={(e) => {
                 if (!moveEnabled) return;
                 startBodyMove(loop.id, loop.start, loop.end, e);
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (reviewMode) return;
                 if (wasDraggedRef.current) {
                   wasDraggedRef.current = false;
                   return;
                 }
+                // Opens the info card in every mode — read-only for detector
+                // layers (review mode); ✓/✗ controls stop propagation.
                 onLoopClick?.(loop.id, { x: e.clientX, y: e.clientY });
               }}
-              disabled={reviewMode}
-              className={`absolute top-0 bottom-0 flex items-stretch overflow-hidden ${
-                reviewMode ? 'cursor-default' : (moveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
+              // touch-pan-y: a vertical swipe over a band still scrolls the
+              // page on a phone; a horizontal one moves the band.
+              className={`absolute top-0 bottom-0 flex items-stretch overflow-hidden ${moveEnabled ? 'touch-pan-y' : ''} ${
+                reviewMode ? 'cursor-pointer' : (moveEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')
               }`}
               style={{
                 left: `${left}%`,
                 width: `${width}%`,
-                background: isPlaying ? `${bandColor}99` : `${bandColor}55`,
+                minWidth: MIN_BAND_PX,
+                background: status ? `${bandColor}ee`
+                  : loop.prominence ? prominenceBandBackground(bandColor, isActive || isPlaying)
+                  : isPlaying ? `${bandColor}99` : isActive ? `${bandColor}77` : `${bandColor}55`,
+                height,
                 boxShadow,
                 borderRight: '1px solid rgba(0,0,0,0.4)',
-                opacity: status === 'rejected' ? 0.4 : 1,
+                opacity: 1,
               }}
               title={reviewMode
                 ? `${loop.label || '(unlabeled)'} · ${fmtTime(loop.start)}–${fmtTime(loop.end)}${status ? ` · ${status}` : ' · pending review'}${loop.description ? '\n' + loop.description : ''}`
-                : `${loop.label || '(unlabeled)'} · ${fmtTime(loop.start)}–${fmtTime(loop.end)}${startSnapped && endSnapped ? ' · both ends snapped' : startSnapped ? ' · start snapped' : endSnapped ? ' · end snapped' : ''}${loop.description ? '\n' + loop.description : ''}`}
+                : `${loop.label || '(unlabeled)'} · ${fmtTime(loop.start)}–${fmtTime(loop.end)}${startSnapped && endSnapped ? ' · both ends snapped' : startSnapped ? ' · start snapped' : endSnapped ? ' · end snapped' : ''}${prominenceSummary(loop.prominence) ? ` · ${prominenceSummary(loop.prominence)}` : ''}${loop.description ? '\n' + loop.description : ''}`}
             >
+              <ProminenceFill points={loop.prominence} itemDuration={loop.end - loop.start} color={bandColor} />
               {startSnapped && !reviewMode && <SnapTick style={{ top: 0, left: 0 }} title="Loop start is on the beat grid" />}
               {endSnapped   && !reviewMode && <SnapTick style={{ top: 0, right: 0 }} title="Loop end is on the beat grid" />}
               <span
-                className="text-[8px] truncate text-white/90 pointer-events-none select-none leading-none px-0.5 pt-0.5"
+                className="text-[10px] truncate text-white/90 pointer-events-none select-none leading-none px-0.5 pt-0.5"
                 style={{ textShadow: '0 0 4px rgba(0,0,0,0.9)' }}
               >
                 {isPlaying ? '▶ ' : ''}{loop.label || `${(loop.end - loop.start).toFixed(1)}s`}
               </span>
               {dragEnabled && (
                 <>
-                  <span
-                    role="separator"
-                    aria-label="Drag to move loop start"
-                    className="absolute top-0 bottom-0 left-0 w-2 z-20 cursor-ew-resize"
-                    style={{ background: 'rgba(255,255,255,0.18)' }}
-                    onMouseDown={(e) => startDrag({ id: loop.id, edge: 'start' }, e)}
-                    onClick={(e) => e.stopPropagation()}
+                  <BandEdgeHandle
+                    edge="start" widthClass="w-2" label="Drag to move loop start"
+                    onPointerDown={(e) => startDrag({ id: loop.id, edge: 'start' }, e)}
                   />
-                  <span
-                    role="separator"
-                    aria-label="Drag to move loop end"
-                    className="absolute top-0 bottom-0 right-0 w-2 z-20 cursor-ew-resize"
-                    style={{ background: 'rgba(255,255,255,0.18)' }}
-                    onMouseDown={(e) => startDrag({ id: loop.id, edge: 'end' }, e)}
-                    onClick={(e) => e.stopPropagation()}
+                  <BandEdgeHandle
+                    edge="end" widthClass="w-2" label="Drag to move loop end"
+                    onPointerDown={(e) => startDrag({ id: loop.id, edge: 'end' }, e)}
                   />
                 </>
               )}
@@ -193,6 +227,22 @@ export function LoopLayerRow({
       })}
 
       {/* Playhead */}
+      {prominenceTarget && onProminenceChange && (
+        <ProminenceStrip
+          points={prominenceTarget.prominence}
+          currentTime={currentTime}
+          start={prominenceTarget.start}
+          end={prominenceTarget.end}
+          duration={duration}
+          containerRef={containerRef}
+          color={color}
+          top={height}
+          snapTime={snapProminenceTime}
+          onChange={(next) => onProminenceChange(prominenceTarget.id, next)}
+          onDragStart={() => onLoopMoveStart?.(prominenceTarget.id)}
+        />
+      )}
+
       <div
         className="absolute top-0 bottom-0 w-px pointer-events-none z-10"
         style={{ left: `${pct}%`, background: 'rgba(255,255,255,0.75)' }}
@@ -202,11 +252,4 @@ export function LoopLayerRow({
       )}
     </div>
   );
-}
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 }

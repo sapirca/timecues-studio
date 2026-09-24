@@ -18,8 +18,8 @@
 
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, type Ref } from 'react';
 import type { MsafSection, SectionItem } from '../tools/runTool';
-import { visibleGridLines } from '../utils/beatGrid';
-import { useExtendedZoom, effectiveDpr } from '../hooks/useExtendedZoom';
+import { drawBeatGrid } from '../utils/gridLineStyle';
+import { TiledStrip, type TileGeom } from './TiledStrip';
 
 type AnySection = MsafSection | SectionItem;
 
@@ -138,20 +138,6 @@ function buildMelMap(bins: number, rows: number, nyquist: number): Uint16Array {
 
 // ── Cached spectrogram ─────────────────────────────────────────────────────────
 
-interface SpectroCache {
-  buffer: AudioBuffer;
-  imgData: ImageData;
-  W: number;
-  H: number;
-  dpr: number;
-  displayNyquist: number;
-  specDb: Float32Array;
-  melMap: Uint16Array;
-  bins: number;
-  minDb: number;
-  maxDb: number;
-}
-
 function buildSpectrogramImage(
   specDb: Float32Array,
   melMap: Uint16Array,
@@ -203,63 +189,6 @@ function drawFreqLabels(ctx: CanvasRenderingContext2D, W: number, H: number, dis
     ctx.lineWidth   = 0.5 * dpr;
     ctx.beginPath(); ctx.moveTo(0, row); ctx.lineTo(W - (30 * dpr), row); ctx.stroke();
   }
-}
-
-function drawBeatGrid(
-  ctx: CanvasRenderingContext2D, W: number, H: number,
-  duration: number, beatTimes?: number[], bpm?: number, beatOffset = 0, beatsPerBar = 4, barGroupSize?: number,
-  subBeatDivision?: number,
-  beatGroupSize?: number,
-  dpr = 1,
-  gridThickness = 1,
-) {
-  if (!duration || !bpm) return;
-
-  // Phase anchor: explicit beatOffset > 0, else first detected beat, else 0.
-  const anchor = beatOffset > 0 ? beatOffset
-    : (beatTimes && beatTimes.length > 0 ? beatTimes[0] : 0);
-
-  const lines = visibleGridLines({
-    bpm, gridOffset: anchor, beatsPerBar,
-    startTime: 0, endTime: duration,
-    barGroupSize: barGroupSize ?? null,
-    subBeatDivision,
-    beatGroupSize,
-  });
-  if (lines.length < 2) return;
-
-  // In dense mode (no barGroupSize) cull lines that would render closer than 5px
-  // — at very low zoom every beat would be a hairline blur otherwise. The cull
-  // step is measured in beat-divisions so sub-beat (8th/16th) lines also thin out.
-  const dense = barGroupSize == null;
-  const div = (dense && subBeatDivision && subBeatDivision > 1) ? Math.floor(subBeatDivision) : 1;
-  const pxPerStep = ((60 / bpm) / div / duration) * W;
-  const step = dense ? Math.max(1, Math.ceil(5 / pxPerStep)) : 1;
-
-  ctx.save();
-  for (let i = 0; i < lines.length; i++) {
-    if (step > 1 && i % step !== 0) continue;
-    const { t, isBar, isPhrase, isSubBeat } = lines[i];
-    const x = (t / duration) * W;
-    if (barGroupSize != null) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.5)';
-      ctx.lineWidth   = 2 * dpr * gridThickness;
-    } else if (isPhrase) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.50)';
-      ctx.lineWidth   = 1.5 * dpr * gridThickness;
-    } else if (isBar) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-      ctx.lineWidth   = 1.5 * dpr * gridThickness;
-    } else if (isSubBeat) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-      ctx.lineWidth   = 1 * dpr * gridThickness;
-    } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.09)';
-      ctx.lineWidth   = 1 * dpr * gridThickness;
-    }
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  ctx.restore();
 }
 
 function drawSectionBands(
@@ -335,180 +264,123 @@ export const SpectrogramAnnotated = forwardRef<SpectrogramAnnotatedHandle, Props
   contrast = 1,
 }: Props, ref: Ref<SpectrogramAnnotatedHandle>) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useImperativeHandle(ref, () => ({
-    getCanvasDataURL: () => canvasRef.current?.toDataURL('image/png') ?? null,
+    // The row is a strip of tiles now, so there is no single canvas to export.
+    // Composite whatever is mounted into one image — at fit zoom that is the
+    // whole row, which is what every caller of this ever wanted.
+    getCanvasDataURL: () => {
+      const host = containerRef.current;
+      if (!host) return null;
+      const tiles = [...host.querySelectorAll('canvas')];
+      if (tiles.length === 0) return null;
+      const w = Math.max(...tiles.map((c) => c.offsetLeft + c.width));
+      const h = Math.max(...tiles.map((c) => c.height));
+      if (w <= 0 || h <= 0 || w > 16_384) return tiles[0].toDataURL('image/png');
+      const out = document.createElement('canvas');
+      out.width = w; out.height = h;
+      const octx = out.getContext('2d');
+      if (!octx) return null;
+      for (const c of tiles) octx.drawImage(c, c.offsetLeft * (c.width / Math.max(1, c.offsetWidth)), 0);
+      return out.toDataURL('image/png');
+    },
   }));
-  const cacheRef  = useRef<SpectroCache | null>(null);
-  const [spectroReady, setSpectroReady] = useState(false);
-  // When the user opts into extended zoom, drop the canvas dpr to 1 so the
-  // internal buffer stays under the browser's max-canvas limit at high zoom.
-  // Also clamp dpr by cssWidth as a defensive backstop so the canvas
-  // self-degrades rather than overflowing if the cssWidth ever exceeds the
-  // safe-buffer/dpr threshold (e.g. mid-zoom race).
-  const { enabled: extendedZoom } = useExtendedZoom();
-  const SPECTRO_MAX_BUFFER_PX = 32_000;
-  const computeSafeDpr = useCallback((cssWidth: number) => {
-    const raw = effectiveDpr(Math.max(1, window.devicePixelRatio || 1), extendedZoom);
-    return Math.min(raw, SPECTRO_MAX_BUFFER_PX / Math.max(1, cssWidth));
-  }, [extendedZoom]);
-  // True while the spectrogram is being soft-clamped (Ultra-zoom past the
-  // safe-buffer cap) — surfaces a small spinner overlay so the user has a live
-  // cue instead of the browser's broken-image placeholder.
-  const [softening, setSoftening] = useState(false);
-  const softenTimerRef = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (softenTimerRef.current != null) window.clearTimeout(softenTimerRef.current);
-  }, []);
-  const [canvasSize, setCanvasSize] = useState(() => {
-    const cssWidth = 900;
-    return {
-      cssWidth,
-      cssHeight: Math.max(1, Math.round(height)),
-      dpr: computeSafeDpr(cssWidth),
-    };
-  });
 
+  const FFT = 2048;
+  const BINS = FFT >> 2;
+
+  // A coarse pass over the whole track for the dB range and the display
+  // Nyquist. Every tile normalizes against THIS, not against its own slice —
+  // per-tile min/max would make each tile's brightness depend on what happens
+  // to be in it, and the seams would show as steps in contrast.
+  const [analysis, setAnalysis] = useState<{ mn: number; mx: number; dNyq: number } | null>(null);
   useEffect(() => {
-    const updateCanvasSize = () => {
-      const cssWidth = Math.max(1, Math.round(containerRef.current?.clientWidth ?? 900));
-      const cssHeight = Math.max(1, Math.round(height));
-      const dpr = computeSafeDpr(cssWidth);
-
-      // Flash the spinner whenever the clamp lowered the dpr below the raw
-      // value — i.e., we're past the safe-buffer cap.
-      const rawDpr = effectiveDpr(Math.max(1, window.devicePixelRatio || 1), extendedZoom);
-      if (dpr < rawDpr - 1e-3) {
-        setSoftening(true);
-        if (softenTimerRef.current != null) window.clearTimeout(softenTimerRef.current);
-        softenTimerRef.current = window.setTimeout(() => setSoftening(false), 250);
-      }
-
-      setCanvasSize((prev) => {
-        if (prev.cssWidth === cssWidth && prev.cssHeight === cssHeight && prev.dpr === dpr) {
-          return prev;
-        }
-        return { cssWidth, cssHeight, dpr };
-      });
-    };
-
-    updateCanvasSize();
-    const ro = containerRef.current ? new ResizeObserver(updateCanvasSize) : null;
-    if (containerRef.current && ro) {
-      ro.observe(containerRef.current);
-    }
-    window.addEventListener('resize', updateCanvasSize);
-
-    return () => {
-      ro?.disconnect();
-      window.removeEventListener('resize', updateCanvasSize);
-    };
-  }, [height, computeSafeDpr, extendedZoom]);
-
-  const pixelWidth = Math.max(1, Math.round(canvasSize.cssWidth * canvasSize.dpr));
-  const pixelHeight = Math.max(1, Math.round(canvasSize.cssHeight * canvasSize.dpr));
-
-  // Keep overlay params in a ref so the RAF loop always reads fresh values
-  const overlayRef = useRef({ sections, duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, gridThickness });
-  useEffect(() => { overlayRef.current = { sections, duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, gridThickness }; });
-
-  // ── Draw one frame onto the canvas ───────────────────────────────────────────
-  const drawFrame = useCallback((headTime: number) => {
-    const canvas = canvasRef.current;
-    const cache  = cacheRef.current;
-    if (!canvas || !cache) return;
-    const ctx = canvas.getContext('2d')!;
-    const { imgData, W, H, dpr, displayNyquist } = cache;
-    const { sections: secs, duration: dur, beatTimes: bt, bpm: b, beatOffset: bo, beatsPerBar: bpb, barGroupSize: bgs, subBeatDivision: sbd, beatGroupSize: bgrp, gridThickness: gt } = overlayRef.current;
-    ctx.putImageData(imgData, 0, 0);
-    drawFreqLabels(ctx, W, H, displayNyquist, dpr);
-    drawBeatGrid(ctx, W, H, dur, bt, b, bo, bpb, bgs, sbd, bgrp, dpr, gt);
-    drawSectionBands(ctx, W, H, secs, dur, dpr);
-    drawPlayhead(ctx, W, H, headTime, dur, dpr);
-  }, []);
-
-  // ── Phase 1: FFT → ImageData ─────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    if (cacheRef.current?.buffer === audioBuffer && cacheRef.current.W === canvas.width && cacheRef.current.H === canvas.height) {
-      const ctx = canvas.getContext('2d')!;
-      cacheRef.current.imgData = buildSpectrogramImage(
-        cacheRef.current.specDb,
-        cacheRef.current.melMap,
-        cacheRef.current.W,
-        cacheRef.current.H,
-        cacheRef.current.bins,
-        cacheRef.current.minDb,
-        cacheRef.current.maxDb,
-        gain,
-        contrast,
-        ctx,
-      );
-      setSpectroReady(true);
-      return;
-    }
-
-    setSpectroReady(false);
+    if (!audioBuffer) { setAnalysis(null); return; }
+    setAnalysis(null);
     let cancelled = false;
-
     const timer = setTimeout(() => {
       if (cancelled) return;
-      const FFT  = 2048, HOP = FFT >> 2, BINS = FFT >> 2;
-      const nyq  = audioBuffer.sampleRate / 2;
+      const trackDuration = duration > 0 ? duration : audioBuffer.duration;
+      const nyq = audioBuffer.sampleRate / 2;
       const dNyq = (BINS / (FFT / 2)) * nyq;
       const samp = audioBuffer.getChannelData(0);
-      const len  = samp.length;
-      const nf   = Math.max(1, Math.floor((len - FFT) / HOP));
-      const W    = canvas.width, H = canvas.height;
-      const mel  = buildMelMap(BINS, H, dNyq);
-
-      const spec = new Float32Array(W * BINS);
+      const len = samp.length;
+      const probes = 1024;
       const re = new Float32Array(FFT), im = new Float32Array(FFT);
       let mn = Infinity, mx = -Infinity;
-
-      for (let col = 0; col < W; col++) {
-        if (cancelled) return;
-        const s0 = Math.min(Math.floor((col / W) * nf), nf - 1) * HOP;
+      for (let i = 0; i < probes; i++) {
+        const centreSample = Math.round((i / probes) * trackDuration * audioBuffer.sampleRate);
+        const s0 = Math.max(0, Math.min(len - FFT, centreSample - (FFT >> 1)));
         re.fill(0); im.fill(0);
-        for (let i = 0; i < FFT; i++) re[i] = (s0 + i < len ? samp[s0 + i] : 0) * hann(FFT, i);
+        for (let k = 0; k < FFT; k++) re[k] = (s0 + k < len ? samp[s0 + k] : 0) * hann(FFT, k);
         fft(re, im);
         for (let b = 0; b < BINS; b++) {
           const db = 20 * Math.log10(Math.max(Math.sqrt(re[b] ** 2 + im[b] ** 2), 1e-8));
-          spec[col * BINS + b] = db;
-          if (db > mx) mx = db; if (db < mn) mn = db;
+          if (db > mx) mx = db;
+          if (db < mn) mn = db;
         }
       }
       if (cancelled) return;
-
-      const ctx   = canvas.getContext('2d')!;
-      const img   = buildSpectrogramImage(spec, mel, W, H, BINS, mn, mx, gain, contrast, ctx);
-      if (cancelled) return;
-      cacheRef.current = {
-        buffer: audioBuffer,
-        imgData: img,
-        W,
-        H,
-        dpr: canvasSize.dpr,
-        displayNyquist: dNyq,
-        specDb: spec,
-        melMap: mel,
-        bins: BINS,
-        minDb: mn,
-        maxDb: mx,
-      };
-      setSpectroReady(true);
+      setAnalysis({ mn, mx, dNyq });
     }, 16);
-
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [audioBuffer, gain, contrast, canvasSize.cssWidth, canvasSize.cssHeight, canvasSize.dpr]);
+  }, [audioBuffer, duration, BINS, FFT]);
 
-  // ── Phase 2: redraw whenever currentTime or overlays change ─────────────────
-  useEffect(() => {
-    if (!spectroReady) return;
-    drawFrame(currentTime);
-  }, [spectroReady, currentTime, sections, duration, beatTimes, bpm, beatOffset, drawFrame]);
+  const melMapRef = useRef<{ h: number; dNyq: number; map: ReturnType<typeof buildMelMap> } | null>(null);
+
+  // One tile's slice: an FFT per column of THIS tile, centred on the time that
+  // column represents. Zooming in therefore buys real analysis resolution —
+  // more columns over less time — instead of stretching a fixed-size bitmap,
+  // and it costs less than the old full-width pass because only the columns
+  // near the viewport are ever computed.
+  const paint = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom) => {
+    if (!audioBuffer || !analysis) return;
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    const colOffset = Math.round(tile.x0 * tile.dpr);
+    const colCount = Math.max(1, Math.round(tile.w * tile.dpr));
+    const trackDuration = duration > 0 ? duration : audioBuffer.duration;
+    const samp = audioBuffer.getChannelData(0);
+    const len = samp.length;
+
+    if (!melMapRef.current || melMapRef.current.h !== H || melMapRef.current.dNyq !== analysis.dNyq) {
+      melMapRef.current = { h: H, dNyq: analysis.dNyq, map: buildMelMap(BINS, H, analysis.dNyq) };
+    }
+    const mel = melMapRef.current.map;
+
+    const spec = new Float32Array(colCount * BINS);
+    const re = new Float32Array(FFT), im = new Float32Array(FFT);
+    const secPerCol = totalPx > 0 ? trackDuration / totalPx : 0;
+    for (let col = 0; col < colCount; col++) {
+      const centreSample = Math.round((colOffset + col) * secPerCol * audioBuffer.sampleRate);
+      const s0 = Math.max(0, Math.min(len - FFT, centreSample - (FFT >> 1)));
+      re.fill(0); im.fill(0);
+      for (let i = 0; i < FFT; i++) re[i] = (s0 + i < len ? samp[s0 + i] : 0) * hann(FFT, i);
+      fft(re, im);
+      for (let b = 0; b < BINS; b++) {
+        spec[col * BINS + b] = 20 * Math.log10(Math.max(Math.sqrt(re[b] ** 2 + im[b] ** 2), 1e-8));
+      }
+    }
+    const img = buildSpectrogramImage(spec, mel, colCount, H, BINS, analysis.mn, analysis.mx, gain, contrast, ctx);
+    ctx.putImageData(img, 0, 0);
+  }, [audioBuffer, analysis, duration, gain, contrast, BINS, FFT]);
+
+  const overlay = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => {
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    ctx.save();
+    ctx.translate(-Math.round(tile.x0 * tile.dpr), 0);
+    if (analysis) drawFreqLabels(ctx, totalPx, H, analysis.dNyq, tile.dpr);
+    drawBeatGrid(ctx, {
+      W: totalPx, H, dpr: tile.dpr, thickness: gridThickness,
+      duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, subBeatDivision, beatGroupSize,
+    });
+    drawSectionBands(ctx, totalPx, H, sections, duration, tile.dpr);
+    if (focusX != null) drawPlayhead(ctx, totalPx, H, focusX, tile.totalW, tile.dpr);
+    ctx.restore();
+  }, [analysis, gridThickness, duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, subBeatDivision, beatGroupSize, sections]);
 
   // ── JSX ──────────────────────────────────────────────────────────────────────
 
@@ -546,33 +418,24 @@ export const SpectrogramAnnotated = forwardRef<SpectrogramAnnotatedHandle, Props
           canvas locks at a runaway size after zoom-in and drifts out of
           alignment with the player / 3-Band cursors. */}
       <div ref={containerRef} className="relative w-full min-w-0">
-        <canvas
-          ref={canvasRef}
-          width={pixelWidth}
-          height={pixelHeight}
-          className="rounded bg-gray-900 block w-full"
-          style={{ height: `${canvasSize.cssHeight}px` }}
-        />
-        {!spectroReady && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900/70 rounded text-xs text-gray-400 animate-pulse pointer-events-none">
-            Computing spectrogram…
-          </div>
-        )}
-        {softening && spectroReady && (
-          <div className="absolute top-1 left-1 z-30 pointer-events-none">
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-              <circle cx="7" cy="7" r="5" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
-              <path d="M 7 2 A 5 5 0 0 1 12 7" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="1.5" strokeLinecap="round">
-                <animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.9s" repeatCount="indefinite" />
-              </path>
-            </svg>
-          </div>
-        )}
-        {algoName && spectroReady && (
-          <div className="absolute bottom-1 left-1 text-[9px] text-gray-500 bg-gray-900/70 px-1.5 py-0.5 rounded pointer-events-none">
-            annotations: {algoName}
-          </div>
-        )}
+        <TiledStrip
+          height={Math.max(1, Math.round(height))}
+          paint={paint}
+          overlay={overlay}
+          overlayFocus={duration > 0 ? currentTime / duration : null}
+          className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
+        >
+          {!analysis && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-900/70 rounded text-xs text-gray-400 animate-pulse pointer-events-none">
+              Computing spectrogram…
+            </div>
+          )}
+          {algoName && analysis && (
+            <div className="absolute bottom-1 left-1 text-[9px] text-gray-500 bg-gray-900/70 px-1.5 py-0.5 rounded pointer-events-none">
+              annotations: {algoName}
+            </div>
+          )}
+        </TiledStrip>
       </div>
     </div>
   );

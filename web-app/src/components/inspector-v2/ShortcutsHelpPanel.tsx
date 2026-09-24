@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import type { ShortcutDef } from '../../hooks/useAnnotationShortcuts';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface Props {
   open: boolean;
@@ -14,6 +15,12 @@ interface Props {
  * Toggled via `?`; closed via Esc, the backdrop, or the × button.
  */
 export function ShortcutsHelpPanel({ open, onClose, shortcuts, accentText = 'text-cyan-300' }: Props) {
+  // The backdrop makes this modal, so Tab belongs inside it while it's open —
+  // and on close, focus goes back to the control that was focused when `?` was
+  // pressed rather than to <body>.
+  const panelRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(panelRef, open);
+
   // Group shortcuts by their `group` field, preserving the order they appear in the array.
   const groups = useMemo(() => {
     const order: string[] = [];
@@ -42,9 +49,16 @@ export function ShortcutsHelpPanel({ open, onClose, shortcuts, accentText = 'tex
 
       {/* Drawer */}
       <aside
+        ref={panelRef}
         role="dialog"
         aria-label="Keyboard shortcuts"
         aria-hidden={!open}
+        /* The drawer stays mounted and slides off-screen, so without `inert` its
+           close button and the scroll container stay in the tab order while
+           hidden — two Tab stops that land off the right edge of the viewport,
+           inside an aria-hidden subtree. `inert` drops the whole subtree from
+           focus and from the a11y tree in one attribute. */
+        inert={!open}
         className={`fixed top-0 right-0 z-50 h-full w-[360px] max-w-[90vw] bg-[#14171d] border-l border-white/[0.08] shadow-2xl shadow-black/80 transition-transform duration-200 ease-out ${
           open ? 'translate-x-0' : 'translate-x-full'
         } flex flex-col`}

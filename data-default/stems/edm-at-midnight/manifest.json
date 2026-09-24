@@ -1,5 +1,5 @@
 {
-  "model": "htdemucs",
+  "model": "htdemucs_6s",
   "audioFile": "edm-at-midnight.mp3",
   "slug": "edm-at-midnight",
   "shipped": true,
@@ -7,6 +7,8 @@
     "drums": "/stems/edm-at-midnight/drums.mp3",
     "bass": "/stems/edm-at-midnight/bass.mp3",
     "other": "/stems/edm-at-midnight/other.mp3",
-    "vocals": "/stems/edm-at-midnight/vocals.mp3"
+    "vocals": "/stems/edm-at-midnight/vocals.mp3",
+    "guitar": "/stems/edm-at-midnight/guitar.mp3",
+    "piano": "/stems/edm-at-midnight/piano.mp3"
   }
 }

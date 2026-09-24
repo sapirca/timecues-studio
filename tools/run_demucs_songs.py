@@ -29,7 +29,7 @@ from stem_paths import ALLIN1_DEMIX_DIR, WEB_APP_STEMS_DIR, write_manifest
 sys.path.insert(0, str(Path(__file__).resolve().parent / "python"))
 from paths import SONGS_DIR  # noqa: E402
 
-MODEL_NAME = "htdemucs"
+MODEL_NAME = "htdemucs_6s"
 CHUNK_SECS = 50
 OVERLAP_SECS = 2
 
@@ -136,13 +136,16 @@ def main():
             continue  # already done
 
         wavs = list(stem_dir.glob("*.wav")) if stem_dir.exists() else []
-        if len(wavs) >= 4:
+        if len(wavs) >= 6:
             to_manifest.append((audio_path, stem_dir))
         else:
-            # Check allin1 demix cache before scheduling a full Demucs run
+            # Check allin1 demix cache before scheduling a full Demucs run. That
+            # cache is the old 4-stem htdemucs (demix/htdemucs/), so it is only a
+            # valid shortcut if it already holds the full 6-source set; otherwise
+            # fall through to a real htdemucs_6s separation.
             cache_dir = ALLIN1_DEMIX_DIR / audio_path.stem
             cached_wavs = list(cache_dir.glob("*.wav")) if cache_dir.exists() else []
-            if len(cached_wavs) >= 4:
+            if len(cached_wavs) >= 6:
                 to_copy_from_cache.append((audio_path, stem_dir))
             else:
                 to_separate.append((audio_path, stem_dir))

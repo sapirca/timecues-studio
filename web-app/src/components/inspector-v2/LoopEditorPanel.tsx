@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, forwardRef, type ForwardedRef } from 'react';
+import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import type {
   AnnotationLayer,
   AnnotationLayersDocument,
@@ -24,12 +25,16 @@ import {
   setLayerStatus,
 } from '../../types/annotationLayer';
 import { snapToBar, snapToBeat, type BarGrid } from '../../utils/barSnap';
+import { resolvePointAddTime } from './boundaryInsert';
 import type { PendingSelection } from './AnnotationOverlays';
 import { useSettings } from '../../context/SettingsContext';
+import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
+import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { LoopItemCard } from './LoopItemCard';
 import { AddItemAtEndCard } from './ItemCard';
 import { LayerModePicker } from './LayerModePicker';
+import { formatBeatTime } from '../../utils/beatTimeFormat';
 
 interface LoopEditorPanelProps {
   currentTime: number;
@@ -40,6 +45,13 @@ interface LoopEditorPanelProps {
   grid: Partial<BarGrid> | null;
   /** Global Snap-to-grid toggle (VizControlBar). */
   snapToGrid?: boolean;
+  /** The page's grid-aware snapper, used for every add / snap-to-playhead
+   *  time. It honours the GRID unit the user picked (1/2 beat, triplets,
+   *  bars…), per-beat overrides and tempo segments, and returns the time
+   *  untouched while Snap and Grid Lock are both off — the same rule a drag
+   *  on the canvas already followed. Optional: without it these paths fall
+   *  back to whole-beat snapping, which is what they all used to do. */
+  snapTime?: (t: number) => number;
   focusedLoop?: { layerId: string; itemId: string } | null;
   onFocusLoop?: (selection: { layerId: string; itemId: string } | null) => void;
   selectedLayerId?: string | null;
@@ -51,13 +63,15 @@ interface LoopEditorPanelProps {
   onClearPendingSelection?: () => void;
   onCapabilitiesChange?: (caps: AnnotationPanelCapabilities) => void;
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
-}
-
-function fmtTime(t: number): string {
-  if (!Number.isFinite(t) || t < 0) return '0:00.0';
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+  /** Fired when an add was refused because a loop with these exact edges is
+   *  already in the target layer — carries the line the page shows as a
+   *  notice. See shared/duplicateItem.ts. */
+  onDuplicateSkipped?: (message: string) => void;
+  gridLock?: boolean;
+  /** Reader for the LIVE media clock (the page's `liveSongTime`). A loop
+   *  placed against `currentTime` starts a render behind where the annotator
+   *  was listening; see `markTime`. Optional — falls back to the prop. */
+  getSongTime?: () => number | null;
 }
 
 function newLoopItem(start: number, end: number): LoopItem {
@@ -67,16 +81,40 @@ function newLoopItem(start: number, end: number): LoopItem {
 function LoopEditorPanelInner(
   {
     currentTime, duration, doc, onDocChange, grid,
-    snapToGrid = false,
+    snapToGrid = false, snapTime,
+    gridLock = false,
     focusedLoop, onFocusLoop, playingLoopId, onPlayLoop, onStopLoop,
     selectedLayerId = null, onSelectLayer,
     pendingSelection, onClearPendingSelection,
     onCapabilitiesChange,
     saveStatus = 'idle',
+    onDuplicateSkipped,
+    getSongTime,
   }: LoopEditorPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
   const { settings } = useSettings();
+  // Where a loop placed *right now* starts. Called at the moment of the add,
+  // never captured — `currentTime` is the media clock one rAF, one setState
+  // and one inspector re-render later. `atTime` is the caller's own reading
+  // (the M shortcut's, taken at the keydown) when it has one.
+  const markTime = useCallback(
+    (atTime?: number) => resolvePointAddTime({
+      live: atTime ?? getSongTime?.(),
+      fallback: currentTime,
+    }),
+    [getSongTime, currentTime],
+  );
+
+  // Where an add actually lands. Delegates to the page's `snapTime` so a mark
+  // placed from the keyboard ends up on the same lines as one dragged on the
+  // canvas; the whole-beat fallback is only for mounts that inject no snapper.
+  const snapAdd = useCallback(
+    (t: number) => (snapTime
+      ? snapTime(t)
+      : (snapToGrid && grid?.bpm ? snapToBeat(t, grid as BarGrid) : t)),
+    [snapTime, snapToGrid, grid],
+  );
   const quickAddBars = settings.loopQuickAddBars;
   const loopLayers = useMemo(
     () => doc.layers.filter((l): l is AnnotationLayer<'loops'> => l.type === 'loops'),
@@ -116,27 +154,25 @@ function LoopEditorPanelInner(
   }
 
   function addLoop(layerId: string, bars: number) {
+    // A highlighted region wins over the playhead + bar-count default: the
+    // drag IS what the annotator asked to add, and discarding it to drop a
+    // fixed-length loop at the cursor lands an item they never pointed at.
+    if (pendingSpan) { confirmPendingForLayer(layerId); return; }
     const layer = loopLayers.find((l) => l.id === layerId);
     if (!layer) return;
     const safeGrid = grid?.bpm && grid.beatsPerBar
       ? { bpm: grid.bpm, beatsPerBar: grid.beatsPerBar, gridOffsetSec: grid.gridOffsetSec ?? 0 }
       : null;
-    let start = currentTime;
-    let end = currentTime + bars * 2; // fallback when no grid: 2 sec/bar guess
+    const at = markTime();
+    let start = at;
+    let end = at + bars * 2; // fallback when no grid: 2 sec/bar guess
     if (safeGrid) {
       const barLen = (60 / safeGrid.bpm) * safeGrid.beatsPerBar;
-      start = snapToBar(currentTime, safeGrid);
+      start = snapToBar(at, safeGrid);
       end   = start + bars * barLen;
     }
     if (end > duration) end = duration;
-    const item = newLoopItem(start, end);
-    onDocChange({
-      ...doc,
-      layers: doc.layers.map((l) =>
-        l.id === layerId ? { ...l, items: [...l.items, item] } : l,
-      ),
-    });
-    onFocusLoop?.({ layerId, itemId: item.id });
+    commitLoop(start, end, layerId);
   }
 
   function patchItem(layerId: string, itemId: string, patch: Partial<LoopItem>) {
@@ -163,14 +199,16 @@ function LoopEditorPanelInner(
   function snapStartToPlayhead(layerId: string, itemId: string) {
     const item = loopLayers.find((l) => l.id === layerId)?.items.find((i) => i.id === itemId);
     if (!item) return;
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
+    const raw = markTime();
+    const t = snapAdd(raw);
     patchItem(layerId, itemId, { start: Math.min(t, item.end - 0.05) });
   }
 
   function snapEndToPlayhead(layerId: string, itemId: string) {
     const item = loopLayers.find((l) => l.id === layerId)?.items.find((i) => i.id === itemId);
     if (!item) return;
-    const t = snapToGrid && grid?.bpm ? snapToBeat(currentTime, grid as BarGrid) : currentTime;
+    const raw = markTime();
+    const t = snapAdd(raw);
     patchItem(layerId, itemId, { end: Math.max(t, item.start + 0.05) });
   }
 
@@ -211,13 +249,26 @@ function LoopEditorPanelInner(
     return { layers, targetId };
   }, [doc.layers, loopLayers, selectedLayerId, activeLayer, focusedLoop]);
 
-  const confirmPendingForLayer = useCallback((forcedLayerId: string | null) => {
-    if (!pendingSpan) return;
-    const start = Math.max(0, pendingSpan.start);
-    const end   = Math.min(duration > 0 ? duration : pendingSpan.end, pendingSpan.end);
-    if (end - start < 0.05) { onClearPendingSelection?.(); return; }
-    const item = newLoopItem(start, end);
+  // The one place a new loop enters the document — the N-bar buttons, the
+  // playhead add, a dragged region and a canvas range all land here, so the
+  // duplicate rule is written once. A loop whose two edges already exist in
+  // the target layer is not added: bar-snapping makes that collision routine
+  // (two "+ 4 bars" clicks anywhere inside the same bar produce the identical
+  // loop), and the second one would hide underneath the first.
+  const commitLoop = useCallback((start: number, end: number, forcedLayerId: string | null) => {
     const { layers, targetId } = pickLoopTarget(forcedLayerId);
+    const layer = layers.find((l): l is AnnotationLayer<'loops'> =>
+      l.id === targetId && l.type === 'loops');
+    const existing = layer && findItemAtSpot(
+      layer.items, { at: start, end }, (it) => ({ at: it.start, end: it.end }),
+    );
+    if (existing) {
+      onFocusLoop?.({ layerId: targetId, itemId: existing.id });
+      onSelectLayer?.(targetId);
+      onDuplicateSkipped?.(duplicateItemNotice('loop', { at: start, end }));
+      return;
+    }
+    const item = newLoopItem(start, end);
     onDocChange({
       ...doc,
       layers: layers.map((l) => (l.id === targetId
@@ -226,8 +277,16 @@ function LoopEditorPanelInner(
     });
     onFocusLoop?.({ layerId: targetId, itemId: item.id });
     onSelectLayer?.(targetId);
+  }, [doc, pickLoopTarget, onDocChange, onFocusLoop, onSelectLayer, onDuplicateSkipped]);
+
+  const confirmPendingForLayer = useCallback((forcedLayerId: string | null) => {
+    if (!pendingSpan) return;
+    const start = Math.max(0, pendingSpan.start);
+    const end   = Math.min(duration > 0 ? duration : pendingSpan.end, pendingSpan.end);
+    if (end - start < 0.05) { onClearPendingSelection?.(); return; }
+    commitLoop(start, end, forcedLayerId);
     onClearPendingSelection?.();
-  }, [pendingSpan, duration, doc, pickLoopTarget, onDocChange, onFocusLoop, onSelectLayer, onClearPendingSelection]);
+  }, [pendingSpan, duration, commitLoop, onClearPendingSelection]);
 
   const confirmPendingSelection = useCallback(() => { confirmPendingForLayer(null); }, [confirmPendingForLayer]);
   const confirmPendingInLayer = useCallback((id: string) => { confirmPendingForLayer(id); }, [confirmPendingForLayer]);
@@ -237,17 +296,8 @@ function LoopEditorPanelInner(
     const eRaw = Math.max(start, end);
     const e = duration > 0 ? Math.min(duration, eRaw) : eRaw;
     if (e - s < 0.05) return;
-    const item = newLoopItem(s, e);
-    const { layers, targetId } = pickLoopTarget(null);
-    onDocChange({
-      ...doc,
-      layers: layers.map((l) => (l.id === targetId
-        ? ({ ...l, items: [...(l as AnnotationLayer<'loops'>).items, item] } as AnnotationLayer)
-        : l)),
-    });
-    onFocusLoop?.({ layerId: targetId, itemId: item.id });
-    onSelectLayer?.(targetId);
-  }, [doc, duration, pickLoopTarget, onDocChange, onFocusLoop, onSelectLayer]);
+    commitLoop(s, e, null);
+  }, [duration, commitLoop]);
 
   // ── Page-level controller wiring ──────────────────────────────────────────
   const focusedLoopItem: LoopItem | null = useMemo(() => {
@@ -319,34 +369,38 @@ function LoopEditorPanelInner(
     onFocusLoop?.(null);
   }, [doc, onDocChange, onFocusLoop]);
 
-  const addLoopForLayer = useCallback((forcedLayerId: string | null) => {
-    const { layers, targetId } = pickLoopTarget(forcedLayerId);
+  const addLoopForLayer = useCallback((forcedLayerId: string | null, atTime?: number) => {
+    if (pendingSpan) { confirmPendingForLayer(forcedLayerId); return; }
     const safeGrid = grid?.bpm && grid.beatsPerBar
       ? { bpm: grid.bpm, beatsPerBar: grid.beatsPerBar, gridOffsetSec: grid.gridOffsetSec ?? 0 }
       : null;
-    let start = currentTime;
-    let end = currentTime + quickAddBars[0] * 2;
+    const at = markTime(atTime);
+    let start = at;
+    let end = at + quickAddBars[0] * 2;
     if (safeGrid) {
       const barLen = (60 / safeGrid.bpm) * safeGrid.beatsPerBar;
-      start = snapToBar(currentTime, safeGrid);
+      start = snapToBar(at, safeGrid);
       end   = start + quickAddBars[0] * barLen;
     }
     if (duration > 0 && end > duration) end = duration;
-    const item = newLoopItem(start, end);
-    onDocChange({
-      ...doc,
-      layers: layers.map((l) =>
-        l.id === targetId
-          ? ({ ...l, items: [...(l as AnnotationLayer<'loops'>).items, item] } as AnnotationLayer)
-          : l,
-      ),
-    });
-    onFocusLoop?.({ layerId: targetId, itemId: item.id });
-    onSelectLayer?.(targetId);
-  }, [doc, pickLoopTarget, grid, currentTime, quickAddBars, duration, onDocChange, onFocusLoop, onSelectLayer]);
+    commitLoop(start, end, forcedLayerId);
+  }, [commitLoop, grid, markTime, quickAddBars, duration,
+      pendingSpan, confirmPendingForLayer]);
 
-  const addLoopAtPlayhead = useCallback(() => { addLoopForLayer(null); }, [addLoopForLayer]);
-  const addLoopAtPlayheadInLayer = useCallback((id: string) => { addLoopForLayer(id); }, [addLoopForLayer]);
+  const addLoopAtPlayhead = useCallback(
+    (atTime?: number) => { addLoopForLayer(null, atTime); },
+    [addLoopForLayer],
+  );
+  const addLoopAtPlayheadInLayer = useCallback(
+    (id: string, atTime?: number) => { addLoopForLayer(id, atTime); },
+    [addLoopForLayer],
+  );
+
+  // While a region is highlighted every add path adopts it, so the buttons
+  // advertise the range rather than a bar count they aren't going to use.
+  const pendingAddLabel = pendingSpan
+    ? `+ Add ${fmtTime(pendingSpan.start)}\u2192${fmtTime(pendingSpan.end)}`
+    : null;
 
   const deleteFocusedLoop = useCallback(() => {
     if (!focusedLoop) return;
@@ -422,6 +476,7 @@ function LoopEditorPanelInner(
   useEffect(() => {
     if (!onCapabilitiesChange) return;
     onCapabilitiesChange({
+      ...emptyCapabilities(),
       status: getLayerStatus(doc, 'loops'),
       hasItems: totalCount > 0,
       saveStatus,
@@ -439,7 +494,7 @@ function LoopEditorPanelInner(
       snapStartLabel: `@ ${fmtTime(currentTime)}`,
       snapEndLabel: `@ ${fmtTime(currentTime)}`,
       canAddAtPlayhead: true,
-      addLabel: `+ Add ${quickAddBars[0]}-bar loop @ ${fmtTime(currentTime)}`,
+      addLabel: pendingAddLabel ?? `+ Add ${quickAddBars[0]}-bar loop @ ${fmtTime(currentTime)}`,
       canAddLayer: true,
       pending: pendingSelection ?? null,
       pendingRequiresRegion: true,
@@ -447,12 +502,20 @@ function LoopEditorPanelInner(
       canExport: totalCount > 0,
       canDeleteAll: loopLayers.length > 0,
     });
-  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, currentTime, pendingSelection, totalCount, loopLayers.length, quickAddBars]);
+  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, currentTime, pendingSelection, totalCount, loopLayers.length, quickAddBars, pendingAddLabel]);
 
   const sortedItems = useMemo(
     () => (activeLayer?.items ?? []).slice().sort((a, b) => a.start - b.start),
     [activeLayer],
   );
+
+  const beatFmt = useMemo<((t: number) => string) | undefined>(() => {
+    if (!gridLock || !grid?.bpm || grid.bpm <= 0) return undefined;
+    return (t: number) => formatBeatTime(
+      t, grid.bpm!, grid.gridOffsetSec ?? 0, grid.beatsPerBar ?? 4,
+      'bar-beat', settings.barBeatOrigin,
+    );
+  }, [gridLock, grid, settings.barBeatOrigin]);
 
   return (
     <div className="space-y-3">
@@ -471,14 +534,15 @@ function LoopEditorPanelInner(
           onChangeMode={(mode) => patchLayer(activeLayer.id, { mode })}
           onDelete={() => deleteLayer(activeLayer.id)}
           onAddBars={(bars) => addLoop(activeLayer.id, bars)}
+          pendingAddLabel={pendingAddLabel}
         />
       )}
 
       {!activeLayer ? (
         <div className="flex flex-wrap items-start gap-1">
           <AddItemAtEndCard
-            onClick={addLoopAtPlayhead}
-            label={`+ Add ${quickAddBars[0]}-bar loop`}
+            onClick={() => addLoopAtPlayhead()}
+            label={pendingAddLabel ?? `+ Add ${quickAddBars[0]}-bar loop`}
           />
         </div>
       ) : (
@@ -503,11 +567,12 @@ function LoopEditorPanelInner(
               onPlay={() => onPlayLoop(loop.id, loop.start, loop.end)}
               onStop={onStopLoop}
               onDelete={() => deleteItem(activeLayer.id, loop.id)}
+              fmt={beatFmt}
             />
           ))}
           <AddItemAtEndCard
             onClick={() => addLoop(activeLayer.id, quickAddBars[0])}
-            label={`+ ${quickAddBars[0]}-bar loop`}
+            label={pendingAddLabel ?? `+ ${quickAddBars[0]}-bar loop`}
           />
         </div>
       )}
@@ -516,6 +581,7 @@ function LoopEditorPanelInner(
 }
 
 // ─── Slim per-layer toolbar above the card row ─────────────────────────────
+
 
 interface LoopLayerToolbarProps {
   layer: AnnotationLayer<'loops'>;
@@ -527,11 +593,15 @@ interface LoopLayerToolbarProps {
   onChangeMode: (mode: import('../../types/annotationLayer').LayerEvalMode) => void;
   onDelete: () => void;
   onAddBars: (bars: number) => void;
+  /** Set while a region is highlighted on the viz — the bar quick-adds are
+   *  replaced by one button that adds exactly that range. */
+  pendingAddLabel: string | null;
 }
 
 function LoopLayerToolbar({
   layer, currentTime, grid, quickAddBars,
   onRename, onToggleVisibility, onChangeMode, onDelete, onAddBars,
+  pendingAddLabel,
 }: LoopLayerToolbarProps) {
   return (
     <div
@@ -550,22 +620,36 @@ function LoopLayerToolbar({
       />
       <span className="text-[10px] font-mono text-slate-500 shrink-0">{layer.items.length}</span>
       <LayerModePicker mode={layer.mode} onChange={onChangeMode} />
-      <span className="text-[10px] uppercase tracking-wider text-slate-500 shrink-0">@ {fmtTime(currentTime)}:</span>
-      {quickAddBars.map((bars, i) => (
+      {pendingAddLabel ? (
+        // A drag is on the canvas — one button, and it adds exactly that
+        // range. No BPM needed: the range already carries its own length.
         <button
-          key={i}
-          onClick={() => onAddBars(bars)}
-          disabled={!grid?.bpm}
-          className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200 hover:bg-fuchsia-500/20 hover:border-fuchsia-400/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title={grid?.bpm
-            ? `Add a ${bars}-bar loop starting from the bar containing the playhead${i === 0 ? ' (M)' : ''}`
-            : 'Set the song BPM first'}
+          onClick={() => onAddBars(quickAddBars[0])}
+          className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200 hover:bg-fuchsia-500/20 hover:border-fuchsia-400/50 transition-colors"
+          title="Add the highlighted region as a loop"
         >
-          + {bars}-bar loop
+          {pendingAddLabel}
         </button>
-      ))}
-      {!grid?.bpm && (
-        <span className="text-[10px] text-amber-400/70 italic">no BPM — set in Song Info to enable bar snap</span>
+      ) : (
+        <>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 shrink-0">@ {fmtTime(currentTime)}:</span>
+          {quickAddBars.map((bars, i) => (
+            <button
+              key={i}
+              onClick={() => onAddBars(bars)}
+              disabled={!grid?.bpm}
+              className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200 hover:bg-fuchsia-500/20 hover:border-fuchsia-400/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title={grid?.bpm
+                ? `Add a ${bars}-bar loop starting from the bar containing the playhead${i === 0 ? ' (M)' : ''}`
+                : 'Set the song BPM first'}
+            >
+              + {bars}-bar loop
+            </button>
+          ))}
+          {!grid?.bpm && (
+            <span className="text-[10px] text-amber-400/70 italic">no BPM — set in Song Info to enable bar snap</span>
+          )}
+        </>
       )}
       <button
         onClick={onToggleVisibility}

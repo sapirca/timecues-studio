@@ -9,7 +9,12 @@ import {
 import { evaluateCustom, type AlgoEvalResult } from '../../utils/evaluation';
 import { CustomEvalControls, DEFAULT_CUSTOM_EVAL_SETTINGS, type CustomEvalSettings } from './CustomEvalControls';
 import { EvalReferenceDropdown } from './EvalReferenceDropdown';
-import type { ManualSection } from '../../types/manualAnnotation';
+import { GlobalEvalSpanTable } from './GlobalEvalSpanTable';
+import { GlobalEvalLoopTable } from './GlobalEvalLoopTable';
+import { GlobalEvalLyricsTable } from './GlobalEvalLyricsTable';
+import { GlobalEvalCueTable } from './GlobalEvalCueTable';
+import { useSettings } from '../../context/SettingsContext';
+import type { SectionBlock } from '../../types/sectionBlock';
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
 
@@ -51,39 +56,86 @@ function isRupturesId(id: string): boolean {
 
 export interface EvaluationStageProps {
   annotationRows: AlgorithmRow[];
-  manualSections: ManualSection[];
-  eyeSections?: ManualSection[];
-  /** When false, hide the Eye option from the eval-reference dropdown
-   *  entirely (gated by the `experimentalEyeAnnotation` Settings flag). */
-  eyeEnabled?: boolean;
+  manualSections: SectionBlock[];
   duration: number;
   tolerance: number;
   onToleranceChange: (t: number) => void;
+  /** Drives the per-kind tabs that re-use the global eval tables in
+   *  single-song mode. When absent, only the Boundaries tab renders
+   *  (the other tabs need a slug to fetch detections + reference
+   *  annotations against). */
+  selectedAudio?: { id: string; name: string } | null;
+  /** When provided, the examined kind is controlled by the parent (the
+   *  inspect-song "Examine" picker) and the internal tab strip is hidden.
+   *  Left undefined in any standalone use, where EvaluationStage owns its
+   *  own tab state and renders the strip. */
+  kind?: EvalTabKey;
+  onKindChange?: (kind: EvalTabKey) => void;
 }
+
+export type EvalTabKey = 'boundaries' | 'cues' | 'spans' | 'loops' | 'lyrics';
+
+const TAB_LABELS: Record<EvalTabKey, string> = {
+  boundaries: 'Boundaries',
+  cues:       'Cues',
+  spans:      'Spans',
+  loops:      'Loops',
+  lyrics:     'Lyrics',
+};
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function EvaluationStage({
   annotationRows,
   manualSections,
-  eyeSections = [],
-  eyeEnabled = true,
   duration,
   tolerance,
   onToleranceChange,
+  selectedAudio = null,
+  kind,
+  onKindChange,
 }: EvaluationStageProps) {
   const [sortKey, setSortKey] = useState<SortKey>('f1');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [evalRef, setEvalRef] = useState<'manual' | 'eye'>('manual');
+  const [evalRef, setEvalRef] = useState<'manual' | 'autoGuess'>('manual');
   const [customSettings, setCustomSettings] = useState<CustomEvalSettings>(DEFAULT_CUSTOM_EVAL_SETTINGS);
+  // When the parent supplies `kind`, the examined kind is controlled (the
+  // inspect-song "Examine" picker owns it and the internal tab strip is
+  // hidden). Otherwise EvaluationStage owns the state and renders the strip.
+  const controlled = kind !== undefined;
+  const [internalTab, setInternalTab] = useState<EvalTabKey>('boundaries');
+  const tab = kind ?? internalTab;
+  const setTab = onKindChange ?? setInternalTab;
+  const { settings } = useSettings();
 
-  // If the experimental Eye flag flips off while Eye was the eval reference,
-  // fall back to manual so the (hidden) Eye option can't stay selected.
+  // Visible tabs depend on which experimental families the user opted into.
+  // Boundaries is always visible (the classic mir_eval table). The other tabs
+  // need a slug to pull predictions + reference annotations against, so we
+  // hide them if no song is selected.
+  const visibleTabs = useMemo<EvalTabKey[]>(() => {
+    const out: EvalTabKey[] = ['boundaries'];
+    if (selectedAudio) {
+      if (settings.experimentalCueExtras)     out.push('cues');
+      if (settings.experimentalSpanFamily)    out.push('spans');
+      if (settings.experimentalLoopFamily)    out.push('loops');
+      if (settings.experimentalLyricsFamily)  out.push('lyrics');
+    }
+    return out;
+  }, [
+    selectedAudio,
+    settings.experimentalCueExtras,
+    settings.experimentalSpanFamily,
+    settings.experimentalLoopFamily,
+    settings.experimentalLyricsFamily,
+  ]);
+
+  // Snap back to boundaries if the active tab disappears (flag flipped off).
+  // Only when uncontrolled — the parent owns this fallback when controlled.
   useEffect(() => {
-    if (!eyeEnabled && evalRef === 'eye') setEvalRef('manual');
-  }, [eyeEnabled, evalRef]);
+    if (!controlled && !visibleTabs.includes(tab)) setTab('boundaries');
+  }, [controlled, visibleTabs, tab, setTab]);
 
-  const refSections = evalRef === 'manual' ? manualSections : eyeSections;
+  const refSections = evalRef === 'manual' ? manualSections : [];
 
   // ── mir_eval (server-side via /api/mir-eval/pairs) — debounced ──────────
   const mirPairs = useMemo<MirEvalPairWithId[] | null>(() => {
@@ -173,26 +225,32 @@ export function EvaluationStage({
   const bestRow  = sorted[0];
   const worstRow = sorted[sorted.length - 1];
 
+  // Only the boundaries table scores against the manual boundary reference;
+  // the cue/span/loop/lyrics tables fetch their own reference by slug,
+  // so a missing boundary reference must not dead-end them.
   const noRef = !refSections.length;
 
-  if (noRef) {
+  if (noRef && tab === 'boundaries') {
+    // The picker collapses to static text when no other source has data, so
+    // "switch the reference below" would point at nothing — only promise the
+    // switch when there is actually another source to switch to.
+    const canSwitch = evalRef !== 'manual' && manualSections.length > 0;
     return (
       <div className="py-6 text-center">
         <p className="text-sm text-gray-500">
           No {evalRef} annotation loaded.
         </p>
         <p className="text-[11px] text-gray-600 mt-1">
-          Load a {evalRef} annotation in the Annotation tab, or switch the reference below.
+          Load a {evalRef} annotation in the Annotation tab{canSwitch ? ', or switch the reference below' : ''}.
         </p>
         <div className="mt-3 flex justify-center">
           <EvalReferenceDropdown
             value={evalRef}
             onChange={(mode) => {
-              if (mode === 'manual' || mode === 'eye') setEvalRef(mode);
+              if (mode === 'manual' || mode === 'autoGuess') setEvalRef(mode);
             }}
             options={[
               { mode: 'manual',      hasData: manualSections.length > 0 },
-              ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: eyeSections.length > 0 }] : []),
               { mode: 'autoGuess', hasData: false },
             ]}
           />
@@ -203,7 +261,7 @@ export function EvaluationStage({
 
   const rupturesCount = useMemo(() => annotationRows.filter((r) => isRupturesId(r.id)).length, [annotationRows]);
 
-  if (!annotationRows.length) {
+  if (!annotationRows.length && tab === 'boundaries') {
     return (
       <div className="py-6 text-center">
         <p className="text-sm text-gray-500">No algorithm results loaded.</p>
@@ -212,8 +270,43 @@ export function EvaluationStage({
     );
   }
 
+  const singleSongFiles = selectedAudio ? [selectedAudio] : [];
+
+  const TabBar = !controlled && visibleTabs.length > 1 && (
+    <div className="flex items-center gap-1 border-b border-white/[0.06] -mb-1">
+      {visibleTabs.map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => setTab(k)}
+          className={[
+            'px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider border-b-2 -mb-px transition-colors',
+            tab === k
+              ? 'border-indigo-400 text-indigo-200'
+              : 'border-transparent text-slate-500 hover:text-slate-300',
+          ].join(' ')}
+        >
+          {TAB_LABELS[k]}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (tab !== 'boundaries') {
+    return (
+      <div className="space-y-4">
+        {TabBar}
+        {tab === 'cues'     && <GlobalEvalCueTable     audioFiles={singleSongFiles} />}
+        {tab === 'spans'    && <GlobalEvalSpanTable    audioFiles={singleSongFiles} />}
+        {tab === 'loops'    && <GlobalEvalLoopTable    audioFiles={singleSongFiles} />}
+        {tab === 'lyrics'   && <GlobalEvalLyricsTable  audioFiles={singleSongFiles} />}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {TabBar}
       {/* Header + controls */}
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1">
@@ -227,11 +320,10 @@ export function EvaluationStage({
         <EvalReferenceDropdown
           value={evalRef}
           onChange={(mode) => {
-            if (mode === 'manual' || mode === 'eye') setEvalRef(mode);
+            if (mode === 'manual' || mode === 'autoGuess') setEvalRef(mode);
           }}
           options={[
             { mode: 'manual',      hasData: manualSections.length > 0 },
-            ...(eyeEnabled ? [{ mode: 'eye' as const, hasData: eyeSections.length > 0 }] : []),
             { mode: 'autoGuess', hasData: false },
           ]}
         />

@@ -35,6 +35,13 @@
   line-height: 1.5;
   font-weight: 400;
 
+  /* App-frame geometry. Desktop: the 72px workspace tab strip, no bottom
+     bar. The phone shell (html.tc-mobile, see mobile/mobileMode.ts) swaps in
+     its own numbers below; every sticky offset reads these instead of a
+     hard-coded 72px so both frames line up with one set of classes. */
+  --tc-header-h: 72px;
+  --tc-nav-h: 0px;
+
   /* Tabular figures for any monospace block — column-aligned timecodes */
   font-feature-settings: "tnum" 1, "ss01" 1;
 }
@@ -775,6 +782,141 @@ input[type="range"].tc-slider::-moz-range-thumb {
   color: #334155; /* matches --tc-text-dim in the light theme */
 }
 
+/* VizControlBar button transition. Deliberately NOT `transition-all`: the bar
+ * re-sizes its own controls to fit the window (see the density walk in
+ * VizControlBar.tsx), and animating width/height there both looks like drift
+ * and makes the walk measure a mid-animation size and settle a tier too
+ * small. Colors and the pressed glow still animate. */
+.tc-viz-transition {
+  transition-property: color, background-color, border-color, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── VizControlBar density tiers ───────────────────────────────────────────
+ * The bar fits itself to the width it has by measuring its own controls and
+ * trying tiers (see the walk in VizControlBar.tsx). Every size that differs
+ * between tiers lives here as a custom property, so trying a tier is a single
+ * attribute write on the bar — which is what lets the whole walk run
+ * synchronously, before the browser paints, instead of as a visible sequence
+ * of React renders that shrink in front of the user.
+ *
+ * The order things are given up in is deliberate: slack first (gaps, padding,
+ * the over-wide grid select), then label size, then the bar-numbering line in
+ * the mode badge, and the button size only after all of that. `roomy` is the
+ * full-size layout and lives on the bare class, so a bar with no tier set yet
+ * (or an unknown one) renders full-size. */
+.tc-viz-bar {
+  --tc-viz-sq: 2.5rem;            /* square icon-button edge */
+  --tc-viz-gap: 0.75rem;
+  --tc-viz-pad-x: 0.75rem;
+  --tc-viz-pad-y: 0.5rem;
+  --tc-viz-label: 9px;
+  --tc-viz-label-track: 0.05em;
+  --tc-viz-label-gap: 1rem;       /* lifts label-less items off the label line */
+  --tc-viz-select-max: none;
+  --tc-viz-zoom-min: 3rem;
+  --tc-viz-lock-pad: 0.75rem;     /* Grid Lock is the one text button */
+  --tc-viz-lock-gap: 0.375rem;
+  --tc-viz-badge-pad: 0.375rem;
+  gap: var(--tc-viz-gap);
+  padding: var(--tc-viz-pad-y) var(--tc-viz-pad-x);
+}
+.tc-viz-bar[data-viz-bar-density='snug'] {
+  --tc-viz-gap: 0.5rem;
+  --tc-viz-pad-x: 0.625rem;
+  --tc-viz-select-max: 9rem;
+}
+.tc-viz-bar[data-viz-bar-density='cozy'] {
+  --tc-viz-gap: 0.375rem;
+  --tc-viz-pad-x: 0.5rem;
+  --tc-viz-select-max: 7rem;
+  --tc-viz-label: 8px;
+  --tc-viz-label-track: 0;
+  --tc-viz-zoom-min: 2.5rem;
+}
+.tc-viz-bar[data-viz-bar-density='tight'] {
+  --tc-viz-sq: 2.25rem;
+  --tc-viz-gap: 0.375rem;
+  --tc-viz-pad-x: 0.5rem;
+  --tc-viz-select-max: 7rem;
+  --tc-viz-label: 8px;
+  --tc-viz-label-track: 0;
+  --tc-viz-zoom-min: 2.5rem;
+}
+.tc-viz-bar[data-viz-bar-density='dense'] {
+  --tc-viz-sq: 2rem;
+  --tc-viz-gap: 0.25rem;
+  --tc-viz-pad-x: 0.5rem;
+  --tc-viz-pad-y: 0.375rem;
+  --tc-viz-select-max: 6rem;
+  --tc-viz-label: 8px;
+  --tc-viz-label-track: 0;
+  --tc-viz-label-gap: 0.75rem;
+  --tc-viz-zoom-min: 2.5rem;
+  --tc-viz-lock-pad: 0.5rem;
+  --tc-viz-lock-gap: 0.25rem;
+  --tc-viz-badge-pad: 0.25rem;
+}
+.tc-viz-bar[data-viz-bar-density='micro'] {
+  --tc-viz-sq: 2rem;
+  --tc-viz-gap: 0.25rem;
+  --tc-viz-pad-x: 0.5rem;
+  --tc-viz-pad-y: 0.375rem;
+  --tc-viz-select-max: 4.5rem;
+  --tc-viz-label-gap: 0;
+  --tc-viz-zoom-min: 2.25rem;
+  --tc-viz-lock-pad: 0.5rem;
+  --tc-viz-lock-gap: 0.25rem;
+  --tc-viz-badge-pad: 0.25rem;
+}
+/* The slim sticky transport reuses the same controls at a fixed small size. */
+.tc-viz-bar[data-viz-bar-density='compact'] {
+  --tc-viz-sq: 2rem;
+  --tc-viz-gap: 0.25rem;
+  --tc-viz-pad-x: 0;
+  --tc-viz-pad-y: 0;
+  --tc-viz-select-max: 7rem;
+  --tc-viz-label-gap: 0;
+  --tc-viz-zoom-min: 3rem;
+}
+
+.tc-viz-sq { width: var(--tc-viz-sq); height: var(--tc-viz-sq); }
+.tc-viz-ctl { height: var(--tc-viz-sq); }
+.tc-viz-rule { height: var(--tc-viz-sq); }
+.tc-viz-select { max-width: var(--tc-viz-select-max); }
+.tc-viz-zoom { min-width: var(--tc-viz-zoom-min); }
+.tc-viz-lock {
+  gap: var(--tc-viz-lock-gap);
+  padding-left: var(--tc-viz-lock-pad);
+  padding-right: var(--tc-viz-lock-pad);
+}
+.tc-viz-badge { padding-left: var(--tc-viz-badge-pad); padding-right: var(--tc-viz-badge-pad); }
+.tc-viz-drop { margin-bottom: var(--tc-viz-label-gap); }
+.tc-viz-label {
+  font-size: var(--tc-viz-label);
+  letter-spacing: var(--tc-viz-label-track);
+}
+/* Below `dense` the labels are what a column's width is actually spent on, so
+ * they go and the column name lives in its hover tooltip instead. */
+.tc-viz-bar[data-viz-bar-density='micro'] .tc-viz-label,
+.tc-viz-bar[data-viz-bar-density='compact'] .tc-viz-label { display: none; }
+/* The mode badge sheds the bar-numbering line, then the BPM/meter line — both
+ * are spelled out in the Song setup panel beside the bar. */
+.tc-viz-bar[data-viz-bar-density='cozy'] .tc-viz-badge-origin,
+.tc-viz-bar[data-viz-bar-density='tight'] .tc-viz-badge-origin,
+.tc-viz-bar[data-viz-bar-density='dense'] .tc-viz-badge-origin,
+.tc-viz-bar[data-viz-bar-density='micro'] .tc-viz-badge-origin { display: none; }
+/* At the last tier the group dividers are the cheapest thing left to give up:
+ * they only ever grouped controls the labels already named. */
+.tc-viz-bar[data-viz-bar-density='micro'] .tc-viz-rule { display: none; }
+/* Compact stacks the dividers differently — centred, and shorter than a
+ * button so the slim row doesn't read as a grid of boxes. */
+.tc-viz-bar[data-viz-bar-density='compact'] .tc-viz-rule {
+  height: 1.5rem;
+  align-self: center;
+}
+
 /* Scrollbars on light surfaces. */
 :root[data-theme="light"] *::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.18);
@@ -815,4 +957,178 @@ input[type="range"].tc-slider::-moz-range-thumb {
 }
 .tc-upload-pulse {
   animation: tc-upload-pulse 1.1s ease-in-out infinite;
+}
+
+/* ─── Phone shell ─────────────────────────────────────────────────────────
+   html.tc-mobile is stamped before the first paint by initMobileMode().
+   The frame is a 48px top bar and, on workspace routes (tc-mobile-framed),
+   a 56px bottom tab bar the page has to leave room for. */
+html.tc-mobile {
+  --tc-header-h: 48px;
+  -webkit-text-size-adjust: 100%;
+}
+html.tc-mobile.tc-mobile-tworow {
+  --tc-header-h: 92px; /* 48px song/avatar row + 44px panel-button row */
+}
+html.tc-mobile.tc-mobile-framed {
+  --tc-nav-h: calc(56px + env(safe-area-inset-bottom, 0px));
+}
+html.tc-mobile.tc-mobile-framed body {
+  padding-bottom: var(--tc-nav-h);
+}
+
+/* Workspace sidebars. Desktop: a sticky column beside the timeline, as tall
+   as the viewport under the header. Phone: there is no room beside the
+   timeline, so a sidebar is hidden until its panel is opened (the song name
+   in the top bar, or the panel buttons over the player) and then covers the
+   timeline between the two bars. The inline width the desktop resize handle
+   writes is overridden, and the resize handle and the collapsed rails have
+   no meaning here. */
+.tc-aside {
+  position: sticky;
+  top: var(--tc-header-h);
+  height: calc(100vh - var(--tc-header-h));
+}
+html.tc-mobile .tc-aside {
+  display: none;
+}
+html.tc-mobile .tc-aside[data-mobile-open] {
+  display: flex;
+  position: fixed;
+  top: var(--tc-header-h);
+  bottom: var(--tc-nav-h);
+  left: 0;
+  right: 0;
+  width: 100% !important;
+  /* Spelled out rather than left to top+bottom: a sticky-turned-fixed flex
+     item was measured at its content height in mobile Chrome. */
+  height: calc(100dvh - var(--tc-header-h) - var(--tc-nav-h));
+  z-index: 65;
+  background: #101318;
+  border: 0;
+  backdrop-filter: none;
+}
+html.tc-mobile .tc-aside [data-resize-handle] {
+  display: none;
+}
+
+/* ── Touch hit areas for timeline drag handles ─────────────────────────────
+   Boundary handles, cue ticks, loop/span edges, prominence breakpoints and
+   segment heads are drawn 2–10px wide, which is a fine target for a mouse and
+   a miss for a fingertip. `.tc-hit` widens the part that answers a touch
+   without widening the part you see: on a coarse pointer (a phone, a tablet)
+   an invisible ::before reaches 10px past each side of the handle, and a
+   press on a pseudo-element is a press on its element, so the handle's own
+   pointer handlers fire. A mouse or trackpad never matches the query, so the
+   desktop timeline is untouched. Every element carrying it is already
+   absolutely positioned, which is what the ::before is placed against. */
+@media (pointer: coarse) {
+  .tc-hit::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -10px;
+    right: -10px;
+  }
+}
+
+/* A viz menu opened as a phone bottom sheet (VizControlBar's DropdownGroup):
+   its rows were sized for a mouse, so give each one a finger-sized line. */
+html.tc-mobile .tc-mobile-sheet-body label {
+  min-height: 36px;
+  align-items: center;
+}
+
+/* Row names on a phone (SharedVizPanel's STICKY_LABEL_CELL). The gutter is a
+   20px strip: the cell's contents — name, pencil, ⓘ, grips — give way to the
+   name alone, written bottom-to-top along the row in the row's own colour
+   (the cell carries it as `color` and the text as `data-label`). A tap opens
+   the row sheet with the name in full and the row's controls.
+   Only while the gutter is that strip (`tc-gutter-strip` on the panel): a
+   sideways drag on the column opens it out, and then the cells draw their
+   own contents, names reading across, as on the desktop. */
+html.tc-mobile .tc-label-cell {
+  /* Vertical swipes still scroll the page; a sideways one is the column's
+     resize (SharedVizPanel's onGutterPointerDown), not a timeline scroll. */
+  touch-action: pan-y;
+}
+html.tc-mobile .tc-gutter-strip .tc-label-cell {
+  padding-right: 0 !important;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  -webkit-user-drag: none;
+}
+html.tc-mobile .tc-gutter-strip .tc-label-cell > * {
+  display: none !important;
+}
+html.tc-mobile .tc-gutter-strip .tc-label-cell::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+html.tc-mobile .tc-gutter-strip .tc-label-cell::after {
+  content: attr(data-short);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  /* `data-short` is the first five letters ("Bound", "Chrom", "Legac"),
+     cut in JS so no letter is sliced in half; a row too short even for that
+     ends it with an ellipsis. The full name is in the row sheet. */
+  text-overflow: ellipsis;
+  max-height: calc(100% - 4px);
+  margin-left: 3px;
+}
+
+/* Phone, Annotator Tool, "Edit list": the list that sits under the timeline,
+   on its own. The timeline stays mounted (the player keeps its place). */
+html.tc-mobile.tc-mobile-list [data-mobile-timeline] {
+  display: none !important;
+}
+
+/* Phone: the viz toolbar wraps onto as many rows as it needs — every control
+   stays in view, none hides past the edge — but with phone-sized slack: tight
+   gaps and padding, and 2rem controls, so the rows it takes are short ones. */
+html.tc-mobile .tc-viz-bar {
+  --tc-viz-sq: 2rem;
+  --tc-viz-gap: 0.375rem;
+  --tc-viz-pad-x: 0.375rem;
+  --tc-viz-pad-y: 0.375rem;
+  --tc-viz-lock-pad: 0.5rem;
+  --tc-viz-label-gap: 0;
+  justify-content: flex-start !important;
+  align-items: center !important;
+}
+
+/* The annotation tools, docked (phone). Annotating means looking at the
+   timeline while you do it, so these sit in the bottom half of the screen
+   with the timeline — and the region you are marking — still visible and
+   draggable above them. The grip inside pulls them to full height
+   (`data-mobile-open="full"`, the rule above) for the long lists. */
+html.tc-mobile .tc-aside[data-mobile-open='dock'] {
+  top: auto;
+  bottom: var(--tc-nav-h);
+  height: 46dvh;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -12px 28px rgba(0, 0, 0, 0.55);
+}
+
+/* While the annotation tools are docked, the pinned viz toolbar stands down:
+   its three rows of buttons are most of the space the lanes need, and the
+   sheet below carries the controls in use. */
+html.tc-mobile.tc-mobile-tools .tc-viz-bar {
+  display: none;
 }

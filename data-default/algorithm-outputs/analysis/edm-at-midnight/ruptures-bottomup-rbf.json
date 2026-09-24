@@ -1,0 +1,99 @@
+{
+  "algorithm": "ruptures-bottomup-rbf",
+  "algoName": "Bottom-Up \u00b7 rbf",
+  "search": "BottomUp",
+  "model": "rbf",
+  "suffix": "bottomup-rbf",
+  "paperSection": "\u00a75.2.3",
+  "methodType": "approximate",
+  "audioFile": "edm-at-midnight.mp3",
+  "duration": 166.875,
+  "sections": [
+    {
+      "time": 0.0,
+      "endTime": 23.011,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 1.0,
+      "centroid": 0.3509
+    },
+    {
+      "time": 23.011,
+      "endTime": 41.285,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.8369,
+      "centroid": 0.6375
+    },
+    {
+      "time": 41.285,
+      "endTime": 45.047,
+      "type": "verse",
+      "label": "Verse",
+      "energy": 0.5013,
+      "centroid": 1.0
+    },
+    {
+      "time": 45.047,
+      "endTime": 74.582,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9403,
+      "centroid": 0.9005
+    },
+    {
+      "time": 74.582,
+      "endTime": 90.511,
+      "type": "buildup",
+      "label": "Buildup",
+      "energy": 0.4364,
+      "centroid": 0.3499
+    },
+    {
+      "time": 90.511,
+      "endTime": 97.083,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.928,
+      "centroid": 0.2507
+    },
+    {
+      "time": 97.083,
+      "endTime": 120.512,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.7837,
+      "centroid": 0.6967
+    },
+    {
+      "time": 120.512,
+      "endTime": 150.512,
+      "type": "drop",
+      "label": "Drop",
+      "energy": 0.9307,
+      "centroid": 0.9246
+    },
+    {
+      "time": 150.512,
+      "endTime": 166.875,
+      "type": "breakdown",
+      "label": "Breakdown",
+      "energy": 0.2698,
+      "centroid": 0.6626
+    }
+  ],
+  "rawBoundaries": [
+    0.0,
+    23.011,
+    41.285,
+    45.047,
+    74.582,
+    90.511,
+    97.083,
+    120.512,
+    150.512,
+    166.875
+  ],
+  "computedAt": 1780119077,
+  "elapsedSec": 2.82
+}

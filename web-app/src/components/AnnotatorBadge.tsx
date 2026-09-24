@@ -17,11 +17,13 @@ export function AnnotatorBadge({ inline = false }: { inline?: boolean } = {}) {
 
   useEffect(() => {
     if (!open) return;
-    const onClick = (e: MouseEvent) => {
+    const onClick = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    window.addEventListener('mousedown', onClick);
-    return () => window.removeEventListener('mousedown', onClick);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    window.addEventListener('pointerdown', onClick);
+    return () => window.removeEventListener('pointerdown', onClick);
   }, [open]);
 
   if (!annotator) return null;

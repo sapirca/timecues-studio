@@ -1,4 +1,4 @@
-import type { ManualSection } from '../../types/manualAnnotation';
+import type { SectionBlock } from '../../types/sectionBlock';
 import { useSettings } from '../../context/SettingsContext';
 import { fmtTime, sectionColor, getSectionTypes } from './sectionConstants';
 import {
@@ -14,7 +14,7 @@ import {
 
 export interface SectionCardProps {
   index: number;
-  section: ManualSection;
+  section: SectionBlock;
   endTime: number;
   isLast: boolean;
   /** Light up the card when the playhead is inside this section (Manual only). */
@@ -29,6 +29,8 @@ export interface SectionCardProps {
   // Action handlers
   onSplit: () => void;
   onTypeChange: (type: string) => void;
+  /** Edit the section label inline. When omitted, the label is read-only. */
+  onLabelChange?: (label: string) => void;
   onToggleImportance: () => void;
   onAddCandidate: () => void;
   onRemoveCandidate: (ci: number) => void;
@@ -46,16 +48,15 @@ export interface SectionCardProps {
 }
 
 /**
- * Visualization-free section card used by both Manual and Eye editors.
- * Behavior is identical except play/stop is opt-in (Manual passes it; Eye doesn't,
- * since by-eye annotation is purely visual).
+ * Visualization-free section card used by the Manual editor.
+ * Play/stop is opt-in (passed in by the caller).
  */
 export function SectionCard({
   index, section, endTime, isLast,
   highlightCurrent = false,
   activeBpm,
   onSnapStart, onSnapEnd,
-  onSplit, onTypeChange, onToggleImportance, onAddCandidate, onRemoveCandidate, onDelete,
+  onSplit, onTypeChange, onLabelChange, onToggleImportance, onAddCandidate, onRemoveCandidate, onDelete,
   onPlay, onStop, isPlaying = false,
   onInsertAfter,
 }: SectionCardProps) {
@@ -91,7 +92,9 @@ export function SectionCard({
         </select>
       </ItemCardHeader>
 
-      <ItemCardLabel value={section.label} readOnly />
+      {onLabelChange
+        ? <ItemCardLabel value={section.label} onChange={onLabelChange} />
+        : <ItemCardLabel value={section.label} readOnly />}
 
       <SnapTimeRow time={section.time} fmt={fmtTime} onSnap={onSnapStart} snapTitle="Snap start to playhead" />
 

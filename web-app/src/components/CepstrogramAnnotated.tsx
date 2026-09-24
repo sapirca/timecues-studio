@@ -12,9 +12,10 @@
  * the track is visible regardless of absolute MFCC magnitude.
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { useExtendedZoom, effectiveDpr } from '../hooks/useExtendedZoom';
-import { visibleGridLines } from '../utils/beatGrid';
+import { useCallback, useMemo, useRef } from 'react';
+import { TiledStrip, type TileGeom } from './TiledStrip';
+import { drawBeatGrid } from '../utils/gridLineStyle';
+import { frameAxis, frameAtColumn, type FrameAxis } from '../utils/frameTime';
 
 export interface Props {
   /** Row-major MFCC matrix: length = frameCount × nMfcc. Index = frame * nMfcc + coef. */
@@ -22,6 +23,11 @@ export interface Props {
   nMfcc: number;
   frameCount: number;
   duration: number;
+  /** Framing of the analysis run — see utils/frameTime. Without it the
+   *  component keeps the old even-spread mapping. */
+  hopSize?: number;
+  fftSize?: number;
+  sampleRate?: number;
   beatTimes?: number[];
   bpm?: number;
   beatOffset?: number;
@@ -76,16 +82,21 @@ function computeCoefRanges(mfcc: Float32Array, nMfcc: number, frameCount: number
 }
 
 function buildCepstrogramImage(
-  mfcc: Float32Array, nMfcc: number, frameCount: number,
+  mfcc: Float32Array, nMfcc: number,
   W: number, H: number,
   coefMin: Float32Array, coefMax: Float32Array,
   ctx: CanvasRenderingContext2D,
+  axis: FrameAxis, duration: number,
+  colOffset = 0, colCount = W,
 ): ImageData {
   // Drop coef 0 — visible coefficients are 1..nMfcc-1.
   const visCoef = nMfcc - 1;
-  const img = ctx.createImageData(W, H);
-  for (let col = 0; col < W; col++) {
-    const srcFrame = Math.min(frameCount - 1, Math.floor((col / W) * frameCount));
+  // W stays the WHOLE strip's width so the time↔column mapping is global; the
+  // image covers only [colOffset, colOffset + colCount).
+  const img = ctx.createImageData(colCount, H);
+  for (let col = 0; col < colCount; col++) {
+    // Column time -> the frame whose analysis window is centred there.
+    const srcFrame = frameAtColumn(colOffset + col, W, duration, axis);
     const fOff = srcFrame * nMfcc;
     for (let row = 0; row < H; row++) {
       // Top row = highest coefficient (matches librosa specshow convention).
@@ -95,7 +106,7 @@ function buildCepstrogramImage(
       const hi  = coefMax[coefIdx];
       const t   = hi > lo ? (v - lo) / (hi - lo) : 0.5;
       const [r, g, b] = magmaRGB(t);
-      const idx = (row * W + col) * 4;
+      const idx = (row * colCount + col) * 4;
       img.data[idx]     = r;
       img.data[idx + 1] = g;
       img.data[idx + 2] = b;
@@ -122,57 +133,6 @@ function drawCoefLabels(ctx: CanvasRenderingContext2D, W: number, H: number, vis
   }
 }
 
-function drawBeatGrid(
-  ctx: CanvasRenderingContext2D, W: number, H: number,
-  duration: number, beatTimes?: number[], bpm?: number, beatOffset = 0, beatsPerBar = 4, barGroupSize?: number,
-  subBeatDivision?: number,
-  beatGroupSize?: number,
-  dpr = 1,
-  gridThickness = 1,
-) {
-  if (!duration || !bpm) return;
-  const anchor = beatOffset > 0 ? beatOffset : (beatTimes && beatTimes.length > 0 ? beatTimes[0] : 0);
-  const lines = visibleGridLines({
-    bpm, gridOffset: anchor, beatsPerBar,
-    startTime: 0, endTime: duration,
-    barGroupSize: barGroupSize ?? null,
-    subBeatDivision,
-    beatGroupSize,
-  });
-  if (lines.length < 2) return;
-  // Cull lines that would render closer than 5 px — at low zoom every line
-  // becomes a hairline blur otherwise. The cull step is measured in beat-
-  // divisions so sub-beat (8th/16th) lines also thin out.
-  const dense = barGroupSize == null;
-  const div = (dense && subBeatDivision && subBeatDivision > 1) ? Math.floor(subBeatDivision) : 1;
-  const pxPerStep = ((60 / bpm) / div / duration) * W;
-  const step = dense ? Math.max(1, Math.ceil(5 / pxPerStep)) : 1;
-  ctx.save();
-  for (let i = 0; i < lines.length; i++) {
-    if (step > 1 && i % step !== 0) continue;
-    const { t, isBar, isPhrase, isSubBeat } = lines[i];
-    const x = (t / duration) * W;
-    if (barGroupSize != null) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.5)';
-      ctx.lineWidth   = 2 * dpr * gridThickness;
-    } else if (isPhrase) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.50)';
-      ctx.lineWidth   = 1.5 * dpr * gridThickness;
-    } else if (isBar) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-      ctx.lineWidth   = 1.5 * dpr * gridThickness;
-    } else if (isSubBeat) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-      ctx.lineWidth   = 1 * dpr * gridThickness;
-    } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.09)';
-      ctx.lineWidth   = 1 * dpr * gridThickness;
-    }
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  ctx.restore();
-}
-
 function drawPlayhead(ctx: CanvasRenderingContext2D, W: number, H: number, t: number, duration: number, dpr = 1) {
   if (t < 0 || !duration) return;
   const x = Math.round((t / duration) * W);
@@ -190,22 +150,15 @@ function drawPlayhead(ctx: CanvasRenderingContext2D, W: number, H: number, t: nu
   ctx.restore();
 }
 
-// ── Cache ───────────────────────────────────────────────────────────────────────
-interface CepstroCache {
-  mfccRef: Float32Array;
-  imgData: ImageData;
-  W: number;
-  H: number;
-  dpr: number;
-  visCoef: number;
-}
-
 // ── Component ───────────────────────────────────────────────────────────────────
 export function CepstrogramAnnotated({
   mfcc,
   nMfcc,
   frameCount,
   duration,
+  hopSize,
+  fftSize,
+  sampleRate,
   beatTimes,
   bpm,
   beatOffset = 0,
@@ -217,109 +170,62 @@ export function CepstrogramAnnotated({
   currentTime = 0,
   height = 80,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cacheRef = useRef<CepstroCache | null>(null);
-  const [ready, setReady] = useState(false);
-  const { enabled: extendedZoom } = useExtendedZoom();
-  // dpr is clamped by both the extended-zoom opt-in and the canvas-buffer cap
-  // so the cache and canvas always agree on dimensions even mid-zoom race.
-  const CEPSTRO_MAX_BUFFER_PX = 32_000;
-  const computeSafeDpr = useCallback((cssWidth: number) => {
-    const raw = effectiveDpr(Math.max(1, window.devicePixelRatio || 1), extendedZoom);
-    return Math.min(raw, CEPSTRO_MAX_BUFFER_PX / Math.max(1, cssWidth));
-  }, [extendedZoom]);
-  const [canvasSize, setCanvasSize] = useState(() => {
-    const cssWidth = 900;
-    return {
-      cssWidth,
-      cssHeight: Math.max(1, Math.round(height)),
-      dpr: computeSafeDpr(cssWidth),
-    };
-  });
+  const frameAxisRef = useRef<FrameAxis>(frameAxis(512, 2048, 44100, frameCount));
+  frameAxisRef.current = hopSize && fftSize && sampleRate
+    ? frameAxis(hopSize, fftSize, sampleRate, frameCount)
+    : { step: duration / Math.max(1, frameCount), offset: 0, count: frameCount };
+  const axis = frameAxisRef.current;
 
-  useEffect(() => {
-    const update = () => {
-      const cssWidth = Math.max(1, Math.round(containerRef.current?.clientWidth ?? 900));
-      const cssHeight = Math.max(1, Math.round(height));
-      const dpr = computeSafeDpr(cssWidth);
-      setCanvasSize((prev) => (
-        prev.cssWidth === cssWidth && prev.cssHeight === cssHeight && prev.dpr === dpr
-          ? prev
-          : { cssWidth, cssHeight, dpr }
-      ));
-    };
-    update();
-    const ro = containerRef.current ? new ResizeObserver(update) : null;
-    if (containerRef.current && ro) ro.observe(containerRef.current);
-    window.addEventListener('resize', update);
-    return () => { ro?.disconnect(); window.removeEventListener('resize', update); };
-  }, [height, computeSafeDpr]);
+  const hasData = frameCount > 0 && mfcc.length > 0;
+  const visCoef = nMfcc - 1;
+  // Per-coefficient min/max is a full pass over the analysis; memoize it so it
+  // is paid once for the row rather than once per tile.
+  const ranges = useMemo(
+    () => (hasData ? computeCoefRanges(mfcc, nMfcc, frameCount) : null),
+    [mfcc, nMfcc, frameCount, hasData],
+  );
 
-  const pixelWidth  = Math.max(1, Math.round(canvasSize.cssWidth * canvasSize.dpr));
-  const pixelHeight = Math.max(1, Math.round(canvasSize.cssHeight * canvasSize.dpr));
+  const paint = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom) => {
+    if (!ranges) return;
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    const colOffset = Math.round(tile.x0 * tile.dpr);
+    const colCount = Math.max(1, Math.round(tile.w * tile.dpr));
+    const img = buildCepstrogramImage(
+      mfcc, nMfcc, totalPx, H, ranges.min, ranges.max, ctx, axis, duration, colOffset, colCount,
+    );
+    ctx.putImageData(img, 0, 0);
+  }, [mfcc, nMfcc, ranges, axis, duration]);
 
-  const overlayRef = useRef({ duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, gridThickness });
-  useEffect(() => { overlayRef.current = { duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, gridThickness }; });
-
-  const drawFrame = useCallback((headTime: number) => {
-    const canvas = canvasRef.current;
-    const cache  = cacheRef.current;
-    if (!canvas || !cache) return;
-    const ctx = canvas.getContext('2d')!;
-    const { imgData, W, H, dpr, visCoef } = cache;
-    const { duration: dur, beatTimes: bt, bpm: b, beatOffset: bo, beatsPerBar: bpb, barGroupSize: bgs, subBeatDivision: sbd, beatGroupSize: bgrp, gridThickness: gt } = overlayRef.current;
-    ctx.putImageData(imgData, 0, 0);
-    drawCoefLabels(ctx, W, H, visCoef, dpr);
-    drawBeatGrid(ctx, W, H, dur, bt, b, bo, bpb, bgs, sbd, bgrp, dpr, gt);
-    drawPlayhead(ctx, W, H, headTime, dur, dpr);
-  }, []);
-
-  // Phase 1: build ImageData when source data / canvas size changes.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    if (frameCount <= 0 || mfcc.length === 0) { setReady(false); return; }
-    setReady(false);
-    let cancelled = false;
-
-    const timer = setTimeout(() => {
-      if (cancelled) return;
-      const W = canvas.width, H = canvas.height;
-      const { min, max } = computeCoefRanges(mfcc, nMfcc, frameCount);
-      const ctx = canvas.getContext('2d')!;
-      const img = buildCepstrogramImage(mfcc, nMfcc, frameCount, W, H, min, max, ctx);
-      if (cancelled) return;
-      cacheRef.current = {
-        mfccRef: mfcc, imgData: img, W, H, dpr: canvasSize.dpr,
-        visCoef: nMfcc - 1,
-      };
-      setReady(true);
-    }, 16);
-
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [mfcc, nMfcc, frameCount, canvasSize.cssWidth, canvasSize.cssHeight, canvasSize.dpr]);
-
-  // Phase 2: redraw overlays on time / grid change.
-  useEffect(() => {
-    if (!ready) return;
-    drawFrame(currentTime);
-  }, [ready, currentTime, duration, beatTimes, bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, gridThickness, drawFrame]);
+  const overlay = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => {
+    const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
+    const H = Math.max(1, Math.round(tile.h * tile.dpr));
+    ctx.save();
+    ctx.translate(-Math.round(tile.x0 * tile.dpr), 0);
+    drawCoefLabels(ctx, totalPx, H, visCoef, tile.dpr);
+    drawBeatGrid(ctx, {
+      W: totalPx, H, dpr: tile.dpr, thickness: gridThickness,
+      duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, subBeatDivision, beatGroupSize,
+    });
+    if (focusX != null) drawPlayhead(ctx, totalPx, H, focusX, tile.totalW, tile.dpr);
+    ctx.restore();
+  }, [visCoef, gridThickness, duration, beatTimes, bpm, beatOffset, beatsPerBar,
+      barGroupSize, subBeatDivision, beatGroupSize]);
 
   return (
-    <div ref={containerRef} className="relative w-full min-w-0">
-      <canvas
-        ref={canvasRef}
-        width={pixelWidth}
-        height={pixelHeight}
-        className="rounded bg-gray-900 block w-full"
-        style={{ height: `${canvasSize.cssHeight}px` }}
-      />
-      {!ready && (
+    <TiledStrip
+      height={Math.max(1, Math.round(height))}
+      paint={paint}
+      overlay={overlay}
+      overlayFocus={duration > 0 ? currentTime / duration : null}
+      className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
+    >
+      {!hasData && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900/70 rounded text-xs text-gray-400 animate-pulse pointer-events-none">
           Computing cepstrogram…
         </div>
       )}
-    </div>
+    </TiledStrip>
   );
 }

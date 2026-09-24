@@ -17,12 +17,15 @@ Endpoints
                          container's /api/capabilities answer "fast" or
                          "slow" without spawning anything.
   POST   /api/stems/separate
-         body { slug: str, force?: bool }
-                       → { jobId }
+         body { slug: str, force?: bool, model?: '6s'|'4s' }
+                       → { jobId, model }
+                       `model` picks the source count — '6s' (htdemucs_6s:
+                       vocals/drums/bass/other/guitar/piano, the default) or
+                       '4s' (htdemucs: vocals/drums/bass/other, ~1.5x faster).
   GET    /api/stems/status/<jobId>
                        → { status: 'running'|'done'|'error'|'cancelled',
                            logs: str, startedAt: int, finishedAt?: int,
-                           cancelMode?: 'soft'|'hard' }
+                           cancelMode?: 'soft'|'hard', model: str }
   DELETE /api/stems/cancel/<jobId>
                        → { ok: true, mode: 'soft' }
                        Graceful: SIGINT to the demucs subprocess so it
@@ -68,8 +71,16 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "python"))
 
 from paths import find_audio  # noqa: E402
+from server_common import cors_headers  # noqa: E402
 
 PORT = 8006
+
+# Separation models the UI may ask for. The values are the tokens
+# demucs_separator.py's --model understands; the keys are what the web sends.
+# Validated here (not in the subprocess) so a bad value fails the request
+# instead of a job that dies 20 seconds later inside demucs.
+STEM_MODELS = {"6s": "6s", "4s": "4s"}
+DEFAULT_MODEL = "6s"
 
 # Stems output directory. Override with STEMS_OUTPUT_DIR for tests; the docker
 # bind mount lines up at /app/web-app/public/stems by default.
@@ -116,12 +127,15 @@ class Job:
 
     __slots__ = (
         "id", "slug", "status", "logs", "started_at", "finished_at",
-        "cancel", "process", "cancel_mode",
+        "cancel", "process", "cancel_mode", "model",
     )
 
-    def __init__(self, slug: str) -> None:
+    def __init__(self, slug: str, model: str = DEFAULT_MODEL) -> None:
         self.id: str = uuid.uuid4().hex[:12]
         self.slug: str = slug
+        # Which separation model this run used — echoed in /status so the UI
+        # can label an in-flight job ("Stemming… 6 stems").
+        self.model: str = model
         self.status: str = "running"  # running | done | error | cancelled
         self.logs: str = ""
         self.started_at: int = int(time.time() * 1000)
@@ -159,13 +173,15 @@ def _run_separation(job: Job, force: bool) -> None:
             return
 
         STEMS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        job.logs += f"\n▶ Demucs ({audio_path.name})\n"
+        stem_count = "6" if job.model == "6s" else "4"
+        job.logs += f"\n▶ Demucs ({audio_path.name}) — {stem_count} stems\n"
 
         cmd: list[str] = [
             sys.executable, "-u",
             str(_DEMUCS_CLI),
             "--file", str(audio_path),
             "--output", str(STEMS_OUTPUT_DIR),
+            "--model", job.model,
         ]
         if force:
             cmd.append("--force")
@@ -227,15 +243,6 @@ def _signal_process_group(job: Job, sig: int, label: str) -> bool:
 
 # ─── HTTP ─────────────────────────────────────────────────────────────────────
 
-def _cors_headers() -> dict:
-    return {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
-    }
-
-
 def _capabilities_payload() -> dict:
     if CAPABILITIES_PATH.exists():
         try:
@@ -264,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code: int, body) -> None:
         data = json.dumps(body).encode()
         self.send_response(code)
-        for k, v in _cors_headers().items():
+        for k, v in cors_headers(with_content_type=True, methods="POST, GET, DELETE, OPTIONS").items():
             self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -272,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
-        for k, v in _cors_headers().items():
+        for k, v in cors_headers(with_content_type=True, methods="POST, GET, DELETE, OPTIONS").items():
             self.send_header(k, v)
         self.end_headers()
 
@@ -301,6 +308,7 @@ class Handler(BaseHTTPRequestHandler):
                 "status": job.status,
                 "logs": job.logs,
                 "startedAt": job.started_at,
+                "model": job.model,
             }
             if job.finished_at is not None:
                 payload["finishedAt"] = job.finished_at
@@ -359,11 +367,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stems/separate":
             slug = str(body.get("slug", "")).strip()
             force = bool(body.get("force", False))
+            model = str(body.get("model") or DEFAULT_MODEL).strip().lower()
             if not slug:
                 self._send_json(400, {"error": "slug is required"})
                 return
+            if model not in STEM_MODELS:
+                self._send_json(400, {
+                    "error": f"unknown model {model!r} — expected one of {sorted(STEM_MODELS)}",
+                })
+                return
 
-            job = Job(slug)
+            job = Job(slug, model=STEM_MODELS[model])
             with _jobs_lock:
                 _jobs[job.id] = job
             threading.Thread(
@@ -372,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                 name=f"stems-{job.id}",
                 daemon=True,
             ).start()
-            self._send_json(200, {"jobId": job.id})
+            self._send_json(200, {"jobId": job.id, "model": job.model})
             return
 
         self._send_json(404, {"error": "not found"})

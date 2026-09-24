@@ -18,10 +18,6 @@ WEB_APP_STEMS_DIR = REPO_ROOT / "web-app" / "public" / "stems"
 ALLIN1_DEMIX_DIR = REPO_ROOT / "demix" / "htdemucs"
 
 
-def stem_dir_for(audio_stem: str) -> Path:
-    return WEB_APP_STEMS_DIR / audio_stem
-
-
 def manifest_payload(audio_filename: str, stem_dir_name: str, sources: Iterable[str], elapsed_sec: float, model_name: str = "htdemucs") -> dict:
     stems_urls = {source: f"/stems/{stem_dir_name}/{source}.wav" for source in sources}
     return {

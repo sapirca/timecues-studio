@@ -1,7 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AutoGuessCentroidMethod } from '../types/manualAnnotation';
+import type { AutoGuessCentroidMethod } from '../types/autoGuess';
 import type { BandPaletteId } from '../utils/bandPalettes';
 import { DEFAULT_BAND_PALETTE } from '../utils/bandPalettes';
+import { DEFAULT_BAR_BEAT_ORIGIN, DEFAULT_TIME_PRECISION, setBarBeatOrigin } from '../utils/beatGrid';
+import type { BarBeatOrigin } from '../utils/beatGrid';
+import type { DemucsModel } from '../hooks/useDemucsStems';
 import { DEFAULT_VOCABULARY } from '../components/inspector-v2/sectionConstants';
 import { GENRE_PRESETS, type GenrePresetKey } from '../components/inspector-v2/genrePresets';
 
@@ -20,6 +23,19 @@ export type ManualBoundariesDefault = ManualBoundariesPresetKey | 'custom';
 export interface UserSettings {
   // Theme
   theme: Theme;
+
+  /** Decimal places used when exporting times (label tracks + JSON manifest).
+   *  3 = millisecond. Range 2–6. In-memory times keep full precision — only
+   *  exported numbers are rounded. See roundTime() in utils/beatGrid.ts. */
+  timePrecisionDecimals: number; // 2 .. 6
+
+  /** Number carried by the first bar and the first beat everywhere bar.beat
+   *  positions are shown or typed (cue lists, bar.beat inputs, the beat-grid
+   *  bar labels, grid exports). 0 = zero-based (the default, matching DAW and
+   *  code indexing), 1 = musician counting ("bar 1 · beat 1"). Purely a
+   *  display/parse convention — the grid math and every stored time are
+   *  unchanged. See utils/beatGrid.ts. */
+  barBeatOrigin: BarBeatOrigin;
 
   // Display + playback
   defaultSidebarCollapsed: boolean;
@@ -42,7 +58,6 @@ export interface UserSettings {
   seekStepLargeSeconds: number;
 
   // MIR signal overlays (the analysis curves below the waveform)
-  defaultShowSignalOverlays: boolean;
   defaultShowEnergy: boolean;
   defaultShowBrightness: boolean;
   defaultShowNovelty: boolean;
@@ -54,11 +69,10 @@ export interface UserSettings {
 
   // Annotations
   defaultShowManual: boolean;
-  defaultShowEye: boolean;
   defaultShowAutoGuess: boolean;
   /** Time unit used in annotation editors / cue lists. */
   annotationTimeUnit: TimeUnit;
-  /** Vocabulary used by the Manual/Eye section type dropdowns — flat de-duplicated list.
+  /** Vocabulary used by the Manual section type dropdowns — flat de-duplicated list.
    *  This is the authoritative input the editors read; consumers don't look at genres. */
   sectionTypeVocabulary: string[];
   /** Which genre cards are toggled ON in the multi-select vocabulary UI.
@@ -74,6 +88,16 @@ export interface UserSettings {
   // An empty array means "show all" (preserves current behavior for new users).
   enabledBpmDetectors: string[];
 
+  // Stem separation (Demucs).
+  /** Separate every newly uploaded song into stems automatically, in the
+   *  background, one song at a time. Songs that already have stems on disk are
+   *  skipped. Ignored entirely when the Demucs tooling isn't installed. */
+  autoStemOnUpload: boolean;
+  /** How many stems a separation produces — '6s' (vocals/drums/bass/other/
+   *  guitar/piano) or '4s' (vocals/drums/bass/other, quicker). Seeds both the
+   *  automatic post-upload runs and the Dataset Prep re-stem control. */
+  defaultStemModel: DemucsModel;
+
   // Auto-guess defaults
   autoGuessClusterTolerance: number; // seconds
   autoGuessCentroidMethod: AutoGuessCentroidMethod;
@@ -84,14 +108,10 @@ export interface UserSettings {
    *  Set to 0 to always show the full button cluster (the legacy behavior). */
   autoGuessExpandZoomThreshold: number;
 
-  // Experimental: Loops + Patterns annotation tabs. Off by default so they
+  // Experimental: Loops + Riff Patterns annotation tabs. Off by default so they
   // stay hidden in shipped builds; flip on locally to test as the UI lands.
   // Boundaries (Manual), Cues, and Spans are always available.
   experimentalLoopsAndPatterns: boolean;
-  // Experimental: Eye sub-tab under Boundaries (independent second observer
-  // pass over the same structural sections). Hidden by default; flip on to
-  // expose the Eye tab, editor, canvas overlay, and visibility toggle.
-  experimentalEyeAnnotation: boolean;
   // Experimental: SPAN-family detection algorithms (Silero-VAD, JDCNet voicing,
   // future MIRFLEX). Output is voiced/instrument intervals. Hidden by default;
   // needs the `experimental-models` docker compose profile to be running so the
@@ -112,8 +132,17 @@ export interface UserSettings {
   // Output is `LyricsItem[]` (word- and line-level entries). Lazy-downloads
   // a ~140 MB Whisper-base checkpoint on first use.
   experimentalLyricsFamily: boolean;
+  // Experimental: PATTERN family detectors (LoCoMotif motif discovery) —
+  // variable-length repeating motifs found via DTW-warped matching on
+  // beat-synchronous chroma. They surface in Algorithm Inspect only; there is
+  // no manual Patterns annotation layer for them to land in.
+  experimentalPatternFamily: boolean;
+  // Experimental: Setlist workspace — algorithmic DJ-style ordering of the
+  // corpus using cached BPM (+ meter and energy as those scorers land). New
+  // top-level workspace tab at /setlist; off by default.
+  experimentalSetlist: boolean;
 
-  // Manual BOUNDARIES (sections) default — which layout the "⚡ Fill default"
+  // Manual BOUNDARIES (sections) default — which layout the "✨ Fill default"
   // button applies when there are no algorithm-suggested sections.
   manualBoundariesDefault: ManualBoundariesDefault;
   /** Custom "type:bars" list, used when manualBoundariesDefault === 'custom'. */
@@ -122,7 +151,7 @@ export interface UserSettings {
   // LOOPS — the two configurable quick-add bar sizes in the Loop editor.
   loopQuickAddBars: [number, number];
 
-  // Evaluation — when ON, region layers (spans / loops / patterns) are scored
+  // Evaluation — when ON, region layers (spans / loops) are scored
   // as if their whole layer were one set of alternative candidates of the same
   // event: a prediction that hits ANY item in the layer satisfies it, and the
   // others are not penalised as misses. Overrides each layer's per-layer mode
@@ -143,6 +172,9 @@ export interface UserSettings {
 export const DEFAULT_SETTINGS: UserSettings = {
   theme: 'dark',
 
+  timePrecisionDecimals: DEFAULT_TIME_PRECISION,
+  barBeatOrigin: DEFAULT_BAR_BEAT_ORIGIN,
+
   defaultSidebarCollapsed: false,
   defaultPlaybackRate: 1,
   defaultShowWaveform: true,        // "3-Band" in the SIGNALS dropdown
@@ -156,7 +188,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   seekStepMediumSeconds: 5,
   seekStepLargeSeconds: 10,
 
-  defaultShowSignalOverlays: true,
   defaultShowEnergy: false,
   defaultShowBrightness: false,
   defaultShowNovelty: false,
@@ -167,29 +198,65 @@ export const DEFAULT_SETTINGS: UserSettings = {
   defaultShowSsm: false,
 
   defaultShowManual: true,
-  defaultShowEye: true,
-  defaultShowAutoGuess: true,
+  defaultShowAutoGuess: false,
   annotationTimeUnit: 'ms',
   sectionTypeVocabulary: [...DEFAULT_VOCABULARY],
   sectionVocabularyGenres: null,
 
+  // Every UI-visible algorithm ID lives here so fresh sessions
+  // start with every checkbox pre-checked across MSAF / All-In-One
+  // (ensemble + all 8 folds) / band-gradient / Ruptures (added by
+  // InspectorPageV2 init) / SPAN / LOOP / PATTERN / LYRICS / CUE-extras.
+  // basic-pitch is included even though Python 3.12+ bare-metal can't
+  // install it — it's served via the Docker pitch sidecar that
+  // ./run.sh auto-launches in that case (see run.sh Step 4a).
   defaultAlgorithms: [
-    'msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda', 'allin1',
+    // BOUNDARY / structure
+    'msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda',
+    'band-gradient',
+    'allin1',
+    'allin1-fold0', 'allin1-fold1', 'allin1-fold2', 'allin1-fold3',
+    'allin1-fold4', 'allin1-fold5', 'allin1-fold6', 'allin1-fold7',
+    // SPAN family
+    'silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive',
+    // CUE family extras
+    'basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients',
+    // LYRICS family
+    'whisper-base', 'ctc-forced-aligner',
+    // PATTERN family
+    'locomotif',
   ],
 
   enabledBpmDetectors: [],
+
+  autoStemOnUpload: true,
+  defaultStemModel: '6s',
 
   autoGuessClusterTolerance: 3,
   autoGuessCentroidMethod: 'mean',
   autoGuessMinConsensus: 1,
   autoGuessExpandZoomThreshold: 2,
 
-  experimentalLoopsAndPatterns: false,
-  experimentalEyeAnnotation: false,
-  experimentalSpanFamily: false,
-  experimentalCueExtras: false,
-  experimentalLoopFamily: false,
-  experimentalLyricsFamily: false,
+  // Experimental flags default ON: maintainer dev runs want every family
+  // visible without going through Settings → Experimental first. OSS
+  // public deploys are still safe because each family's section in the
+  // run-options sidebar is ALSO gated by `expAvail.<family>` (= sidecar
+  // reachable) — turning on a flag without the matching sidecar running
+  // simply hides the section, no broken-state UI. Returning users who
+  // explicitly turned a flag off in Settings keep that choice because
+  // localStorage overlays this default at hydration time.
+  experimentalLoopsAndPatterns: true,
+  experimentalSpanFamily: true,
+  experimentalCueExtras: true,
+  experimentalLoopFamily: true,
+  experimentalLyricsFamily: true,
+  experimentalPatternFamily: true,
+  // Default flips to true when run.sh was invoked with `--with-dj`. That sets
+  // VITE_WITH_DJ=1 in the Vite env, Vite inlines it here at build/dev time,
+  // and first-time visitors see the Setlist tab already enabled. Returning
+  // users keep whatever they explicitly chose in Settings — `readStored()`
+  // overlays their localStorage on top of this default.
+  experimentalSetlist: (import.meta.env.VITE_WITH_DJ as string | undefined) === '1',
 
   manualBoundariesDefault: 'house',
   manualBoundariesCustomLayout: 'intro:16, buildup:8, drop:32, breakdown:16, buildup:8, drop:32, outro:16',
@@ -204,12 +271,19 @@ export const DEFAULT_SETTINGS: UserSettings = {
   spanTaxonomy: ['vocals', 'pad', 'bass', 'lead', 'fx'],
 };
 
+/** The section vocabulary this app shipped with until 2026-09-08, frozen as a
+ *  historical record for the `_verseChorusVocabMigrated` migration below. It is
+ *  deliberately NOT `DEFAULT_VOCABULARY` — the migration has to recognise the
+ *  *old* list, so it must not follow the live constant when that changes again. */
+const LEGACY_CANONICAL_VOCAB: readonly string[] =
+  ['intro', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence'];
+
 /** Reverse-detect which genre cards' vocabularies, unioned, exactly reproduce
  *  `stored`. Returns the list of matching genre keys, or `null` if no exact cover
  *  exists (in which case the user falls into "custom" mode). Deterministic:
  *  iterates `GENRE_PRESETS` in declaration order, and prefers single-genre exact
- *  matches over multi-genre covers (so the canonical 7 maps to ['house'] alone,
- *  not ['house','mainstage','bass'] which all share that vocabulary). */
+ *  matches over multi-genre covers (so the canonical list maps to ['edm'] alone,
+ *  not ['edm','house','mainstage','bass'] which all share that vocabulary). */
 function detectVocabularyGenres(stored: readonly string[]): GenrePresetKey[] | null {
   const target = new Set(stored.map((s) => s.toLowerCase()));
   // 1. Single-genre exact match wins.
@@ -251,10 +325,10 @@ function readStored(): UserSettings {
     ) {
       parsed.sectionVocabularyGenres = detectVocabularyGenres(parsed.sectionTypeVocabulary);
     }
-    // 2026-05-20 migration: experimentalAnnotationTypes split into two flags.
-    // Old flag gated Spans+Loops+Patterns; Spans is now always-on so the old
-    // setting maps cleanly onto Loops+Patterns. Eye gets its own new flag
-    // defaulting to false (independent opt-in).
+    // 2026-05-20 migration: experimentalAnnotationTypes → experimentalLoopsAndPatterns.
+    // Old flag gated Spans+Loops+Patterns; Spans is now always-on and the
+    // Patterns layer has since been removed, so the old setting maps onto what
+    // the flag gates today (Loops + Riff Patterns).
     if (
       parsed.experimentalLoopsAndPatterns === undefined &&
       parsed.experimentalAnnotationTypes !== undefined
@@ -262,6 +336,50 @@ function readStored(): UserSettings {
       parsed.experimentalLoopsAndPatterns = !!parsed.experimentalAnnotationTypes;
     }
     delete parsed.experimentalAnnotationTypes;
+    // "Overlay all on signals" was removed — drop its persisted keys so a stale
+    // stored value can't outlive the feature.
+    delete parsed.defaultShowSignalOverlays;
+    delete parsed._signalOverlaysOffMigrated;
+    // 2026-06-26 migration: auto-guess must never start on. It defaults to false
+    // in DEFAULT_SETTINGS, but returning users persisted `true` back when that
+    // default was true — and {...DEFAULT_SETTINGS, ...parsed} lets the stale true
+    // win. Force it off exactly once (guarded by a sentinel so a deliberate
+    // re-enable in Settings still persists afterwards).
+    if (!parsed._autoGuessOffMigrated) {
+      parsed.defaultShowAutoGuess = false;
+      parsed._autoGuessOffMigrated = true;
+    }
+    // 2026-09-07 migration: bar/beat numbering now counts from 0 by default.
+    // The setting shipped 1-based, so anyone who saved settings in between has
+    // a stale `1` that would win the spread below. Force it once behind a
+    // sentinel, so switching back to 1 in Settings still persists afterwards.
+    if (!parsed._barBeatOriginZeroMigrated) {
+      parsed.barBeatOrigin = 0;
+      parsed._barBeatOriginZeroMigrated = true;
+    }
+    // 2026-09-08 migration: `verse` and `chorus` joined the shipped section
+    // vocabulary. Anyone who saved settings before that has the old canonical
+    // seven persisted, and the stale list wins the spread below — so the two
+    // new types would never reach a returning user's dropdown. Upgrade only a
+    // store that still holds exactly the old default: a list of any other
+    // shape was either hand-edited or derived from a genre card the user
+    // picked, and re-adding words someone deliberately dropped is worse than
+    // the omission. Re-run the genre detection afterwards so the Settings
+    // cards light up for the new list instead of falling to Custom.
+    if (!parsed._verseChorusVocabMigrated) {
+      parsed._verseChorusVocabMigrated = true;
+      const stored: string[] | null = Array.isArray(parsed.sectionTypeVocabulary)
+        ? parsed.sectionTypeVocabulary.map((w: unknown) => String(w).trim().toLowerCase())
+        : null;
+      if (
+        stored
+        && stored.length === LEGACY_CANONICAL_VOCAB.length
+        && LEGACY_CANONICAL_VOCAB.every((w) => stored.includes(w))
+      ) {
+        parsed.sectionTypeVocabulary = [...DEFAULT_VOCABULARY];
+        parsed.sectionVocabularyGenres = detectVocabularyGenres(parsed.sectionTypeVocabulary);
+      }
+    }
     return { ...DEFAULT_SETTINGS, ...parsed } as UserSettings;
   } catch {
     return DEFAULT_SETTINGS;
@@ -288,8 +406,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<UserSettings>(() => {
     const s = readStored();
     _currentSettings = s;
+    setBarBeatOrigin(s.barBeatOrigin);
     return s;
   });
+
+  // Non-React callers (exporters, serializers) read the bar/beat origin off the
+  // beatGrid module, so mirror it there on every change. Done during render —
+  // not in an effect — so anything formatted in this same pass already sees it.
+  setBarBeatOrigin(settings.barBeatOrigin);
 
   useEffect(() => {
     _currentSettings = settings;
@@ -320,6 +444,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<SettingsContextValue>(() => ({ settings, update, reset }), [settings, update, reset]);
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
+}
+
+/** Bar/beat display origin, re-rendering the caller when the setting flips.
+ *  Safe outside SettingsProvider (tests mount panels standalone) — falls back
+ *  to the last known settings rather than throwing. */
+export function useBarBeatOrigin(): BarBeatOrigin {
+  const ctx = useContext(SettingsContext);
+  return (ctx?.settings ?? _currentSettings).barBeatOrigin ?? DEFAULT_BAR_BEAT_ORIGIN;
 }
 
 export function useSettings(): SettingsContextValue {

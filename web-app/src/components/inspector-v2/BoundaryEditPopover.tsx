@@ -1,5 +1,5 @@
 /**
- * Floating edit popover for a single boundary (ManualSection) — thin adapter
+ * Floating edit popover for a single boundary (SectionBlock) — thin adapter
  * over the shared AnnotationPointCard. The section-type dropdown lives in the
  * card's `extras` slot (rendered above Label so Type leads the card).
  * Boundaries are single-point markers, so the End ms field is non-editable:
@@ -8,8 +8,7 @@
  */
 
 import { type CSSProperties } from 'react';
-import type { ManualSection } from '../../types/manualAnnotation';
-import type { TempoAnchor } from '../../types/songInfo';
+import type { SectionBlock } from '../../types/sectionBlock';
 import { useSettings } from '../../context/SettingsContext';
 import { sectionColor, getSectionTypes, sectionLabel } from './sectionConstants';
 import { AnnotationPointCard } from './shared/AnnotationPointCard';
@@ -24,14 +23,14 @@ export function useBoundaryEditPopover() {
 interface BoundaryEditPopoverProps {
   /** 0-based index — used for header numbering ("Boundary #3"). */
   index: number;
-  section: ManualSection;
+  section: SectionBlock;
   /** Time of the next boundary, or the track duration if this is the last
    *  one. Displayed as a non-editable End ms read-out. */
   endTime: number;
   popoverRef: React.RefObject<HTMLDivElement | null>;
   positionStyle: CSSProperties;
   /** Patch fields. `time` maps to the section's start; `type` is boundary-only. */
-  onChange: (patch: Partial<ManualSection>) => void;
+  onChange: (patch: Partial<SectionBlock>) => void;
   onDelete: () => void;
   onClose: () => void;
   /** Play a 0.5s preview starting at section.time. */
@@ -39,11 +38,13 @@ interface BoundaryEditPopoverProps {
   onStop?: () => void;
   isPlaying?: boolean;
   /** Beat-grid context — BPM, gridOffset, time-signature numerator, and
-   *  optional tempo anchors. Drive the bar.beat input + length read-out. */
+   *  Drive the bar.beat input + length read-out. */
   bpm?: number;
   gridOffset?: number;
   beatsPerBar?: number;
-  anchors?: readonly TempoAnchor[];
+  /** Resolved grid segments — keeps the bar.beat readout in step with a
+   *  split grid, where each segment counts in its own meter from its own bar 1. */
+  segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
   /** Current playhead — enables the crosshair snap button on the Start row. */
   currentTime?: number;
   /** When provided, a "Split" button is rendered on the footer next to Delete.
@@ -57,7 +58,7 @@ export function BoundaryEditPopover({
   index, section, endTime, popoverRef, positionStyle,
   onChange, onDelete, onClose,
   onPlay, onStop, isPlaying,
-  bpm, gridOffset, beatsPerBar, anchors, currentTime,
+  bpm, gridOffset, beatsPerBar, segments, currentTime,
   onSplit, canSplit,
 }: BoundaryEditPopoverProps) {
   const { settings } = useSettings();
@@ -117,10 +118,10 @@ export function BoundaryEditPopover({
       bpm={bpm}
       gridOffset={gridOffset}
       beatsPerBar={beatsPerBar}
-      anchors={anchors}
+      segments={segments}
       currentTime={currentTime}
       onChange={(patch) => {
-        const out: Partial<ManualSection> = {};
+        const out: Partial<SectionBlock> = {};
         if (patch.start !== undefined) out.time = patch.start;
         if (patch.label !== undefined) out.label = patch.label;
         if (patch.description !== undefined) out.description = patch.description;

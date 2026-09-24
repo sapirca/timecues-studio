@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getCurrentAnnotatorId } from '../context/AnnotatorContext';
+import { getIsMobile } from '../mobile/mobileMode';
 
 type Accent = 'emerald' | 'cyan' | 'violet' | 'amber' | 'rose' | 'pink' | 'slate';
 
@@ -28,14 +29,6 @@ export function isInfoBannerDismissed(id: string): boolean {
     return localStorage.getItem(storageKey(id, userId)) === '1';
   }
   catch { return false; }
-}
-
-/** Reset a banner's dismissed state for the current user. */
-export function resetInfoBanner(id: string): void {
-  try {
-    const userId = getCurrentAnnotatorId();
-    localStorage.removeItem(storageKey(id, userId));
-  } catch { /* ignore */ }
 }
 
 /** Reset all dismissed banners for the current user (useful for factory reset / clear site data flows). */
@@ -67,7 +60,10 @@ export function InfoBanner({ id, title, children, accent = 'slate' }: InfoBanner
     setDismissed(isInfoBannerDismissed(id));
   }, [id]);
 
-  if (dismissed) return null;
+  // Every banner's prose points at the desktop layout ("the sidebar on the
+  // right", "the tab strip above"), which the phone shell does not have — its
+  // panels are named buttons instead, so the directions would be wrong.
+  if (dismissed || getIsMobile()) return null;
 
   const c = ACCENT[accent];
 

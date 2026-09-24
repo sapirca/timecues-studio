@@ -68,13 +68,13 @@ export function StatusPill({
         onChange?.(next === 'reviewed' ? 'reviewed' : 'in_progress');
       }}
       title={disabled ? 'Read-only annotation type' : 'Annotation workflow status'}
-      className={`text-[11px] font-mono rounded px-2.5 py-1 border focus:outline-none focus:ring-1 transition-colors ${
+      className={`shrink-0 text-[11px] font-mono rounded px-1 py-1 border focus:outline-none focus:ring-1 transition-colors ${
         disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
       } ${tone}`}
     >
-      <option value="not_started" disabled={hasItems}>● Not started</option>
-      <option value="in_progress" disabled={!hasItems}>● In progress</option>
-      <option value="reviewed"    disabled={!hasItems}>● Reviewed</option>
+      <option value="not_started" disabled={hasItems}>Not started</option>
+      <option value="in_progress" disabled={!hasItems}>In progress</option>
+      <option value="reviewed"    disabled={!hasItems}>Reviewed</option>
     </select>
   );
 }
@@ -96,12 +96,12 @@ export function UndoButton({ canUndo, onUndo }: { canUndo: boolean; onUndo?: () 
       onClick={onUndo}
       disabled={!canUndo || !onUndo}
       title={canUndo ? 'Undo last edit (⌘Z)' : 'Nothing to undo'}
-      className={`flex-1 flex items-center justify-center px-2 py-1 text-[13px] leading-none rounded transition-colors ${
+      className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded transition-colors ${
         canUndo && onUndo
           ? 'bg-white/[0.04] hover:bg-white/[0.08] text-slate-300'
           : 'bg-white/[0.02] text-slate-700 cursor-not-allowed'
       }`}
-    >↶</button>
+    >Undo</button>
   );
 }
 
@@ -111,12 +111,12 @@ export function RedoButton({ canRedo, onRedo }: { canRedo: boolean; onRedo?: () 
       onClick={onRedo}
       disabled={!canRedo || !onRedo}
       title={canRedo ? 'Redo (⇧⌘Z)' : 'Nothing to redo'}
-      className={`flex-1 flex items-center justify-center px-2 py-1 text-[13px] leading-none rounded transition-colors ${
+      className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded transition-colors ${
         canRedo && onRedo
           ? 'bg-white/[0.04] hover:bg-white/[0.08] text-slate-300'
           : 'bg-white/[0.02] text-slate-700 cursor-not-allowed'
       }`}
-    >↷</button>
+    >Redo</button>
   );
 }
 
@@ -130,17 +130,17 @@ export function SplitButton({
       onClick={onSplit}
       disabled={!canSplit || !onSplit}
       title={canSplit ? `${label} (S)` : (disabledReason ?? 'Split is not available here')}
-      className={`flex-1 flex items-center justify-center px-2 py-1 text-[13px] leading-none rounded transition-colors ${
+      className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded transition-colors ${
         canSplit && onSplit
           ? 'bg-violet-500/15 hover:bg-violet-500/25 text-violet-200 border border-violet-400/40'
           : 'bg-white/[0.02] text-slate-700 border border-white/[0.04] cursor-not-allowed'
       }`}
-    >✂</button>
+    >Split</button>
   );
 }
 
 /** Mark In / Mark Out — Rekordbox-style two-step ADD for Spans / Loops /
- *  Patterns. Mark In stashes the playhead as the start of a brand-new item
+ *  Loops. Mark In stashes the playhead as the start of a brand-new item
  *  and draws a flag at that position; Mark Out completes the add with the
  *  current playhead as the end. Distinct from the per-row ⌐ / ¬ chips,
  *  which still snap an existing focused item's boundary. In is green, Out
@@ -157,13 +157,13 @@ export function SnapStartButton({
       disabled={!canSnap || !onSnap}
       title={canSnap
         ? `Mark In — stash this as the start of a new item (${label}). Shortcut: I. Click Mark Out next to complete the region.`
-        : 'Switch to Spans / Loops / Patterns to use Mark In'}
-      className={`flex-1 flex items-center justify-center px-2 py-1 font-mono text-[12px] leading-none rounded border transition-colors ${
+        : 'Switch to Spans / Loops to use Mark In'}
+      className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded border transition-colors ${
         canSnap && onSnap
           ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-400/50'
           : 'bg-white/[0.02] text-slate-700 border-white/[0.04] cursor-not-allowed'
       }`}
-    >▶|</button>
+    >Mark In</button>
   );
 }
 
@@ -179,12 +179,12 @@ export function SnapEndButton({
       title={canSnap
         ? `Mark Out — commit a new item ending at ${label}. Shortcut: O.`
         : 'Click Mark In first to start a new region'}
-      className={`flex-1 flex items-center justify-center px-2 py-1 font-mono text-[12px] leading-none rounded border transition-colors ${
+      className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded border transition-colors ${
         canSnap && onSnap
           ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-400/50'
           : 'bg-white/[0.02] text-slate-700 border-white/[0.04] cursor-not-allowed'
       }`}
-    >|◀</button>
+    >Mark Out</button>
   );
 }
 
@@ -193,9 +193,9 @@ export function DeleteButton({ onDeleteAll }: { onDeleteAll?: () => void }) {
     <button
       onClick={onDeleteAll}
       disabled={!onDeleteAll}
-      className="flex-1 flex items-center justify-center px-2 py-1 bg-white/[0.04] hover:bg-red-500/15 hover:text-red-300 text-slate-300 text-[13px] leading-none rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/[0.04] disabled:hover:text-slate-300"
+      className="flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 bg-white/[0.04] hover:bg-red-500/15 hover:text-red-300 text-slate-300 text-[10px] leading-none rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/[0.04] disabled:hover:text-slate-300"
       title="Delete all data for this annotation type on this song"
-    >✕</button>
+    >Delete all</button>
   );
 }
 
@@ -204,7 +204,7 @@ export function ExportButton({ onExport, canExport }: { onExport?: () => void; c
     <button
       onClick={onExport}
       disabled={!canExport || !onExport}
-      className={`px-2 py-1 text-[13px] leading-none rounded transition-colors ${
+      className={`px-1.5 py-1 text-[13px] leading-none rounded transition-colors ${
         canExport && onExport
           ? 'bg-white/[0.04] hover:bg-white/[0.08] text-slate-300'
           : 'bg-white/[0.02] text-slate-700 cursor-not-allowed'
@@ -224,11 +224,13 @@ export function ImportMenu({
 
   useEffect(() => {
     if (!open) return;
-    const onClick = (e: MouseEvent) => {
+    const onClick = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    window.addEventListener('mousedown', onClick);
-    return () => window.removeEventListener('mousedown', onClick);
+    // Pointerdown, not mousedown: the timeline cancels its touch pointerdowns,
+    // so a tap there never fires a mousedown and would leave this open.
+    window.addEventListener('pointerdown', onClick);
+    return () => window.removeEventListener('pointerdown', onClick);
   }, [open]);
 
   if (formats.length === 0) return null;
@@ -237,7 +239,7 @@ export function ImportMenu({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="px-2 py-1 bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 text-[13px] leading-none rounded transition-colors"
+        className="px-1.5 py-1 bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 text-[13px] leading-none rounded transition-colors"
         title="Import annotations from a file"
       >↑<span className="text-[9px] align-middle">▾</span></button>
       {open && (

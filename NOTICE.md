@@ -40,6 +40,9 @@ see [LICENSE](LICENSE).
 | pyloudnorm | MIT |
 | allin1, natten | MIT |
 | madmom (CPJKU fork: `github.com/CPJKU/madmom`) | BSD-3-Clause |
+| beat-this (`github.com/CPJKU/beat_this`) | MIT |
+| pyaudio (BeatNet's realtime input; stubbed out for offline use — see `tools/python/pyaudio_shim.py`) | MIT |
+| Cython (build-time prereq for the CPJKU madmom fork in the `beatnet` / `beat-transformer` images) | Apache-2.0 |
 
 All of the above are MIT-compatible and may be redistributed under the terms
 of TimeCues Studio's MIT license, subject to preserving their upstream copyright
@@ -61,6 +64,20 @@ AGPL. For most research / single-host evaluator setups this is a non-issue;
 for SaaS redistribution it is. TimeCues Studio itself does not require or
 import Essentia at install time.
 
+## Vendored third-party source
+
+Two model files are copied into this tree rather than installed, because
+upstream ships no package. Each carries its upstream LICENSE next to the
+code, and the subpackage docstring records any change made to it.
+
+| Path | Upstream | License |
+|---|---|---|
+| [tools/python/vendor/beat_transformer/](tools/python/vendor/beat_transformer/) | [zhaojw1998/Beat-Transformer](https://github.com/zhaojw1998/Beat-Transformer) — `code/DilatedTransformer.py`, `code/DilatedTransformerLayer.py` | MIT (© 2022 Zhao Jingwei) |
+
+Both files are byte-for-byte upstream except one line: the flat
+`from DilatedTransformerLayer import ...` is made relative so the files
+import as a package. The change is marked inline.
+
 ## Pretrained model checkpoints
 
 The code is MIT-licensed, but several models download **pretrained weights**
@@ -72,6 +89,8 @@ the user accepts when the code triggers the download:
 | Demucs (Hybrid Transformer v4) | MIT | MIT | `stems` daemon, `tools/run_demucs_songs.py` |
 | `allin1` (`mir-aidj/all-in-one`) | MIT | See upstream release notes | `tools/run_allin1.py`, fold-comparison panel |
 | BeatNet | MIT | See upstream release notes | experimental `beatnet` sidecar |
+| Beat This! (`CPJKU/beat_this`) | MIT | MIT | experimental `beat-this` sidecar |
+| Beat Transformer (`zhaojw1998/Beat-Transformer`) | MIT | MIT | experimental `beat-transformer` sidecar |
 | Silero-VAD | MIT | MIT | experimental `span` sidecar |
 | JDCNet (scaffolded) | MIT | See upstream release notes | experimental `span` sidecar |
 | CPJKU-madmom-fork pretrained beat trackers | BSD-3-Clause | Mixed — some checkpoints historically carried CC-BY-NC restrictions | `bpm` daemon |
