@@ -1,10 +1,6 @@
-/** Tap Along's capture rule, which differs by what the session commits into.
- *
- *  A grid node can't draw anything narrower than one chip, so a press that
- *  never leaves its step records as a point. A boundary node has no grid at
- *  all: there the press and the release ARE the block, so every hold keeps
- *  its own release however short — nothing is rounded to a step and no length
- *  is invented for the user. Both come out of the one `useTapAlong`. */
+/** Tap Along's capture rule: the press and the release ARE the note, so every
+ *  hold keeps its own release however short — nothing is rounded to a step
+ *  and no length is invented for the user. */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { act, render, renderHook, screen, fireEvent } from '@testing-library/react';
 import { TapRefineControls, useBoundaryTapRefine, useTapAlong } from './BeatChipControls';
@@ -13,15 +9,13 @@ import { TapRefineControls, useBoundaryTapRefine, useTapAlong } from './BeatChip
 const NODE = { stepsPerCycle: 32, subbeatsPerBeat: 4 };
 
 /** Starts a session and runs the 3-2-1 count-in out, so taps are armed. */
-function startSession(mode: 'boundary' | 'grid') {
+function startSession() {
   const saved: { taps: unknown[]; numBeats: number }[] = [];
   const view = renderHook(
     ({ playheadStep }: { playheadStep: number | null }) => useTapAlong({
       ...NODE,
       playheadStep,
-      ...(mode === 'boundary'
-        ? { onSaveTaps: (taps, numBeats) => saved.push({ taps, numBeats }) }
-        : { onChange: () => {} }),
+      onSaveTaps: (taps, numBeats) => { saved.push({ taps, numBeats }); },
     }),
     { initialProps: { playheadStep: 0 as number | null } },
   );
@@ -41,9 +35,9 @@ function press(view: ReturnType<typeof startSession>['view'], fromStep: number, 
 afterEach(() => { vi.useRealTimers(); });
 
 describe('useTapAlong — press and release', () => {
-  it('keeps every press-to-release on a boundary node, however short', () => {
+  it('keeps every press-to-release, however short', () => {
     vi.useFakeTimers();
-    const { view } = startSession('boundary');
+    const { view } = startSession();
     // A hold across two steps, and one that never leaves its own step — both
     // come back with the exact release, in beats.
     press(view, 4, 5);
@@ -56,7 +50,7 @@ describe('useTapAlong — press and release', () => {
 
   it('closes a press at the node end when the release cannot be read', () => {
     vi.useFakeTimers();
-    const { view } = startSession('boundary');
+    const { view } = startSession();
     // The loop wrapped while the key was down (the playhead is back near 0),
     // and then a release taken while the node isn't sounding at all. Either
     // way the key was still down when the node ended.
@@ -66,13 +60,6 @@ describe('useTapAlong — press and release', () => {
       [7, 8],
       [5, 8],
     ]);
-  });
-
-  it('still records a within-a-step press as a point on a grid node', () => {
-    vi.useFakeTimers();
-    const { view } = startSession('grid');
-    press(view, 8, 8.2);
-    expect(view.result.current.tapEvents).toEqual([{ beat: 2, pass: 0 }]);
   });
 });
 

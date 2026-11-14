@@ -441,67 +441,6 @@ export type SnapDivision =
   | '1/2beat' | '1/4beat' | '1/8beat'
   | '1/3beat' | '1/6beat';
 
-/** Narrowest snap step a hand can actually aim at, in screen pixels.
- *
- *  A five-minute song drawn at fit zoom is about 4.5 px per second, so at
- *  100 BPM one beat is under 3 px. Snapping in 3 px steps is not a snap the
- *  annotator can see or steer — the band just slides under the pointer, which
- *  is exactly what "Grid Lock is on but nothing snaps" means in practice. The
- *  Prominence lane already reasons in pixels for the same reason (see
- *  MAGNET_REACH_PX in LeadLaneRow). */
-export const MIN_SNAP_STEP_PX = 6;
-
-/** The ladders a too-fine snap is widened along. Every entry is a whole
- *  multiple of the one before it, so coarsening only ever removes landing
- *  spots — it never moves the grid off the finer lines.
- *
- *  Two ladders, because that invariant is exactly what a beat's two families
- *  do not share: 1/2 is not a whole multiple of 1/3, so widening a triplet
- *  along the binary rungs would slide every landing spot off the triplet grid
- *  the user can see. A triplet division therefore coarsens 1/6 → 1/3 → beat
- *  and only then joins the common bar rungs, where the two families agree
- *  again. */
-const BINARY_SNAP_LADDER: readonly SnapDivision[] = ['1/8beat', '1/4beat', '1/2beat', 'beat', 'bar', '2bar', '4bar', '8bar'];
-const TRIPLET_SNAP_LADDER: readonly SnapDivision[] = ['1/6beat', '1/3beat', 'beat', 'bar', '2bar', '4bar', '8bar'];
-
-function snapLadderFor(division: SnapDivision): readonly SnapDivision[] {
-  return division === '1/3beat' || division === '1/6beat'
-    ? TRIPLET_SNAP_LADDER : BINARY_SNAP_LADDER;
-}
-
-/**
- * Widen `division` until one step is at least `minPx` wide on screen.
- *
- * Zoom is what decides whether a beat is a target or a blur: at fit zoom a
- * beat is a couple of pixels and the musically honest unit is the bar; zoomed
- * in, the same rule hands the beat (or the sixteenth) straight back. Same
- * adaptive grid a DAW gives you, and the same reasoning the Prominence lane's
- * pixel-sized magnet zone already uses.
- *
- * `pxPerSec` of 0 (unknown width) or a missing BPM leaves the division alone.
- */
-export function coarsenSnapDivision(
-  division: SnapDivision,
-  bpm: number,
-  beatsPerBar: number,
-  pxPerSec: number,
-  minPx: number = MIN_SNAP_STEP_PX,
-): SnapDivision {
-  if (!(pxPerSec > 0) || !Number.isFinite(bpm) || bpm <= 0) return division;
-  const widthPx = (d: SnapDivision) => (60 / bpm) * unitBeats(d, beatsPerBar) * pxPerSec;
-  if (widthPx(division) >= minPx) return division;
-  // A division off the ladder ('3bar', '16bar') is already coarser than a bar;
-  // it can only have failed the test on a very long track, so continue from
-  // the bar rung rather than pretending it was a sub-beat.
-  const ladder = snapLadderFor(division);
-  const from = ladder.indexOf(division);
-  const start = from >= 0 ? from + 1 : ladder.indexOf('bar');
-  for (let i = start; i < ladder.length; i++) {
-    if (widthPx(ladder[i]) >= minPx) return ladder[i];
-  }
-  return ladder[ladder.length - 1];
-}
-
 // Snap an arbitrary time to the nearest grid line at the given subdivision.
 // 'beat' = every beat; 'bar' = every bar; 'Nbar' = every N bars (N=2,4,8,16…).
 // Negative results are clamped to 0 — annotations live in [0, duration].
@@ -561,6 +500,32 @@ export function snapTimeToGrid(
   }
   if (toleranceSec != null && Math.abs(snappedTime - time) > toleranceSec) return time;
   return snappedTime;
+}
+
+/** The grid line one step from `time` in direction `dir` (+1 forward, −1 back):
+ *  the arrow keys' seek. A time already on a line moves to the neighbour; one
+ *  between lines moves to the line on that side, so a press never lands
+ *  further than one grid unit away. Same grid as snapTimeToGrid — overrides
+ *  and split segments included — so the playhead lands on the drawn lines. */
+export function stepTimeOnGrid(
+  time: number,
+  dir: 1 | -1,
+  bpm: number,
+  gridOffset: number,
+  beatsPerBar: number,
+  division: SnapDivision,
+  overrides?: Readonly<Record<string, number>>,
+  segments?: readonly ResolvedSegment[],
+): number {
+  // A playhead within a millisecond of a line is on it: the media clock is
+  // never exactly the number a seek asked for.
+  const EPS = 0.001;
+  const snap = (t: number) => snapTimeToGrid(t, bpm, gridOffset, beatsPerBar, division, overrides, undefined, segments);
+  const nearest = snap(time);
+  if (dir > 0 ? nearest > time + EPS : nearest < time - EPS) return nearest;
+  const seg = hasSplits(segments) ? segmentAt(segments, time) : null;
+  const period = (seg ? seg.beatDur : 60 / bpm) * unitBeats(division, seg ? seg.beatsPerBar : beatsPerBar);
+  return snap(nearest + dir * period);
 }
 
 function unitBeats(division: string, beatsPerBar: number): number {

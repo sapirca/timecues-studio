@@ -8,20 +8,22 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { RiffBoundarySegment, RiffNode } from '../../types/annotationLayer';
-import { boundarySegmentsFromTaps, isBoundaryNode, riffNodeLengthBeats } from '../../types/annotationLayer';
+import { boundarySegmentsFromTaps, riffNodeLengthBeats } from '../../types/annotationLayer';
 import { getAudioBuffer } from '../../services/audioAnalysis';
 import { computeOnsetEnvelopeWindow } from '../../services/mirAnalysis';
 import type { FrameAxis } from '../../utils/frameTime';
 import { sampleOnsetWindow } from '../../utils/onsetWindow';
 import {
-  BeatChipPicker, TapAlongControls, TapAlongPianoRoll, TapRefineControls,
+  TapAlongControls, TapAlongPianoRoll, TapRefineControls,
   useBoundaryTapRefine, useTapAlong,
 } from './BeatChipControls';
-import {
-  BoundarySegmentEditor, type BoundaryOnsetSource, type BoundaryTickSource,
-} from './BoundarySegmentEditor';
 import { NodeLengthControl } from './RiffPatternEditorPanel';
+import { PitchedRiffEditor, type BoundaryTickSource, type NoteOnsetSource } from './PitchedRiffEditor';
+import { pulseOf } from '../../utils/pitchedRiff';
+import { LoopLength } from './LoopNotation';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
+import { sweepStep } from './sweepStep';
 
 export type NodeEditAnchor = PopoverAnchor;
 
@@ -50,15 +52,14 @@ interface NodeEditPopoverProps {
    *  by returning false). Pass `null` to clear. */
   registerCloseGuard: (guard: (() => boolean) | null) => void;
   bpm?: number;
+  /** For the node length in bars ("1 bar", "½ bar"). 4/4 when unknown. */
+  beatsPerBar?: number;
   /** The first real spot on the timeline this node is actually placed
    *  (directly, or nested inside a combo) — null if it isn't used anywhere
    *  yet, in which case there's no real audio to preview. */
   occurrence: { start: number; end: number } | null;
   /** True while real playback is currently inside `occurrence`. */
   isPlaying?: boolean;
-  /** The main player's current time — drives the karaoke sweep the same way
-   *  RiffPatternEditPopover does. */
-  currentTime?: number;
   /** Seeks the main player to `occurrence.start` (or `preRollSec` earlier,
    *  when given — used by Tap Along's count-in/loop) and plays through it —
    *  undefined when there's no occurrence to play. */
@@ -109,37 +110,45 @@ interface NodeEditPopoverProps {
    *  hits. Each is fetched, decoded and analysed only once the picker selects
    *  it — the window is a few seconds, but the file is a whole song. */
   onsetStems?: readonly { id: string; name: string; url: string }[];
+  /** A node from a detector's proposed lane: shown in full — name, length,
+   *  beats or blocks, the real audio — but nothing can be changed, and there
+   *  is no Tap Along or Delete. */
+  readOnly?: boolean;
 }
 
 export function NodeEditPopover({
   node, popoverRef, positionStyle, onChange, onDelete, onClose, registerCloseGuard,
-  occurrence, isPlaying, currentTime, onPlay, onStop,
+  occurrence, isPlaying, onPlay, onStop,
   entryLengthSteps, onResizeEntry, onTrimLength,
   tickSources, onsetEnvelope, onsetEnvelopeName = 'audio', onsetStems,
+  readOnly = false, beatsPerBar = 4,
 }: NodeEditPopoverProps) {
-  // Boundary nodes replace the whole beat-chip half of this card: no
-  // subdivision and no chip grid. Tap Along still runs — it's the same
-  // capture loop either way, only the commit differs (raw fractional
-  // presses into blocks, instead of a quantised chip patch). Everything
-  // else — name, length, placement, playback preview — is shared with grid
-  // nodes.
-  const boundary = isBoundaryNode(node);
-  const lengthBeats = riffNodeLengthBeats(node);
+  const notes = node;
+  const pulse = pulseOf(notes);
+  const lengthBeats = riffNodeLengthBeats(notes);
   // Karaoke sweep: map the live playhead's fraction through the real
   // occurrence's duration onto the node's own step grid — correct regardless
   // of whether this particular placement's entry length was stretched away
   // from the node's natural stepsPerCycle (an entry can be resized on the
   // canvas independently of the node it references).
-  const playheadStep =
-    isPlaying && occurrence && currentTime != null
-      ? ((currentTime - occurrence.start) / Math.max(0.001, occurrence.end - occurrence.start)) * node.stepsPerCycle
-      : null;
+  //
+  // Read from the playhead clock at the precision something on the card
+  // actually draws (see `sweepStep`), so the card re-renders on a step
+  // change rather than on every frame of playback.
+  const playheadStep = usePlayheadValue((t) => (
+    isPlaying && occurrence
+      ? sweepStep(
+          ((t - occurrence.start) / Math.max(0.001, occurrence.end - occurrence.start)) * notes.stepsPerCycle,
+          true,
+        )
+      : null
+  ));
 
   // The audio under this node, in the node's own beat coordinates — the same
   // linear mapping through `occurrence` the karaoke sweep uses above, so the
   // envelope, the blocks and the playhead cannot disagree. Memoised on the
   // window rather than on `occurrence` itself, which is rebuilt every render
-  // (and this card re-renders on every playhead tick).
+  // (and this card re-renders on every step of the karaoke sweep).
   const occStart = occurrence?.start ?? null;
   const occEnd = occurrence?.end ?? null;
   // Depends on the envelope's *parts*, not on the wrapper object: the curve
@@ -152,13 +161,13 @@ export function NodeEditPopover({
   const axisOffset = onsetEnvelope?.axis.offset ?? 0;
   const axisCount = onsetEnvelope?.axis.count ?? 0;
   const onsetWindow = useMemo(() => (
-    boundary && onsetValues && axisCount > 0 && occStart != null && occEnd != null
+    onsetValues && axisCount > 0 && occStart != null && occEnd != null
       ? sampleOnsetWindow(
           onsetValues, { step: axisStep, offset: axisOffset, count: axisCount },
           occStart, occEnd, lengthBeats, { levels: onsetLevels },
         )
       : null
-  ), [boundary, onsetValues, onsetLevels, axisStep, axisOffset, axisCount, occStart, occEnd, lengthBeats]);
+  ), [onsetValues, onsetLevels, axisStep, axisOffset, axisCount, occStart, occEnd, lengthBeats]);
 
   // Which onset source the editor's picker is showing. Held here, not just
   // inside the editor, because a stem's audio is only worth fetching once it
@@ -179,7 +188,7 @@ export function NodeEditPopover({
   const [stemStatus, setStemStatus] = useState<'idle' | 'loading' | 'error'>('idle');
 
   useEffect(() => {
-    if (!boundary || !selectedStemId || !selectedStemUrl || occStart == null || occEnd == null) {
+    if (!selectedStemId || !selectedStemUrl || occStart == null || occEnd == null) {
       setStemEnvelope(null);
       setStemStatus('idle');
       return;
@@ -212,7 +221,7 @@ export function NodeEditPopover({
       }
     })();
     return () => { cancelled = true; };
-  }, [boundary, selectedStemId, selectedStemUrl, occStart, occEnd]);
+  }, [selectedStemId, selectedStemUrl, occStart, occEnd]);
 
   // The selected stem's envelope on the node's own beat axis — the same
   // windowing the mix goes through above, so the two are directly comparable.
@@ -230,13 +239,12 @@ export function NodeEditPopover({
   // isolated stem, then every detected onset/cue layer that has something
   // inside this placement — the same sources the ⟳ menu re-seeds from, so
   // "snapped to X" and "seeded from X" mean the same X.
-  const onsetSources = useMemo<BoundaryOnsetSource[]>(() => {
-    const out: BoundaryOnsetSource[] = [];
+  const onsetSources = useMemo<NoteOnsetSource[]>(() => {
+    const out: NoteOnsetSource[] = [];
     if (onsetWindow && onsetWindow.peakBeats.length > 0) {
       out.push({
         id: 'audio', name: onsetEnvelopeName,
-        beats: onsetWindow.peakBeats, curve: onsetWindow.curve,
-        levelCurve: onsetWindow.levelCurve,
+        beats: onsetWindow.peakBeats,
       });
     }
     if (occStart != null && occEnd != null) {
@@ -249,15 +257,13 @@ export function NodeEditPopover({
           // picker that only offers what is already loaded can never be used
           // to load anything.
           beats: selected && stemWindow ? stemWindow.peakBeats : [],
-          curve: selected && stemWindow ? stemWindow.curve : undefined,
-          levelCurve: selected && stemWindow ? stemWindow.levelCurve : undefined,
           status: selected && stemStatus !== 'idle' ? stemStatus : undefined,
         });
       }
     }
     for (const s of tickSources ?? []) {
       if (s.kind === 'cues' && s.tickBeats && s.tickBeats.length > 0) {
-        out.push({ id: s.id, name: s.name, beats: s.tickBeats });
+        out.push({ id: s.id, name: s.name, beats: s.tickBeats, notes: s.tickNotes });
       }
     }
     return out;
@@ -266,34 +272,28 @@ export function NodeEditPopover({
     selectedStemId, stemWindow, stemStatus, occStart, occEnd,
   ]);
 
-  // Snap for the block editor, owned here rather than inside it so a tap
-  // session commits at exactly the value the picker is showing — "with or
-  // without snap" is the same one control in both directions.
-  const [boundarySnap, setBoundarySnap] = useState(0);
+  // A tap session lands on the node's pulse, like every other way in.
+  const tapSnap = 1 / pulse;
   // Fold + vote for the tap review step, owned here for the same reason snap
   // is: the preview below and the Save above have to agree on them.
   const refine = useBoundaryTapRefine();
 
   const tapAlong = useTapAlong({
-    stepsPerCycle: node.stepsPerCycle,
-    subbeatsPerBeat: node.subbeatsPerBeat,
+    stepsPerCycle: notes.stepsPerCycle,
+    subbeatsPerBeat: notes.subbeatsPerBeat,
     playheadStep,
     isPlaying,
     onPlay,
     onStop,
-    onChange: (patch) => onChange(patch),
-    onSaveTaps: boundary
-      ? (taps, numBeats) => onChange({ segments: boundarySegmentsFromTaps(taps, numBeats, boundarySnap, refine) })
-      : undefined,
+    onSaveTaps: (taps, numBeats) => onChange({ segments: boundarySegmentsFromTaps(taps, numBeats, tapSnap, refine) }),
   });
-  const tapPreview = tapAlong.previewPatch;
   // Live preview of the blocks the current session would commit — the
   // boundary counterpart of feeding `previewPatch` into the chip grid, so
   // taps are visible where they land instead of only after Save. Re-runs on
   // every snap change too, so flipping the picker during review re-quantises
   // what's on screen before anything is written.
-  const tapSegments = boundary && tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0
-    ? boundarySegmentsFromTaps(tapAlong.tapEvents, tapAlong.numBeats, boundarySnap, refine)
+  const tapSegments = tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0
+    ? boundarySegmentsFromTaps(tapAlong.tapEvents, tapAlong.numBeats, tapSnap, refine)
     : null;
   // How many passes the take has, for the vote's ceiling — passes are
   // numbered from 0 and only counted once a tap lands in them.
@@ -317,7 +317,7 @@ export function NodeEditPopover({
   }, [registerCloseGuard, tapPhase, tapSave]);
 
   // The block list needs more horizontal room than a chip grid does.
-  const width = boundary ? 420 : 320;
+  const width = 480;
   const MARGIN = 12;
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -389,8 +389,13 @@ export function NodeEditPopover({
           style={{ background: node.color, boxShadow: `0 0 6px ${node.color}66` }}
         />
         <span className="text-[10px] uppercase tracking-wider font-medium text-orange-300">
-          {boundary ? 'Boundary Node' : 'Node'}
+          Riff node
         </span>
+        {readOnly && (
+          <span className="text-[9px] text-slate-500" title="Detector output — copy the lane into a layer to edit it">
+            read-only
+          </span>
+        )}
         <button
           onClick={onClose}
           className="w-5 h-5 rounded flex items-center justify-center text-slate-300 hover:text-slate-100 hover:bg-white/[0.06] text-[12px] ml-auto"
@@ -403,7 +408,8 @@ export function NodeEditPopover({
       <label className="block">
         <span className="block text-[9px] uppercase tracking-wider text-slate-300 mb-0.5">Name</span>
         <input
-          autoFocus
+          autoFocus={!readOnly}
+          readOnly={readOnly}
           value={node.name}
           onChange={(e) => onChange({ name: e.target.value })}
           placeholder="short name (e.g. kick motif)"
@@ -412,99 +418,57 @@ export function NodeEditPopover({
         />
       </label>
 
-      <NodeLengthControl
-        node={node}
-        onResize={(patch) => onChange(patch)}
-        onResizeSubdivision={(patch) => onChange(patch)}
-        onTrimLength={onTrimLength}
-        entryLengthSteps={entryLengthSteps}
-        onResizeEntry={onResizeEntry}
-        showSubdivision={!boundary}
-      />
-
-      {boundary ? (
-        <>
-          <BoundarySegmentEditor
-            color={node.color}
-            segments={tapSegments ?? node.segments ?? []}
-            lengthBeats={lengthBeats}
-            // Straight relative-time position inside the node — the same
-            // fraction the grid card turns into a step index, left in beats
-            // instead, so nothing is rounded to a subdivision on the way.
-            playheadBeat={playheadStep != null ? playheadStep / Math.max(1, node.subbeatsPerBeat) : null}
-            onChange={(segments: RiffBoundarySegment[]) => onChange({ segments })}
-            readOnly={tapAlong.phase !== 'idle'}
-            tickSources={tickSources}
-            onsetCurve={onsetWindow?.curve}
-            levelCurve={onsetWindow?.levelCurve}
-            onsetSources={onsetSources}
-            onOnsetRefChange={setOnsetRefId}
-            secPerBeat={occStart != null && occEnd != null && lengthBeats > 0
-              ? (occEnd - occStart) / lengthBeats
-              : undefined}
-            snap={boundarySnap}
-            onSnapChange={setBoundarySnap}
-            onTapAtBeat={tapAlong.phase === 'recording'
-              ? (beat) => tapAlong.tapAtStep(beat * tapAlong.subbeats)
-              : undefined}
-          />
-
-          {tapAlong.phase !== 'idle' && (
-            <TapAlongPianoRoll
-              taps={tapAlong.tapEvents}
-              numBeats={tapAlong.numBeats}
-              playheadBeat={playheadStep != null ? playheadStep / tapAlong.subbeats : null}
-              color={node.color}
-            />
-          )}
-
-          {tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0 && (
-            <TapRefineControls {...refine} passes={tapPasses} />
-          )}
-
-          <TapAlongControls {...tapAlong} disabled={!onPlay} mode="boundary" />
-        </>
+      {readOnly ? (
+        <div className="text-[10px] font-mono text-slate-400">
+          {+lengthBeats.toFixed(3)} beats
+          {' · '}<LoopLength beats={lengthBeats} beatsPerBar={beatsPerBar} className="text-slate-300" />
+        </div>
       ) : (
-        <>
-          <div>
-            <span className="block text-[9px] uppercase tracking-wider text-slate-300 mb-0.5">
-              Beats
-              {tapAlong.phase === 'recording' && (
-                <span className="normal-case text-slate-500"> — tap along, or click a beat directly</span>
-              )}
-              {tapAlong.phase !== 'idle' && tapAlong.phase !== 'recording' && (
-                <span className="normal-case text-slate-500"> — tap along, watch them land here</span>
-              )}
-            </span>
-            <BeatChipPicker
-              color={node.color}
-              steps={tapPreview?.stepsPerCycle ?? node.stepsPerCycle}
-              subbeatsPerBeat={tapPreview?.subbeatsPerBeat ?? node.subbeatsPerBeat}
-              highlighted={tapPreview?.highlightedBeats ?? node.highlightedBeats}
-              spans={tapPreview?.spans ?? node.spans}
-              accents={tapPreview ? undefined : node.accents}
-              onChange={(patch) => onChange(patch)}
-              playheadStep={playheadStep}
-              readOnly={tapAlong.phase !== 'idle'}
-              onTapAlongTap={tapAlong.phase === 'recording' ? tapAlong.tapAtStep : undefined}
-            />
-          </div>
-
-          {tapAlong.phase !== 'idle' && (
-            <TapAlongPianoRoll
-              taps={tapAlong.tapEvents}
-              numBeats={tapAlong.numBeats}
-              playheadBeat={playheadStep != null ? playheadStep / tapAlong.subbeats : null}
-              color={node.color}
-            />
-          )}
-
-          <TapAlongControls {...tapAlong} disabled={!onPlay} />
-        </>
+        <NodeLengthControl
+          node={notes}
+          onResize={(patch) => onChange(patch)}
+          onResizeSubdivision={(patch) => onChange(patch)}
+          onTrimLength={onTrimLength}
+          entryLengthSteps={entryLengthSteps}
+          onResizeEntry={onResizeEntry}
+          beatsPerBar={beatsPerBar}
+        />
       )}
 
+      <PitchedRiffEditor
+        color={node.color}
+        segments={tapSegments ?? notes.segments ?? []}
+        lengthBeats={lengthBeats}
+        pulse={pulse}
+        beatsPerBar={beatsPerBar}
+        playheadBeat={playheadStep != null ? playheadStep / Math.max(1, notes.subbeatsPerBeat) : null}
+        onChange={(segments: RiffBoundarySegment[]) => onChange({ ...notes, segments })}
+        readOnly={readOnly || tapAlong.phase !== 'idle'}
+        onsetSources={readOnly ? undefined : onsetSources}
+        onOnsetRefChange={setOnsetRefId}
+        tickSources={readOnly ? undefined : tickSources}
+        onTapAtBeat={tapAlong.phase === 'recording'
+          ? (beat) => tapAlong.tapAtStep(beat * tapAlong.subbeats)
+          : undefined}
+      />
+
+      {tapAlong.phase !== 'idle' && (
+        <TapAlongPianoRoll
+          taps={tapAlong.tapEvents}
+          numBeats={tapAlong.numBeats}
+          playheadBeat={playheadStep != null ? playheadStep / tapAlong.subbeats : null}
+          color={node.color}
+        />
+      )}
+
+      {tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0 && (
+        <TapRefineControls {...refine} passes={tapPasses} />
+      )}
+
+      {!readOnly && <TapAlongControls {...tapAlong} disabled={!onPlay} />}
+
       <div className="flex items-center justify-between pt-1.5 border-t border-white/[0.04] gap-1.5">
-        <button
+        {readOnly ? <span /> : <button
           // Cancel any live Tap Along first: closing commits a session (see
           // the guard above) and there's nothing to commit it into — the node
           // is about to be deleted, and a save+delete pair would just be two
@@ -514,7 +478,7 @@ export function NodeEditPopover({
           title="Delete this node (⌘Z to undo)"
         >
           Delete
-        </button>
+        </button>}
         <div className="flex items-center gap-1.5">
           {/* Hidden during an active Tap Along session: this button shares
            *  `onPlay`/`onStop` with the tap-along loop below, and pausing
@@ -548,7 +512,7 @@ export function NodeEditPopover({
               ? 'Keep the tapping shown above and close (⌘Z to undo) — use Tap Along’s ✕ to throw it away instead'
               : undefined}
           >
-            {tapAlong.phase !== 'idle' ? 'Save & Done' : 'Done'}
+            {readOnly ? 'Close' : tapAlong.phase !== 'idle' ? 'Save & Done' : 'Done'}
           </button>
         </div>
       </div>

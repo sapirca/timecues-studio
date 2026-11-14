@@ -118,7 +118,7 @@ export function EvaluationStage({
       if (settings.experimentalCueExtras)     out.push('cues');
       if (settings.experimentalSpanFamily)    out.push('spans');
       if (settings.experimentalLoopFamily)    out.push('loops');
-      if (settings.experimentalLyricsFamily)  out.push('lyrics');
+      out.push('lyrics');
     }
     return out;
   }, [
@@ -126,7 +126,6 @@ export function EvaluationStage({
     settings.experimentalCueExtras,
     settings.experimentalSpanFamily,
     settings.experimentalLoopFamily,
-    settings.experimentalLyricsFamily,
   ]);
 
   // Snap back to boundaries if the active tab disappears (flag flipped off).

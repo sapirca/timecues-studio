@@ -141,6 +141,26 @@ export function beatToTime(beat: number, g: BeatGrid): number {
   return roundTime(beatTimeAt(beat, g.bpm, g.gridOffset, undefined, g.segments));
 }
 
+/** Every snap the grid offers — 1/2, 1/3, 1/4, 1/6 and 1/8 of a beat — is a
+ *  whole number of these steps (24 is the smallest number both 8 and 6 divide). */
+export const BEAT_FRACTION_STEPS = 24;
+
+/** A time this close to a grid fraction IS that fraction: times are kept to
+ *  the millisecond, so a mark snapped to 1/8 beat comes back 0.0004 beats off. */
+const STAMP_SNAP_SEC = 0.001;
+
+/** The beat stamp written for `t`: its exact grid fraction (12.375, not
+ *  12.37491) when it sits within a millisecond of one, else the raw position
+ *  to six places — a tapped hit off the grid keeps where it really is. Under
+ *  Grid Lock the stamp is the annotation, so it has to say "the 4th 32nd of
+ *  beat 12", not a float that only rounds to it. */
+export function stampBeat(t: number, g: BeatGrid): number {
+  const b = timeToBeat(t, g);
+  const step = Math.round(b * BEAT_FRACTION_STEPS) / BEAT_FRACTION_STEPS;
+  const tol = STAMP_SNAP_SEC * Math.abs(timeToBeat(t + 1, g) - b);   // 1 ms in this tempo's beats
+  return Math.abs(step - b) <= tol ? step : Number(b.toFixed(6));
+}
+
 /** Where `t` lands after the grid changes, if it holds its musical position. */
 function retime(t: number, from: BeatGrid, to: BeatGrid): number {
   return Math.max(0, beatToTime(timeToBeat(t, from), to));
@@ -191,9 +211,9 @@ function stampLayer(layer: AnnotationLayer, g: BeatGrid): AnnotationLayer {
   // them, the bulk snap skips them) — a sung word does not sit on a beat.
   if (layer.type === 'lyrics') return layer;
   const items = itemsOf(layer).map((it) => {
-    if (typeof it.time === 'number') return { ...it, beat: timeToBeat(it.time, g) };
+    if (typeof it.time === 'number') return { ...it, beat: stampBeat(it.time, g) };
     if (typeof it.start === 'number' && typeof it.end === 'number') {
-      return { ...it, startBeat: timeToBeat(it.start, g), endBeat: timeToBeat(it.end, g) };
+      return { ...it, startBeat: stampBeat(it.start, g), endBeat: stampBeat(it.end, g) };
     }
     return it;
   });
@@ -332,7 +352,7 @@ function retimeLayer(layer: AnnotationLayer, from: BeatGrid, to: BeatGrid): Anno
       return {
         ...it,
         time,
-        beat: timeToBeat(time, to),
+        beat: stampBeat(time, to),
         ...(Array.isArray(it.candidates)
           ? { candidates: (it.candidates as number[]).map((c) => retime(c, from, to)) }
           : {}),
@@ -345,8 +365,8 @@ function retimeLayer(layer: AnnotationLayer, from: BeatGrid, to: BeatGrid): Anno
         ...it,
         start,
         end: Math.max(end, start),   // a tempo change must not invert an interval
-        startBeat: timeToBeat(start, to),
-        endBeat: timeToBeat(Math.max(end, start), to),
+        startBeat: stampBeat(start, to),
+        endBeat: stampBeat(Math.max(end, start), to),
         ...(Array.isArray(it.candidates)
           ? {
               candidates: (it.candidates as [number, number][]).map(([s, e]) => {

@@ -67,13 +67,8 @@ const LAYER_LABELS: Record<string, string> = {
 export function deriveSongTracks(args: {
   layerSummary: SongLayerStatuses | undefined;
   autoGuess: AutoGuessSongStatus | undefined;
-  /** Mirrors settings.experimentalLoopsAndPatterns. With the flag off the
-   *  editor doesn't render those layers (loops AND riff-patterns —
-   *  the same flag gates all three), so counting them here produced phantom
-   *  "in progress" songs the user could neither see nor edit. */
-  includeLoopsAndPatterns: boolean;
 }): SongTrackSummary {
-  const { layerSummary, autoGuess, includeLoopsAndPatterns } = args;
+  const { layerSummary, autoGuess } = args;
   const tracks: SongTrack[] = [];
 
   if (layerSummary) {
@@ -82,7 +77,6 @@ export function deriveSongTracks(args: {
     );
     for (const [type, info] of entries) {
       if (!info || info.count === 0) continue;
-      if ((type === 'loops' || type === 'riff-patterns') && !includeLoopsAndPatterns) continue;
       tracks.push({
         kind: type as TrackKind,
         label: LAYER_LABELS[type] ?? type,

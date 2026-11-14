@@ -1,43 +1,47 @@
-"""Worked example: pattern detector emitting a 1-bar kick pattern x4.
+"""Worked example: riff detector emitting a 1-bar kick figure x4.
 
-Demonstrates the experimental `Pattern` output kind. Hidden from the registry
-unless the `experimentalLoopsAndPatterns` Settings flag is on.
+Demonstrates the experimental `Riff` output kind — one riff lane, in the shape
+a Riff Patterns layer has in the app: a node (the figure, written once, its
+notes in beats on its own pulse) and an item that places it. Hidden from the
+registry unless the `experimentalLoopsAndPatterns` Settings flag is on.
 
-`highlighted_beats` indexes 16th-note steps within one cycle — see
-PATTERN_SUBBEATS_PER_BEAT in web-app/src/types/annotationLayer.ts. A 4/4 bar
-has 16 steps (0..15); we accent the downbeats at steps 0, 4, 8, 12.
+A 4/4 bar on the sixteenth pulse is 16 steps (`steps_per_cycle`), 4 to the
+beat (`subbeats_per_beat`); the kick strikes each beat, one sixteenth long.
 """
 
 from __future__ import annotations
 
-from custom_api import CustomDetector, DetectionContext, Pattern
+from custom_api import CustomDetector, DetectionContext, Riff, RiffEntry, RiffItem, RiffNode, RiffNote
 
 
 class FourOnTheFloorPatternDetector(CustomDetector):
     name = "example_random_patterns"
     label = "4-on-the-floor pattern"
-    output_kind = "pattern"
-    is_algorithm = True
-    is_annotation = True
-    description = "Emits a 1-bar kick pattern repeated 4 times starting at the first downbeat. Experimental."
-    version = "0.1"
+    output_kind = "riff"
+    description = "Emits a 1-bar kick figure repeated 4 times starting at the first downbeat. Experimental."
+    windowable = True
+    version = "0.2"
 
     BEATS_PER_BAR = 4
     REPEAT_COUNT = 4
-    DOWNBEAT_STEPS = (0, 4, 8, 12)  # 16th-note step indices for 4-on-the-floor
 
-    def detect(self, ctx: DetectionContext) -> list[Pattern]:
+    def detect(self, ctx: DetectionContext) -> Riff:
         if not ctx.beat_times_ms or ctx.bpm <= 0:
-            return []
-        start_ms = int(ctx.beat_times_ms[0])
-        beat_ms = 60_000.0 / float(ctx.bpm)
-        cycle_ms = int(round(beat_ms * self.BEATS_PER_BAR))
-        if cycle_ms <= 0 or start_ms + cycle_ms * self.REPEAT_COUNT > ctx.duration_ms:
-            return []
-        return [Pattern(
-            start_ms=start_ms,
-            duration_ms=cycle_ms,
-            label="kick pattern",
-            repeat_count=self.REPEAT_COUNT,
-            highlighted_beats=list(self.DOWNBEAT_STEPS),
-        )]
+            return Riff(nodes=[], items=[])
+        start = ctx.beat_times_ms[0] / 1000
+        cycle = 60.0 / float(ctx.bpm) * self.BEATS_PER_BAR
+        if start + cycle * self.REPEAT_COUNT > ctx.duration_ms / 1000:
+            return Riff(nodes=[], items=[])
+        kick = RiffNode(
+            id="kick",
+            name="Four on the floor",
+            steps_per_cycle=4 * self.BEATS_PER_BAR,
+            notes=[RiffNote(start=beat, end=beat + 0.25) for beat in range(self.BEATS_PER_BAR)],
+        )
+        return Riff(
+            nodes=[kick],
+            items=[RiffItem(start=start, end=start + cycle, label="kick pattern",
+                            sequence=[RiffEntry(type="kick", length_steps=kick.steps_per_cycle)],
+                            repeat_count=self.REPEAT_COUNT)],
+            drum="kick",
+        )

@@ -26,10 +26,27 @@
  *   --precision <n>    Decimal places for exported times, 2–6 (default 3).
  *                      Mirrors the timePrecisionDecimals Settings control.
  *   --default          Read from data-default/ instead of data/.
+ *   --with-notes       Export detected cue lanes as their rows, not as a
+ *                      summary (see isDetectedHitStream). Off by default.
+ *   --detectors        Also write <slug>_detectors.txt: every detector that
+ *                      ran on the song, summarised per group (detectorBlock).
+ *   --units <u>        `seconds` (default) or `beats`. Beats writes every
+ *                      position as fractional beats from the grid origin
+ *                      (bar 1, beat 1 = 0; the 3rd 16th of beat 5 = 4.5):
+ *                      the .txt columns, sections.json, and the manifest,
+ *                      which then drops each seconds field that has a beat
+ *                      twin (`start` beside `start_beat`) and converts the
+ *                      ones that have none, under a name that says so
+ *                      (candidate_beats, an envelope's peak_beat,
+ *                      prominence at_beat, a cue's decay_beats).
+ *                      `units: "beats"` heads the manifest, and its `grid`
+ *                      block — bpm, grid_offset, time signature, tempo_map —
+ *                      is what turns a beat back into a second. A song with
+ *                      no grid cannot be written in beats and is skipped.
  *
  * Writes per song into <out>/<slug>/:
- *   <slug>_beats.txt            POINT  chosen detector's beat_times
- *   <slug>_bars.txt             POINT  downbeats (every Nth beat)
+ *   <slug>_beats.txt            POINT  the annotator's grid (detector beats if no BPM)
+ *   <slug>_bars.txt             POINT  its bar lines, bar 1 at the downbeat
  *   <slug>_key_points.txt       SPAN   cues + spans + loops layers, merged
  *   <slug>_pattern.txt          SPAN   riff-pattern instances
  *   <slug>_lyrics.txt           SPAN   lyrics layers (words / lines)
@@ -64,10 +81,31 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { register } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
+
+// ── The app's own grid code ──────────────────────────────────────────────────
+// beats.txt / bars.txt are the grid the annotator sees, so they come from the
+// same functions that draw it (resolveGridSegments + visibleGridLines), not a
+// copy of them. Node runs the .ts directly (type stripping, Node ≥ 22.18);
+// the hook only adds the `.ts` the app's extensionless imports leave off.
+register('data:text/javascript,' + encodeURIComponent(`
+export async function resolve(spec, ctx, next) {
+  try { return await next(spec, ctx); } catch (e) {
+    if (/^\\.\\.?\\//.test(spec) && !/\\.[cm]?[jt]s$/.test(spec)) return next(spec + '.ts', ctx);
+    throw e;
+  }
+}`));
+const APP_SRC = path.join(REPO_ROOT, 'web-app', 'src');
+const appModule = (rel) => import(pathToFileURL(path.join(APP_SRC, rel)).href);
+const { resolveGridSegments } = await appModule('utils/gridSegments.ts');
+const { visibleGridLines, beatsPerBarFromTimeSignature, beatPositionAt } = await appModule('utils/beatGrid.ts');
+const { sanitizeSongInfo, effectiveGridMode } = await appModule('types/songInfo.ts');
+const { BEAT_FRACTION_STEPS, gridOf } = await appModule('utils/beatAnchoring.ts');
+const { layersGridOf, withSecondsFromBeats } = await appModule('utils/beatTimebase.ts');
 
 // ── Time precision (mirrors utils/beatGrid.ts) ───────────────────────────────
 const DEFAULT_TIME_PRECISION = 3;
@@ -91,6 +129,14 @@ function flagValue(name, fallback) {
 
 const ALL = argv.includes('--all');
 const USE_DEFAULT = argv.includes('--default');
+const WITH_NOTES = argv.includes('--with-notes');
+const WITH_DETECTORS = argv.includes('--detectors');
+const UNITS = flagValue('--units', 'seconds');
+if (UNITS !== 'seconds' && UNITS !== 'beats') {
+  console.error('error: --units must be `seconds` or `beats`');
+  process.exit(2);
+}
+const IN_BEATS = UNITS === 'beats';
 const ANNOTATOR = flagValue('--annotator', null);
 const OUT_ROOT = path.resolve(REPO_ROOT, flagValue('--out', 'exports/timing'));
 
@@ -110,7 +156,7 @@ const POSITIONAL = (() => {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--annotator' || a === '--out' || a === '--precision') { i++; continue; }
+    if (a === '--annotator' || a === '--out' || a === '--precision' || a === '--units') { i++; continue; }
     if (a.startsWith('--')) continue;
     out.push(a);
   }
@@ -168,10 +214,33 @@ function pickBeatAlgorithm(bpmDoc) {
 }
 
 function timeSignatureNumerator(info) {
-  const ts = info?.timeSignature;
-  if (!ts) return 4;
-  const n = parseInt(String(ts).split('/')[0], 10);
-  return Number.isFinite(n) && n > 0 ? n : 4;
+  return beatsPerBarFromTimeSignature(info?.timeSignature);
+}
+
+/** The song's beat and bar lines as the annotator's grid draws them — the
+ *  downbeat they placed (gridOffset), the tempo map in Mapped mode, pinned
+ *  beats in Manual mode — over [0, durationSec]. Beats before the downbeat
+ *  (the pickup) are included, as on screen; bars are numbered from 1 at the
+ *  downbeat. null when the song has no grid yet (no BPM). */
+function userGridLines(info, durationSec) {
+  if (!info || !(durationSec > 0)) return null;
+  const clean = sanitizeSongInfo(info);
+  const segments = resolveGridSegments(clean);
+  if (!segments.length) return null;
+  const lines = visibleGridLines({
+    bpm: clean.bpm,
+    gridOffset: clean.gridOffset ?? 0,
+    beatsPerBar: beatsPerBarFromTimeSignature(clean.timeSignature),
+    startTime: 0,
+    endTime: durationSec,
+    beatOverrides: effectiveGridMode(clean) === 'manual' ? clean.beatOverrides : undefined,
+    segments,
+    barBeatOrigin: 1,
+  });
+  return {
+    beats: lines.map((l) => ({ t: l.t, label: `b${l.beatIndex}` })),
+    bars: lines.filter((l) => l.isBar).map((l) => ({ t: l.t, label: `bar ${l.barNumber}` })),
+  };
 }
 
 function median(nums) {
@@ -211,13 +280,17 @@ function resolveGridBpm(info) {
 // TAB-separated, one record per line, sorted by start, no header, labels
 // unquoted. POINT markers emit start == end (three-column form).
 
+// What a column holds: seconds, or under --units beats the song's beat
+// position (set per song by exportSong, which owns the grid).
+let column = (t) => roundTime(t, PRECISION);
+
 function pointLine(t, label) {
-  const s = roundTime(t, PRECISION);
+  const s = column(t);
   return `${s}\t${s}\t${label ?? ''}`;
 }
 
 function spanLine(start, end, label) {
-  return `${roundTime(start, PRECISION)}\t${roundTime(end, PRECISION)}\t${label ?? ''}`;
+  return `${column(start)}\t${column(end)}\t${label ?? ''}`;
 }
 
 /** Serialize point records `{ t, label }`, sorted by time. */
@@ -259,6 +332,79 @@ function layerItemToRecord(type, item) {
     return { start: item.time, end: item.end ?? item.time, label: item.text ?? '' };
   }
   return { start: item.start, end: item.end, label: item.label ?? '' };
+}
+
+// ── Beats-only items (--units beats) ─────────────────────────────────────────
+// A manifest item in seconds, restated with no seconds in it. A position that
+// already has its beat twin loses the seconds (`start` beside `start_beat`);
+// one that has none is converted and renamed so the key says what it holds
+// (`candidates` → `candidate_beats`, an envelope's `peak` → `peak_beat`).
+// Durations that describe the sound become their length in beats at that
+// point of the song (`decay` → `decay_beats`). A riff note's start/end were
+// beats from its node's start all along and stay as they are.
+
+const SECONDS_TWINS = [['start', 'start_beat'], ['end', 'end_beat'], ['time', 'beat']];
+
+function inBeats(item, beatAt) {
+  const o = { ...item };
+  // A point (cue, boundary) has `beat` and start == end.
+  if (o.beat !== undefined && o.start_beat === undefined) {
+    delete o.start;
+    if (o.end_beat === undefined) delete o.end;
+  }
+  for (const [sec, beat] of SECONDS_TWINS) if (o[beat] !== undefined) delete o[sec];
+  if (Array.isArray(o.candidates)) {
+    o.candidate_beats = o.candidates.map((c) => (Array.isArray(c) ? c.map(beatAt) : beatAt(c)));
+    delete o.candidates;
+  }
+  if (Array.isArray(o.onsets)) {
+    o.onsets = o.onsets.map(({ time, ...rest }) => (rest.beat !== undefined ? rest : { ...rest, beat: beatAt(time) }));
+  }
+  if (Array.isArray(o.prominence)) {
+    o.prominence = o.prominence.map(({ t, at, ...rest }) => ({ at_beat: beatAt(at), ...rest }));
+  }
+  if (o.envelope) {
+    const e = { ...o.envelope };
+    for (const k of ['start', 'peak', 'decay_end', 'release', 'end']) {
+      if (Number.isFinite(e[k])) e[`${k}_beat`] = beatAt(e[k]);
+      delete e[k];
+    }
+    o.envelope = e;
+  }
+  if (typeof o.decay === 'number' && Number.isFinite(item.start)) {
+    o.decay_beats = Number((beatAt(item.start + o.decay) - beatAt(item.start)).toFixed(6));
+    delete o.decay;
+  }
+  if (o.energy && Number.isFinite(item.start)) o.energy = energyInBeats(o.energy, item.start, beatAt);
+  if (o.pulse && 'interval_ms' in o.pulse) {
+    o.pulse = { ...o.pulse };
+    delete o.pulse.interval_ms;   // period_beats says it without the clock
+  }
+  return o;
+}
+
+/** The ⚡ Energy measurement with its clock taken out: where it starts and
+ *  ends is the item's own start_beat / end_beat, each curve point gets the
+ *  beat it sits on, and every millisecond length (attack, decay …) becomes
+ *  that many beats at the item's tempo. */
+function energyInBeats(energy, startSec, beatAt) {
+  const e = { ...energy };
+  const perSec = beatAt(startSec + 1) - beatAt(startSec);
+  const msToBeats = (ms) => Number(((ms / 1000) * perSec).toFixed(6));
+  delete e.start_ms; delete e.end_ms;
+  if (Number.isFinite(e.duration_ms)) { e.duration_beats = msToBeats(e.duration_ms); delete e.duration_ms; }
+  if (Array.isArray(e.curve)) {
+    e.curve = e.curve.map((pt) => {
+      if (!pt || typeof pt !== 'object' || !Number.isFinite(pt.t_ms)) return pt;
+      const { t_ms: tMs, ...rest } = pt;
+      return { at_beat: beatAt(startSec + tMs / 1000), ...rest };
+    });
+  }
+  if (e.envelope && typeof e.envelope === 'object') {
+    e.envelope = Object.fromEntries(Object.entries(e.envelope).map(([k, v]) => (
+      k.endsWith('_ms') && Number.isFinite(v) ? [`${k.slice(0, -3)}_beats`, msToBeats(v)] : [k, v])));
+  }
+  return e;
 }
 
 // ── Pulse ────────────────────────────────────────────────────────────────────
@@ -307,14 +453,22 @@ function parseEnergyDescription(description) {
     const parsed = JSON.parse(text);
     if (!parsed || parsed.type !== 'energy_span') return null;
     if (!Array.isArray(parsed.curve) || !parsed.curve.length) return null;
-    // The curve is ~one RMS frame per 10ms and is the bulkiest thing in the
-    // export; it is kept (dropping data is the bug being fixed here) but
-    // rounded, since three decimals is well past what a normalized loudness
-    // reading means.
-    return { ...parsed, curve: parsed.curve.map((v) => roundTime(v, 3)) };
+    // The curve is the bulkiest thing in the export; it is kept (dropping data
+    // is the bug being fixed here) but rounded, since three decimals is well
+    // past what a normalized reading means. A point is an object — t_ms plus
+    // energy, brightness, beat_strength, flux — so each number in it is
+    // rounded; rounding the point itself turned every one into null.
+    return { ...parsed, curve: parsed.curve.map(roundCurvePoint) };
   } catch {
     return null;
   }
+}
+
+function roundCurvePoint(p) {
+  if (typeof p === 'number') return roundTime(p, 3);
+  if (!p || typeof p !== 'object') return p;
+  return Object.fromEntries(Object.entries(p).map(([k, v]) =>
+    [k, typeof v === 'number' ? (k === 't_ms' ? Math.round(v) : roundTime(v, 3)) : v]));
 }
 
 // ── Prominence ───────────────────────────────────────────────────────────────
@@ -356,6 +510,30 @@ function roundBeat(b) {
   return Number.isFinite(b) ? Number(Number(b).toFixed(6)) : b;
 }
 
+/** Every item's musical position, from its seconds on the song's grid -- the
+ *  same reading beatAnchoring stamps (macro grid, overrides not consulted).
+ *  Computed here rather than copied from the stored stamp because lyrics carry
+ *  none and the stored ones are read off 3-decimal seconds (64.00053). A
+ *  position within SNAP_SEC of a 1/24-beat step — every snap the grid offers:
+ *  1/2, 1/3, 1/4, 1/6, 1/8 — is that step; anything further off (a tapped
+ *  hit, a sung word) stays as it is. null when the song has no grid. */
+const SNAP_SEC = 0.001;
+const SNAP_STEPS = BEAT_FRACTION_STEPS;
+function beatReader(info) {
+  if (!info) return null;
+  const clean = sanitizeSongInfo(info);
+  const segments = resolveGridSegments(clean);
+  if (!segments.length || !(clean.bpm > 0)) return null;
+  const at = (t) => beatPositionAt(t, clean.bpm, clean.gridOffset ?? 0, segments);
+  return (t) => {
+    if (!Number.isFinite(t)) return undefined;
+    const b = at(t);
+    const step = Math.round(b * SNAP_STEPS) / SNAP_STEPS;
+    const tol = SNAP_SEC * Math.abs(at(t + 1) - b);       // 1 ms, in this tempo's beats
+    return roundBeat(Math.abs(step - b) <= tol ? step : b);
+  };
+}
+
 function setIf(out, key, value) {
   if (value !== undefined && value !== null && value !== '') out[key] = value;
   return out;
@@ -375,49 +553,58 @@ function commonItemFields(out, item, startSec) {
   return out;
 }
 
-/** One riff sequence entry — `type` is a node id, a combo id, or the silence
- *  sentinel. Resolved to a name here so a reader doesn't have to join tables
- *  to learn what is playing; the id is kept beside it for one that does. */
+/** One riff sequence entry, as the app stores it — `type` is a node id, a
+ *  combo id, or the silence sentinel. The entry's `name` is added so a reader
+ *  doesn't have to join tables to learn what is playing. */
 function riffEntryOut(entry, nameById) {
-  const out = { ref: entry.type, length_steps: entry.lengthSteps };
+  const out = { type: entry.type, lengthSteps: entry.lengthSteps };
   const name = nameById.get(entry.type);
   if (name) out.name = name;
   else if (entry.type === '__silence__') out.name = 'silence';
   return out;
 }
 
+/** One note (or rest) of a node, as stored: beats from the node's start. */
+function riffNoteOut(sg) {
+  const o = { start: roundBeat(sg.start), end: roundBeat(sg.end) };
+  if (sg.kind) o.kind = sg.kind;
+  setIf(o, 'label', sg.label);
+  // A pitched note's MIDI number (a bass line, a riff).
+  setIf(o, 'note', sg.note);
+  // How hard it is struck, 1..127; absent = full strength.
+  setIf(o, 'accent', sg.accent);
+  return o;
+}
+
+/** A riff node, as the app stores it: its length on its own pulse, and its
+ *  notes. The one shape a repeated figure takes, here as in the app. */
 function riffNodeOut(node) {
   const out = {
     id: node.id,
     name: node.name,
-    kind: node.kind ?? 'grid',
-    steps_per_cycle: node.stepsPerCycle,
-    subbeats_per_beat: node.subbeatsPerBeat,
+    color: node.color,
+    stepsPerCycle: node.stepsPerCycle,
+    subbeatsPerBeat: node.subbeatsPerBeat,
+    segments: (node.segments ?? []).map(riffNoteOut),
   };
-  if (Array.isArray(node.highlightedBeats) && node.highlightedBeats.length) {
-    out.ticks = node.highlightedBeats.slice().sort((a, b) => a - b);
-  }
-  if (Array.isArray(node.spans) && node.spans.length) out.holds = node.spans;
-  // How hard each step is struck, 1..127, for the steps a detector measured.
-  // Sparse by design: a step with no entry is played at full strength, which
-  // is every step of a hand-drawn node, so an empty map is omitted entirely.
-  if (node.accents && Object.keys(node.accents).length) {
-    out.accents = Object.fromEntries(
-      Object.entries(node.accents)
-        .map(([step, v]) => [Number(step), Number(v)])
-        .sort((a, b) => a[0] - b[0]),
-    );
-  }
-  if (Array.isArray(node.segments) && node.segments.length) {
-    // Boundary nodes quantise nothing: these are beat offsets from the node's
-    // own start, and rounding them to a grid here would be the exact lie the
-    // node kind exists to avoid.
-    out.segments = node.segments.map((sg) => {
-      const o = { start: roundBeat(sg.start), end: roundBeat(sg.end), kind: sg.kind };
-      setIf(o, 'label', sg.label);
-      return o;
-    });
-  }
+  setIf(out, 'names', Array.isArray(node.names) && node.names.length ? node.names : null);
+  return out;
+}
+
+/** An item's measured sound (lyrics, spans) as attack, decay, sustain and
+ *  release — song seconds, snake_case. Null when it has none. */
+function envelopeOut(e) {
+  if (!e) return null;
+  const out = {
+    start: roundTime(e.start, PRECISION), peak: roundTime(e.peak, PRECISION),
+    decay_end: roundTime(e.decayEnd, PRECISION), release: roundTime(e.release, PRECISION),
+    end: roundTime(e.end, PRECISION), peak_db: e.peakDb,
+  };
+  setIf(out, 'sustain_db', e.sustainDb);
+  // What it was read off: 'mix' or a stem.
+  setIf(out, 'source', e.source);
+  // Several pulses read as one outer shape: how many.
+  setIf(out, 'peaks', e.peaks);
   return out;
 }
 
@@ -429,17 +616,34 @@ function manifestItem(type, item, grid, nameById) {
   const out = { id: item.id, start, end: roundTime(r.end, PRECISION), label: r.label };
 
   if (type === 'lyrics') {
-    // A lyric carries no label/description/importance — its text IS its label,
-    // and `kind` says whether it is a word or a whole line.
+    // A lyric carries no importance — its text IS its label, and `kind` says
+    // whether it is a word or a whole line. A description is the annotator's
+    // note on it, as on any other item.
     out.text = item.text ?? '';
     out.kind = item.kind ?? 'word';
-    setIf(out, 'beat', roundBeat(item.beat));
+    setIf(out, 'description', item.description);
+    setIf(out, 'beat', grid.beatAt ? grid.beatAt(r.start) : roundBeat(item.beat));
+    if (grid.beatAt) setIf(out, 'end_beat', grid.beatAt(r.end));
+    // Where each sound inside the word begins, with the syllable sung there
+    // (no text: an attack no syllable was laid on). Pinned to the audio, so a
+    // word trimmed by hand keeps only the onsets still inside it.
+    const onsets = (item.onsets ?? [])
+      .filter((o) => o.time >= r.start && o.time <= r.end)
+      .map((o) => setIf(setIf({ time: roundTime(o.time, PRECISION) }, 'beat', grid.beatAt?.(o.time)), 'text', o.text));
+    if (onsets.length) out.onsets = onsets;
+    // The word's whole sound as attack, decay, sustain and release — it may
+    // rise before the word and ring on after it.
+    setIf(out, 'envelope', envelopeOut(item.envelope));
     return out;
   }
 
   if (type === 'cues' || type === 'boundaries') {
-    setIf(out, 'beat', roundBeat(item.beat));
-    if (type === 'boundaries') out.section_type = item.type ?? 'unset';
+    setIf(out, 'beat', grid.beatAt ? grid.beatAt(r.start) : roundBeat(item.beat));
+    if (grid.beatAt && r.end > r.start) setIf(out, 'end_beat', grid.beatAt(r.end));
+    if (type === 'boundaries') {
+      out.section_type = item.type ?? 'unset';
+      setIf(out, 'color', item.color);
+    }
     if (type === 'cues') {
       // A struck hit: how hard (1-127, per instrument), how loud (dB against
       // the track's loudest hit), and the hue its detector drew it in.
@@ -453,12 +657,16 @@ function manifestItem(type, item, grid, nameById) {
     return commonItemFields(out, item, start);
   }
 
-  setIf(out, 'start_beat', roundBeat(item.startBeat));
-  setIf(out, 'end_beat', roundBeat(item.endBeat));
+  setIf(out, 'start_beat', grid.beatAt ? grid.beatAt(r.start) : roundBeat(item.startBeat));
+  setIf(out, 'end_beat', grid.beatAt ? grid.beatAt(r.end) : roundBeat(item.endBeat));
+  // An item's own colour, over its layer's (spans, loops, riff instances…).
+  setIf(out, 'color', item.color);
 
   if (type === 'spans') {
     const energy = parseEnergyDescription(item.description);
     setIf(out, 'pulse', pulseDetail(item.pulse, grid.bpm, grid.beatsPerBar));
+    // Extract ADSR's reading, in the same shape a lyric's has.
+    setIf(out, 'envelope', envelopeOut(item.envelope));
     commonItemFields(out, item, start);
     if (energy) { delete out.description; out.energy = energy; }
     return out;
@@ -471,8 +679,18 @@ function manifestItem(type, item, grid, nameById) {
   }
 
   if (type === 'riff-patterns') {
-    out.repeats = item.repeatCount;
+    out.repeatCount = item.repeatCount;
     out.sequence = (item.sequence ?? []).map((e) => riffEntryOut(e, nameById));
+    // The plays that differed from their node — the same node, played
+    // differently once: what it added, what it left out.
+    if (Array.isArray(item.occurrences) && item.occurrences.length) {
+      out.occurrences = item.occurrences.map((o) => {
+        const oo = { index: o.index, event: o.event };
+        if (Array.isArray(o.added) && o.added.length) oo.added = o.added.map(riffNoteOut);
+        if (Array.isArray(o.missing) && o.missing.length) oo.missing = o.missing.map((m) => ({ start: roundBeat(m.start) }));
+        return oo;
+      });
+    }
     setIf(out, 'duplicate_of', item.duplicateOfId);
     return commonItemFields(out, item, start);
   }
@@ -481,6 +699,228 @@ function manifestItem(type, item, grid, nameById) {
 }
 
 const KEY_POINT_TYPES = new Set(['cues', 'spans', 'loops']);
+
+/** A cue layer copied from a detector is a transcription — one row per struck
+ *  hit, played note or onset: 4,369 rows (186k chars) on one song, past a
+ *  light show's preload limit, so the patterns behind them never reached it.
+ *  What a reader downstream needs from it is what it adds up to — how many,
+ *  where in the song, which drums or pitches — and the patterns the detector
+ *  found in it, which travel as their own lanes (riffs, grooves). So a detected
+ *  cue lane exports as that summary, never as its rows, unless `--with-notes`
+ *  asks for the rows. A cue layer the user made is theirs and always travels. */
+function isDetectedHitStream(layer) {
+  return layer.type === 'cues' && Boolean(layer.importedFrom
+    || (typeof layer.source === 'string' && layer.source.startsWith('detector:')));
+}
+
+// ── Detector summaries ───────────────────────────────────────────────────────
+// One reading of a detector's output at the level a person describes music:
+// a hit stream as counts, range and where it plays; a pattern as its rhythm or
+// notes, how often, and at which bars. Used for detected lanes in the manifest
+// and for `--detectors`, so a copied lane and the detector it came from read
+// the same. Never a list of the hits themselves.
+
+/** The bar a time falls in (1-based) on the song's grid, or null without one. */
+function barOf(t, g) {
+  if (!g?.barSec) return null;
+  return Math.max(1, Math.floor((t - g.offset) / g.barSec) + 1);
+}
+
+/** Where a set of times plays, as merged bar ranges ("bars 1–40, 49–120"):
+ *  a silence of more than `gapBars` bars starts a new range. Seconds when the
+ *  song has no grid. */
+function whereText(times, g, gapBars = 2) {
+  const ts = times.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!ts.length) return '';
+  const unit = g?.barSec ? (t) => barOf(t, g) : (t) => Math.round(t);
+  const gap = g?.barSec ? gapBars + 1 : (gapBars + 1) * 2;
+  const ranges = [];
+  for (const t of ts) {
+    const u = unit(t);
+    const last = ranges[ranges.length - 1];
+    if (last && u - last[1] <= gap) last[1] = u;
+    else ranges.push([u, u]);
+  }
+  const fmt = ([a, b]) => (a === b ? `${a}` : `${a}–${b}`);
+  return `${g?.barSec ? 'bars' : 's'} ${ranges.map(fmt).join(', ')}`;
+}
+
+function midiName(n) {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  return `${names[n % 12]}${Math.floor(n / 12) - 1}`;
+}
+
+/** Counted values, most frequent first, as "kick 320 · snare 395". */
+function tally(values, top) {
+  const counts = new Map();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, top);
+}
+
+/** A hit stream in one line: how many, how dense, its range of pitch or its
+ *  mix of drums, and where in the song it plays. `hits` are {t, label, note}. */
+function hitsSummary(hits, g, noun) {
+  const ts = hits.map((h) => h.t).filter(Number.isFinite);
+  if (!ts.length) return `0 ${noun}`;
+  const parts = [`${ts.length} ${noun}`];
+  const bars = g?.barSec ? barOf(Math.max(...ts), g) - barOf(Math.min(...ts), g) + 1 : null;
+  if (bars) parts.push(`${roundTime(ts.length / bars, 2)}/bar`);
+  const notes = hits.map((h) => h.note).filter((n) => Number.isInteger(n) && n >= 0 && n <= 127);
+  if (notes.length) {
+    const top = tally(notes, 3).map(([n, c]) => `${midiName(n)} ${Math.round((100 * c) / notes.length)}%`);
+    const [lo, hi] = [midiName(Math.min(...notes)), midiName(Math.max(...notes))];
+    parts.push(`${lo === hi ? lo : `${lo}–${hi}`}, mostly ${top.join(', ')}`);
+  } else {
+    // A drum split labels each hit with its drum; a bare onset stream labels
+    // them all the same, and saying so would be noise.
+    const labels = hits.map((h) => String(h.label ?? '').split(' · ')[0].trim()).filter(Boolean);
+    const kinds = tally(labels, 9);
+    if (kinds.length > 1 && kinds.length <= 8) parts.push(kinds.map(([l, c]) => `${l} ${c}`).join(' · '));
+  }
+  parts.push(whereText(ts, g));
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** One detected figure's rhythm: its steps on its own pulse, and the step
+ *  each note starts on — with its pitch when it has one, after the lane's
+ *  drum when it is a drum's ("16 steps: kick 0,4,8,12"). A riff node. */
+function riffRhythm(node, drum) {
+  const pulse = node.subbeatsPerBeat || 4;
+  const notes = (node.segments ?? []).filter((sg) => sg.kind === 'tick');
+  const step = (sg) => Math.round(sg.start * pulse);
+  if (notes.some((sg) => Number.isInteger(sg.note))) {
+    return `${node.stepsPerCycle} steps: ${notes.map((sg) => `${step(sg)}:${Number.isInteger(sg.note) ? midiName(sg.note) : '?'}`).join(' ')}`;
+  }
+  if (!notes.length) return '';
+  return `${node.stepsPerCycle} steps: ${drum ? `${drum} ` : ''}${notes.map(step).join(',')}`;
+}
+
+/** A riff lane's figures, one line each, most-played first: a node with how
+ *  many times it plays across every instance (each entry of each repeat of a
+ *  sequence is one play), its rhythm, and the bars it plays at. */
+function riffLines(lane, g) {
+  const byId = new Map((lane.nodes ?? []).map((n) => [n.id, { node: n, plays: 0, starts: [] }]));
+  for (const it of lane.items ?? []) {
+    const seq = it.sequence ?? [];
+    const total = seq.reduce((n, e) => n + (e.lengthSteps ?? 0), 0) || 1;
+    const cycle = (it.end ?? 0) - (it.start ?? 0);
+    for (let r = 0; r < Math.max(1, it.repeatCount ?? 1); r += 1) {
+      let at = 0;
+      for (const e of seq) {
+        const m = byId.get(e.type);
+        if (m) { m.plays += 1; m.starts.push(it.start + r * cycle + (cycle * at) / total); }
+        at += e.lengthSteps ?? 0;
+      }
+    }
+  }
+  return [...byId.values()]
+    .filter((m) => m.plays > 0)
+    .sort((a, b) => b.plays - a.plays)
+    .map(({ node, plays, starts }) => {
+      const bars = Math.max(1, Math.round(node.stepsPerCycle / (node.subbeatsPerBeat || 4) / 4));
+      // What the figure is called, else how busy it is: "four on the floor",
+      // "7 hits/bar", "19 notes/4 bars" — the line's second field, which
+      // lol's bank_rhythms reads.
+      const notes = (node.segments ?? []).filter((sg) => sg.kind === 'tick');
+      const noun = notes.some((sg) => Number.isInteger(sg.note)) ? 'notes' : 'hits';
+      const feel = node.names?.length ? node.names.join(', ') : `${notes.length} ${noun}/${bars === 1 ? 'bar' : `${bars} bars`}`;
+      return [`${node.name} · ${feel} ×${plays}`, riffRhythm(node, lane.drum), whereText(starts, g, bars + 1)].filter(Boolean).join(' · ');
+    });
+}
+
+/** A detected cue layer from the layers document, as the summary that stands
+ *  in for its rows in the manifest. */
+function laneSummary(layer, g, groupName) {
+  const hits = (layer.items ?? []).map((i) => ({ t: Number(i.time), label: i.label, note: i.note }));
+  const out = {
+    name: layer.name ?? layer.type,
+    type: layer.type,
+    count: hits.length,
+    summary: hitsSummary(hits, g, hits.some((h) => Number.isInteger(h.note)) ? 'notes' : 'hits'),
+  };
+  setIf(out, 'group', groupName);
+  setIf(out, 'detector', layer.importedFrom);
+  return out;
+}
+
+/** A detector's raw output file as indented lines: its warnings, then each
+ *  group — every lane the detector wrote under one group name — as its loops
+ *  ranked by repeats, a stats line for its hits, and its spans / boundaries. */
+function detectorBlock(doc, g) {
+  const lanes = Array.isArray(doc.lanes) && doc.lanes.length
+    ? doc.lanes
+    : [{ label: doc.name, output_kind: doc.output_kind, items: doc.items ?? [], nodes: doc.nodes, drum: doc.drum }];
+  const groups = new Map();
+  for (const lane of lanes) {
+    const key = lane.group ?? lane.label ?? doc.name;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(lane);
+  }
+  const out = [`## ${doc.name} — ${doc.output_kind ?? 'output'}`];
+  for (const n of doc.notes ?? []) {
+    out.push(`  ! ${n.code}: ${String(n.message ?? '').split(/(?<=\.)\s/)[0]}`);
+  }
+  if (doc.fatal) {
+    const f = doc.fatal;
+    out.push(`  ! failed: ${typeof f === 'string' ? f : (f.message ?? f.code ?? JSON.stringify(f))}`);
+  }
+  const before = out.length;
+  for (const [name, ls] of groups) {
+    const body = [];
+    // A group is read as its riff: when it has one, its note / hit lane is
+    // what the riff was found in and says nothing more, so it is left out.
+    const hasPattern = ls.some((l) => l.output_kind === 'riff' && (l.items ?? []).length);
+    for (const lane of ls) {
+      const items = lane.items ?? [];
+      if (!items.length) continue;
+      const kind = lane.output_kind;
+      if (kind === 'cue' && hasPattern) continue;
+      if (kind === 'cue') {
+        const hits = items.map((i) => ({ t: i.time_ms / 1000, label: i.label, note: i.note }));
+        body.push(`${lane.label ?? 'hits'}: ${hitsSummary(hits, g, hits.some((h) => Number.isInteger(h.note)) ? 'notes' : 'hits')}`);
+      } else if (kind === 'riff') {
+        const loops = riffLines(lane, g);
+        body.push(`${lane.label ?? 'loops'}: ${loops.length} loop${loops.length === 1 ? '' : 's'}`);
+        for (const line of loops) body.push(`  ${line}`);
+      } else if (kind === 'span') {
+        body.push(`${lane.label ?? 'spans'}: ${items.length}`);
+        for (const it of items) {
+          const s = it.start_ms / 1000;
+          body.push(`  ${roundTime(s, 1)}–${roundTime(s + (it.duration_ms ?? 0) / 1000, 1)}s ${it.label ?? ''}`.trimEnd());
+        }
+      } else if (kind === 'boundary') {
+        body.push(`${lane.label ?? 'boundaries'}: ${items.map((it) => `${roundTime(it.time_ms / 1000, 1)}s ${it.label ?? ''}`.trim()).join(' · ')}`);
+      } else if (kind === 'lyrics') {
+        const ts = items.map((i) => i.time_ms / 1000);
+        const lines = items.filter((i) => i.kind === 'line').length;
+        body.push(`${lane.label ?? 'lyrics'}: ${items.length - lines} words, ${lines} lines · ${whereText(ts, g)}`);
+      }
+    }
+    if (!body.length) continue;
+    if (groups.size > 1) out.push(`  ### ${name}`);
+    const pad = groups.size > 1 ? '    ' : '  ';
+    for (const b of body) out.push(pad + b);
+  }
+  if (out.length === before && !doc.fatal) out.push('  (found nothing)');
+  return out.join('\n');
+}
+
+/** Every custom / curated detector that ran on this song, newest format only
+ *  (the files with an `output_kind`). */
+function detectorsDoc(slug, g) {
+  const blocks = [];
+  for (const root of ['custom', 'curated']) {
+    const dir = path.join(DATA_DIR, 'algorithm-outputs', root);
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir).sort()) {
+      const doc = readJsonOrNull(path.join(dir, name, `${slug}.json`));
+      if (!doc || typeof doc !== 'object' || !doc.output_kind) continue;
+      blocks.push(detectorBlock({ ...doc, name: doc.name ?? name }, g));
+    }
+  }
+  return blocks;
+}
+
 // Every authored layer type reaches the manifest. It used to be four, one of
 // which ('patterns') had since been retired from the app — so riff patterns
 // and lyrics, both of which a person can spend an afternoon annotating, were
@@ -492,19 +932,41 @@ const MANIFEST_TYPES = new Set(['boundaries', 'cues', 'spans', 'loops', 'lyrics'
 function exportSong(slug, generatedAt) {
   const info = readJsonOrNull(path.join(SONG_INFO_DIR, `${slug}.json`));
   const bpmDoc = readJsonOrNull(path.join(BPM_DIR, `${slug}.json`));
-  const layersDoc = readJsonOrNull(layersFile(slug));
+  // A Grid Lock save stores beats alone; its seconds are where those beats
+  // fall on the song's grid as it stands now (beats are the annotation).
+  const rawLayers = readJsonOrNull(layersFile(slug));
+  let layersDoc = rawLayers;
+  let layersProblem = null;
+  if (rawLayers) {
+    try { layersDoc = withSecondsFromBeats(rawLayers, gridOf(info ? sanitizeSongInfo(info) : null)); }
+    catch (e) { layersDoc = null; layersProblem = `layers file unreadable: ${e.message}`; }
+  }
+  const beatAt = beatReader(info);
+  const outDir = path.join(OUT_ROOT, slug);
+  if (IN_BEATS && !beatAt) {
+    return { outDir, written: [], warnings: ['no grid (no BPM) — a beat position means nothing without one; skipped'] };
+  }
+  column = IN_BEATS ? beatAt : (t) => roundTime(t, PRECISION);
 
   const beatAlgo = pickBeatAlgorithm(bpmDoc);
-  const beats = beatAlgo?.beat_times ?? [];
+  const detected = beatAlgo?.beat_times ?? [];
+  const duration = Number.isFinite(bpmDoc?.duration) ? bpmDoc.duration : detected[detected.length - 1];
+  const userGrid = userGridLines(info, duration);
   const numerator = timeSignatureNumerator(info);
-  const layers = Array.isArray(layersDoc?.layers) ? layersDoc.layers : [];
+  const allLayers = Array.isArray(layersDoc?.layers) ? layersDoc.layers : [];
+  const tempo = resolveGridBpm(info) ?? beatAlgo?.bpm;
+  const barGrid = Number.isFinite(tempo) && tempo > 0
+    ? { barSec: (60 / tempo) * timeSignatureNumerator(info), offset: info?.gridOffset ?? 0 }
+    : null;
+  const exported = (l) => WITH_NOTES || !isDetectedHitStream(l);
+  const layers = allLayers.filter(exported);
+  const omitted = allLayers.filter((l) => !exported(l));
   // Sections come from the FIRST boundaries layer — the same single track the
   // old singleton manual document held. Extra boundary layers are an editing
   // affordance; the exported .txt/.json contract stays one sections track.
   const boundaryLayer = layers.find((l) => l.type === 'boundaries') ?? null;
   const sections = Array.isArray(boundaryLayer?.items) ? boundaryLayer.items : [];
 
-  const outDir = path.join(OUT_ROOT, slug);
   fs.mkdirSync(outDir, { recursive: true });
   const written = [];
   const write = (name, contents) => {
@@ -514,16 +976,20 @@ function exportSong(slug, generatedAt) {
     written.push(name);
   };
 
-  // 1. beats.txt — POINT, label b0, b1, …
-  write(`${slug}_beats.txt`, pointsTrack(
-    beats.map((t, i) => ({ t, label: `b${i}` })),
-  ) + '\n');
-
-  // 2. bars.txt — POINT, downbeats = every Nth beat, label bar 0, bar 1, …
-  const bars = [];
-  for (let i = 0; i < beats.length; i += numerator) {
-    bars.push({ t: beats[i], label: `bar ${i / numerator}` });
+  // 1–2. beats.txt / bars.txt — POINT. The annotator's grid when the song has
+  // one (labels b<beat index>, bar <n> from bar 1 at the downbeat). Without a
+  // BPM there is no grid, and the beat detector is all there is: its beats,
+  // every Nth called a bar, counted from its own first beat.
+  let beats = userGrid?.beats;
+  let bars = userGrid?.bars;
+  if (!userGrid) {
+    beats = detected.map((t, i) => ({ t, label: `b${i}` }));
+    bars = [];
+    for (let i = 0; i < detected.length; i += numerator) {
+      bars.push({ t: detected[i], label: `bar ${i / numerator}` });
+    }
   }
+  write(`${slug}_beats.txt`, pointsTrack(beats) + '\n');
   write(`${slug}_bars.txt`, pointsTrack(bars) + '\n');
 
   // 3. key_points.txt — SPAN, cues + spans + loops layers merged.
@@ -566,9 +1032,13 @@ function exportSong(slug, generatedAt) {
   const sortedSections = sections
     .slice()
     .sort((a, b) => a.time - b.time)
-    .map((s) => ({ time: roundTime(s.time, PRECISION), type: s.type ?? 'unset', label: s.label ?? '' }));
+    .map((s) => ({
+      ...(IN_BEATS ? { beat: beatAt(s.time) } : { time: roundTime(s.time, PRECISION) }),
+      type: s.type ?? 'unset', label: s.label ?? '',
+    }));
   write(`${slug}_sections.json`, JSON.stringify({
     song: slug,
+    ...(IN_BEATS ? { units: 'beats' } : {}),
     annotated_at: layersDoc?.annotated_at ?? null,
     sections: sortedSections,
   }, null, 2) + '\n');
@@ -587,11 +1057,26 @@ function exportSong(slug, generatedAt) {
     `bpm: ${bpm == null ? '' : roundTime(bpm, PRECISION)}`,
     `time signature: ${info?.timeSignature ?? '4/4'}`,
     `grid mode: ${info?.gridMode ?? 'static'}`,
+    `grid offset: ${roundTime(info?.gridOffset ?? 0, PRECISION)} s`,
+    `units: ${IN_BEATS ? 'beats from the grid origin (bar 1, beat 1 = 0)' : 'seconds'}`,
     `sections: ${sortedSections.map((s) => s.label).join(', ')}`,
     // What a reader would otherwise have to open the JSON to discover — most
     // usefully, that a song HAS lyrics or riff patterns at all.
     `layers: ${laneCounts.length ? laneCounts.join('; ') : '(none)'}`,
   ];
+  const groupName = new Map((layersDoc?.groups ?? []).map((gr) => [gr.id, gr.name]));
+  // A copied group is read as its pattern (riffs, grooves): when it has one,
+  // its note / hit lane is left out altogether, not even summarised.
+  const patternGroups = new Set(layers
+    .filter((l) => l.groupId && l.type === 'riff-patterns')
+    .map((l) => l.groupId));
+  const summarized = omitted
+    .filter((l) => !patternGroups.has(l.groupId))
+    .map((l) => laneSummary(l, barGrid, groupName.get(l.groupId)));
+  if (summarized.length) {
+    infoLines.push('detected lanes, summarised (rows not exported):');
+    for (const s of summarized) infoLines.push(`  ${s.group ? `${s.group} / ` : ''}${s.name}: ${s.summary}`);
+  }
   write(`${slug}_info.txt`, infoLines.join('\n') + '\n');
 
   // 9. annotations.json — self-describing per-layer manifest.
@@ -617,6 +1102,9 @@ function exportSong(slug, generatedAt) {
     grid_offset: roundTime(info?.gridOffset ?? 0, PRECISION),
     grid_mode: info?.gridMode ?? 'static',
     beat_overrides: Object.keys(info?.beatOverrides ?? {}).length || 0,
+    // What beats.txt / bars.txt hold: the annotator's grid, or (no BPM yet)
+    // the beat detector's beats.
+    beats_source: userGrid ? 'grid' : (beatAlgo ? 'detector' : null),
   };
   const segs = Array.isArray(info?.gridSegments) ? info.gridSegments : [];
   if (segs.length) {
@@ -624,6 +1112,16 @@ function exportSong(slug, generatedAt) {
       start: roundTime(g.start, PRECISION),
       bpm: roundTime(g.bpm, PRECISION),
       time_signature: g.timeSignature ?? grid.time_signature,
+    }));
+  }
+  // The grid resolved into constant-tempo stretches: from `beat` at `time`
+  // seconds, `bpm` beats a minute. seconds = time + (b - beat) * 60 / bpm,
+  // using the last entry whose beat <= b. All a reader needs to place a beat,
+  // whatever the song's tempo mode (pinned beats aside).
+  const tempoMap = info ? layersGridOf(sanitizeSongInfo(info))?.tempoMap : null;
+  if (tempoMap) {
+    grid.tempo_map = tempoMap.map((e) => ({
+      beat: e.beat, time: roundTime(e.time, MAX_TIME_PRECISION), bpm: e.bpm,
     }));
   }
   // Mirrors gridSignature() in web-app/src/utils/beatAnchoring.ts closely
@@ -644,8 +1142,9 @@ function exportSong(slug, generatedAt) {
     for (const c of layer.combos ?? []) nameById.set(c.id, c.name);
 
     const items = (layer.items ?? [])
-      .map((item) => manifestItem(layer.type, item, { bpm: gridBpm, beatsPerBar: numerator }, nameById))
-      .sort((a, b) => a.start - b.start || a.end - b.end);
+      .map((item) => manifestItem(layer.type, item, { bpm: gridBpm, beatsPerBar: numerator, beatAt }, nameById))
+      .sort((a, b) => a.start - b.start || a.end - b.end)
+      .map((it) => (IN_BEATS ? inBeats(it, beatAt) : it));
     const lane = {
       id: `layer:${layer.id}`,
       source: 'layers',
@@ -659,6 +1158,11 @@ function exportSong(slug, generatedAt) {
     setIf(lane, 'stem', layer.sourceStem);
     setIf(lane, 'detector', layer.importedFrom ?? (typeof layer.source === 'string' && layer.source.startsWith('detector:') ? layer.source.slice('detector:'.length) : null));
     setIf(lane, 'detector_description', layer.sourceDescription);
+    // The layer's big picture in one line (a copied groove's main loops), for a
+    // reader who should get it before reading every item.
+    setIf(lane, 'summary', layer.summary);
+    // The drum a copied groove's figures are played on (hat, snare, kick …).
+    setIf(lane, 'drum', layer.drum);
     // Caveats the detector raised about the run that produced this lane. They
     // matter MORE out here than in the app: a curator can hover the lane's ⓘ
     // and see them, while a light show or a training set reads the manifest
@@ -679,10 +1183,10 @@ function exportSong(slug, generatedAt) {
       lane.nodes = layer.nodes.map(riffNodeOut);
     }
     if (Array.isArray(layer.combos) && layer.combos.length) {
-      lane.combos = layer.combos.map((c) => ({
+      lane.combos = layer.combos.map((c) => setIf({
         id: c.id, name: c.name,
         sequence: (c.sequence ?? []).map((e) => riffEntryOut(e, nameById)),
-      }));
+      }, 'color', c.color));
     }
     // A lyrics layer's prominence lives on its vocal runs, not on its words —
     // one arc per sung stretch. Absent means "derived on read", not "none".
@@ -691,6 +1195,11 @@ function exportSong(slug, generatedAt) {
         const o = { start: roundTime(r.start, PRECISION), end: roundTime(r.end, PRECISION) };
         setIf(o, 'prominence', prominenceOut(r.prominence, r.start));
         setIf(o, 'prominence_summary', prominenceSummary(r.prominence));
+        if (IN_BEATS) {
+          o.start_beat = beatAt(r.start);
+          o.end_beat = beatAt(r.end);
+          return inBeats(o, beatAt);
+        }
         return o;
       });
     }
@@ -703,11 +1212,12 @@ function exportSong(slug, generatedAt) {
   // `type: "sections"` and a rename would break it for no gain.
   const sectionItems = sections
     .map((sec) => {
-      const item = manifestItem('boundaries', sec, { bpm: gridBpm, beatsPerBar: numerator }, new Map());
+      const item = manifestItem('boundaries', sec, { bpm: gridBpm, beatsPerBar: numerator, beatAt }, new Map());
       item.kind = sec.type ?? 'unset';
       return item;
     })
-    .sort((a, b) => a.start - b.start);
+    .sort((a, b) => a.start - b.start)
+    .map((it) => (IN_BEATS ? inBeats(it, beatAt) : it));
   lanes.push({
     id: 'sections',
     source: 'layers',
@@ -726,20 +1236,41 @@ function exportSong(slug, generatedAt) {
     // Bumped when the shape of what's below changes. v1 was start/end/label
     // and nothing else; v2 carries every field the annotation carries.
     schema_version: 2,
+    // What every position below is in. Absent from older exports, which
+    // were all seconds.
+    units: UNITS,
     precision: PRECISION,
     grid,
     groups,
     lanes,
+    // Detected cue lanes, as what they add up to instead of their rows (see
+    // isDetectedHitStream). Present only when there are some.
+    ...(summarized.length ? { summarized_lanes: summarized } : {}),
   }, null, 2) + '\n');
 
-  return { outDir, written, warnings: collectWarnings({ info, bpmDoc, beatAlgo, layersDoc, boundaryLayer }) };
+  // 10. detectors.txt — every detector that ran, summarised (--detectors).
+  if (WITH_DETECTORS) {
+    const blocks = detectorsDoc(slug, barGrid);
+    write(`${slug}_detectors.txt`, [
+      `# Detector outputs for ${slug}, summarised: patterns, counts and where they play — never the individual hits.`,
+      barGrid ? `# Bars on the song's grid: ${roundTime(tempo, 2)} BPM, ${timeSignatureNumerator(info)} beats a bar.` : '# No grid: places are in seconds.',
+      '', ...blocks.flatMap((b) => [b, '']),
+    ].join('\n'));
+  }
+
+  const warnings = collectWarnings({ info, bpmDoc, beatAlgo, userGrid, layersDoc, boundaryLayer });
+  if (layersProblem) warnings.unshift(layersProblem);
+  return { outDir, written, warnings };
 }
 
-function collectWarnings({ info, bpmDoc, beatAlgo, layersDoc, boundaryLayer }) {
+function collectWarnings({ info, bpmDoc, beatAlgo, userGrid, layersDoc, boundaryLayer }) {
   const w = [];
   if (!info) w.push('no song-info (using defaults for bpm / time signature / title)');
-  if (!bpmDoc) w.push('no bpm-detections (beats / bars will be empty)');
-  else if (!beatAlgo) w.push('no usable beat detector in bpm-detections (beats / bars empty)');
+  if (userGrid) { /* beats / bars are the annotator's grid */ }
+  else if (Number.isFinite(info?.bpm) && !Number.isFinite(bpmDoc?.duration)) w.push('song has a grid but no known duration (beats / bars from the detector)');
+  else if (!bpmDoc) w.push('no bpm-detections and no grid BPM (beats / bars will be empty)');
+  else if (!beatAlgo) w.push('no usable beat detector and no grid BPM (beats / bars empty)');
+  else w.push('no grid BPM in song-info (beats / bars are the beat detector\'s)');
   if (!layersDoc) w.push('no layers file for this annotator (key_points / pattern empty)');
   if (!boundaryLayer) w.push('no boundaries layer for this annotator (sections empty)');
   return w;

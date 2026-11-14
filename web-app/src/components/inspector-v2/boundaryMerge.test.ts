@@ -5,8 +5,13 @@ import {
   mergeLayerName,
   mergedToSectionBlocks,
   toggleMergeDropped,
+  patchMergeEdit,
   readMergeState,
   writeMergeState,
+  addMergeBoundary,
+  removeMergeBoundary,
+  isHandOnly,
+  HAND_LANE_ID,
   type MergeSourceLane,
 } from './boundaryMerge';
 
@@ -89,18 +94,44 @@ describe('toggleMergeDropped', () => {
 
 describe('merge state storage', () => {
   it('round-trips a blend, and forgets an empty one rather than leaving a row', () => {
-    writeMergeState('song-1', { memberIds: ['a', 'b'], dropped: [12.5] });
-    expect(readMergeState('song-1')).toEqual({ memberIds: ['a', 'b'], dropped: [12.5] });
+    const edits = [{ at: 30, label: 'drop', type: 'drop' }];
+    writeMergeState('song-1', { memberIds: ['a', 'b'], dropped: [12.5], edits, added: [] });
+    expect(readMergeState('song-1')).toEqual({ memberIds: ['a', 'b'], dropped: [12.5], edits, added: [] });
 
-    writeMergeState('song-1', { memberIds: [], dropped: [] });
+    writeMergeState('song-1', { memberIds: [], dropped: [], edits: [], added: [] });
     expect(readMergeState('song-1')).toBeNull();
   });
 
   it('is per song, and survives junk in storage', () => {
-    writeMergeState('song-a', { memberIds: ['a'], dropped: [] });
+    writeMergeState('song-a', { memberIds: ['a'], dropped: [], edits: [], added: [] });
     expect(readMergeState('song-b')).toBeNull();
     window.localStorage.setItem('tc.merge.song-c', '{not json');
     expect(readMergeState('song-c')).toBeNull();
+  });
+
+  it('remembers which members are hidden from the canvas', () => {
+    writeMergeState('song-e', { memberIds: ['a', 'b'], dropped: [], edits: [], added: [], hidden: ['b'] });
+    expect(readMergeState('song-e')?.hidden).toEqual(['b']);
+  });
+
+  it('reads a blend stored before edits existed as having none', () => {
+    window.localStorage.setItem('tc.merge.song-d', JSON.stringify({ memberIds: ['a'], dropped: [] }));
+    expect(readMergeState('song-d')).toEqual({ memberIds: ['a'], dropped: [], edits: [], added: [] });
+  });
+});
+
+describe('merge boundary edits', () => {
+  it('follow the boundary by the time the lanes reported, through a membership change', () => {
+    const [b] = mergeBoundaryLanes([lane('a', [30])]);
+    const edits = patchMergeEdit([], b, { label: 'the drop', type: 'drop' });
+    const again = mergeBoundaryLanes([lane('b', [30.02]), lane('a', [30])], [], edits);
+    expect(again[0].edit).toMatchObject({ label: 'the drop', type: 'drop' });
+  });
+
+  it('patch the existing edit rather than stacking a second one', () => {
+    const [b] = mergeBoundaryLanes([lane('a', [30])]);
+    const edits = patchMergeEdit(patchMergeEdit([], b, { label: 'x' }), b, { description: 'y' });
+    expect(edits).toEqual([{ at: 30, label: 'x', description: 'y' }]);
   });
 });
 
@@ -125,8 +156,54 @@ describe('mergedToSectionBlocks', () => {
     expect(blocks.map((b) => b.time)).toEqual([0, 30, 90]);
   });
 
+  it('carries the popover edits, and re-sorts a boundary moved past its neighbour', () => {
+    const merged = mergeBoundaryLanes([lane('a', [30, 60])]);
+    let edits = patchMergeEdit([], merged[0], { time: 70, type: 'drop', label: 'drop 1', description: 'big one' });
+    edits = patchMergeEdit(edits, merged[1], { importance: 'critical' });
+    const blocks = mergedToSectionBlocks(mergeBoundaryLanes([lane('a', [30, 60])], [], edits));
+    expect(blocks.map((b) => [b.time, b.type, b.label])).toEqual([
+      [0, UNSET_TYPE, 'Section 1'], [60, UNSET_TYPE, 'Section 2'], [70, 'drop', 'drop 1'],
+    ]);
+    expect(blocks[2].description).toBe('big one');
+    expect(blocks[1].importance).toBe('critical');
+  });
+
   it('is empty when nothing is kept', () => {
     expect(mergedToSectionBlocks(mergeBoundaryLanes([lane('a', [30])], [30]))).toEqual([]);
+  });
+});
+
+describe('splitting the merge by hand', () => {
+  it('adds a boundary where no lane has one, voting as the hand lane', () => {
+    const added = addMergeBoundary([], 45.0004);
+    const merged = mergeBoundaryLanes([lane('a', [30, 60])], [], [], added);
+    expect(shape(merged)).toEqual([[30, 1, true], [45, 1, true], [60, 1, true]]);
+    expect(isHandOnly(merged[1])).toBe(true);
+    expect(isHandOnly(merged[0])).toBe(false);
+  });
+
+  it('folds into a lane boundary at the same instant, detectors named first', () => {
+    const merged = mergeBoundaryLanes([lane('a', [30])], [], [], addMergeBoundary([], 30.02));
+    expect(merged).toHaveLength(1);
+    expect(merged[0].laneIds).toEqual(['a', HAND_LANE_ID]);
+    expect(isHandOnly(merged[0])).toBe(false);
+  });
+
+  it('ignores a second split at the same instant, and removes cleanly', () => {
+    const added = addMergeBoundary(addMergeBoundary([], 45), 45.01);
+    expect(added).toEqual([45]);
+    const [, hand] = mergeBoundaryLanes([lane('a', [30])], [], [], added);
+    expect(removeMergeBoundary(added, hand)).toEqual([]);
+  });
+
+  it('is committed like any other boundary', () => {
+    const blocks = mergedToSectionBlocks(mergeBoundaryLanes([lane('a', [30])], [], [], [45]));
+    expect(blocks.map((b) => b.time)).toEqual([0, 30, 45]);
+  });
+
+  it('survives a reload', () => {
+    writeMergeState('song-h', { memberIds: ['a'], dropped: [], edits: [], added: [45] });
+    expect(readMergeState('song-h')?.added).toEqual([45]);
   });
 });
 

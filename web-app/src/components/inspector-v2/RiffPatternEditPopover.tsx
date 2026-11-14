@@ -20,12 +20,13 @@ import type {
 } from '../../types/annotationLayer';
 import {
   boundarySegmentsFromTaps,
-  computeRiffSeqPlayback, defaultRiffEntryLength, isBoundaryNode, newRiffSeqEntry,
+  computeRiffSeqPlayback, defaultRiffEntryLength, newRiffSeqEntry,
   riffEntryOccurrenceAtPath, riffLeafPath, riffNodeLengthBeats,
 } from '../../types/annotationLayer';
-import { BoundarySegmentEditor } from './BoundarySegmentEditor';
+import { PitchedRiffEditor } from './PitchedRiffEditor';
+import { pulseOf } from '../../utils/pitchedRiff';
 import {
-  BeatChipPicker, TapAlongControls, TapAlongPianoRoll, TapRefineControls,
+  TapAlongControls, TapAlongPianoRoll, TapRefineControls,
   useBoundaryTapRefine, useTapAlong,
 } from './BeatChipControls';
 import {
@@ -35,6 +36,9 @@ import { AnnotationPointCard, cardTheme, forwardCardPatch } from './shared/Annot
 import { RepeatsRow, useRepeatsDraft } from './shared/RepeatsRow';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
 import { prominenceSection } from './shared/ProminenceControl';
+import { detectorBadgeLabel } from './shared/detectorBadge';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
+import { sweepStep } from './sweepStep';
 
 export type RiffPatternAnchor = PopoverAnchor;
 
@@ -79,7 +83,6 @@ interface RiffPatternEditPopoverProps {
   /** Resolved grid segments — keeps the bar.beat readout in step with a
    *  split grid, where each segment counts in its own meter from its own bar 1. */
   segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
-  currentTime?: number;
   /** Pre-expand this sequence-entry index on open — set when the popover was
    *  opened by clicking a specific block on the canvas rather than the tile
    *  background. Only meaningful for a combo entry (a node entry opens its
@@ -87,6 +90,10 @@ interface RiffPatternEditPopoverProps {
   initialExpandedIndex?: number | null;
   /** Opens the given node's floating edit popup (owned at the page level). */
   onEditNode: (nodeId: string, e: React.MouseEvent) => void;
+  /** A detector's proposal rather than the user's own layer: everything is
+   *  shown — the sequence tree, each node's beats — but nothing can be
+   *  changed. Copying the lane into a layer is how it becomes editable. */
+  readOnly?: boolean;
 }
 
 /** One row in the sequence tree — a chip plus the same expand toggle for
@@ -105,10 +112,12 @@ function SeqTreeRow({
   entry, path, nodes, combos, forbiddenFor,
   expandedPaths, onToggleExpand, onRemove,
   onPatchCombo, onPatchNode, onTrimNode, onCreateNode, onCreateCombo, onEditNode,
-  activePath, nodePlayheadStep, isPlaying, onPlay, onStop, onTapActiveChange,
-  item, bpm, onSeekAndPlay,
+  activePath, isPlaying, onPlay, onStop, onTapActiveChange,
+  item, bpm, onSeekAndPlay, readOnly = false, beatsPerBar = 4,
 }: {
   entry: RiffSeqEntry;
+  /** For the node length in bars ("1 bar"). */
+  beatsPerBar?: number;
   /** Dot-separated index path from the root sequence down to this row, e.g. "0.2". */
   path: string;
   nodes: RiffNode[]; combos: RiffCombo[];
@@ -126,9 +135,9 @@ function SeqTreeRow({
   /** Full index path of the leaf the live playhead is currently sounding, or
    *  null when not playing. Every row along this path — ancestor combos and
    *  the leaf alike — gets the karaoke glow; only the leaf itself (when it's
-   *  a node) sweeps its `BeatChipPicker` via `nodePlayheadStep`. */
+   *  a node) sweeps its `BeatChipPicker`, reading its position within the
+   *  node off the playhead clock itself (`nodePlayheadStep` below). */
   activePath: number[] | null;
-  nodePlayheadStep: number | null;
   /** True while the instance's real audio is playing anywhere within the
    *  instance's own region — a looser window than any one node's own turn,
    *  used (together with `onSeekAndPlay`) to derive this row's own tight
@@ -160,6 +169,8 @@ function SeqTreeRow({
   /** Seeks + plays an arbitrary [time, stopTime) span — see the prop of the
    *  same name on `RiffPatternEditPopover`. */
   onSeekAndPlay?: (time: number, stopTime?: number) => void;
+  /** See the prop of the same name on `RiffPatternEditPopover`. */
+  readOnly?: boolean;
 }) {
   const [nestedMenuOpen, setNestedMenuOpen] = useState(false);
   const id = entry.type;
@@ -176,6 +187,7 @@ function SeqTreeRow({
   // below so hook order stays stable across renders regardless of what this
   // entry resolves to — a combo/silence row just never uses it.
   const nodeItem = resolved?.kind === 'node' ? resolved.item : null;
+  const nodePulse = nodeItem ? pulseOf(nodeItem) : 4;
   // This row's own tight [start, end) within the instance — not the whole
   // instance's region — so its Tap Along loops around just this node's own
   // turn (count-in, one short pass, count-in again…) exactly like the
@@ -192,15 +204,11 @@ function SeqTreeRow({
   // `isPlaying` (the instance-wide flag) already implies playback is inside
   // the instance's own region, which always contains this node's occurrence
   // — so gating on it here is enough to rule out a paused player whose
-  // `currentTime` merely happens to sit inside the window.
+  // playhead merely happens to sit inside the window.
   const tapIsPlaying = !!nodeOccurrence && !!isPlaying;
-  // A boundary node's Tap Along commits raw presses as blocks instead of a
-  // quantised chip patch — same hook, same controls, same session (see
-  // `useTapAlong`'s `onSaveTaps`), only the write differs. Snap lives here
-  // rather than inside the block editor so the commit uses exactly the value
-  // its picker is showing.
-  const nodeIsBoundary = isBoundaryNode(nodeItem);
-  const [boundarySnap, setBoundarySnap] = useState(0);
+  // Tap Along commits its presses as notes on the node's pulse — same hook,
+  // same controls, same session (see `useTapAlong`'s `onSaveTaps`).
+  const tapSnap = 1 / nodePulse;
   // Fold + vote for the tap review step, owned here for the same reason snap
   // is: the preview below and the Save above have to agree on them.
   const refine = useBoundaryTapRefine();
@@ -209,6 +217,17 @@ function SeqTreeRow({
   // to commit whatever the take (and the snap/fold dials) look like by the
   // time the card is actually closed.
   const tapSaveRef = useRef<() => void>(() => {});
+  // Where the playhead sits inside this node's own beat grid — only on the
+  // leaf that is sounding, so only that row follows the clock, and only at
+  // the precision it draws (see `sweepStep`): the whole position while a
+  // block editor is on screen or a take is live, the half-step otherwise.
+  const [tapLive, setTapLive] = useState(false);
+  const fractional = tapLive || expanded;
+  const nodePlayheadStep = usePlayheadValue((t) => {
+    if (!isActiveLeaf || !isPlaying || !bpm) return null;
+    const step = computeRiffSeqPlayback(item, nodes, combos, bpm, t)?.nodePlayheadStep ?? null;
+    return step != null ? sweepStep(step, fractional) : null;
+  });
   const tapAlong = useTapAlong({
     stepsPerCycle: nodeItem?.stepsPerCycle ?? 1,
     subbeatsPerBeat: nodeItem?.subbeatsPerBeat ?? 1,
@@ -216,18 +235,17 @@ function SeqTreeRow({
     isPlaying: tapIsPlaying,
     onPlay: tapOnPlay,
     onStop,
-    onChange: (patch) => { if (nodeItem) onPatchNode(nodeItem.id, patch); },
-    onSaveTaps: nodeIsBoundary
-      ? (taps, numBeats) => {
-          if (nodeItem) onPatchNode(nodeItem.id, { segments: boundarySegmentsFromTaps(taps, numBeats, boundarySnap, refine) });
-        }
-      : undefined,
-    onPhaseChange: (phase) => onTapActiveChange?.(path, phase !== 'idle', () => tapSaveRef.current()),
+    onSaveTaps: (taps, numBeats) => {
+      if (nodeItem) onPatchNode(nodeItem.id, { segments: boundarySegmentsFromTaps(taps, numBeats, tapSnap, refine) });
+    },
+    onPhaseChange: (phase) => {
+      setTapLive(phase !== 'idle');
+      onTapActiveChange?.(path, phase !== 'idle', () => tapSaveRef.current());
+    },
   });
   useEffect(() => { tapSaveRef.current = tapAlong.save; }, [tapAlong.save]);
-  const tapPreview = tapAlong.previewPatch;
-  const tapSegments = nodeIsBoundary && tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0
-    ? boundarySegmentsFromTaps(tapAlong.tapEvents, tapAlong.numBeats, boundarySnap, refine)
+  const tapSegments = tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0
+    ? boundarySegmentsFromTaps(tapAlong.tapEvents, tapAlong.numBeats, tapSnap, refine)
     : null;
   // How many passes the take has, for the vote's ceiling — passes are
   // numbered from 0 and only counted once a tap lands in them.
@@ -262,18 +280,20 @@ function SeqTreeRow({
             type="button"
             className="text-[9px] text-slate-500 hover:text-slate-200 transition-colors"
             onClick={(e) => onEditNode(resolved.item.id, e)}
-            title="Edit this node"
+            title={readOnly ? 'Open this node' : 'Edit this node'}
           >
-            ✎
+            {readOnly ? '↗' : '✎'}
           </button>
         )}
-        <button
-          type="button"
-          className="text-[9px] text-slate-600 hover:text-red-400 transition-colors"
-          onClick={onRemove}
-        >
-          ✕
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            className="text-[9px] text-slate-600 hover:text-red-400 transition-colors"
+            onClick={onRemove}
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Node beats shown inline — right here, not behind another popup or a
@@ -282,78 +302,47 @@ function SeqTreeRow({
           rename/color (see file header). */}
       {resolved.kind === 'node' && expanded && (
         <div className="pl-1 pb-1.5">
-          <NodeLengthControl
-            node={resolved.item}
-            onResize={(patch) => onPatchNode(resolved.item.id, patch)}
-            onResizeSubdivision={(patch) => onPatchNode(resolved.item.id, patch)}
-            onTrimLength={(beats) => onTrimNode(resolved.item.id, beats)}
-            showSubdivision={!isBoundaryNode(resolved.item)}
-          />
+          {!readOnly && (
+            <NodeLengthControl
+              node={nodeItem!}
+              onResize={(patch) => onPatchNode(resolved.item.id, patch)}
+              onResizeSubdivision={(patch) => onPatchNode(resolved.item.id, patch)}
+              onTrimLength={(beats) => onTrimNode(resolved.item.id, beats)}
+              beatsPerBar={beatsPerBar}
+            />
+          )}
           {/* Boundary nodes swap the chip grid for their own block editor —
               same relative-time karaoke sweep, no subdivision inference. Tap
               Along stays: its raw presses land as blocks where they fell. */}
-          {isBoundaryNode(resolved.item) ? (
-            <div className="mt-1 space-y-1">
-              <BoundarySegmentEditor
-                color={resolved.item.color}
-                segments={tapSegments ?? resolved.item.segments ?? []}
-                lengthBeats={riffNodeLengthBeats(resolved.item)}
-                playheadBeat={isActiveLeaf && nodePlayheadStep != null
-                  ? nodePlayheadStep / Math.max(1, resolved.item.subbeatsPerBeat)
-                  : null}
-                onChange={(segments) => onPatchNode(resolved.item.id, { segments })}
-                readOnly={tapAlong.phase !== 'idle'}
-                snap={boundarySnap}
-                onSnapChange={setBoundarySnap}
-                onTapAtBeat={tapAlong.phase === 'recording'
-                  ? (beat) => tapAlong.tapAtStep(beat * tapAlong.subbeats)
-                  : undefined}
-              />
-              {tapAlong.phase !== 'idle' && (
-                <TapAlongPianoRoll
-                  taps={tapAlong.tapEvents}
-                  numBeats={tapAlong.numBeats}
-                  playheadBeat={isActiveLeaf && nodePlayheadStep != null ? nodePlayheadStep / tapAlong.subbeats : null}
-                  color={resolved.item.color}
-                />
-              )}
-              {tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0 && (
-                <TapRefineControls {...refine} passes={tapPasses} />
-              )}
-              <TapAlongControls {...tapAlong} disabled={!tapOnPlay} mode="boundary" />
-            </div>
-          ) : (
-          <>
-          <BeatChipPicker
-            color={resolved.item.color}
-            steps={tapPreview?.stepsPerCycle ?? resolved.item.stepsPerCycle}
-            subbeatsPerBeat={tapPreview?.subbeatsPerBeat ?? resolved.item.subbeatsPerBeat}
-            highlighted={tapPreview?.highlightedBeats ?? resolved.item.highlightedBeats}
-            spans={tapPreview?.spans ?? resolved.item.spans}
-            // A Tap Along preview is a pattern being re-played by hand; the
-            // measured accents describe the old steps, so they are held back
-            // until the preview is committed or dropped.
-            accents={tapPreview ? undefined : resolved.item.accents}
-            onChange={(patch) => onPatchNode(resolved.item.id, patch)}
-            playheadStep={isActiveLeaf ? nodePlayheadStep : null}
-            readOnly={tapAlong.phase !== 'idle'}
-            onTapAlongTap={tapAlong.phase === 'recording' ? tapAlong.tapAtStep : undefined}
-          />
-          {tapAlong.phase !== 'idle' && (
-            <div className="mt-1">
+          <div className="mt-1 space-y-1">
+            <PitchedRiffEditor
+              color={resolved.item.color}
+              segments={tapSegments ?? nodeItem!.segments ?? []}
+              lengthBeats={riffNodeLengthBeats(nodeItem!)}
+              pulse={nodePulse}
+              beatsPerBar={beatsPerBar}
+              playheadBeat={isActiveLeaf && nodePlayheadStep != null
+                ? nodePlayheadStep / Math.max(1, nodeItem!.subbeatsPerBeat)
+                : null}
+              onChange={(segments) => onPatchNode(resolved.item.id, { ...nodeItem!, segments })}
+              readOnly={readOnly || tapAlong.phase !== 'idle'}
+              onTapAtBeat={tapAlong.phase === 'recording'
+                ? (beat) => tapAlong.tapAtStep(beat * tapAlong.subbeats)
+                : undefined}
+            />
+            {tapAlong.phase !== 'idle' && (
               <TapAlongPianoRoll
                 taps={tapAlong.tapEvents}
                 numBeats={tapAlong.numBeats}
                 playheadBeat={isActiveLeaf && nodePlayheadStep != null ? nodePlayheadStep / tapAlong.subbeats : null}
                 color={resolved.item.color}
               />
-            </div>
-          )}
-          <div className="mt-1">
-            <TapAlongControls {...tapAlong} disabled={!tapOnPlay} />
+            )}
+            {tapAlong.phase !== 'idle' && tapAlong.tapEvents.length > 0 && (
+              <TapRefineControls {...refine} passes={tapPasses} />
+            )}
+            {!readOnly && <TapAlongControls {...tapAlong} disabled={!tapOnPlay} />}
           </div>
-          </>
-          )}
         </div>
       )}
 
@@ -362,6 +351,7 @@ function SeqTreeRow({
           {resolved.item.sequence.map((nested, i) => (
             <SeqTreeRow
               key={`${nested.type}-${i}`}
+              beatsPerBar={beatsPerBar}
               entry={nested}
               path={`${path}.${i}`}
               nodes={nodes} combos={combos}
@@ -378,7 +368,6 @@ function SeqTreeRow({
               onCreateCombo={onCreateCombo}
               onEditNode={onEditNode}
               activePath={activePath}
-              nodePlayheadStep={nodePlayheadStep}
               isPlaying={isPlaying}
               onPlay={onPlay}
               onStop={onStop}
@@ -386,12 +375,13 @@ function SeqTreeRow({
               item={item}
               bpm={bpm}
               onSeekAndPlay={onSeekAndPlay}
+              readOnly={readOnly}
             />
           ))}
           {resolved.item.sequence.length === 0 && (
             <span className="text-[9px] text-slate-600 italic">empty</span>
           )}
-          <div className="relative">
+          {!readOnly && <div className="relative">
             <button
               type="button"
               className="text-[9px] text-slate-500 hover:text-slate-200 border border-dashed border-slate-700 hover:border-slate-500 rounded px-1.5 py-0.5 transition-colors"
@@ -411,7 +401,7 @@ function SeqTreeRow({
                 onCreateCombo={onCreateCombo}
               />
             )}
-          </div>
+          </div>}
         </div>
       )}
     </div>
@@ -423,8 +413,8 @@ export function RiffPatternEditPopover({
   onChange, onDelete, onClose, registerCloseGuard,
   onPatchCombo, onPatchNode, onTrimNode, onCreateNode, onCreateCombo, onEditNode,
   onPlay, onStop, onSeekAndPlay, isPlaying,
-  bpm, gridOffset, segments, currentTime,
-  initialExpandedIndex,
+  bpm, gridOffset, segments,
+  initialExpandedIndex, readOnly = false,
 }: RiffPatternEditPopoverProps) {
   const nodes = layer.nodes ?? [];
   const combos = layer.combos ?? [];
@@ -487,16 +477,21 @@ export function RiffPatternEditPopover({
   // sounding right now, and (if it's a node) where inside that node's own
   // beat grid. Same idea as PatternEditPopover/NodeEditPopover's sweep, just
   // walking a tree of node/combo/silence entries instead of one flat grid.
-  const seqPlayback =
-    isPlaying && bpm && currentTime != null
-      ? computeRiffSeqPlayback(item, nodes, combos, bpm, currentTime)
-      : null;
+  //
+  // Only the sounding leaf's index is read off the playhead clock here, so
+  // the card re-renders when playback moves to another leaf, not on every
+  // frame; the leaf row reads its own position inside the node (SeqTreeRow).
+  const activeLeafIndex = usePlayheadValue((t) => (
+    isPlaying && bpm
+      ? computeRiffSeqPlayback(item, nodes, combos, bpm, t)?.leafIndex ?? null
+      : null
+  ));
 
   // Full index path (one entry per nesting level) from the root sequence
   // down to the leaf currently sounding — null when not playing. Drives the
   // karaoke glow (every row along the path).
-  const activePath = seqPlayback != null
-    ? riffLeafPath(item.sequence, nodes, combos, seqPlayback.leafIndex)
+  const activePath = activeLeafIndex != null
+    ? riffLeafPath(item.sequence, nodes, combos, activeLeafIndex)
     : null;
   // Identity of the *ancestor chain* only (path minus its final leaf index),
   // with stable string identity so the auto-expand effect below can use it as
@@ -534,7 +529,12 @@ export function RiffPatternEditPopover({
 
   // The repeat count is the one field that rewrites where the whole instance
   // ends, so it stays visible above the fold rather than inside a section.
-  const extras = (
+  const extras = readOnly ? (
+    <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+      <span>×{reps}</span>
+      <span title="Region end (cycle × repeats)">→ ends {regionEnd.toFixed(2)}s</span>
+    </div>
+  ) : (
     <RepeatsRow
       draft={repeats}
       focusRing={cardTheme('riff-pattern').focusRing}
@@ -553,12 +553,15 @@ export function RiffPatternEditPopover({
     content: (
       <>
         <span className="mb-1 block text-[9px] text-slate-400">
-          ▼ to peek at a node's beats or a combo's contents, ✎ to edit a node
+          {readOnly
+            ? "▼ to see a node's beats or a combo's contents, ↗ to open a node"
+            : "▼ to peek at a node's beats or a combo's contents, ✎ to edit a node"}
         </span>
         <div className="space-y-1">
           {item.sequence.map((entry, i) => (
             <SeqTreeRow
               key={`${entry.type}-${i}`}
+              beatsPerBar={beatsPerBar}
               entry={entry} path={String(i)}
               nodes={nodes} combos={combos}
               forbiddenFor={(comboId) => reachableCombos(comboId, combos)}
@@ -580,7 +583,6 @@ export function RiffPatternEditPopover({
               onCreateNode={onCreateNode}
               onCreateCombo={onCreateCombo}
               activePath={activePath}
-              nodePlayheadStep={seqPlayback?.nodePlayheadStep ?? null}
               isPlaying={isPlaying}
               onPlay={onPlay}
               onStop={onStop}
@@ -588,13 +590,16 @@ export function RiffPatternEditPopover({
               item={item}
               bpm={bpm}
               onSeekAndPlay={onSeekAndPlay}
+              readOnly={readOnly}
             />
           ))}
           {item.sequence.length === 0 && (
-            <div className="text-[10px] text-slate-600 italic px-1.5 py-1">empty — add a node, combo, or silence below</div>
+            <div className="text-[10px] text-slate-600 italic px-1.5 py-1">
+              {readOnly ? 'empty' : 'empty — add a node, combo, or silence below'}
+            </div>
           )}
         </div>
-        <div className="relative mt-1">
+        {!readOnly && <div className="relative mt-1">
           <button
             type="button"
             className="text-[9px] text-slate-500 hover:text-slate-200 border border-dashed border-slate-700 hover:border-slate-500 rounded px-1.5 py-0.5 transition-colors"
@@ -613,7 +618,7 @@ export function RiffPatternEditPopover({
               onCreateCombo={onCreateCombo}
             />
           )}
-        </div>
+        </div>}
       </>
     ),
   };
@@ -622,14 +627,13 @@ export function RiffPatternEditPopover({
   // commits it, so it really is the Save button in that moment.
   const doneLabel = anyTapActive ? 'Save & Done' : undefined;
 
-  const sections = [
+  const sections = readOnly ? [sequenceSection] : [
     sequenceSection,
     // Prominence runs over the whole repeated region, not one cycle.
     prominenceSection({
       points: item.prominence,
       start: item.start,
       end: regionEnd,
-      currentTime,
       color: layer.color,
       onChange: (points) => onChange({ prominence: points }),
     }),
@@ -650,7 +654,6 @@ export function RiffPatternEditPopover({
       gridOffset={gridOffset}
       beatsPerBar={beatsPerBar}
       segments={segments}
-      currentTime={currentTime}
       width={380}
       onChange={forwardCardPatch<RiffPatternItem>(onChange)}
       onDelete={onDelete}
@@ -658,6 +661,8 @@ export function RiffPatternEditPopover({
       onStop={anyTapActive ? undefined : onStop}
       isPlaying={isPlaying}
       onClose={onClose}
+      readOnly={readOnly}
+      badge={readOnly ? detectorBadgeLabel(layer.source) : undefined}
       popoverRef={popoverRef}
       positionStyle={positionStyle}
       extras={extras}

@@ -36,6 +36,7 @@ import { LoopPlayIcon } from '../LoopPlayIcon';
 import { CardSection, setCardSectionOpen, useCardSectionOpen, type CardSectionSpec } from './CardSection';
 import { useProminenceStrip } from './ProminenceLane';
 import { ImportanceStar } from './ImportanceStar';
+import { usePlayheadClock, usePlayheadValue } from '../../../hooks/usePlayhead';
 
 export type AnnotationCardKind = 'cue' | 'span' | 'boundary' | 'loop' | 'lyrics' | 'riff-pattern';
 
@@ -138,6 +139,15 @@ export function forwardCardPatch<T>(
   };
 }
 
+/** The other lanes an item can be moved to from its card — same type,
+ *  editable. With any present, the lane name in the header is a picker: an
+ *  item made on the wrong lane (Enter adds it to whichever is selected) moves
+ *  across without closing the card or redoing it. */
+export interface CardLaneMove {
+  targets: readonly { id: string; name: string }[];
+  onMove: (layerId: string) => void;
+}
+
 export interface AnnotationPointCardProps {
   kind: AnnotationCardKind;
 
@@ -147,6 +157,11 @@ export interface AnnotationPointCardProps {
   layerColor: string;
   /** Optional badge after the layer name (eg "detector" for read-only cards). */
   badge?: string;
+  /** A large "#N" chip at the head of the card, for rows that print the same
+   *  number on the item (the Merge row), so card and item visibly match. */
+  numberChip?: number;
+  /** Turns the layer name into a lane picker — see CardLaneMove. */
+  laneMove?: CardLaneMove;
 
   // ─── Time ─────────────────────────────────────────────────────────────
   /** Seconds from track start. Always present. */
@@ -180,10 +195,6 @@ export interface AnnotationPointCardProps {
   beatsPerBar?: number;
   /** Resolved grid segments — keeps bar.beat readouts in step with a split grid. */
   segments?: readonly import('../../../utils/gridSegments').ResolvedSegment[];
-  /** Current playhead in seconds — when supplied, each editable time row
-   *  gets a crosshair button that snaps that field to the playhead. */
-  currentTime?: number;
-
   // ─── Flags ────────────────────────────────────────────────────────────
   /** Inputs disabled + delete hidden + importance hidden. */
   readOnly?: boolean;
@@ -191,6 +202,10 @@ export interface AnnotationPointCardProps {
   hideImportance?: boolean;
   /** Hide the delete button even when not read-only. */
   hideDelete?: boolean;
+  /** Delete button text and tooltip, where "Delete" is not what it does (a
+   *  Merge boundary is dropped from the blend, not deleted from anything). */
+  deleteLabel?: string;
+  deleteTitle?: string;
   /** Hide the description textarea (eg algo-output cards where the detector
    *  never emits a description field). */
   hideDescription?: boolean;
@@ -203,6 +218,11 @@ export interface AnnotationPointCardProps {
   isPlaying?: boolean;
   /** Closes the card. Returns `false` when a close guard vetoed it. */
   onClose: () => boolean | void;
+  /** The Done button only, when it means more than closing: a draft item
+   *  (made by a lane gesture, see laneCreate.ts) is kept on Done and dropped
+   *  by every other way out — ×, Escape, a click elsewhere. Falls back to
+   *  `onClose`. */
+  onDone?: () => boolean | void;
 
   // ─── Layout ───────────────────────────────────────────────────────────
   popoverRef: React.RefObject<HTMLDivElement | null>;
@@ -244,7 +264,7 @@ export interface AnnotationPointCardProps {
 function TimeRow({
   label, valueSec, onChangeSec, focusRing, readOnly, disabled,
   bpm, gridOffset, beatsPerBar, segments,
-  minSeconds, currentTime,
+  minSeconds,
 }: {
   label: string;
   valueSec: number;
@@ -258,10 +278,14 @@ function TimeRow({
   /** Resolved grid segments — keeps bar.beat readouts in step with a split grid. */
   segments?: readonly import('../../../utils/gridSegments').ResolvedSegment[];
   minSeconds?: number;
-  currentTime?: number;
 }) {
   const locked = readOnly || disabled;
-  const canSnap = !locked && currentTime !== undefined && Number.isFinite(currentTime);
+  // The crosshair snaps the field to the playhead. Only whether the clock
+  // holds a usable time is rendered; the time itself is read at click time,
+  // so the row doesn't re-render as the song plays.
+  const playheadClock = usePlayheadClock();
+  const playheadFinite = usePlayheadValue((t) => Number.isFinite(t));
+  const canSnap = !locked && playheadFinite;
   const inputBase = `bg-[#0a0b0d] border border-white/[0.08] rounded px-1.5 py-1 text-[11px] font-mono text-slate-200 focus:outline-none focus:ring-1 ${focusRing} disabled:text-slate-600 disabled:cursor-not-allowed`;
   return (
     <div className="flex items-center gap-2">
@@ -294,7 +318,10 @@ function TimeRow({
       />
       <button
         type="button"
-        onClick={() => { if (canSnap) onChangeSec(Math.max(minSeconds ?? 0, currentTime!)); }}
+        onClick={() => {
+          const t = playheadClock.get();
+          if (canSnap && Number.isFinite(t)) onChangeSec(Math.max(minSeconds ?? 0, t));
+        }}
         disabled={!canSnap}
         className={`shrink-0 w-7 h-7 flex items-center justify-center rounded border transition-colors ${
           canSnap
@@ -377,14 +404,14 @@ function LengthRow({
 
 export function AnnotationPointCard({
   kind,
-  layerName, layerColor, badge,
+  layerName, layerColor, badge, numberChip, laneMove,
   start, end, endEditable = true,
   label, labelPlaceholder, labelSuggestions,
   description, descriptionPlaceholder,
   importance, rawOutput,
-  bpm, gridOffset, beatsPerBar, segments, currentTime,
-  readOnly = false, hideImportance = false, hideDelete = false, hideDescription = false,
-  onChange, onDelete, onPlay, onStop, isPlaying = false, onClose,
+  bpm, gridOffset, beatsPerBar, segments,
+  readOnly = false, hideImportance = false, hideDelete = false, hideDescription = false, deleteLabel, deleteTitle,
+  onChange, onDelete, onPlay, onStop, isPlaying = false, onClose, onDone,
   popoverRef, positionStyle, width = 340,
   extras, sections = [], footerExtras, footerLeftExtras, doneLabel,
   doneDisabled = false, doneDisabledReason,
@@ -419,6 +446,7 @@ export function AnnotationPointCard({
   useEffect(() => () => setCardSectionOpen('prominence', false), []);
   const barBeatOrigin = useBarBeatOrigin();
   const datalistId = useId();
+  const labelInputRef = useRef<HTMLInputElement>(null);
   const hasEnd = end !== undefined;
   const showLengthRow = hasEnd && endEditable;
   const showDelete = !readOnly && !hideDelete && !!onDelete;
@@ -545,7 +573,7 @@ export function AnnotationPointCard({
   const resolvedStyle: CSSProperties = pos
     ? {
       position: 'fixed', left: pos.left, top: pos.top, width,
-      maxHeight: `calc(100vh - ${pos.top + MARGIN}px)`,
+      maxHeight: `calc(100 * var(--vh-u, 1vh) - ${pos.top + MARGIN}px)`,
     }
     : { ...positionStyle, width };
 
@@ -575,12 +603,56 @@ export function AnnotationPointCard({
           className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
           style={{ background: layerColor, boxShadow: `0 0 6px ${layerColor}66` }}
         />
-        <span
-          className="text-[10px] uppercase tracking-wider font-medium truncate"
-          style={{ color: layerColor }}
-        >
-          {layerName}
-        </span>
+        {numberChip !== undefined && (
+          <span
+            className="px-1.5 rounded bg-white/[0.08] border border-white/20 text-[15px] leading-6 font-mono font-bold text-white shrink-0"
+            title={`Number ${numberChip} on the row`}
+          >
+            #{numberChip}
+          </span>
+        )}
+        {laneMove && laneMove.targets.length > 0 && !readOnly ? (
+          // A native select, so the list is the browser's own and keyboard-
+          // reachable. Its pointerdown stays off the header's drag handle.
+          // After a move the caret goes back to Label: the usual reason to
+          // move is that you were about to type into the wrong lane.
+          <span className="relative min-w-0 flex items-center">
+            <select
+              value=""
+              onPointerDown={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                laneMove.onMove(e.target.value);
+                requestAnimationFrame(() => labelInputRef.current?.focus());
+              }}
+              title="Move to another lane"
+              aria-label={`Lane: ${layerName}. Move to another lane`}
+              className="appearance-none min-w-0 max-w-[220px] h-8 pl-2 pr-7 rounded border border-white/20 hover:border-white/40 bg-transparent text-[10px] uppercase tracking-wider font-medium truncate cursor-pointer focus:outline-none focus:ring-1 focus:ring-white/50"
+              style={{ color: layerColor }}
+            >
+              <option value="" disabled hidden>{layerName}</option>
+              <option value="" disabled>Move to lane…</option>
+              {laneMove.targets.map((t) => (
+                <option key={t.id} value={t.id} className="normal-case text-slate-100 bg-[#1e242e]">{t.name}</option>
+              ))}
+            </select>
+            <svg
+              aria-hidden
+              viewBox="0 0 12 12"
+              className="pointer-events-none absolute right-2 w-3 h-3"
+              style={{ fill: layerColor }}
+            >
+              <path d="M1.5 4h9L6 9z" />
+            </svg>
+          </span>
+        ) : (
+          <span
+            className="text-[10px] uppercase tracking-wider font-medium truncate"
+            style={{ color: layerColor }}
+          >
+            {layerName}
+          </span>
+        )}
         {badge && (
           <span
             className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-300 border border-slate-600/30"
@@ -592,7 +664,7 @@ export function AnnotationPointCard({
         <button
           onClick={onClose}
           className="w-5 h-5 rounded flex items-center justify-center text-slate-300 hover:text-slate-100 hover:bg-white/[0.06] text-[12px] ml-auto"
-          title="Close (Esc)"
+          title={onDone ? 'Discard this new item (Esc)' : 'Close (Esc)'}
         >
           ×
         </button>
@@ -613,11 +685,13 @@ export function AnnotationPointCard({
         <label className="block">
           <span className="block text-[9px] uppercase tracking-wider text-slate-300 mb-0.5">Label</span>
           <input
+            ref={labelInputRef}
             autoFocus={!readOnly}
             value={label}
             readOnly={readOnly}
             onChange={(e) => onChange({ label: e.target.value })}
             placeholder={labelPlaceholder ?? `short label`}
+            dir="auto"
             spellCheck={false}
             list={labelSuggestions && labelSuggestions.length > 0 ? datalistId : undefined}
             className={`w-full bg-[#0a0b0d] border border-white/[0.06] rounded px-2 py-1 text-[12px] text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 ${theme.focusRing} ${readOnly ? 'cursor-not-allowed opacity-70' : ''}`}
@@ -669,7 +743,6 @@ export function AnnotationPointCard({
                   gridOffset={gridOffset}
                   beatsPerBar={beatsPerBar}
                   segments={segments}
-                  currentTime={currentTime}
                 />
                 {hasEnd && (
                   <TimeRow
@@ -684,8 +757,7 @@ export function AnnotationPointCard({
                     beatsPerBar={beatsPerBar}
                     segments={segments}
                     minSeconds={start}
-                    currentTime={currentTime}
-                  />
+                    />
                 )}
                 {showLengthRow && (
                   <LengthRow
@@ -714,6 +786,7 @@ export function AnnotationPointCard({
                   value={description}
                   readOnly={readOnly}
                   onChange={(e) => onChange({ description: e.target.value })}
+                  dir="auto"
                   placeholder={descriptionPlaceholder ?? (readOnly ? '— (read-only — detector output)' : `Longer free-form note about this ${noun}…`)}
                   rows={3}
                   spellCheck={false}
@@ -763,9 +836,9 @@ export function AnnotationPointCard({
               // that prompt cancels the delete as well (see NodeEditPopover).
               onClick={() => { if (onClose() === false) return; onDelete?.(); }}
               className="px-3 py-1 rounded text-[10px] uppercase tracking-wider border transition-colors bg-red-500/20 border-red-400/40 text-red-200 hover:bg-red-500/30"
-              title={`Delete this ${noun} (⌘Z to undo)`}
+              title={deleteTitle ?? `Delete this ${noun} (⌘Z to undo)`}
             >
-              Delete
+              {deleteLabel ?? 'Delete'}
             </button>
           ) : readOnly ? (
             <span className="text-[10px] text-slate-400 italic">Read-only — sourced from a custom detector run.</span>
@@ -794,9 +867,9 @@ export function AnnotationPointCard({
             </button>
           )}
           <button
-            onClick={doneDisabled ? undefined : onClose}
+            onClick={doneDisabled ? undefined : (onDone ?? onClose)}
             disabled={doneDisabled}
-            title={doneDisabled ? (doneDisabledReason ?? 'Fix the invalid field first') : undefined}
+            title={doneDisabled ? (doneDisabledReason ?? 'Fix the invalid field first') : onDone ? 'Keep this new item' : undefined}
             className={`px-3 py-1 rounded text-[10px] uppercase tracking-wider border ${
               doneDisabled
                 ? 'bg-white/[0.02] text-slate-600 border-white/[0.06] cursor-not-allowed'

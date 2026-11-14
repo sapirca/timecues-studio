@@ -136,10 +136,21 @@ def test_a_hand_placed_grid_is_refused():
     the curator made by hand."""
     ok, why = is_trustworthy({
         "bpm": 145, "gridOffset": 0.036, "timeSignature": "4/4",
-        "beatOverrides": {"128": 55.3},
+        "gridMode": "manual", "beatOverrides": {"128": 55.3},
     })
     assert ok is False
     assert "Hand-placed" in why
+
+
+def test_leftover_overrides_outside_manual_mode_are_ignored():
+    """Overrides are orphan data outside Manual mode — the app never draws
+    them — so they must not cost a static grid its trust (toast3d_peter_the_wolf:
+    three pinned opening beats sank a grid that fits the drums at 0.98)."""
+    ok, why = is_trustworthy({
+        "bpm": 145, "gridOffset": 0.036, "timeSignature": "4/4",
+        "gridMode": "static", "beatOverrides": {"opening:4": 1.56},
+    })
+    assert ok is True, why
 
 
 def test_a_drifting_grid_with_anchors_is_refused():

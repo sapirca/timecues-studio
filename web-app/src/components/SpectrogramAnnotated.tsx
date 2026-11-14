@@ -20,6 +20,7 @@ import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHand
 import type { MsafSection, SectionItem } from '../tools/runTool';
 import { drawBeatGrid } from '../utils/gridLineStyle';
 import { TiledStrip, type TileGeom } from './TiledStrip';
+import { SECTION_COLORS } from './inspector-v2/sectionConstants';
 
 type AnySection = MsafSection | SectionItem;
 
@@ -39,7 +40,6 @@ export interface Props {
   beatGroupSize?: number;
   /** Multiplier on beat-grid line width (1 = default). */
   gridThickness?: number;
-  currentTime?: number;
   height?: number;
   gain?: number;
   contrast?: number;
@@ -109,15 +109,7 @@ function magmaRGB(t: number): [number, number, number] {
 
 // ── Colour palette ─────────────────────────────────────────────────────────────
 
-const SEC_COLORS: Record<string, string> = {
-  intro:     '#a78bfa',
-  buildup:   '#fde047',
-  drop:      '#4ade80',
-  breakdown: '#e879f9',
-  bridge:    '#fb7185',
-  outro:     '#6b7280',
-  default:   '#374151',
-};
+const SEC_COLORS: Record<string, string> = { ...SECTION_COLORS, default: '#374151' };
 function hexToRgb(hex: string): [number, number, number] {
   return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
 }
@@ -258,7 +250,6 @@ export const SpectrogramAnnotated = forwardRef<SpectrogramAnnotatedHandle, Props
   subBeatDivision,
   beatGroupSize,
   gridThickness = 1,
-  currentTime = 0,
   height = 160,
   gain = 1,
   contrast = 1,
@@ -422,7 +413,7 @@ export const SpectrogramAnnotated = forwardRef<SpectrogramAnnotatedHandle, Props
           height={Math.max(1, Math.round(height))}
           paint={paint}
           overlay={overlay}
-          overlayFocus={duration > 0 ? currentTime / duration : null}
+          focusDuration={duration}
           className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
         >
           {!analysis && (

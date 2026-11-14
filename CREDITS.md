@@ -98,7 +98,9 @@ project's own citation see [README.md](README.md#citation).
   Yin Cao, Turab Iqbal, Yuxuan Wang, Wenwu Wang, Mark D. Plumbley. *PANNs:
   Large-Scale Pretrained Audio Neural Networks for Audio Pattern
   Recognition.* TASLP 2020.
-  → https://github.com/qiuqiangkong/audioset_tagging_cnn — MIT
+  → https://github.com/qiuqiangkong/audioset_tagging_cnn — MIT (code)
+  → https://zenodo.org/records/3987831 — CC-BY-4.0 (CNN14 weights, downloaded
+  at run time, not bundled)
   Powers the `panns-cnn14` algorithm in the SPAN family (`panns` sidecar,
   port 8013).
 
@@ -117,10 +119,22 @@ project's own citation see [README.md](README.md#citation).
   Powers the `whisper-base` algorithm in the LYRICS family (`lyrics`
   sidecar, port 8016).
 
+- **Ivrit** (ivrit.ai) — Yanir Marmor, Kinneret Misgav,
+  Yair Lifshitz (ivrit.ai). *ivrit.ai: A Comprehensive Dataset of Hebrew
+  Speech for AI Research and Development.* arXiv:2307.08720, 2023.
+  → https://huggingface.co/ivrit-ai/whisper-large-v3-turbo — Apache-2.0
+  ivrit.ai's Hebrew speech-recognition model, loaded through
+  `transformers` and lazy-downloaded at first use (never redistributed).
+  Powers the `ivrit` algorithm in the LYRICS family.
+
 - **ctc-forced-aligner** — Mahmoud Ashraf et al.
   → https://github.com/MahmoudAshraf97/ctc-forced-aligner — MIT
   We use the package pinned to `facebook/wav2vec2-base-960h` (Apache-2.0,
-  English-only) so the integration stays fully permissively-licensed.
+  English) and, for lyrics written in Hebrew,
+  `imvladikon/wav2vec2-large-xlsr-53-hebrew` (Apache-2.0, a fine-tune of
+  `facebook/wav2vec2-large-xlsr-53`), never the package's default CC-BY-NC
+  MMS model, so the integration stays fully permissively-licensed. Both
+  checkpoints are lazy-downloaded at first use (never redistributed).
   Powers the `ctc-forced-aligner` algorithm in the LYRICS family.
 
 - **wav2vec 2.0** — Alexei Baevski, Henry Zhou, Abdelrahman Mohamed,
@@ -152,7 +166,9 @@ project's own citation see [README.md](README.md#citation).
 
 - **autochord** — Vincent Roca et al.
   → https://github.com/cjbayron/autochord — MIT
-  Powers the `autochord-chords` algorithm in the CUE family.
+  Powers the `autochord-chords` algorithm in the CUE family. Opt-in: it
+  loads the NNLS-Chroma Vamp plugin (Matthias Mauch & Simon Dixon, QMUL),
+  which is GPL — see NOTICE.md.
 
 - **librosa onsets** — see librosa entry. Powers `librosa-onsets` (CUE family).
 

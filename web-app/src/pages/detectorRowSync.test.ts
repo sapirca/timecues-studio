@@ -64,22 +64,53 @@ describe('detector layers seed viz rows', () => {
  * A family that builds its layers without it drops them on the floor — and the
  * lane then positively asserts there was nothing to say, which is worse than
  * saying nothing: an unreliable groove renders identically to a clean one.
+ *
+ * Every family's lane is built in inspector-v2/detectorLayers.ts, and all of
+ * them take their source fields from one helper there; the page's memos only
+ * pick the colour and call the builder. So this pins both halves: the helper
+ * carries the notes, every family's builder goes through the helper, and every
+ * memo calls its builder.
  */
-describe('detector layers carry their run notes', () => {
-  const MEMOS = FAMILIES.map(([, memo]) => memo);
+const LAYERS_SOURCE = readFileSync(
+  resolve(process.cwd(), 'src/components/inspector-v2/detectorLayers.ts'),
+  'utf-8',
+);
 
-  it('every detector layer memo sets sourceNotes', () => {
-    // One `sourceNotes:` per `sourceDescription:` — the two are set together
-    // on every detector-sourced layer, so a mismatch means a family was missed.
-    const described = SOURCE.match(/sourceDescription: d\.description/g) ?? [];
-    const noted = SOURCE.match(/sourceNotes: \(env\.notes/g) ?? [];
-    expect(described.length).toBe(MEMOS.length);
-    expect(noted.length).toBe(described.length);
+/** Memo → the builder it must call. */
+const BUILDERS: Record<string, string> = {
+  detectorCueLayers: 'detectorCueLayer',
+  detectorLoopLayers: 'detectorLoopLayer',
+  // The whole lane; the canvas's detectorSpanLayers cuts it by part.
+  detectorSpanLayersWhole: 'detectorSpanLayer',
+  detectorRiffLayers: 'detectorRiffLayer',
+  detectorLyricsLayers: 'detectorLyricsLayer',
+};
+
+describe('detector layers carry their run notes', () => {
+  it('the shared source fields include the notes', () => {
+    const helper = LAYERS_SOURCE.slice(LAYERS_SOURCE.indexOf('function laneSource('));
+    expect(helper.slice(0, helper.indexOf('\n}\n'))).toContain('sourceNotes:');
+  });
+
+  it.each(Object.values(BUILDERS))('%s builds from the shared source fields', (builder) => {
+    const start = LAYERS_SOURCE.indexOf(`export function ${builder}(`);
+    expect(start).toBeGreaterThan(-1);
+    const body = LAYERS_SOURCE.slice(start, LAYERS_SOURCE.indexOf('\n}\n', start));
+    expect(body).toContain('laneSource(d, env)');
+  });
+
+  it.each(Object.entries(BUILDERS))('%s is built by %s', (memo, builder) => {
+    const start = SOURCE.indexOf(`const ${memo} = useMemo`);
+    expect(start).toBeGreaterThan(-1);
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n  }, [', start));
+    // `laneResults` is customResults with every `lanes` detector expanded to
+    // one single-kind entry per lane (expandDetectorLanes) — the same runs.
+    expect(body).toContain(`${builder}(d, laneResults[d.name]`);
   });
 
   it('passes undefined rather than an empty array when there is nothing to say', () => {
     // An empty array is truthy in JS, so a lane with no caveats would light up
     // its ⚠ and open a popover listing none.
-    expect(SOURCE).toContain('(env.notes && env.notes.length) ? env.notes : undefined');
+    expect(LAYERS_SOURCE).toContain('(env.notes && env.notes.length) ? env.notes : undefined');
   });
 });

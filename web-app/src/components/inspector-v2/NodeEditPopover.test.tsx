@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { NodeEditPopover } from './NodeEditPopover';
 import { SettingsProvider } from '../../context/SettingsContext';
 import type { RiffNode } from '../../types/annotationLayer';
+import { PlayheadClockContext, createPlayheadClock } from '../../hooks/usePlayhead';
 
 const getAudioBuffer = vi.hoisted(() => vi.fn());
 const computeOnsetEnvelopeWindow = vi.hoisted(() => vi.fn());
@@ -15,11 +16,8 @@ const node: RiffNode = {
   id: 'n1',
   name: 'Blocks 1',
   color: '#f59e0b',
-  highlightedBeats: [],
-  spans: [],
   stepsPerCycle: 32,
   subbeatsPerBeat: 4,
-  kind: 'boundary',
   segments: [{ start: 0, end: 8, kind: 'empty' }],
 };
 
@@ -67,12 +65,14 @@ describe('NodeEditPopover Delete', () => {
 });
 
 describe('NodeEditPopover Tap Along on close', () => {
-  /** The card with a real placement to tap along to — `currentTime` sweeps the
-   *  occurrence, which is what the tap capture reads its beat position off. */
+  /** The card with a real placement to tap along to — the playhead clock
+   *  sweeps the occurrence, which is what the tap capture reads its beat
+   *  position off. */
   function mountTapping() {
     const onChange = vi.fn();
     let guard: (() => boolean) | null = null;
-    function Card({ currentTime }: { currentTime: number }) {
+    const clock = createPlayheadClock(0);
+    function Card() {
       const ref = useRef<HTMLDivElement>(null);
       return (
         <NodeEditPopover
@@ -87,14 +87,17 @@ describe('NodeEditPopover Tap Along on close', () => {
           // 8 beats at 120bpm — the node's own length, so a beat is 0.5s.
           occurrence={{ start: 0, end: 4 }}
           isPlaying
-          currentTime={currentTime}
           onPlay={vi.fn()}
           onStop={vi.fn()}
         />
       );
     }
-    const view = render(<SettingsProvider><Card currentTime={0} /></SettingsProvider>);
-    const seek = (t: number) => view.rerender(<SettingsProvider><Card currentTime={t} /></SettingsProvider>);
+    render(
+      <PlayheadClockContext.Provider value={clock}>
+        <SettingsProvider><Card /></SettingsProvider>
+      </PlayheadClockContext.Provider>,
+    );
+    const seek = (t: number) => act(() => clock.set(t));
     return { onChange, seek, close: () => guard?.() };
   }
 

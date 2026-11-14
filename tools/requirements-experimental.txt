@@ -46,9 +46,8 @@ beat-this
 # with it). pitch_server lazy-imports basic_pitch, so the "Deps missing"
 # state is harmless when the package is absent.
 basic-pitch ; python_version < "3.12"
-# autochord lives in tools/requirements-autochord.txt — it pulls the `vamp`
-# C extension which needs the system `vamp-plugin-sdk` lib, so run.sh
-# attempts it separately (best-effort, won't block the rest of the family).
+# autochord is deliberately absent: the NNLS-Chroma Vamp plugin it loads is
+# GPL, so it is an opt-in the user installs by hand — see NOTICE.md.
 
 # --- LYRICS family ---------------------------------------------------------
 openai-whisper
@@ -66,6 +65,10 @@ openai-whisper
 # / `get_alignments` functions lyrics_server.py is written against. A bare
 # `pip install ctc-forced-aligner` pulls the wrong package and fails at import.
 ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+# faster-whisper (MIT) runs Ivrit on CTranslate2 int8 weights: ~1.6 GB peak
+# for a full song instead of 10+ GB through transformers at fp32. The int8
+# model is converted once by `lyrics_server.py --prepare-ivrit`.
+faster-whisper>=1.1,<2
 
 # --- PATTERN family --------------------------------------------------------
 # dtai-locomotif (MIT, KU Leuven) — DTW-warped variable-length motif discovery.

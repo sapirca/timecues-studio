@@ -116,8 +116,8 @@ is self-contained and references the deep-dive part of the
 [user guide](/timecues/user-guide/) when the topic deserves more than a
 screencast can give.
 
-> ⚠ **Set BPM and lock the grid in Dataprep before anything else.** Every
-> annotation snaps to the song's beat grid, and the Annotator Tool
+> ⚠ **Set BPM and lock the grid in Prepare before anything else.** Every
+> annotation snaps to the song's beat grid, and the Annotate tab
 > refuses to open without a BPM. The grid-readiness glyph on the song
 > row in the sidebar turns **emerald ♩** once you're ready; amber ♩
 > means the grid is not locked yet, red ♩ means BPM is still missing.
@@ -136,7 +136,7 @@ screencast can give.
 *The main page — “Enter Demo” to look around with no account, or “Start a new dataset” / “Enter your corpus” to work on real audio.*
 
 ![The Annotator Tool](timecues/images/annotate-overview.png)
-*The Annotator Tool — press space to play and M at each transition to drop a boundary on the nearest beat.*
+*The Annotate tab — press space to play and M at each transition to drop a boundary on the nearest beat.*
 
 The shortest possible loop through the app — open a song, lock the
 grid, drop your first boundary, save.
@@ -148,13 +148,13 @@ grid, drop your first boundary, save.
 2. **Sign in or click Enter Demo.** Demo Mode needs no account and
    keeps every edit in `localStorage`; signing in writes annotations
    server-side under your annotator id.
-3. **You land in Dataprep.** Pick a song in the left sidebar. If the
+3. **You land in Prepare.** Pick a song in the left sidebar. If the
    manifest is empty, drop an MP3 into the upload zone.
 4. **Open step *① Tempo*** in the *Song setup* sidebar on the right.
    Click an `Auto-detected` chip (or type a value) to set BPM. Then in
    step *② Downbeat*, press `G` (or click *Set bar 1 here*) at the first
    audible kick to align bar 1.
-5. **Switch to the *Annotator Tool* tab.** The song's sidebar glyph
+5. **Switch to the *Annotate* tab.** The song's sidebar glyph
    should now read emerald ♩.
 6. **Press space to play, press M when the song hits a section
    transition.** The boundary lands on the nearest beat; tab to give it
@@ -227,7 +227,7 @@ want:
    in the sidebar title and the *Enter `<corpus>`* card. Stored at
    `data/dataset-config.json:datasetName`. Edit later from
    **Settings → Corpus management → Admin & access**.
-4. **You land in Dataprep** with an empty song list. The viz canvas
+4. **You land in Prepare** with an empty song list. The viz canvas
    shows a placeholder.
 5. **Drop audio into the upload zone** at the bottom of the song
    sidebar. MP3, WAV, FLAC, and M4A are supported; the file's slug is
@@ -250,7 +250,7 @@ want:
    sign in. See [Roles](/timecues/user-guide/#roles-admin-team-leader-vs-annotator)
    in the user guide for the full per-tier capability matrix.
 9. **(Optional) Pre-compute the algorithm cache.** From the sidebar
-   footer in Dataprep click **Run all algorithms** — every built-in
+   footer in Prepare click **Run all algorithms** — every built-in
    detector runs on every song and the per-song cache fills. Useful
    before Auto-guess (it needs the per-detector outputs as input) and
    before any batch Inspect All run (instant load when the cache is
@@ -290,7 +290,7 @@ The exports are read-only at export time (no streaming sync). Useful
 for handing the corpus to collaborators or moving to a fresh deploy.
 
 Deep dive: [Main Page](/timecues/user-guide/#the-main-page) covers
-the Dataprep workspace end-to-end, and
+the Prepare workspace end-to-end, and
 [Roles](/timecues/user-guide/#roles-admin-team-leader-vs-annotator)
 covers the four-tier access model.
 
@@ -305,7 +305,7 @@ covers the four-tier access model.
 <!-- /tc-videos:main-3-annotate -->
 
 ![The Annotator Tool](timecues/images/annotate-overview.png)
-*The Annotator Tool — control bar, player, stacked signal rows, and the structure-sections editor.*
+*The Annotate tab — control bar, player, stacked signal rows, and the structure-sections editor.*
 
 ![The annotation edit toolbar](timecues/images/annotate-toolbar.png)
 *The edit toolbar — undo/redo, split, auto-guess, list/grid view, and clear.*
@@ -315,9 +315,9 @@ covers the four-tier access model.
 
 The full keyboard-driven flow. Faster than the mouse once you commit to it.
 
-1. **Lock BPM and grid in Dataprep first** — section transitions snap
+1. **Lock BPM and grid in Prepare first** — section transitions snap
    to the grid you set up there.
-2. **Switch to the Annotator Tool.** Pick *Boundaries → Manual* in the
+2. **Switch to the Annotate tab.** Pick *Boundaries → Manual* in the
    tab strip just under the waveform.
 3. **Press space to play.** Listen for the first transition.
 4. **Press `M` to drop a boundary** at the playhead. The boundary
@@ -374,7 +374,7 @@ together into a **group**: a named, coloured band that sits above them.
 
 Groups are saved with the song's annotations, so they come back when you
 reopen it. Detector lanes can't join one (they're rebuilt on every render),
-and bands only draw in the Annotator Tool — Dataprep and Algorithm Inspect
+and bands only draw in the Annotate tab — Prepare and Inspect
 leave out the header along with the lanes it covers.
 
 Deep dive: [Annotation Workspace](/timecues/user-guide/#annotation-workspace)
@@ -391,7 +391,7 @@ and [Keyboard Shortcuts](/timecues/user-guide/#keyboard-shortcuts).
 <!-- /tc-videos:main-4-inspect -->
 
 ![Algorithm Inspect overview](timecues/images/inspect-overview.png)
-*Algorithm Inspect — each detector's predictions stacked as colored timelines over the waveform, with your reference layers (Boundaries / Auto-guess) lined up beneath.*
+*Inspect — each detector's predictions stacked as colored timelines over the waveform, with your reference layers (Boundaries / Auto-guess) lined up beneath.*
 
 ![The Algorithms sidebar](timecues/images/algorithms-sidebar.png)
 *Tick detectors in the right sidebar — grouped by family (MSAF, All-in-One, Ruptures/CPD, Span, Loop, Cue, Lyrics, Pattern, Custom). Every tick fires a run, cached by file hash, so repeats are instant.*
@@ -412,7 +412,7 @@ ground truth and see who wins, per song and across the corpus.
    *Auto-guess (reviewed)* on the song to evaluate against.
    Without that, every metric is meaningless — F1 against an empty
    reference is undefined.
-2. **Switch to the *Algorithm Inspect* tab** and pick a song from the
+2. **Switch to the *Inspect* tab** and pick a song from the
    sidebar.
 3. **Tick algorithms in the right sidebar.** Each one you tick fires a
    detector run (cached by file hash, so a repeat run is instant). Their
@@ -437,7 +437,7 @@ ground truth and see who wins, per song and across the corpus.
    precision / recall / MNBD / CSR — click a column header to re-sort.
    Each row expands to per-song scores so you can spot which songs an
    algorithm chokes on.
-8. **Pre-compute the cache** in Dataprep first if you have many songs:
+8. **Pre-compute the cache** in Prepare first if you have many songs:
    the *Run all algorithms* button warms the cache for every detector ×
    every song, so the batch view loads instantly later.
 
@@ -448,8 +448,9 @@ ground truth and see who wins, per song and across the corpus.
 > dev: `pip install -r tools/requirements-allin1.txt`). The experimental
 > detectors (BeatNet, Silero-VAD, PANNs, …) need **both** the
 > `--profile experimental-models` sidecars **and** their per-family toggle in
-> **Settings → Experimental annotation types & models** — every experimental
-> flag is **off by default**. Full map:
+> **Settings → Experimental detectors** (each flag is **on by default**). The
+> lyrics detectors (Whisper, Ivrit, CTC) have no toggle — they appear when the
+> lyrics sidecar is reachable. Full map:
 > [Flags & compose profiles](#flags-environment-variables--compose-profiles).
 
 Deep dive: [Inspect Workspace](/timecues/user-guide/#inspect-workspace)
@@ -480,14 +481,14 @@ agreement into a single candidate and asks you to confirm it.
 
 ### Step by step
 
-1. **Lock BPM and grid in Dataprep first.** Auto-guess clusters in
+1. **Lock BPM and grid in Prepare first.** Auto-guess clusters in
    seconds, but candidates are still snapped to the grid you set up.
-2. **Pre-compute the detector cache.** From Dataprep, click *Run all
+2. **Pre-compute the detector cache.** From Prepare, click *Run all
    algorithms* to warm the cache for every built-in detector on this
-   song. (You can also do it from Algorithm Inspect — the cache is
+   song. (You can also do it from Inspect — the cache is
    shared.) Auto-guess won't run until the source detectors have
    results to consume.
-3. **Switch to the Annotator Tool → Boundaries → Auto-guess** tab.
+3. **Switch to the Annotate tab → Boundaries → Auto-guess** tab.
 4. **Click *Generate AutoGuess*.** The server pulls every cached
    detector's output, clusters all the boundary times into groups
    within a **cluster tolerance τ** (default 3 s, slider exposes
@@ -518,7 +519,7 @@ agreement into a single candidate and asks you to confirm it.
    the clustering re-runs.
 7. **Flip the layer to *reviewed*** when you've ticked through every
    candidate. The Auto-guess layer is now eligible as a reference in
-   Algorithm Inspect — meaning you can train new detectors against
+   Inspect — meaning you can train new detectors against
    the boundaries the consensus revealed.
 
 ### Why this is faster than annotating from scratch
@@ -585,10 +586,12 @@ algorithm shows up as an overlay alongside every built-in detector.
    ```
 3. **Upload it** via the Playground UI's file picker (or drop it into
    `tools/python/custom/` on disk and click *Reload*). The registry
-   hot-reloads and the new detector appears alongside built-ins in
-   Algorithm Inspect, Auto-guess's source pool, and the Dataprep
-   batch-run picker.
-4. **Run it** on a song in Algorithm Inspect and check the overlay.
+   hot-reloads and the new detector gets its own row in Algorithm
+   Inspect's **Detectors** sidebar, and appears in Auto-guess's source
+   pool and Prepare's batch-run picker.
+4. **Run it** on a song from its row in the Detectors sidebar (**▶**, or
+   **↻** to re-run) and check its lane. If it declares `strictness = True`,
+   the row also has a **Strictness** slider (Strict · Normal · Loose).
 5. **Iterate** — edit the script, re-upload (or just re-save and
    *Reload*), re-run. Cached results are keyed by the script's file
    hash, so a tweaked script always produces a fresh run; reverting
@@ -634,7 +637,7 @@ you put them side by side and resolve disagreements.
    id; annotations land at
    `data/annotations/<layer>/<annotator-id>/<slug>.json`.
 2. **Each annotator does a Manual pass** on the same song.
-3. **Open the Annotator Tool's *Compare* sub-tab** while signed in as
+3. **Open the Annotate's *Compare* sub-tab** while signed in as
    an admin or researcher (regular team annotators only see their own
    work).
 4. **Pick the two annotators in the Compare picker.** Their layers
@@ -665,10 +668,10 @@ single ground truth instead, make the song **collaborative**: the team edits
 *one* annotation, and takes turns.
 
 Collaboration is per song. A collaborative song opens read-only for everyone;
-you press **Lock to edit** to take it and **Unlock** to hand it back, and a bar
-above the annotation panel always names who holds it — whether they are
+you press **Grab** to take it and **Let go** to hand it back, and a bar
+above the annotation panel always names who has it — whether they are
 actively editing, holding it quietly, or whether their tab has stopped
-answering. Nothing unlocks on a timer: taking a song from someone is always a
+answering. Nothing is let go on a timer: taking a song from someone is always a
 deliberate act, and their work is saved as a version before it moves.
 
 Every hand-off is a version you can read and restore, so "put it back the way
@@ -690,7 +693,7 @@ Deep dive: [Collaborative songs](/timecues/user-guide/#collaborative-songs-one-s
 Five detectors race in parallel; you click the chip whose number
 matches what you hear, and the song's BPM is set.
 
-1. **In Dataprep, open step *① Tempo*** in the *Song setup* sidebar.
+1. **In Prepare, open step *① Tempo*** in the *Song setup* sidebar.
 2. **A row of `Auto-detected` chips** appears just below the BPM
    input. As detectors finish, their chips light up:
    - **`client-wabd`** — runs in your browser via
@@ -730,7 +733,7 @@ Deep dive: [Song Info Bar → BPM](/timecues/user-guide/#song-info-bar).
 ## Aligning the beat grid
 
 ![Tempo and grid alignment controls](timecues/images/grid-alignment.png)
-*The Tempo panel in Dataset Prep — set the BPM, then anchor bar 1 with Set bar start (G), Nudge, and the Grid offset (s) field.*
+*The Tempo panel in Prepare — set the BPM, then anchor bar 1 with Set bar start (G), Nudge, and the Grid offset (s) field.*
 
 ![The beat grid drawn over the waveform](timecues/images/grid-overlay.png)
 *Turn on Show beat grid and the lines ride on the audio — white for beats, red for bar downbeats, and the yellow marker for your bar-start anchor (beat 1). Aligning means sliding those red bar lines onto the song's real downbeats.*
@@ -754,15 +757,15 @@ is on (which is the default — see [Snap toggle](/timecues/user-guide/#3-big-ic
 If your grid is misaligned by 240 ms, every boundary you drop with `M`
 lands 240 ms early. Then when you compare against algorithm output
 they look "always slightly off" — and that's the grid's fault, not
-the algorithm's. Catching this in Dataprep saves debugging in
-Algorithm Inspect later.
+the algorithm's. Catching this in Prepare saves debugging in
+Inspect later.
 
 ### The grid-readiness glyph
 
 Each song row in the sidebar carries a `♩` glyph that summarizes how
 ready that song is for annotation:
 
-- **🔴 red ♩** — no BPM set. Annotator Tool won't open.
+- **🔴 red ♩** — no BPM set. Annotate won't open.
 - **🟡 amber ♩** — BPM is set but the bar start has not been
   confirmed. Annotation will work, but every boundary's snap may be
   one beat off the actual downbeat.
@@ -774,7 +777,7 @@ emerald before you start annotating.
 
 ### Step by step
 
-1. **In Dataprep, pick the song** in the sidebar. The viz canvas
+1. **In Prepare, pick the song** in the sidebar. The viz canvas
    loads, the audio decodes, the waveform draws.
 2. **Open step *① Tempo*** in the *Song setup* sidebar if it's
    collapsed.
@@ -862,7 +865,7 @@ Deep dive:
 [Grid Offset](/timecues/user-guide/#grid-offset--where-bar-1-starts-in-seconds),
 [Grid Mode (Steady · Mapped · Hand-placed)](/timecues/user-guide/#grid-mode-steady--mapped--hand-placed),
 [Which mode does this song need?](/timecues/user-guide/#which-mode-does-this-song-need),
-and [Metronome Panel](/timecues/user-guide/#metronome-panel-dataset-prep).
+and [Metronome Panel](/timecues/user-guide/#metronome-panel-prepare).
 
 ## Mapped and hand-placed tempo
 
@@ -875,7 +878,7 @@ you make the grid follow the music instead of fighting it.
 Both live in the same **① Tempo** step as Steady, behind the three-way mode
 picker. Switching modes is **non-destructive** — each mode keeps its own grid
 data, and only the *active* mode's grid is drawn downstream in the Annotator
-Tool and Algorithm Inspect.
+Tool and Inspect.
 
 ### Mapped — a tempo map, one bar 1 per segment
 
@@ -976,7 +979,7 @@ everywhere a source picker is shown.
 1. **Open the Source picker** in the top viz bar — the dropdown next
    to the waveform mode chooser.
 2. **Pick a stem** — *Vocals*, *Drums*, *Bass*, or *Other*. If stems
-   aren't cached yet for this song, Algorithm Inspect / Annotator
+   aren't cached yet for this song, Inspect / Annotator
    Tool will show a "Stems not extracted" hint and (for admins) a
    *Run Demucs* button.
 3. **Admin: click *Run Demucs*** to trigger the stems daemon on `:8006`.
@@ -1001,7 +1004,7 @@ Demo Mode ships with pre-extracted stems for the three sample songs
 (`edm-at-midnight`, `pantheon`, `phonk-remix`) — switching stems in
 demo is instant and does not run Demucs.
 
-Deep dive: [Stems server](/timecues/user-guide/#dataset-prep)
+Deep dive: [Stems server](/timecues/user-guide/#prepare)
 and [Storage clear scopes](/timecues/user-guide/#the-clear-storage-dialog--three-levels-of-cleanup).
 
 ## Self-hosting on your own server
@@ -1161,7 +1164,6 @@ wheels on first run. No containers needed; a full run ends `13 Ready,
 |---|---|
 | `--all` / `TIMECUES_FULL_INSTALL=1` | Switch to the full install profile (every model family). Same as running `./run_all.sh`. |
 | `--torch=cpu\|gpu\|none` | Which PyTorch build to install. Default: `none` in lean mode, `cpu` under `--all`. `--cpu` / `--gpu` / `--no-torch` are shorthands. |
-| `--with-dj` | Enable the experimental **Setlist** workspace at `/setlist`. Installs nothing extra — Setlist v0 reads the cached BPM the other detectors already produce. |
 | `SKIP_MODEL_INSTALL=1` | Skip the heavy `pip install` even under `--all` (use your own venv / Conda). Core deps still install; sidecars boot but ones whose deps aren't importable report `available=false` and the UI reads **Deps missing**. |
 | `TIMECUES_PYTHON` | Absolute path to the interpreter Vite's capability probe should inspect. Set this to your venv's `python` if the UI insists Demucs is missing after a manual `pip install`. The launcher sets it for you when it does the install itself. |
 | `PYTHON` | Which interpreter the launcher uses for sidecars (defaults to `python`, then `python3`). |
@@ -1169,8 +1171,8 @@ wheels on first run. No containers needed; a full run ends `13 Ready,
 ### In-app experimental flags
 
 Running the `experimental-models` profile only makes the sidecars
-*reachable* — each detector family stays hidden until you flip its flag in
-**Settings → Experimental annotation types & models**. The flag and the
+*reachable* — each detector family also has a flag (on by default) in
+**Settings → Experimental detectors**. The flag and the
 sidecar are linked: a family's toggle is **disabled** (with an install
 hint) until its sidecar is live, and the inspector surface **auto-hides**
 if the sidecar goes away — so you never see a detector you can't run.
@@ -1180,7 +1182,10 @@ if the sidecar goes away — so you never see a detector you can't run.
 | `experimentalSpanFamily` | Silero-VAD, JDCNet, PANNs, HPSS percussive |
 | `experimentalCueExtras` | BeatNet, basic-pitch, librosa key, autochord, librosa onsets |
 | `experimentalLoopFamily` | chroma-autocorrelation loop finder |
-| `experimentalLyricsFamily` | Whisper-base transcription |
+| `experimentalPatternFamily` | LoCoMotif motif discovery |
+
+The lyrics detectors (Whisper-base transcription, Ivrit, CTC forced aligner)
+have no flag: they show whenever the `lyrics` sidecar is reachable.
 
 Without the profile running, the matching `/api/<family>/*` calls return
 503 and the Initialize-models panel reads **Server off** — dimmed buttons,
@@ -1260,14 +1265,14 @@ syncs to the corpus.
 | **Default signals** | Master "Signal overlays on" toggle plus 12 sub-toggles for which signal rows are pre-checked in the SIGNALS dropdown (3-Band waveform, Spectrogram, Cepstrogram/MFCC, Chromagram, Tempogram, SSM, Energy/RMS, Brightness, Novelty, Onsets, Spectral Flux, EQ). Plus a 3-Band palette picker (`Classic` / `Cool` / `Sunset` / `Forest` / `Mono`). |
 | **Annotations — display** | Per-layer visibility defaults (Manual / Auto-guess) plus a time-unit picker for annotation editors (`Milliseconds` or `Beats & bars`). |
 | **Vocabularies & taxonomies** | All label vocabularies in one place. Section vocabulary (genre cards plus a custom textarea), cue vocabulary, span vocabulary. Each row has a *Save as dataset default* / *Clear dataset default* button **visible only to admins**, plus a *Local override* pill that appears next to your row when your local value diverges from the admin default. |
-| **Loops** | Default loop names, default cue labels for loops, opt-in for the loops marker family (experimental). |
+| **Loops** | Default loop names, default cue labels for loops. |
 | **BPM & grid protection (personal)** | When on, prevents accidental BPM or Grid Offset edits — the field becomes read-only until you toggle it back off. Useful once a song is fully annotated. |
-| **Experimental annotation types** | Per-family feature flags — Loops, Riff Patterns, Cue Extras, Span layers, etc. Off by default. Switching one on reveals its UI surface across the app. |
+| **Experimental detectors** | Per-family detector flags — SPAN-family, CUE-family extras, LOOP-family, PATTERN-family. On by default. Switching one off hides that family's detectors. Loops, Riff Patterns and Lyrics annotation types are always available. |
 
 #### 🔬 Research  *(violet)*
 
 ![Research settings](timecues/images/settings-default-algorithms.png)
-*Research — which detectors are pre-ticked in Algorithm Inspect, plus BPM-detection and Auto-guess defaults.*
+*Research — which detectors are pre-ticked in Inspect, plus BPM-detection and Auto-guess defaults.*
 
 Algorithm and detector defaults. **Visible to all tiers but
 read-only for Team / Public** — each row carries an *Admin only*
@@ -1275,7 +1280,7 @@ pill at those tiers.
 
 | Panel | What's inside |
 |---|---|
-| **Default algorithms** | Which algorithms are pre-ticked in Algorithm Inspect when a song opens. The order matters — the first ticked algorithm becomes the default reference in the diff readout. |
+| **Default algorithms** | Which algorithms are pre-ticked in Inspect when a song opens. The order matters — the first ticked algorithm becomes the default reference in the diff readout. |
 | **BPM detection** | Per-detector enable toggles (`client-wabd`, `librosa-beat-track`, `librosa-tempo-static`, `librosa-tempo-dynamic`, `madmom-rnn-beats`, `madmom-tempo`). Disabled detectors don't appear in the chip row. Useful for turning off detectors you don't trust on your corpus. |
 | **Auto-guess defaults** | Default cluster tolerance τ in seconds (default 3), default minimum agreement count (default 1), default source-detector subset (which of the 30+ detectors feed into Auto-guess by default). |
 | **Optional GPU tooling** | When the GPU profile is enabled at compose time, toggles here let you opt specific algorithms (allin1, demucs) into GPU acceleration. No effect when the profile is off. |

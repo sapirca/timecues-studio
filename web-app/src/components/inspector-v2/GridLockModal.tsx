@@ -1,80 +1,161 @@
+import { useState } from 'react';
 import { createPortal } from 'react-dom';
+import { formatClockTime } from '../../utils/clockTime';
+import type { GridLockMove, GridLockSnapType } from '../../utils/gridLockSnap';
 
-interface SnapCount {
-  boundaries: number;
-  cues: number;
-  spans: number;
-  loops: number;
-  riffPatterns: number;
-}
+const SNAP_ROWS: { type: GridLockSnapType; label: string }[] = [
+  { type: 'boundaries', label: 'Boundaries' },
+  { type: 'loops', label: 'Loops' },
+  { type: 'spans', label: 'Spans' },
+  { type: 'riff-patterns', label: 'Riff patterns' },
+];
+
+/** Ticked when the dialog opens: the song's structure. Spans and riff
+ *  patterns often sit off the grid on purpose, so they are opt-in. */
+const DEFAULT_SNAP: GridLockSnapType[] = ['boundaries', 'loops'];
 
 interface GridLockModalProps {
-  snapCount: SnapCount;
+  /** Every item each type would move, from where to where — only the ones
+   *  that actually move; an item already on the grid is not listed. */
+  moves: Record<GridLockSnapType, GridLockMove[]>;
   /** The grid unit everything will be pulled onto, worded as the Grid selector
    *  words it ("1/3 beat · triplet"). Named here because it is the whole
    *  answer to "aligned to what?", and it is a toolbar away from this dialog. */
   unitLabel: string;
-  /** Enable, and pull every existing annotation onto the grid. */
-  onConfirm: () => void;
+  /** Enable, and pull the existing items of the ticked types onto the grid. */
+  onConfirm: (types: GridLockSnapType[]) => void;
   onCancel: () => void;
 }
 
-/** Warning popup shown before enabling GRID LOCK. Grid Lock means the song IS
- *  on the grid, so enabling always aligns what is already there — the choice
- *  is whether to enable at all. Lists how many annotations will move. */
-export function GridLockModal({ snapCount, unitLabel, onConfirm, onCancel }: GridLockModalProps) {
-  const rows: { label: string; n: number }[] = [
-    { label: 'Boundaries', n: snapCount.boundaries },
-    { label: 'Cues', n: snapCount.cues },
-    { label: 'Spans', n: snapCount.spans },
-    { label: 'Loops', n: snapCount.loops },
-    { label: 'Riff patterns', n: snapCount.riffPatterns },
-  ];
-  const total = rows.reduce((sum, r) => sum + r.n, 0);
-  const shown = rows.filter((r) => r.n > 0);
+function signedMs(d: number): string {
+  const ms = Math.round(d * 1000);
+  return `${ms > 0 ? '+' : ms < 0 ? '−' : '±'}${Math.abs(ms)} ms`;
+}
+
+/** One edge of a move: "0:12.345 → 0:12.500  +155 ms". */
+function EdgeMove({ name, from, to }: { name?: string; from: number; to: number }) {
+  const still = Math.abs(to - from) < 5e-4;
+  return (
+    <div className={`flex gap-1.5 tabular-nums ${still ? 'text-slate-500' : ''}`}>
+      {name && <span className="w-7 text-slate-500">{name}</span>}
+      <span>{formatClockTime(from, 3)}</span>
+      {still ? <span>stays</span> : (
+        <>
+          <span className="text-slate-500">→</span>
+          <span className="text-amber-200">{formatClockTime(to, 3)}</span>
+          <span className="ml-auto text-slate-500">{signedMs(to - from)}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MoveList({ moves }: { moves: GridLockMove[] }) {
+  const lanes = new Set(moves.map((m) => m.lane)).size;
+  return (
+    <ul className="ml-5 mt-1 mb-1.5 max-h-44 overflow-y-auto rounded border border-white/[0.08] bg-black/30 divide-y divide-white/[0.05] text-[11px] font-mono">
+      {moves.map((m) => (
+        <li key={`${m.lane}/${m.id}`} className="px-2 py-1">
+          <div className="truncate text-slate-300">
+            {m.label || '—'}
+            {lanes > 1 && <span className="text-slate-500"> · {m.lane}</span>}
+          </div>
+          {m.from.end === undefined ? (
+            <EdgeMove from={m.from.start} to={m.to.start} />
+          ) : (
+            <>
+              <EdgeMove name="start" from={m.from.start} to={m.to.start} />
+              <EdgeMove name="end" from={m.from.end} to={m.to.end ?? m.from.end} />
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Popup shown before enabling GRID LOCK. The annotator picks which layer
+ *  types are pulled onto the grid, and can open each type to see every item
+ *  that would move and where to. Everything else keeps its times. Nothing
+ *  ticked is fine too — the lock then only governs what is placed from now on. */
+export function GridLockModal({ moves, unitLabel, onConfirm, onCancel }: GridLockModalProps) {
+  const [picked, setPicked] = useState<Set<GridLockSnapType>>(() => new Set(DEFAULT_SNAP));
+  const [open, setOpen] = useState<Set<GridLockSnapType>>(() => new Set());
+  const flip = (set: typeof setPicked, type: GridLockSnapType) => set((prev) => {
+    const next = new Set(prev);
+    if (next.has(type)) next.delete(type); else next.add(type);
+    return next;
+  });
+  const total = SNAP_ROWS.reduce((sum, r) => sum + (picked.has(r.type) ? moves[r.type].length : 0), 0);
 
   return createPortal(
     <div
       className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/70"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
     >
-      <div className="bg-[#14171d] border border-white/[0.18] rounded-xl shadow-2xl shadow-black/70 w-[360px] p-6 flex flex-col gap-4">
+      <div className="bg-[#14171d] border border-white/[0.18] rounded-xl shadow-2xl shadow-black/70 w-[420px] max-h-[90vh] overflow-y-auto p-6 flex flex-col gap-4">
         <div className="flex items-start gap-3">
           <span className="text-amber-400 text-xl mt-0.5">⊞</span>
           <div>
             <h2 className="text-white font-semibold text-[15px] leading-snug">Enable Grid Lock?</h2>
             <p className="text-slate-400 text-[12px] mt-1 leading-relaxed">
-              Grid Lock locks all snapping on and aligns every existing
-              annotation to the grid you have on screen — currently{' '}
+              Grid Lock locks all snapping on. Tick what to align to the grid
+              you have on screen — currently{' '}
               <span className="text-slate-200 font-mono">{unitLabel}</span>.
-              Lyrics are left untouched.
+              Anything left unticked, cues and lyrics keep their times. Open
+              a row to see what moves and where to.
             </p>
           </div>
         </div>
 
-        {total > 0 && (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 space-y-1">
-            <p className="text-amber-200 text-[11px] font-semibold uppercase tracking-wider mb-1.5">
-              Will be re-snapped
-            </p>
-            {shown.map((r) => (
-              <div key={r.label} className="flex justify-between text-[12px] font-mono">
-                <span className="text-slate-300">{r.label}</span>
-                <span className="text-amber-300">{r.n} item{r.n !== 1 ? 's' : ''}</span>
-              </div>
-            ))}
-            <div className="border-t border-amber-500/20 mt-2 pt-2 flex justify-between text-[12px] font-mono font-semibold">
-              <span className="text-slate-200">Total</span>
-              <span className="text-amber-200">{total}</span>
-            </div>
-          </div>
-        )}
-
-        {total === 0 && (
-          <p className="text-slate-500 text-[12px] italic">
-            Every annotation is already on the grid — nothing will move.
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 space-y-0.5" data-testid="grid-lock-snap-picker">
+          <p className="text-amber-200 text-[11px] font-semibold uppercase tracking-wider mb-1.5">
+            Snap to the grid
           </p>
-        )}
+          {SNAP_ROWS.map((r) => {
+            const list = moves[r.type];
+            const n = list.length;
+            const on = picked.has(r.type) && n > 0;
+            const expanded = open.has(r.type) && n > 0;
+            return (
+              <div key={r.type}>
+                <div className={`flex items-center gap-2 text-[12px] font-mono py-0.5 ${n ? '' : 'opacity-40'}`}>
+                  <button
+                    type="button"
+                    disabled={n === 0}
+                    onClick={() => flip(setOpen, r.type)}
+                    aria-expanded={expanded}
+                    aria-label={`${expanded ? 'Hide' : 'Show'} the ${r.label.toLowerCase()} that move`}
+                    className="text-slate-400 hover:text-white disabled:hover:text-slate-400 p-0.5 -m-0.5"
+                  >
+                    <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden
+                      className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
+                      <path d="M4 2.5 L9 6 L4 9.5 Z" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <label className={`flex flex-1 items-center gap-2 ${n ? 'cursor-pointer' : 'cursor-default'}`}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={n === 0}
+                      onChange={() => flip(setPicked, r.type)}
+                      className="accent-amber-400 w-3.5 h-3.5"
+                    />
+                    <span className={on ? 'text-slate-200' : 'text-slate-400'}>{r.label}</span>
+                    <span className={`ml-auto ${on ? 'text-amber-300' : 'text-slate-500'}`}>
+                      {n ? `${n} to move` : 'nothing to move'}
+                    </span>
+                  </label>
+                </div>
+                {expanded && <MoveList moves={list} />}
+              </div>
+            );
+          })}
+          <div className="border-t border-amber-500/20 mt-2 pt-2 flex justify-between text-[12px] font-mono font-semibold">
+            <span className="text-slate-200">Will move</span>
+            <span className="text-amber-200">{total}</span>
+          </div>
+        </div>
 
         <p className="text-slate-500 text-[11px]">
           You can undo immediately after enabling. Times already on the grid
@@ -91,7 +172,7 @@ export function GridLockModal({ snapCount, unitLabel, onConfirm, onCancel }: Gri
           </button>
           <button
             type="button"
-            onClick={onConfirm}
+            onClick={() => onConfirm(SNAP_ROWS.map((r) => r.type).filter((t) => picked.has(t) && moves[t].length > 0))}
             className="px-5 py-2 rounded text-[12px] font-mono font-semibold bg-amber-500/20 border border-amber-500/60 text-amber-200 hover:bg-amber-500/30 hover:border-amber-400 transition-colors"
           >
             Enable Grid Lock

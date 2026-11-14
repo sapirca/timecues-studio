@@ -7,10 +7,11 @@ lyrics, pattern, …) and Demucs stems into ONE clean, importable layer:
     instruments   — per-instrument presence spans          (span)
     cues          — sparse, salient points of interest     (cue)
     drum-pattern  — the repeating rhythmic pattern          (pattern)
-                    drum_pattern.py: one row of unlabelled onsets.
-                    drum_kit_pattern.py: three labelled rows
-                    (kick/snare/hat) with accents, and each repeat
-                    carrying how far it strays from the groove.
+                    drum_kit_pattern.py: labelled rows (kick/snare/hat)
+                    with accents, and each repeat carrying how far it
+                    strays from the groove. Built by the Drum hits &
+                    grooves detector, not by a batch run: it needs the
+                    song's bar grid.
     lyrics        — per-word (fallback per-line) timing      (lyrics)
 
 These are NOT sandboxed custom detectors: they run as privileged batch

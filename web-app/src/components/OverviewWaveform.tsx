@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PlayheadClock } from '../hooks/usePlayhead';
 import {
   aggregateExactRange,
   aggregateRange,
@@ -19,8 +20,10 @@ interface OverviewWaveformProps {
   containerWidth: number;
   /** Effective WaveSurfer zoom in pixels-per-second */
   pxPerSec: number;
-  /** Current scrollLeft of WaveSurfer's internal scroll container, in CSS px */
-  scrollLeft: number;
+  /** scrollLeft of WaveSurfer's internal scroll container, in CSS px. A clock
+   *  rather than a number: it moves every frame while a zoomed track plays,
+   *  and this canvas repaints for it without anyone re-rendering. */
+  scrollClock: PlayheadClock;
   /** Outer (peak) envelope color — hex like '#fb7185' */
   peakColor: string;
   /** Inner (RMS) envelope color — hex like '#e11d48' */
@@ -39,7 +42,7 @@ export function OverviewWaveform({
   audioBuffer,
   containerWidth,
   pxPerSec,
-  scrollLeft,
+  scrollClock,
   peakColor,
   rmsColor,
   scaleMode,
@@ -77,30 +80,56 @@ export function OverviewWaveform({
     const canvas = canvasRef.current;
     if (!canvas || containerWidth <= 0) return;
 
-    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
+    const schedule = () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        drawAll(
+          canvas,
+          summary,
+          channels,
+          containerWidth,
+          pxPerSec,
+          scrollClock.get(),
+          peakColor,
+          rmsColor,
+          scaleMode,
+          isLight,
+        );
+        rafRef.current = null;
+      });
+    };
+    schedule();
+    // A scroll is drawn now, not on the next animation frame: while playing
+    // the player scrolls from inside its own rAF tick, where a requested
+    // frame is the NEXT one — the canvas would trail the playhead and the
+    // lanes, which move in the tick itself, by a frame of scroll.
+    const unsubscribe = scrollClock.subscribe(() => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       drawAll(
         canvas,
         summary,
         channels,
         containerWidth,
         pxPerSec,
-        scrollLeft,
+        scrollClock.get(),
         peakColor,
         rmsColor,
         scaleMode,
         isLight,
       );
-      rafRef.current = null;
     });
 
     return () => {
+      unsubscribe();
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
     };
-  }, [summary, channels, containerWidth, pxPerSec, scrollLeft, peakColor, rmsColor, scaleMode, isLight]);
+  }, [summary, channels, containerWidth, pxPerSec, scrollClock, peakColor, rmsColor, scaleMode, isLight]);
 
   return (
     <canvas

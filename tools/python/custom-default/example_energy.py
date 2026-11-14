@@ -21,9 +21,8 @@ class EnergyJumpDetector(CustomDetector):
     name = "example_energy"
     label = "energy jumps"
     output_kind = "boundary"
-    is_algorithm = True
-    is_annotation = True
     description = "Boundary at every peak in the gradient of the smoothed energy curve."
+    windowable = True
     version = "0.1"
 
     # Tunables. Kept as class attributes so they're easy to read/edit.

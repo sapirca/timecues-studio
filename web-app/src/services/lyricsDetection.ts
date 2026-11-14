@@ -1,6 +1,5 @@
 // Whisper-base vocal transcription — talks to the Python lyrics_server
-// (proxied at /api/lyrics). LYRICS family. Experimental: gated by
-// `experimentalLyricsFamily`.
+// (proxied at /api/lyrics). LYRICS family.
 
 import { createDetectionClient } from './detectionClient';
 

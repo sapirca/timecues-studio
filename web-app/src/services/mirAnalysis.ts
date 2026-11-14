@@ -10,10 +10,39 @@
 
 import type { FrameAxis } from '../utils/frameTime';
 
+/**
+ * The Energy lane's mix: loudness, the bass hits, and every attack. Weighted
+ * this way because in dance music a drop is the kick and bass
+ * hitting again and a build is them gone, so the lane counts the low end's
+ * HITS — not its level: a breakdown full of swelling sub-bass pads has plenty
+ * of bass level and almost no bass hits. Spectral width, a quarter of the old
+ * mix (0.40 RMS + 0.25 width + 0.35 onsets), is gone: it barely moves at a
+ * drop and jitters inside one as much as it moves. Measured on the builds of
+ * Alor, alexia-chellun and mahalo as edge step over in-drop jitter: 14.8 /
+ * 13.0 / 6.5 against 9.9 / 12.7 / 6.8, with the edges stepping further.
+ * Mirrored in utils/energySpan.ts and tools/python/generators/energy_arcs.py.
+ */
+export const ENERGY_WEIGHTS = { rms: 0.4, bassHits: 0.3, onsets: 0.3 } as const;
+/** Upper edge of the bass in the Energy mix — kick and sub, not the whole
+ *  250 Hz low band. */
+export const ENERGY_BASS_HZ = 120;
+/** Edges of the frequency bands Busyness counts notes in (utils/rhythmSignals):
+ *  octave-ish bands from the kick to the air, so a bass line, a chord stab
+ *  and a hi-hat each land in their own. */
+export const BUSY_BAND_EDGES_HZ = [40, 120, 250, 500, 1000, 2000, 4000, 8000, 16000] as const;
+export const N_BUSY_BANDS = BUSY_BAND_EDGES_HZ.length - 1;
+
 export interface MIRFeatures {
-  energy: Float32Array;      // Composite: 40% RMS + 25% bandwidth + 35% onsets
+  energy: Float32Array;      // Composite: 40% RMS + 30% bass hits (< 120 Hz) + 30% onsets — see ENERGY_WEIGHTS. Not drawn as a lane (Volume and Beat strength say it better); the energy / sections / drops / buildups / breakdowns tools read it
+  bassHits: Float32Array;    // Onsets below ENERGY_BASS_HZ — the kick and bass landing (normalized 0-1). Beat strength (utils/rhythmSignals) reads it
   rms: Float32Array;         // Raw RMS energy (normalized 0-1)
   centroid: Float32Array;
+  bandwidth: Float32Array;   // Spectral bandwidth — spread of the spectrum around its centroid (normalized 0-1): a lone bass or a thin riser reads narrow, a full mix wide
+  /** Level of each BUSY_BAND_EDGES_HZ band in dB (10·log10 of mean power per
+   *  bin), row-major frame × band (length = frameCount × nBusyBands). Raw,
+   *  not normalised — Busyness reads rises in dB. */
+  bandLevels: Float32Array;
+  nBusyBands: number;
   onsets: Float32Array;
   zcr: Float32Array;         // Zero-crossing rate (normalized 0-1)
   loudness: Float32Array;    // A-weighted perceptual loudness (normalized 0-1)
@@ -306,7 +335,8 @@ export function computeMIRFeatures(
     const empty = new Float32Array(0);
     if (frameCount <= 0) {
       resolve({
-        energy: empty, rms: empty, centroid: empty, onsets: empty,
+        energy: empty, bassHits: empty, rms: empty, centroid: empty, bandwidth: empty,
+        bandLevels: empty, nBusyBands: N_BUSY_BANDS, onsets: empty,
         zcr: empty, loudness: empty, lowBand: empty, midBand: empty,
         highBand: empty, peaks: empty,
         flux: empty, novelty: empty, harmonic: empty, percussive: empty,
@@ -323,6 +353,8 @@ export function computeMIRFeatures(
     const bandwidth = new Float32Array(frameCount);
     const centroid  = new Float32Array(frameCount);
     const onsets    = new Float32Array(frameCount);
+    // Onsets below ENERGY_BASS_HZ only: the kick and bass hitting.
+    const bassHits  = new Float32Array(frameCount);
     // Full spectral flux (L2): sqrt(Σ(mag[t][k] - mag[t-1][k])²) — unlike onsets (half-wave
     // rectified, counts only increases), this counts both magnitude increases and decreases,
     // capturing note releases, filter closings, and other spectral "ending" events alongside attacks.
@@ -333,6 +365,7 @@ export function computeMIRFeatures(
     const midBand   = new Float32Array(frameCount);
     const highBand  = new Float32Array(frameCount);
     const peaks     = new Float32Array(frameCount);
+    const bandLevels = new Float32Array(frameCount * N_BUSY_BANDS);
 
     // ── Novelty: raw cosine-distance between adjacent 7-dim feature vectors ──
     // Vectors use raw (pre-normalisation) values — cosine distance is scale-invariant
@@ -363,8 +396,14 @@ export function computeMIRFeatures(
     const lowMaxBin    = Math.max(1, Math.floor(250 / freqBinWidth));
     const midMaxBin    = Math.max(lowMaxBin + 1, Math.floor(4000 / freqBinWidth));
     const lowNumBins   = lowMaxBin;
+    const bassMaxBin   = Math.max(1, Math.floor(ENERGY_BASS_HZ / freqBinWidth));
     const midNumBins   = midMaxBin - lowMaxBin;
     const highNumBins  = Math.max(1, halfSpectrum - midMaxBin);
+    // Busyness bands as bin ranges [from, to); a band above Nyquist is empty.
+    const busyBandBins = Array.from({ length: N_BUSY_BANDS }, (_, b) => [
+      Math.max(1, Math.round(BUSY_BAND_EDGES_HZ[b] / freqBinWidth)),
+      Math.min(halfSpectrum, Math.round(BUSY_BAND_EDGES_HZ[b + 1] / freqBinWidth)),
+    ]);
 
     // ── MFCC precomputation ──────────────────────────────────────────────────
     // Mel filterbank applied to power spectrum → log → DCT-II → N_MFCC coefficients.
@@ -440,13 +479,17 @@ export function computeMIRFeatures(
         // ── Onset Strength (half-wave rectified flux) + Full Spectral Flux ──
         // onsets: Σ max(0, Δmag) — only increases → sharp attack peaks
         // fluxRaw: sqrt(Σ Δmag²) — full L2 distance → all spectral change
-        let onset = 0, fluxSq = 0;
+        let onset = 0, fluxSq = 0, bassHit = 0;
         for (let i = 0; i < halfSpectrum; i++) {
           const diff = mag[i] - prevMag[i];
-          if (diff > 0) onset += diff;
+          if (diff > 0) {
+            onset += diff;
+            if (i >= 1 && i <= bassMaxBin) bassHit += diff;
+          }
           fluxSq += diff * diff;
         }
         onsets[frameIdx]  = onset;
+        bassHits[frameIdx] = bassHit;
         fluxRaw[frameIdx] = Math.sqrt(fluxSq);
         prevMag.set(mag);
 
@@ -466,6 +509,15 @@ export function computeMIRFeatures(
         lowBand[frameIdx]  = lo / lowNumBins;
         midBand[frameIdx]  = mi / midNumBins;
         highBand[frameIdx] = hi / highNumBins;
+
+        // ── Busyness bands: mean power per bin, in dB ─────────────────────
+        const levelOff = frameIdx * N_BUSY_BANDS;
+        for (let b = 0; b < N_BUSY_BANDS; b++) {
+          const [from, to] = busyBandBins[b];
+          let pw = 0;
+          for (let i = from; i < to; i++) pw += mag[i] * mag[i];
+          bandLevels[levelOff + b] = 10 * Math.log10((to > from ? pw / (to - from) : 0) + 1e-12);
+        }
 
         // ── Compressed spectrogram for HPSS ──────────────────────────────
         // Sample NUM_HPSS_BINS evenly from the magnitude spectrum.
@@ -532,6 +584,7 @@ export function computeMIRFeatures(
         normalizeInPlace(bandwidth);
         normalizeInPlace(centroid);
         normalizeInPlace(onsets);
+        normalizeInPlace(bassHits);
         normalizeInPlace(fluxRaw);
         normalizeInPlace(zcr);
         normalizeInPlace(loudness);
@@ -542,10 +595,11 @@ export function computeMIRFeatures(
         normalizeInPlace(midBand);
         normalizeInPlace(highBand);
 
-        // Composite energy: 40% RMS + 25% bandwidth + 35% onsets
+        // Composite energy — see ENERGY_WEIGHTS.
         const energy = new Float32Array(frameCount);
         for (let i = 0; i < frameCount; i++) {
-          energy[i] = 0.40 * rmsRaw[i] + 0.25 * bandwidth[i] + 0.35 * onsets[i];
+          energy[i] = ENERGY_WEIGHTS.rms * rmsRaw[i] + ENERGY_WEIGHTS.bassHits * bassHits[i]
+            + ENERGY_WEIGHTS.onsets * onsets[i];
         }
         normalizeInPlace(energy);
 
@@ -723,7 +777,7 @@ export function computeMIRFeatures(
 
         onProgress?.({ phase: 'done', progress: 1 });
         resolve({
-          energy, rms: rmsRaw, centroid, onsets,
+          energy, bassHits, rms: rmsRaw, centroid, bandwidth, bandLevels, nBusyBands: N_BUSY_BANDS, onsets,
           zcr, loudness, lowBand, midBand, highBand, peaks,
           flux: fluxRaw, novelty, harmonic, percussive,
           mfcc, nMfcc: N_MFCC,

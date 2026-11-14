@@ -38,6 +38,7 @@ import {
   type ProminenceLevel,
 } from '../../../types/annotationLayer';
 import { useProminenceDrag } from '../../../hooks/useProminenceDrag';
+import { usePlayheadClock, usePlayheadValue } from '../../../hooks/usePlayhead';
 import { setCardSectionOpen } from './CardSection';
 
 /**
@@ -201,10 +202,6 @@ interface ProminenceStripProps {
   color: string;
   /** Vertical offset of the strip within the lane row. */
   top: number;
-  /** Playhead in track seconds — the level buttons apply there when it's
-   *  inside the item, which is what makes them quick: scrub to where the
-   *  vocal enters, click Backing. */
-  currentTime?: number;
   readOnly?: boolean;
   /** Pull a breakpoint onto the song's beat grid as it's dragged or placed.
    *  Track seconds in, track seconds out — the host passes the page's one snap
@@ -220,7 +217,7 @@ interface ProminenceStripProps {
 
 /** The expanded four-row breakpoint editor, spanning the item's x-range. */
 export function ProminenceStrip({
-  points, start, end, duration, containerRef, color, top, currentTime,
+  points, start, end, duration, containerRef, color, top,
   readOnly = false, snapTime, onChange, onDragStart,
 }: ProminenceStripProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -291,11 +288,18 @@ export function ProminenceStrip({
 
   // Where the level buttons land. The playhead when it's inside the item —
   // the same rule the card's copy of these buttons used — else the t=0 anchor,
-  // the only other position that always means something.
-  const tRel = currentTime !== undefined ? currentTime - start : null;
-  const playheadInside = tRel !== null && tRel >= 0 && tRel <= itemDuration;
-  const applyAt = playheadInside ? tRel : 0;
-  const activeLevel = prominenceAt(points, applyAt)?.level;
+  // the only other position that always means something. That is what makes
+  // them quick: scrub to where the vocal enters, click Backing. Read from the
+  // playhead clock: the header re-renders only when the inside/outside answer
+  // or the level under the playhead changes, and a click reads the clock at
+  // the moment it lands.
+  const playheadClock = usePlayheadClock();
+  const applyAtFor = (t: number) => {
+    const tRel = t - start;
+    return tRel >= 0 && tRel <= itemDuration ? tRel : 0;
+  };
+  const playheadInside = usePlayheadValue((t) => t - start >= 0 && t - start <= itemDuration);
+  const activeLevel = usePlayheadValue((t) => prominenceAt(points, applyAtFor(t))?.level);
 
   return (
     <div
@@ -332,7 +336,7 @@ export function ProminenceStrip({
               key={level}
               type="button"
               disabled={readOnly}
-              onClick={() => onChange(setProminenceAt(points, applyAt, level))}
+              onClick={() => onChange(setProminenceAt(points, applyAtFor(playheadClock.get()), level))}
               className={`rounded px-1 py-[1px] text-[10px] leading-none border ${
                 readOnly ? 'cursor-not-allowed opacity-60' : 'hover:bg-white/[0.08]'
               } ${isActive ? 'text-slate-50' : 'text-slate-300 border-white/[0.08] bg-[#0a0b0d]'}`}

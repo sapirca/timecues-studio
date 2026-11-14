@@ -74,6 +74,7 @@ except ImportError:
 PORT = 8001
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from layers_timebase import read_layers  # noqa: E402
 from paths import (  # noqa: E402
     ANALYSIS_DIR,
     REPO_ROOT,
@@ -411,7 +412,7 @@ def _load_manual_segs(ann_path: Path):
     structure); the first one is the reference, matching the order the canvas
     draws them in.
     """
-    doc = json.loads(ann_path.read_text())
+    doc = read_layers(ann_path)   # a Grid Lock file stores beats; read them as seconds
     layers = _boundary_layers(doc)
     if not layers:
         return [], 0.0

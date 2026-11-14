@@ -37,6 +37,7 @@ RUN pip install --no-cache-dir \
 
 COPY tools/python/paths.py          /app/tools/python/paths.py
 COPY tools/python/server_common.py  /app/tools/python/server_common.py
+COPY tools/python/grid_truth.py     /app/tools/python/grid_truth.py
 COPY tools/python/msaf_server.py    /app/tools/python/msaf_server.py
 
 # Read-only seed dataset so MSAF can analyse the shipped default tracks even

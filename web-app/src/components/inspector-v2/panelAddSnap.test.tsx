@@ -55,7 +55,7 @@ describe('panel adds snap on the selected grid unit', () => {
     const onDocChange = vi.fn();
     render(wrap(
       <CueEditorPanel
-        ref={ref} currentTime={0} doc={docWith('cues')} onDocChange={onDocChange}
+        ref={ref} doc={docWith('cues')} onDocChange={onDocChange}
         selectedLayerId="L1" snapToGrid grid={GRID} snapTime={halfBeatSnap}
       />,
     ));
@@ -77,7 +77,7 @@ describe('panel adds snap on the selected grid unit', () => {
     const onDocChange = vi.fn((next: AnnotationLayersDocument) => { doc = next; });
     const view = () => wrap(
       <CueEditorPanel
-        ref={ref} currentTime={0} doc={doc} onDocChange={onDocChange}
+        ref={ref} doc={doc} onDocChange={onDocChange}
         selectedLayerId="L1" snapToGrid grid={GRID} snapTime={halfBeatSnap}
       />,
     );
@@ -100,7 +100,7 @@ describe('panel adds snap on the selected grid unit', () => {
     const onDocChange = vi.fn();
     render(wrap(
       <CueEditorPanel
-        ref={ref} currentTime={0} doc={docWith('cues')} onDocChange={onDocChange}
+        ref={ref} doc={docWith('cues')} onDocChange={onDocChange}
         selectedLayerId="L1" snapToGrid grid={GRID}
       />,
     ));
@@ -114,7 +114,7 @@ describe('panel adds snap on the selected grid unit', () => {
     const onDocChange = vi.fn();
     render(wrap(
       <SpanEditorPanel
-        ref={ref} currentTime={0} duration={60} doc={docWith('spans')}
+        ref={ref} duration={60} doc={docWith('spans')}
         onDocChange={onDocChange} selectedLayerId="L1"
         snapToGrid grid={GRID} snapTime={halfBeatSnap}
       />,
@@ -129,7 +129,7 @@ describe('panel adds snap on the selected grid unit', () => {
     const onDocChange = vi.fn();
     render(wrap(
       <CueEditorPanel
-        ref={ref} currentTime={0} doc={docWith('cues')} onDocChange={onDocChange}
+        ref={ref} doc={docWith('cues')} onDocChange={onDocChange}
         selectedLayerId="L1" snapToGrid grid={GRID} snapTime={tripletSnap}
       />,
     ));
@@ -167,7 +167,7 @@ describe('a section marked at the playhead snaps too', () => {
     ) => { doc = typeof next === 'function' ? next(doc) : next; });
     render(wrap(
       <BoundaryEditorPanel
-        ref={ref} songId="song" currentTime={0} duration={60}
+        ref={ref} songId="song" duration={60}
         songBpm={BPM} songBeatsPerBar={4} songGridOffset={0}
         doc={doc} onDocChange={onDocChange} docLoaded
         selectedLayerId="B1" snapTime={snapTime}

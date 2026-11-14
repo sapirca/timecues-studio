@@ -15,12 +15,17 @@ duplicated bits, extracted so they have one definition instead of fifteen.
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import os
+import socket
+import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from http.server import HTTPServer
 from pathlib import Path
 
 # The methods/headers used by the large majority of servers (everything
@@ -110,6 +115,25 @@ def cached_result(cache_path: Path, force: bool = False, *, failed=None):
     return payload
 
 
+def write_result(cache_path: Path, payload: dict, deps_ok: bool) -> None:
+    """Write a detector's payload to its cache file — unless the detector could
+    not run at all because this machine is missing a dependency.
+
+    A failure is worth keeping when it says something about the song. "torch
+    not installed" says something about the machine, and the cache outlives
+    the fix: the record kept being read back, from disk, months after the
+    package went in, and the lane stayed empty with an error nobody could act
+    on. Not writing it costs nothing — the request that hit the missing
+    dependency still gets the error in its response, and /health reports it.
+    """
+    if not deps_ok:
+        return
+    try:
+        cache_path.write_text(json.dumps(payload, indent=2))
+    except Exception:
+        pass
+
+
 # ─── Analysing one span of a song instead of the whole thing ─────────────────
 #
 # DataPrep's Mapped grid mode splits a song into grid segments, each with its
@@ -178,12 +202,28 @@ def decode_mono_16k(audio_path: Path):
     decodes the same formats, so we hand the models samples instead of a path
     and the subprocess never happens. 16 kHz mono in [-1, 1] is exactly what
     both loaders produce.
+
+    The work is librosa.load's own — soundfile to read, a channel mean, soxr
+    HQ to resample — called directly, because importing librosa costs ~250 MB
+    a server holds for life. librosa stays the fallback for what soundfile
+    cannot read.
     """
-    import librosa
     import numpy as np
 
-    y, _ = librosa.load(str(audio_path), sr=16000, mono=True)
-    return np.asarray(y, dtype=np.float32)
+    try:
+        import soundfile as sf
+        import soxr
+
+        x, sr = sf.read(str(audio_path), dtype="float32", always_2d=True)
+        y = x.mean(axis=1)
+        if sr != 16000:
+            y = soxr.resample(y, sr, 16000, quality="HQ")
+        return np.asarray(y, dtype=np.float32)
+    except Exception:
+        import librosa
+
+        y, _ = librosa.load(str(audio_path), sr=16000, mono=True)
+        return np.asarray(y, dtype=np.float32)
 
 
 @contextmanager
@@ -235,3 +275,90 @@ def shift_times(result: dict, offset: float, keys=("beat_times", "downbeats")) -
         if isinstance(value, list):
             result[key] = [float(t) + offset for t in value]
     return result
+
+
+# How long a model server keeps its models after the last request. A model
+# reload costs seconds; a model left loaded costs gigabytes for as long as the
+# server lives (one ivrit run leaves ~7 GB behind), so it goes after a few
+# idle minutes.
+MODEL_IDLE_SECONDS = float(os.environ.get("TC_MODEL_IDLE_SECONDS", "300"))
+
+# Carries the listening socket across ModelServer's restart.
+_SOCKET_FD_ENV = "TC_SERVER_SOCKET_FD"
+
+
+def release_memory() -> None:
+    """Collect what the last request left behind and empty torch's caches."""
+    gc.collect()
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if getattr(torch, "mps", None) is not None and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
+
+
+_model_used = False
+
+
+def model_used() -> None:
+    """Mark that the request in flight ran a model. Each `_ensure_*` loader
+    calls it, so only real work — not /health polls — counts as use."""
+    global _model_used
+    _model_used = True
+
+
+class ModelServer(HTTPServer):
+    """An HTTPServer that gives its models' memory back once it sits idle.
+
+    Dropping the model objects is not enough: torch and the C allocator keep
+    the freed pages, and a server that ran ivrit once stays at 4+ GB after
+    every reference is gone. Only a fresh process starts small. So after
+    MODEL_IDLE_SECONDS without a model request, the server re-execs itself —
+    same PID, same port, same log — handing the listening socket to the new
+    image, so a request that arrives meanwhile waits in the backlog instead
+    of being refused. The check runs in `service_actions`, on the serving
+    thread between requests, so it never interrupts a request in flight.
+    """
+
+    def __init__(self, address, handler, idle_seconds: float = MODEL_IDLE_SECONDS):
+        fd = os.environ.pop(_SOCKET_FD_ENV, None)
+        if fd is None:
+            super().__init__(address, handler)
+        else:
+            super().__init__(address, handler, bind_and_activate=False)
+            self.socket.close()
+            self.socket = socket.socket(fileno=int(fd))
+            self.socket.set_inheritable(False)
+            self.server_address = self.socket.getsockname()
+            self.server_name = socket.getfqdn(self.server_address[0])
+            self.server_port = self.server_address[1]
+        self._idle_seconds = idle_seconds
+        self._last_use: float | None = None
+
+    def process_request(self, request, client_address):
+        global _model_used
+        try:
+            super().process_request(request, client_address)
+        finally:
+            if _model_used:
+                _model_used = False
+                self._last_use = time.monotonic()
+                release_memory()
+
+    def service_actions(self):
+        if self._last_use is None:
+            return
+        if time.monotonic() - self._last_use < self._idle_seconds:
+            return
+        print(f"Idle {self._idle_seconds:.0f}s with models loaded — restarting "
+              f"to give their memory back.", file=sys.stderr, flush=True)
+        sys.stdout.flush()
+        fd = self.socket.fileno()
+        os.set_inheritable(fd, True)
+        os.environ[_SOCKET_FD_ENV] = str(fd)
+        os.execv(sys.executable, sys.orig_argv)

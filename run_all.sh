@@ -10,7 +10,7 @@
 #
 # This is a thin wrapper: it just turns on the full-install profile and hands
 # off to run.sh, so server startup and the Vite dev server have a SINGLE source
-# of truth. Any flags you pass are forwarded (e.g. ./run_all.sh --gpu --with-dj).
+# of truth. Any flags you pass are forwarded (e.g. ./run_all.sh --gpu --with-lol).
 set -e
 cd "$(dirname "$0")"
 exec ./run.sh --all "$@"

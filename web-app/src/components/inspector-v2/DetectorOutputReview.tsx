@@ -33,6 +33,8 @@ import { AnnotationPointCard, type AnnotationCardKind } from './shared/Annotatio
 import { useAnnotationPopover } from './shared/useAnnotationPopover';
 import { type ReviewableCategory } from './detectorConvert';
 import type { ResolvedSegment } from '../../utils/gridSegments';
+import { parseEnergySpanExport } from '../../utils/energySpan';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
 
 export type DetectorReviewStatus = 'accepted' | 'rejected';
 
@@ -53,8 +55,6 @@ interface Props {
   onSeekAndPlay?: (time: number, stopTime?: number) => void;
   onPause?: () => void;
   playerIsPlaying?: boolean;
-  /** Current playhead — used to detect "is this item currently playing?". */
-  playerTime?: number;
   /** Beat-grid context — drives the bar.beat read-out next to the seconds
    *  field on the read-only review card. Detector cards never edit; this is
    *  view-only context. */
@@ -109,7 +109,6 @@ export function DetectorOutputReview({
   onSeekAndPlay,
   onPause,
   playerIsPlaying = false,
-  playerTime = 0,
   bpm,
   gridOffset,
   beatsPerBar,
@@ -126,15 +125,6 @@ export function DetectorOutputReview({
     return { accepted, rejected, pending: items.length - accepted - rejected };
   }, [reviewState, items.length]);
 
-  if (!items.length) {
-    return (
-      <div className="p-4 rounded border border-white/[0.06] bg-white/[0.02] text-[12px] text-slate-400">
-        <span className="font-medium text-slate-300">{detectorLabel}</span> didn't emit any {category}.
-        Run it first from the Detectors panel, or pick another source.
-      </div>
-    );
-  }
-
   // Resolved open item — for the popover render. We use the item index from
   // the open state's itemId since the list is stable for the lifetime of the
   // popover (the envelope doesn't mutate under us).
@@ -145,6 +135,22 @@ export function DetectorOutputReview({
     if (!Number.isFinite(idx) || idx < 0 || idx >= items.length) return null;
     return { idx, item: items[idx] };
   })();
+  const openView = openItem ? detectorItemView(category, openItem.item) : null;
+  const openStart = openView?.start ?? 0;
+  const openStop = openView ? (openView.end ?? openView.start + 0.5) : 0;
+  // "Is the open item sounding?" — re-renders only when that flips.
+  const openItemUnderPlayhead = usePlayheadValue(
+    (t) => openView != null && t >= openStart && t < openStop,
+  );
+
+  if (!items.length) {
+    return (
+      <div className="p-4 rounded border border-white/[0.06] bg-white/[0.02] text-[12px] text-slate-400">
+        <span className="font-medium text-slate-300">{detectorLabel}</span> didn't emit any {category}.
+        Run it first from the Detectors panel, or pick another source.
+      </div>
+    );
+  }
 
   return (
     <div className="rounded border border-white/[0.06] bg-white/[0.02]">
@@ -224,7 +230,7 @@ export function DetectorOutputReview({
         const status = reviewState[id];
         const { start, end, label, description } = detectorItemView(category, openItem.item);
         const stopTime = end ?? start + 0.5;
-        const itemIsPlaying = playerIsPlaying && playerTime >= start && playerTime < stopTime;
+        const itemIsPlaying = playerIsPlaying && openItemUnderPlayhead;
         return (
           <AnnotationPointCard
             kind={kind}
@@ -318,7 +324,8 @@ function detectorItemView(
       start: s.start_ms / 1000,
       end: (s.start_ms + s.duration_ms) / 1000,
       label: s.label ?? '',
-      description: '',
+      // An ⚡ Energy blob is kilobytes of JSON; the card shows its sentence.
+      description: parseEnergySpanExport(s.description)?.description ?? s.description ?? '',
     };
   }
   // loops
@@ -331,11 +338,6 @@ function detectorItemView(
   };
 }
 
-/** Convert a slice of detector items into the matching user-layer item shape.
- *  Returns null for the 'boundaries' category (no manual-layer equivalent).
- *  All time fields are converted from ms (custom envelope) to seconds (layer
- *  doc). Per-item ids are minted fresh — the layer-doc id space is uuid, and
- *  the detector envelope's index-based keys would collide on a second copy. */
 function ReviewChip({
   active, tone, title, onClick, children,
 }: {

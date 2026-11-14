@@ -63,7 +63,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import (  # noqa: E402
     find_audio, stem_audio, cache_name, PATTERN_OUTPUTS_DIR as CACHE_DIR,
 )
-from server_common import cached_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
+from server_common import cached_result, write_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
+from grid_truth import NoUserGrid, cached_grid, grid_choice, user_beats  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +105,7 @@ def _detect_locomotif(
     y: "np.ndarray",
     sr: int,
     *,
+    beat_times_s=None,
     min_bars: int = 4,
     max_bars: int = 16,
     rho: float = 0.6,
@@ -111,14 +113,24 @@ def _detect_locomotif(
     """Return (patterns, duration_seconds).
 
     Pipeline:
-      1. Beat-track the audio (librosa).
+      1. The beats: `beat_times_s` (the song's grid) when given, else tracked
+         by librosa.
       2. Compute beat-synchronous chroma (12 × N_beats).
       3. Z-normalize each chroma row across beats — LoCoMotif's preferred input.
       4. apply_locomotif with cycle-length window [min_bars*4, max_bars*4] beats.
       5. Explode each motif set into one entry per occurrence.
     """
-    _, beats = librosa.beat.beat_track(y=y, sr=sr)
     duration = float(len(y) / sr)
+    if beat_times_s is not None:
+        # Motifs start and end on the beats exactly as set, not on the
+        # analysis frame each falls in; two beats in one frame keep the first.
+        exact = np.asarray(beat_times_s, dtype=float)
+        beats = librosa.time_to_frames(exact, sr=sr)
+        keep = np.concatenate([[True], np.diff(beats) > 0])
+        beats, exact = beats[keep], exact[keep]
+    else:
+        _, beats = librosa.beat.beat_track(y=y, sr=sr)
+        exact = librosa.frames_to_time(beats, sr=sr)
     if len(beats) < min_bars * 4 + 4:
         return [], duration
 
@@ -140,7 +152,7 @@ def _detect_locomotif(
     if l_max <= l_min:
         return [], duration
 
-    beat_times = librosa.frames_to_time(beats, sr=sr)
+    beat_times = exact
     # locomotif's apply_locomotif uses keyword `warping=True` by default — the
     # whole reason to pick it over plain SSM autocorrelation.
     # apply_locomotif returns a list of motif_sets; each motif_set is a list of
@@ -192,7 +204,9 @@ def _detect_locomotif(
     return out, duration
 
 
-def detect_locomotif(audio_path: Path) -> dict:
+def detect_locomotif(audio_path: Path, slug: str = "", grid: str = "auto") -> dict:
+    """grid="user" cuts the chroma on the song's grid as the annotator set it
+    (raises NoUserGrid when it has none); "auto" on librosa's tracked beats."""
     algo = "locomotif"
     if not (_LIBROSA_OK and _NUMPY_OK):
         return _err(algo, "librosa / numpy not installed")
@@ -201,7 +215,8 @@ def detect_locomotif(audio_path: Path) -> dict:
     t0 = datetime.now().timestamp() * 1000
     try:
         y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
-        patterns, duration = _detect_locomotif(y, sr)
+        beats = user_beats(slug, len(y) / sr) if grid == "user" else None
+        patterns, duration = _detect_locomotif(y, sr, beat_times_s=beats)
         return {
             "algorithm": algo,
             "ok":        True,
@@ -209,6 +224,8 @@ def detect_locomotif(audio_path: Path) -> dict:
             "duration":  duration,
             "ms":        time_ms(t0),
         }
+    except NoUserGrid:
+        raise
     except Exception as e:
         return _err(algo, f"{type(e).__name__}: {e}")
 
@@ -225,14 +242,16 @@ ALGORITHMS = {
 }
 
 
-def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> dict:
+def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False,
+               grid: str = "user") -> dict:
+    """A saved result counts only if it was made on the same `grid`."""
     if algo not in ALGORITHMS:
         raise ValueError(f"unknown algorithm: {algo}")
     cache_dir = CACHE_DIR / slug
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{cache_name(algo, stem)}.json"
     hit = cached_result(cache_path, force)
-    if hit is not None:
+    if hit is not None and cached_grid(hit) == grid:
         return hit
 
     if stem and stem != "mix":
@@ -244,12 +263,13 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
         if audio_path is None:
             raise FileNotFoundError(f"audio not found for slug: {slug}")
 
-    result = ALGORITHMS[algo]["detect"](audio_path)
+    result = ALGORITHMS[algo]["detect"](audio_path, slug, grid)
     payload = {
         "slug":        slug,
         "audio_file":  audio_path.name,
         "algorithm":   algo,
         "stem":        stem or "mix",
+        "grid":        grid,
         "duration":    result.get("duration", 0.0),
         "patterns":    result.get("patterns", []),
         "ok":          result.get("ok", False),
@@ -257,10 +277,7 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
         "ms":          result.get("ms", 0),
         "computed_at": now_iso(),
     }
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=ALGORITHMS[algo]["available"]())
     return payload
 
 
@@ -335,7 +352,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "slug and algo are required"})
                 return
             try:
-                self._send(200, detect_one(slug, algo, stem=stem, force=force))
+                self._send(200, detect_one(slug, algo, stem=stem, force=force,
+                                           grid=grid_choice(body)))
+            except NoUserGrid as e:
+                self._send(409, {"error": str(e)})
             except FileNotFoundError as e:
                 self._send(404, {"error": str(e)})
             except ValueError as e:

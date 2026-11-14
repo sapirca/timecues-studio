@@ -1,5 +1,4 @@
-// LYRICS-family eval table for the all-songs view. Renders when
-// `experimentalLyricsFamily` is on. Mirrors GlobalEvalSpanTable but the
+// LYRICS-family eval table for the all-songs view. Mirrors GlobalEvalSpanTable but the
 // reference comes from the first non-empty lyrics layer (loaded via
 // /api/annotation-layers/<slug>) and the prediction is the cached lyrics
 // sidecar result at /api/lyrics/detect/<slug>/<algo>.
@@ -42,9 +41,10 @@ interface AlgoAggregate {
   lineOnsetF1: number;
 }
 
-const LYRICS_ALGO_IDS = ['whisper-base', 'ctc-forced-aligner'] as const;
+const LYRICS_ALGO_IDS = ['whisper-base', 'ivrit', 'ctc-forced-aligner'] as const;
 const LYRICS_LABELS: Record<string, string> = {
   'whisper-base':       'Whisper-base',
+  'ivrit':              'Ivrit',
   'ctc-forced-aligner': 'CTC forced aligner',
 };
 

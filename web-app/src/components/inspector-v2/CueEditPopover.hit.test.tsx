@@ -58,7 +58,7 @@ describe('CueEditPopover Hit section', () => {
 
   it('sets and resets the tick colour', () => {
     const onChange = open({ id: 'c', time: 1, label: 'kick', color: '#38bdf8' });
-    fireEvent.change(screen.getByLabelText('Cue colour'), { target: { value: '#a3e635' } });
+    fireEvent.change(screen.getByLabelText('Item colour'), { target: { value: '#a3e635' } });
     expect(onChange).toHaveBeenCalledWith({ color: '#a3e635' });
     fireEvent.click(screen.getByRole('button', { name: 'reset' }));
     expect(onChange).toHaveBeenCalledWith({ color: undefined });
@@ -83,5 +83,12 @@ describe('CueEditPopover Hit section — note and decay', () => {
     fireEvent.change(d, { target: { value: '250' } });
     fireEvent.blur(d);
     expect(onChange).toHaveBeenCalledWith({ decay: 0.25 });
+  });
+
+  it('reads a decay back first in the folded summary, and puts its field first', () => {
+    open({ id: 'c', time: 1, label: 'kick', velocity: 90, decay: 0.42 });
+    expect(screen.getByText('rings 420 ms · velocity 90')).toBeTruthy();
+    const fields = screen.getAllByRole('spinbutton');
+    expect(fields[0]).toBe(screen.getByLabelText(/Decay ms/));
   });
 });

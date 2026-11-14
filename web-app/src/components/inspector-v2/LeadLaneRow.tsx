@@ -40,6 +40,9 @@ import { formatBeatPosition, getBarBeatOrigin, snapTimeToGrid, visibleGridLines 
 import { useRegionSelectDrag } from '../../hooks/useTimelineDrag';
 import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import { BeatGridOverlay, type LaneGridProps } from './BeatGridOverlay';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
+import { PlayheadLine } from '../Playhead';
+import { MIN_BAND_PX } from './shared/bandGeometry';
 
 /** One tier per prominence level. Fourteen pixels so a Lead block can carry a
  *  cut strip along its top edge and still leave a body big enough to click. */
@@ -135,7 +138,6 @@ interface PendingRange {
 interface LeadLaneRowProps {
   candidates: LeadCandidate[];
   duration: number;
-  currentTime: number;
   gridProps?: LeadGridProps;
   onSeek?: (time: number) => void;
   onRegionDragStart?: () => void;
@@ -249,7 +251,7 @@ function interiorCutTimes(
 }
 
 export function LeadLaneRow({
-  candidates, duration, currentTime, gridProps,
+  candidates, duration, gridProps,
   onSeek, onRegionDragStart, onAssignLead, onSetLevel, onPendingRangeChange,
 }: LeadLaneRowProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -314,7 +316,6 @@ export function LeadLaneRow({
     [candidates, duration],
   );
   const regions = tiers[0].regions;
-  const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   // Ranges are snapped to whole bars: the question this lane answers is a
   // musical one ("from the second chorus"), and a lead handover that lands
@@ -532,14 +533,16 @@ export function LeadLaneRow({
     return 'to hand over part-way, slide the rail along the block’s top edge to a beat.';
   }, [pending, gridProps]);
 
+  // The playhead's beat, read from the clock only while the picker is open:
+  // it changes once a beat, so the row re-renders then and not every frame.
+  const playheadBeat = usePlayheadValue((t) => (pending ? snapBeat(t) : null));
   const splitCut = useMemo(() => {
-    if (!pending) return null;
-    const t = snapBeat(currentTime);
+    if (!pending || playheadBeat === null) return null;
+    const t = playheadBeat;
     if (!(t > pending.t0 + 0.05 && t < pending.t1 - 0.05)) return null;
     const pos = cutPosAt(t, gridProps);
     return { t, label: pos === null ? fmtTime(t) : cutProse(pos) };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, currentTime, gridProps, duration]);
+  }, [pending, playheadBeat, gridProps]);
 
   return (
     <div
@@ -615,7 +618,7 @@ export function LeadLaneRow({
       {tiers.map(({ level, regions: tierRegions }, tierIndex) => tierRegions.map((region) => {
         const isLead = level === 'lead';
         const left = duration > 0 ? (region.start / duration) * 100 : 0;
-        const width = Math.max(0.3, duration > 0 ? ((region.end - region.start) / duration) * 100 : 0);
+        const width = duration > 0 ? ((region.end - region.start) / duration) * 100 : 0;
         const shared = region.leaders.length > 1;
         const head = region.leaders[0];
         const names = region.leaders.map((l) => (l.label === l.layerName ? l.label : `${l.label} (${l.layerName})`)).join(' + ');
@@ -654,8 +657,9 @@ export function LeadLaneRow({
             style={{
               left: `${left}%`,
               width: `${width}%`,
-              top: tierIndex * TIER_H + 1,
-              height: TIER_H - 2,
+              minWidth: MIN_BAND_PX,
+              top: tierIndex * TIER_H,
+              height: TIER_H,
               // Its own dark ground, so a block still separates from the tier
               // wash behind it once the fill gets faint down at Backing.
               backgroundColor: 'rgba(2,6,23,0.55)',
@@ -794,9 +798,10 @@ export function LeadLaneRow({
         />
       )}
 
-      <div
+      <PlayheadLine
+        duration={duration}
         className="absolute top-0 bottom-0 w-px pointer-events-none z-10"
-        style={{ left: `${pct}%`, background: 'rgba(255,255,255,0.75)' }}
+        style={{ background: 'rgba(255,255,255,0.75)' }}
       />
 
       {pending && (
@@ -896,7 +901,7 @@ function LeadPicker({
   return (
     <div
       className="fixed z-50 rounded border border-white/10 bg-[#0a0b0d] shadow-2xl p-2"
-      style={{ left, top, width, maxHeight: '46vh', overflowY: 'auto' }}
+      style={{ left, top, width, maxHeight: 'calc(46 * var(--vh-u, 1vh))', overflowY: 'auto' }}
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
       role="dialog"

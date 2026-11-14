@@ -26,6 +26,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { PendingSelection } from '../AnnotationOverlays';
 import { formatClockTime as fmtTime } from '../../../utils/clockTime';
+import { usePlayheadTitle } from '../../../hooks/usePlayhead';
 
 interface AnnotationAddPanelProps {
   pending: PendingSelection | null;
@@ -270,7 +271,6 @@ export function AnnotationAddPanel({
   // Hide it so the user only sees the one that matches their selection.
   const pendingHasActionableAdd = showPending && !needsRegion && !!onConfirmPending;
   const showAdd = !!addAtPlayhead && !pendingHasActionableAdd;
-  if (!showPending && !showAdd && !hint) return null;
 
   const pickerOpts = layerPicker?.options ?? [];
   const showPicker = pickerOpts.length > 1;
@@ -281,6 +281,11 @@ export function AnnotationAddPanel({
   // label it made "+ ADD" as wide as the layer name.
   const targetSuffix = showPicker && selectedLayer ? ` → ${selectedLayer.name}` : '';
   const addBtnLabel = (addAtPlayhead?.label ?? '') + targetSuffix;
+  const addBtnTitle = addAtPlayhead?.disabled
+    ? (addAtPlayhead.disabledReason ?? 'Add is not available right now')
+    : `${addBtnLabel} (M)`;
+  const addBtnTitleRef = usePlayheadTitle<HTMLButtonElement>(addBtnTitle);
+  if (!showPending && !showAdd && !hint) return null;
 
   return (
     <div className="flex-1 flex items-stretch gap-1">
@@ -426,11 +431,10 @@ export function AnnotationAddPanel({
             />
           ) : (
             <button
+              ref={addBtnTitleRef}
               onClick={addAtPlayhead.onAdd}
               disabled={addAtPlayhead.disabled}
-              title={addAtPlayhead.disabled
-                ? (addAtPlayhead.disabledReason ?? 'Add is not available right now')
-                : `${addBtnLabel} (M)`}
+              title={addBtnTitle}
               className={`flex-1 flex items-center justify-center px-2 py-1 text-[14px] leading-none rounded transition-colors ${
                 addAtPlayhead.disabled
                   ? 'bg-white/[0.02] text-slate-700 border border-white/[0.04] cursor-not-allowed'

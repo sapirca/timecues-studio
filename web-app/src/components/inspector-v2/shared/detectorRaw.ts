@@ -19,11 +19,19 @@ export function rawDetectorItem(
 ): unknown {
   if (!source || !source.startsWith('detector:')) return undefined;
   const env = results[source.slice('detector:'.length)];
-  if (!env || !Array.isArray(env.items)) return undefined;
+  if (!env) return undefined;
   // The index is the second-to-last colon segment (the last is the ms stamp);
   // detector names don't contain colons, but slicing from the end is robust.
   const parts = itemId.split(':');
   const idx = Number(parts[parts.length - 2]);
-  if (!Number.isInteger(idx) || idx < 0 || idx >= env.items.length) return undefined;
-  return env.items[idx];
+  // A `lanes` detector's items live in their lane, which the id's name names:
+  // `instrument_layers~kick_notes:3:1250` is item 3 of lane `kick_notes`.
+  const name = parts.slice(0, -2).join(':');
+  const sep = name.indexOf('~');
+  const items = env.lanes && sep >= 0
+    ? env.lanes.find((l) => l.id === name.slice(sep + 1))?.items
+    : env.items;
+  if (!Array.isArray(items)) return undefined;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) return undefined;
+  return items[idx];
 }

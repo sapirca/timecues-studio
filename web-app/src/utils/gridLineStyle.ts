@@ -7,7 +7,7 @@
 // formula, so the same bar line came out white here, red there, 1 px on the
 // waveform and 4 px on a lane row, solid in one place and dashed in another.
 //
-// Rendering still happens two ways — DOM divs for the surfaces that position
+// Rendering still happens two ways — SVG paths for the surfaces that position
 // by percent, canvas strokes for the ones that paint pixels — but both read
 // their colour and width from here, in CSS pixels, so a line of a given kind
 // is the same line everywhere. `components/GridLines.tsx` is the DOM half;
@@ -59,7 +59,14 @@ export const GRID_HALO_EXTRA_PX = 1.5;
 /** Tick caps and bar-number labels, for the surfaces that show them. */
 export const GRID_CAP_COLOR   = { phrase: 'rgba(251,191,36,0.85)', bar: 'rgba(226,232,240,0.75)' } as const;
 export const GRID_CAP_HEIGHT  = { phrase: 6, bar: 3 } as const;
-export const GRID_LABEL_COLOR = { phrase: 'rgba(251,191,36,0.95)', bar: 'rgba(226,232,240,0.85)' } as const;
+export const GRID_LABEL_COLOR = {
+  phrase: 'rgba(251,191,36,0.95)',
+  bar: 'rgba(226,232,240,0.85)',
+  // Beat numbers ("Show beat numbers"): quieter than the bar number so
+  // the bar still reads first, sub-beats quieter again.
+  beat: 'rgba(148,163,184,0.85)',
+  subBeat: 'rgba(100,116,139,0.85)',
+} as const;
 
 /** Colour, halo and width (CSS px) for one line at the user's thickness
  *  setting. `haloWidth` is what the halo is stroked at; the core goes on top. */

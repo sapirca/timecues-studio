@@ -4,9 +4,6 @@
  * Mirrors CueEditorPanel's shape: only the selected layer renders below the
  * waveform, as a flex-wrap row of LoopItemCards. The slim toolbar above the
  * cards owns layer-level controls (name, visibility, delete, + N-bar add).
- *
- * Gated by the experimentalLoopsAndPatterns Settings flag — the parent does
- * not mount this panel unless the flag is on.
  */
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, forwardRef, type ForwardedRef } from 'react';
@@ -19,6 +16,7 @@ import type {
 } from '../../types/annotationLayer';
 import {
   getLayerStatus,
+  newLoopItem,
   newLoopLayer,
   newId,
   pickDefaultLayerColor,
@@ -26,6 +24,8 @@ import {
 } from '../../types/annotationLayer';
 import { snapToBar, snapToBeat, type BarGrid } from '../../utils/barSnap';
 import { resolvePointAddTime } from './boundaryInsert';
+import { PLAYHEAD_SLOT, usePlayheadClock, usePlayheadValue } from '../../hooks/usePlayhead';
+import { LiveLabel } from '../Playhead';
 import type { PendingSelection } from './AnnotationOverlays';
 import { useSettings } from '../../context/SettingsContext';
 import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
@@ -37,7 +37,6 @@ import { LayerModePicker } from './LayerModePicker';
 import { formatBeatTime } from '../../utils/beatTimeFormat';
 
 interface LoopEditorPanelProps {
-  currentTime: number;
   duration: number;
   doc: AnnotationLayersDocument;
   onDocChange: (next: AnnotationLayersDocument) => void;
@@ -45,12 +44,12 @@ interface LoopEditorPanelProps {
   grid: Partial<BarGrid> | null;
   /** Global Snap-to-grid toggle (VizControlBar). */
   snapToGrid?: boolean;
-  /** The page's grid-aware snapper, used for every add / snap-to-playhead
-   *  time. It honours the GRID unit the user picked (1/2 beat, triplets,
-   *  bars…), per-beat overrides and tempo segments, and returns the time
-   *  untouched while Snap and Grid Lock are both off — the same rule a drag
-   *  on the canvas already followed. Optional: without it these paths fall
-   *  back to whole-beat snapping, which is what they all used to do. */
+  /** The page's snapper (`snapToBeatOrFiner`), used for every add /
+   *  snap-to-playhead time: the nearest beat — or the nearest GRID line when
+   *  the grid divides the beat — whatever Snap and Grid Lock say; the same
+   *  rule a drag on the canvas follows. It honours per-beat
+   *  overrides and tempo segments. Optional: without it these paths fall back
+   *  to whole-beat snapping while Snap is on. */
   snapTime?: (t: number) => number;
   focusedLoop?: { layerId: string; itemId: string } | null;
   onFocusLoop?: (selection: { layerId: string; itemId: string } | null) => void;
@@ -69,18 +68,15 @@ interface LoopEditorPanelProps {
   onDuplicateSkipped?: (message: string) => void;
   gridLock?: boolean;
   /** Reader for the LIVE media clock (the page's `liveSongTime`). A loop
-   *  placed against `currentTime` starts a render behind where the annotator
-   *  was listening; see `markTime`. Optional — falls back to the prop. */
+   *  placed against the playhead clock starts a frame behind where the
+   *  annotator was listening; see `markTime`. Optional — falls back to the
+   *  playhead clock. */
   getSongTime?: () => number | null;
-}
-
-function newLoopItem(start: number, end: number): LoopItem {
-  return { id: newId(), start, end, label: '', description: '', snapZeroCross: true };
 }
 
 function LoopEditorPanelInner(
   {
-    currentTime, duration, doc, onDocChange, grid,
+    duration, doc, onDocChange, grid,
     snapToGrid = false, snapTime,
     gridLock = false,
     focusedLoop, onFocusLoop, playingLoopId, onPlayLoop, onStopLoop,
@@ -94,16 +90,20 @@ function LoopEditorPanelInner(
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
   const { settings } = useSettings();
+  // The playhead is read from the clock, not a prop: handlers call
+  // `playheadClock.get()` when they fire, and the "@ <time>" labels re-render
+  // only when the time they print changes.
+  const playheadClock = usePlayheadClock();
   // Where a loop placed *right now* starts. Called at the moment of the add,
-  // never captured — `currentTime` is the media clock one rAF, one setState
-  // and one inspector re-render later. `atTime` is the caller's own reading
-  // (the M shortcut's, taken at the keydown) when it has one.
+  // never captured — the playhead clock is the media clock one rAF later.
+  // `atTime` is the caller's own reading (the M shortcut's, taken at the
+  // keydown) when it has one.
   const markTime = useCallback(
     (atTime?: number) => resolvePointAddTime({
       live: atTime ?? getSongTime?.(),
-      fallback: currentTime,
+      fallback: playheadClock.get(),
     }),
-    [getSongTime, currentTime],
+    [getSongTime, playheadClock],
   );
 
   // Where an add actually lands. Delegates to the page's `snapTime` so a mark
@@ -306,13 +306,13 @@ function LoopEditorPanelInner(
       l.id === focusedLoop.layerId && l.type === 'loops');
     return layer?.items.find((it) => it.id === focusedLoop.itemId) ?? null;
   }, [focusedLoop, doc.layers]);
-  const canSplitAtPlayhead = !!focusedLoopItem
-    && currentTime > focusedLoopItem.start + 0.01
-    && currentTime < focusedLoopItem.end - 0.01;
+  const canSplitAtPlayhead = usePlayheadValue((t) => !!focusedLoopItem
+    && t > focusedLoopItem.start + 0.01
+    && t < focusedLoopItem.end - 0.01);
 
   const splitFocusedLoop = useCallback(() => {
     if (!focusedLoop || !focusedLoopItem) return;
-    const t = currentTime;
+    const t = playheadClock.get();
     if (t <= focusedLoopItem.start + 0.01 || t >= focusedLoopItem.end - 0.01) return;
     const oldEnd = focusedLoopItem.end;
     onDocChange({
@@ -330,7 +330,7 @@ function LoopEditorPanelInner(
         return { ...l, items } as AnnotationLayer;
       }),
     });
-  }, [focusedLoop, focusedLoopItem, currentTime, doc, onDocChange]);
+  }, [focusedLoop, focusedLoopItem, playheadClock, doc, onDocChange]);
 
   const setLoopsStage = useCallback((stage: AnnotationStage) => {
     onDocChange(setLayerStatus(doc, 'loops', stage));
@@ -487,14 +487,14 @@ function LoopEditorPanelInner(
       splitDisabledReason: canSplitAtPlayhead
         ? undefined
         : 'Focus a loop whose body contains the playhead to enable Split',
-      splitLabel: `Split at ${fmtTime(currentTime)}`,
+      splitLabel: `Split at ${PLAYHEAD_SLOT}`,
       snapBoundaryVisible: true,
       canMarkIn: true,
       canMarkOut: false,
-      snapStartLabel: `@ ${fmtTime(currentTime)}`,
-      snapEndLabel: `@ ${fmtTime(currentTime)}`,
+      snapStartLabel: `@ ${PLAYHEAD_SLOT}`,
+      snapEndLabel: `@ ${PLAYHEAD_SLOT}`,
       canAddAtPlayhead: true,
-      addLabel: pendingAddLabel ?? `+ Add ${quickAddBars[0]}-bar loop @ ${fmtTime(currentTime)}`,
+      addLabel: pendingAddLabel ?? `+ Add ${quickAddBars[0]}-bar loop @ ${PLAYHEAD_SLOT}`,
       canAddLayer: true,
       pending: pendingSelection ?? null,
       pendingRequiresRegion: true,
@@ -502,7 +502,7 @@ function LoopEditorPanelInner(
       canExport: totalCount > 0,
       canDeleteAll: loopLayers.length > 0,
     });
-  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, currentTime, pendingSelection, totalCount, loopLayers.length, quickAddBars, pendingAddLabel]);
+  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, pendingSelection, totalCount, loopLayers.length, quickAddBars, pendingAddLabel]);
 
   const sortedItems = useMemo(
     () => (activeLayer?.items ?? []).slice().sort((a, b) => a.start - b.start),
@@ -526,7 +526,6 @@ function LoopEditorPanelInner(
       {activeLayer && (
         <LoopLayerToolbar
           layer={activeLayer}
-          currentTime={currentTime}
           grid={grid}
           quickAddBars={quickAddBars}
           onRename={(name) => patchLayer(activeLayer.id, { name })}
@@ -552,7 +551,7 @@ function LoopEditorPanelInner(
               key={loop.id}
               index={i}
               loop={loop}
-              color={activeLayer.color}
+              color={loop.color ?? activeLayer.color}
               grid={grid}
               isSelected={focusedLoop?.layerId === activeLayer.id && focusedLoop.itemId === loop.id}
               isPlaying={playingLoopId === loop.id}
@@ -585,7 +584,6 @@ function LoopEditorPanelInner(
 
 interface LoopLayerToolbarProps {
   layer: AnnotationLayer<'loops'>;
-  currentTime: number;
   grid: Partial<BarGrid> | null;
   quickAddBars: readonly [number, number];
   onRename: (name: string) => void;
@@ -599,7 +597,7 @@ interface LoopLayerToolbarProps {
 }
 
 function LoopLayerToolbar({
-  layer, currentTime, grid, quickAddBars,
+  layer, grid, quickAddBars,
   onRename, onToggleVisibility, onChangeMode, onDelete, onAddBars,
   pendingAddLabel,
 }: LoopLayerToolbarProps) {
@@ -632,7 +630,7 @@ function LoopLayerToolbar({
         </button>
       ) : (
         <>
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 shrink-0">@ {fmtTime(currentTime)}:</span>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 shrink-0">@ <LiveLabel text={PLAYHEAD_SLOT} />:</span>
           {quickAddBars.map((bars, i) => (
             <button
               key={i}

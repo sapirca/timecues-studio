@@ -78,3 +78,13 @@ describe('resolvePointAddTime', () => {
     expect(resolvePointAddTime({ live: 45.2, fallback: 45.18, pendingPoint: 21.1 })).toBe(45.2);
   });
 });
+
+describe('roundTime is the app-wide millisecond rounding', () => {
+  it('agrees with beatGrid.roundTime, half-milliseconds included', async () => {
+    const { roundTime } = await import('./boundaryInsert');
+    const { roundTime: gridRound } = await import('../../utils/beatGrid');
+    for (const t of [0.4045, 1.0005, 7.8185, 15.2315, 0.40541, 123.4565]) {
+      expect(roundTime(t)).toBe(gridRound(t));
+    }
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectMobileMode, isMobileHost, DESKTOP_SITE_KEY, type DetectEnv } from './mobileMode';
+import { detectMobileMode, isMobileHost, DESKTOP_SITE_KEY, TAB_OVERRIDE_KEY, type DetectEnv } from './mobileMode';
 
 function memStorage(initial: Record<string, string> = {}) {
   const m = new Map(Object.entries(initial));
@@ -14,6 +14,7 @@ const env = (over: Partial<DetectEnv> = {}): DetectEnv => ({
   hostname: 'timecues-studio.lol',
   search: '',
   storage: memStorage(),
+  tabStorage: memStorage(),
   matchesPhone: false,
   ...over,
 });
@@ -32,13 +33,23 @@ describe('detectMobileMode', () => {
     expect(detectMobileMode(env({ matchesPhone: true }))).toBe(true);
   });
 
-  it('honours ?mobile for this visit only, and remembers nothing', () => {
+  it('keeps a ?mobile override for the tab, so a reload does not drop the shell', () => {
     const storage = memStorage();
-    expect(detectMobileMode(env({ hostname: 'localhost', search: '?mobile=1', storage }))).toBe(true);
+    const tabStorage = memStorage();
+    expect(detectMobileMode(env({ hostname: 'localhost', search: '?mobile=1', storage, tabStorage }))).toBe(true);
+    // A reload of the same tab, without the query string — this is what makes
+    // signing in on the phone shell in dev possible.
+    expect(detectMobileMode(env({ hostname: 'localhost', storage, tabStorage }))).toBe(true);
+    expect(tabStorage.dump()[TAB_OVERRIDE_KEY]).toBe('1');
+    // Nothing reaches the browser-wide store: another tab starts fresh.
     expect(storage.dump()).toEqual({});
-    // The next visit to the same address is the desktop shell again — a single
-    // ?mobile=1 used to leave the browser stuck in the phone shell.
     expect(detectMobileMode(env({ hostname: 'localhost', storage }))).toBe(false);
+  });
+
+  it('lets the tab override put the desktop shell on the phone host', () => {
+    const tabStorage = memStorage();
+    expect(detectMobileMode(env({ hostname: 'm.localhost', search: '?mobile=0', tabStorage }))).toBe(false);
+    expect(detectMobileMode(env({ hostname: 'm.localhost', tabStorage }))).toBe(false);
   });
 
   it('lets ?mobile=0 look at the desktop shell on the phone host', () => {

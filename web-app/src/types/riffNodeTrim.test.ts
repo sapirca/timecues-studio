@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   PATTERN_SUBBEATS_PER_BEAT,
-  newRiffBoundaryNode,
   newRiffCombo,
   newRiffNode,
   newRiffPatternItem,
@@ -19,7 +18,7 @@ import {
 /** A 4-beat boundary node with a hit on every whole beat — 16 beats' worth of
  *  rhythm to cut back to, and enough blocks that a trim is visible. */
 function boundaryNode(lengthBeats: number, tickAt: number[]): RiffNode {
-  const node = newRiffBoundaryNode('B', '#f97316', lengthBeats);
+  const node = newRiffNode('B', '#f97316', lengthBeats);
   const segments: RiffBoundarySegment[] = tickAt.map((b) => ({ start: b, end: b + 0.5, kind: 'tick' }));
   return { ...node, segments: normalizeBoundarySegments(segments, lengthBeats) };
 }
@@ -83,15 +82,6 @@ describe('trimRiffNodeLength', () => {
     expect(next.combos![0].sequence[0].lengthSteps).toBe(16);
     expect(next.combos![0].sequence[1].lengthSteps).toBe(16);
     expect(next.nodes!.find((n) => n.id === other.id)).toEqual(other);
-  });
-
-  it('trims a grid node’s ticks the same way', () => {
-    const node: RiffNode = { ...newRiffNode('G', '#38bdf8'), highlightedBeats: [0, 4, 8, 12] };
-    const next = trimRiffNodeLength(layerWith(node, placement(node.id, 4)), node.id, 2);
-
-    expect(next.nodes![0].stepsPerCycle).toBe(8);
-    expect(next.nodes![0].highlightedBeats).toEqual([0, 4]);
-    expect((next.items as RiffPatternItem[])[0].sequence[0].lengthSteps).toBe(8);
   });
 
   it('extends as well as trims, and is a no-op for an unknown node', () => {

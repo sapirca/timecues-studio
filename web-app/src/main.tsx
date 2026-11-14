@@ -1,3 +1,5 @@
+// First: zooms the page and re-scales coordinate APIs before anything reads one.
+import './uiScale'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'

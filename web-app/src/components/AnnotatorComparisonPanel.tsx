@@ -1,49 +1,84 @@
 import { useEffect, useMemo, useState } from 'react';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
-import type { AutoGuessManualAnnotation } from '../types/autoGuess';
 import type { AnnotationLayersDocument } from '../types/annotationLayer';
 import { primaryBoundaryItems } from '../services/annotationLayers';
-import {
-  autoGuessBoundaries,
-  buildAgreementMatrix,
-  type AgreementMatrix,
-} from '../utils/annotatorAgreement';
-import type { BoundarySource } from './inspector-v2/shared/tabConfig';
+import { buildAgreementMatrix, type AgreementMatrix } from '../utils/annotatorAgreement';
 
-/** The comparison panel picks among the boundary sources. `manual` reads the
- *  annotator's primary boundaries layer. */
-type AnnotationKind = BoundarySource;
+/** One comparison per annotation layer type. Boundaries compare each
+ *  annotator's primary boundaries layer (one reference reading); every other
+ *  type pools all of that annotator's layers of the type and compares item
+ *  onsets (`time`, or `start` for spans / loops / riffs). */
+type AnnotationKind = 'boundaries' | 'cues' | 'spans' | 'loops' | 'riff-patterns' | 'lyrics';
 
-/** Response bucket backing each kind. */
-const KIND_BUCKET: Record<AnnotationKind, 'layers' | 'autoGuess'> = {
-  manual: 'layers',
-  autoGuess: 'autoGuess',
-};
+const KINDS: AnnotationKind[] = ['boundaries', 'cues', 'spans', 'loops', 'riff-patterns', 'lyrics'];
 
 interface AllAnnotationsResponse {
   slug: string;
-  /** One annotation-layers document per annotator. Boundaries are read out of
-   *  it via `primaryBoundaryItems` — one reference reading per annotator. */
+  /** One annotation-layers document per annotator. */
   layers: Record<string, AnnotationLayersDocument>;
-  autoGuess: Record<string, AutoGuessManualAnnotation>;
 }
 
 const KIND_LABEL: Record<AnnotationKind, string> = {
-  manual: 'Boundaries',
-  autoGuess: 'Auto-guess',
+  boundaries: 'Boundaries',
+  cues: 'Cues',
+  spans: 'Spans',
+  loops: 'Loops',
+  'riff-patterns': 'Riff Patterns',
+  lyrics: 'Lyrics',
+};
+
+/** What one item is called, for headers and the footnote. */
+const KIND_NOUN: Record<AnnotationKind, string> = {
+  boundaries: 'boundaries',
+  cues: 'cues',
+  spans: 'spans',
+  loops: 'loops',
+  'riff-patterns': 'riffs',
+  lyrics: 'words',
+};
+
+/** What the bottom number compares for each kind. */
+const KIND_LABEL_NOTE: Record<AnnotationKind, string> = {
+  boundaries: 'the same section type',
+  cues: 'the same label',
+  spans: 'the same label',
+  loops: 'the same label',
+  'riff-patterns': 'the same label',
+  lyrics: 'the same word',
 };
 
 const TOLERANCES = [0.5, 3] as const;
 
+type Mark = { time: number; type: string };
+
+function marksFor(doc: AnnotationLayersDocument | undefined, kind: AnnotationKind): Mark[] {
+  if (!doc) return [];
+  if (kind === 'boundaries') {
+    return primaryBoundaryItems(doc).map((b) => ({ time: b.time, type: b.type ?? '' }));
+  }
+  const out: Mark[] = [];
+  for (const layer of doc.layers ?? []) {
+    if (layer.type !== kind) continue;
+    for (const raw of layer.items as unknown[]) {
+      const it = raw as { time?: number; start?: number; label?: string; text?: string };
+      const t = typeof it.time === 'number' ? it.time : it.start;
+      if (typeof t !== 'number' || !Number.isFinite(t)) continue;
+      const lab = kind === 'lyrics' ? it.text : it.label;
+      out.push({ time: t, type: normaliseLabel(lab) });
+    }
+  }
+  return out;
+}
+
+function normaliseLabel(s: string | undefined): string {
+  return (s ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
-  const KINDS: AnnotationKind[] = useMemo(
-    () => ['manual', 'autoGuess'],
-    [],
-  );
   const [data, setData] = useState<AllAnnotationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [kind, setKind] = useState<AnnotationKind>('manual');
+  const [kind, setKind] = useState<AnnotationKind>('boundaries');
 
   useEffect(() => {
     if (!slug) return;
@@ -62,46 +97,36 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
       .finally(() => setLoading(false));
   }, [slug]);
 
-  const matricesByKind = useMemo(() => {
-    if (!data) return null;
-    const out: Partial<Record<AnnotationKind, Record<number, AgreementMatrix>>> = {};
-
+  /** Per kind: the annotators who have at least one item of it, with their marks. */
+  const marksByKind = useMemo(() => {
+    const out: Partial<Record<AnnotationKind, Record<string, Mark[]>>> = {};
+    if (!data) return out;
     for (const k of KINDS) {
-      const bucket = data[KIND_BUCKET[k]];
-      const ids = Object.keys(bucket).sort();
-      if (ids.length < 2) continue;
-      const perTol: Record<number, AgreementMatrix> = {};
-      for (const tol of TOLERANCES) {
-        if (k === 'autoGuess') {
-          perTol[tol] = buildAgreementMatrix(
-            ids,
-            (id) => autoGuessBoundaries(bucket[id] as AutoGuessManualAnnotation).map((t) => ({ time: t, type: '' })),
-            tol,
-          );
-        } else {
-          perTol[tol] = buildAgreementMatrix(
-            ids,
-            (id) => primaryBoundaryItems(bucket[id] as AnnotationLayersDocument).map((s) => ({ time: s.time, type: s.type })),
-            tol,
-          );
-        }
+      const byId: Record<string, Mark[]> = {};
+      for (const id of Object.keys(data.layers ?? {}).sort()) {
+        const m = marksFor(data.layers[id], k);
+        if (m.length > 0) byId[id] = m;
       }
-      out[k] = perTol;
+      out[k] = byId;
     }
     return out;
-  }, [data, KINDS]);
+  }, [data]);
 
-  const availableKinds = useMemo<AnnotationKind[]>(() => {
-    if (!data) return [];
-    return KINDS.filter((k) => Object.keys(data[KIND_BUCKET[k]]).length >= 2);
-  }, [data, KINDS]);
+  const availableKinds = useMemo<AnnotationKind[]>(
+    () => KINDS.filter((k) => Object.keys(marksByKind[k] ?? {}).length >= 2),
+    [marksByKind],
+  );
 
-  // Auto-select an available kind when current selection has no comparison
-  useEffect(() => {
-    if (availableKinds.length > 0 && !availableKinds.includes(kind)) {
-      setKind(availableKinds[0]);
-    }
-  }, [availableKinds, kind]);
+  const activeKind: AnnotationKind | null = availableKinds.includes(kind) ? kind : availableKinds[0] ?? null;
+
+  const matrices = useMemo(() => {
+    if (!activeKind) return null;
+    const byId = marksByKind[activeKind] ?? {};
+    const ids = Object.keys(byId);
+    const perTol: Record<number, AgreementMatrix> = {};
+    for (const tol of TOLERANCES) perTol[tol] = buildAgreementMatrix(ids, (id) => byId[id], tol);
+    return perTol;
+  }, [activeKind, marksByKind]);
 
   if (loading) {
     return <Shell><p className="text-xs text-slate-500">Loading…</p></Shell>;
@@ -111,10 +136,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
   }
   if (!data) return null;
 
-  const totalAnnotators = new Set([
-    ...Object.keys(data.layers),
-    ...Object.keys(data.autoGuess),
-  ]).size;
+  const totalAnnotators = Object.keys(data.layers ?? {}).length;
 
   if (totalAnnotators < 2) {
     return (
@@ -126,7 +148,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
     );
   }
 
-  if (availableKinds.length === 0) {
+  if (!activeKind) {
     return (
       <Shell>
         <p className="text-xs text-slate-500">
@@ -137,27 +159,25 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
     );
   }
 
-  const matrices = matricesByKind?.[kind];
-
   return (
     <Shell>
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="text-[11px] text-slate-400">
           {totalAnnotators} annotators have data for this song
         </div>
-        <nav className="flex gap-1 text-[10px] uppercase tracking-wider">
+        <nav className="flex flex-wrap justify-end gap-1 text-[10px] uppercase tracking-wider">
           {availableKinds.map((k) => (
             <button
               key={k}
               type="button"
               onClick={() => setKind(k)}
               className={`px-2 py-0.5 rounded transition-colors ${
-                kind === k
+                activeKind === k
                   ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
                   : 'bg-white/[0.04] text-slate-500 hover:text-slate-300 border border-transparent'
               }`}
             >
-              {KIND_LABEL[k]} ({Object.keys(data[KIND_BUCKET[k]]).length})
+              {KIND_LABEL[k]} ({Object.keys(marksByKind[k] ?? {}).length})
             </button>
           ))}
         </nav>
@@ -166,7 +186,7 @@ export function AnnotatorComparisonPanel({ slug }: { slug: string }) {
       {matrices && (
         <div className="space-y-4">
           {TOLERANCES.map((tol) => (
-            <MatrixView key={tol} matrix={matrices[tol]} tolerance={tol} kind={kind} />
+            <MatrixView key={tol} matrix={matrices[tol]} tolerance={tol} kind={activeKind} />
           ))}
         </div>
       )}
@@ -187,12 +207,13 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 function MatrixView({ matrix, tolerance, kind }: { matrix: AgreementMatrix; tolerance: number; kind: AnnotationKind }) {
   const ids = matrix.ids;
-  const showLabels = kind !== 'autoGuess';
+  // Show the label line only when some matched pair actually carried labels.
+  const showLabels = matrix.labels.some((row) => row.some((v) => v !== null && v > 0));
 
   return (
     <div>
       <div className="text-[11px] text-slate-400 mb-1.5">
-        Boundary F1 (±{tolerance}s)
+        {KIND_LABEL[kind]} F1 (±{tolerance}s)
       </div>
       <div className="overflow-x-auto">
         <table className="text-[11px] border-separate border-spacing-0">
@@ -205,7 +226,7 @@ function MatrixView({ matrix, tolerance, kind }: { matrix: AgreementMatrix; tole
                 <th
                   key={id}
                   className="px-2 py-1 text-slate-400 font-normal text-left whitespace-nowrap"
-                  title={`${matrix.counts[id]} boundaries`}
+                  title={`${matrix.counts[id]} ${KIND_NOUN[kind]}`}
                 >
                   <IdChip id={id} />
                   <span className="text-slate-600 ml-1">·{matrix.counts[id]}</span>
@@ -252,7 +273,8 @@ function MatrixView({ matrix, tolerance, kind }: { matrix: AgreementMatrix; tole
       </div>
       {showLabels && (
         <div className="text-[10px] text-slate-600 mt-1">
-          Top number = boundary F1. Bottom = % of matched boundaries with same section type.
+          Top number = F1 of {KIND_NOUN[kind]} matched by time. Bottom = % of matched {KIND_NOUN[kind]} with{' '}
+          {KIND_LABEL_NOTE[kind]}.
         </div>
       )}
     </div>

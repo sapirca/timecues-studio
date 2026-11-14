@@ -19,9 +19,9 @@ Endpoints
   POST   /api/stems/separate
          body { slug: str, force?: bool, model?: '6s'|'4s' }
                        → { jobId, model }
-                       `model` picks the source count — '6s' (htdemucs_6s:
-                       vocals/drums/bass/other/guitar/piano, the default) or
-                       '4s' (htdemucs: vocals/drums/bass/other, ~1.5x faster).
+                       `model` picks the source count — '4s' (htdemucs:
+                       vocals/drums/bass/other, the default, ~1.5x faster) or
+                       '6s' (htdemucs_6s: adds guitar/piano).
   GET    /api/stems/status/<jobId>
                        → { status: 'running'|'done'|'error'|'cancelled',
                            logs: str, startedAt: int, finishedAt?: int,
@@ -80,7 +80,7 @@ PORT = 8006
 # Validated here (not in the subprocess) so a bad value fails the request
 # instead of a job that dies 20 seconds later inside demucs.
 STEM_MODELS = {"6s": "6s", "4s": "4s"}
-DEFAULT_MODEL = "6s"
+DEFAULT_MODEL = "4s"
 
 # Stems output directory. Override with STEMS_OUTPUT_DIR for tests; the docker
 # bind mount lines up at /app/web-app/public/stems by default.

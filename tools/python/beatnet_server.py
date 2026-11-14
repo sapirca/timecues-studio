@@ -58,7 +58,7 @@ import sys
 import warnings
 from collections import Counter
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -68,8 +68,10 @@ PORT = 8010
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import find_audio, BEATNET_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
 from server_common import (  # noqa: E402
-    cached_result, cors_headers, now_iso, parse_range, shift_times, time_ms,
+    cached_result, write_result, cors_headers, now_iso, parse_range, shift_times, time_ms,
     trimmed_audio,
+    ModelServer,
+    model_used,
 )
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -140,6 +142,7 @@ def _infer_meter(beat_labels: list[int]) -> str | None:
 def _ensure_beatnet():
     """Construct the offline BeatNet estimator on first use."""
     global _beatnet_estimator
+    model_used()
     if _beatnet_estimator is not None:
         return
     from BeatNet.BeatNet import BeatNet  # type: ignore[import-not-found]
@@ -240,10 +243,7 @@ def detect(slug: str, force: bool = False, span: "tuple[float, float] | None" = 
         "result":      result,
         "computed_at": now_iso(),
     }
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=_BEATNET_OK and _NUMPY_OK)
     return payload
 
 
@@ -342,7 +342,7 @@ def main():
     host = os.environ.get("HOST", "localhost")
     print(f"Starting BeatNet server on http://{host}:{PORT}", file=sys.stderr)
     print(f"  BeatNet={_BEATNET_OK}  numpy={_NUMPY_OK}", file=sys.stderr)
-    server = HTTPServer((host, PORT), Handler)
+    server = ModelServer((host, PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

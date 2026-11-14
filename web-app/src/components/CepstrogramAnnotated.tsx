@@ -39,7 +39,6 @@ export interface Props {
   beatGroupSize?: number;
   /** Multiplier on beat-grid line width (1 = default). */
   gridThickness?: number;
-  currentTime?: number;
   height?: number;
 }
 
@@ -167,7 +166,6 @@ export function CepstrogramAnnotated({
   subBeatDivision,
   beatGroupSize,
   gridThickness = 1,
-  currentTime = 0,
   height = 80,
 }: Props) {
   const frameAxisRef = useRef<FrameAxis>(frameAxis(512, 2048, 44100, frameCount));
@@ -218,7 +216,7 @@ export function CepstrogramAnnotated({
       height={Math.max(1, Math.round(height))}
       paint={paint}
       overlay={overlay}
-      overlayFocus={duration > 0 ? currentTime / duration : null}
+      focusDuration={duration}
       className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
     >
       {!hasData && (

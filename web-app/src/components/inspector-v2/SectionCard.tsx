@@ -62,7 +62,9 @@ export function SectionCard({
 }: SectionCardProps) {
   const { settings } = useSettings();
   const sectionTypes = getSectionTypes(settings.sectionTypeVocabulary);
-  const color = sectionColor(section.type);
+  const typeColor = sectionColor(section.type);
+  // The section's own colour, when it has one, edges the card like its block.
+  const color = section.color ?? typeColor;
   const isCritical = section.importance !== 'optional';
   const barsToNext = activeBpm
     ? Math.round(((endTime - section.time) / ((60 / activeBpm) * 4)) * 2) / 2
@@ -83,7 +85,7 @@ export function SectionCard({
           onChange={(e) => { e.stopPropagation(); onTypeChange(e.target.value); }}
           onClick={(e) => e.stopPropagation()}
           className="flex-1 min-w-0 truncate text-[10px] font-mono uppercase tracking-wider bg-transparent border-0 p-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-violet-500/40 rounded"
-          style={{ color }}
+          style={{ color: typeColor }}
           title="Change section type"
         >
           {sectionTypes.map((t) => (

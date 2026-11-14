@@ -26,6 +26,8 @@ const {
   initSharedRepo, commitSharedDoc, historyFor, readVersion, hasGit,
   readLock, writeLock, removeLock, listLocks, newLock, canAcquire, isStale,
   viewLock, touchLockEdit, removeSharedSong, writeJsonAtomic,
+  archiveSharedSong, readUnshareRecord, applyUnshareDefault, switchUnshareChoice,
+  dismissUnshareNotice, listUnsharedSlugs, listSongArchives, restoreSongArchive,
 } = mod
 
 const NAME = (id: string) => (id === 'alice@example.com' ? 'Alice Cohen' : id)
@@ -202,5 +204,144 @@ describe('atomic writes', () => {
     writeJsonAtomic(p, { a: 1 })
     expect(JSON.parse(fs.readFileSync(p, 'utf-8'))).toEqual({ a: 1 })
     expect(fs.readdirSync(path.dirname(p))).toEqual(['layers.json'])
+  })
+})
+
+describe('after collaboration stops', () => {
+  const ALICE = 'alice@example.com'
+  const own = (id = ALICE) => path.join(TMP, 'annotations', 'layers', id, 'a-song.json')
+  const read = (p: string) => JSON.parse(fs.readFileSync(p, 'utf-8'))
+  const T0 = Date.parse('2026-10-01T00:00:00Z')
+
+  /** Alice's own file, written at `at`; then a team document; then un-share. */
+  function setup({ ownAt, teamAt }: { ownAt: number | null; teamAt: number }) {
+    if (ownAt !== null) {
+      writeJsonAtomic(own(), { song: 'a-song', rev: 4, layers: [{ id: 'mine', items: [] }], time_spent_seconds: 90 })
+      fs.utimesSync(own(), ownAt / 1000, ownAt / 1000)
+    }
+    initSharedRepo('a-song', meta(), { ...doc(7, 3), seededFrom: 'bob', time_spent_seconds: 5 })
+    fs.utimesSync(sharedDocPath('a-song'), teamAt / 1000, teamAt / 1000)
+    return archiveSharedSong('a-song', teamAt + 1000)
+  }
+
+  it('archives the folder, drops the lease, and leaves a record', () => {
+    writeLock(newLock('a-song', ALICE, 's1', T0))
+    const rec = setup({ ownAt: null, teamAt: T0 })
+    expect(isSharedSong('a-song')).toBe(false)
+    expect(readLock('a-song')).toBeNull()
+    expect(listUnsharedSlugs()).toEqual(['a-song'])
+    expect(fs.existsSync(path.join(TMP, 'annotations', 'shared-archive', rec.archive, 'layers.json'))).toBe(true)
+  })
+
+  it('gives the team version when it is newer, keeping a copy of the old file', () => {
+    setup({ ownAt: T0, teamAt: T0 + 60_000 })
+    const c = applyUnshareDefault('a-song', ALICE, own(), T0 + 120_000)!
+    expect(c).toMatchObject({ kept: 'team', automatic: true, hadOwn: true })
+    const now = read(own())
+    expect(now.layers[0].id).toBe('l1')
+    expect(now.seededFrom).toBeUndefined()
+    // Her clock travels with her; rev climbs past both documents.
+    expect(now.time_spent_seconds).toBe(90)
+    expect(now.rev).toBe(8)
+    const rec = readUnshareRecord('a-song')!
+    expect(read(path.join(TMP, 'annotations', 'shared-archive', rec.archive, c.ownCopy!)).layers[0].id).toBe('mine')
+  })
+
+  it('leaves the own file alone when it is newer', () => {
+    setup({ ownAt: T0 + 60_000, teamAt: T0 })
+    const before = fs.readFileSync(own(), 'utf-8')
+    expect(applyUnshareDefault('a-song', ALICE, own(), T0 + 120_000)).toMatchObject({ kept: 'own', automatic: true })
+    expect(fs.readFileSync(own(), 'utf-8')).toBe(before)
+  })
+
+  it('gives the team version to someone who had nothing', () => {
+    setup({ ownAt: null, teamAt: T0 })
+    expect(applyUnshareDefault('a-song', ALICE, own(), T0 + 5000)).toMatchObject({ kept: 'team', hadOwn: false })
+    expect(read(own()).layers[0].id).toBe('l1')
+  })
+
+  it('decides once — later edits are never overwritten by a second read', () => {
+    setup({ ownAt: null, teamAt: T0 })
+    applyUnshareDefault('a-song', ALICE, own(), T0 + 5000)
+    writeJsonAtomic(own(), { song: 'a-song', rev: 20, layers: [] })
+    applyUnshareDefault('a-song', ALICE, own(), T0 + 9000)
+    expect(read(own()).rev).toBe(20)
+  })
+
+  it('switches back and forth without losing an edit on either side', () => {
+    setup({ ownAt: T0, teamAt: T0 + 60_000 })
+    applyUnshareDefault('a-song', ALICE, own(), T0 + 120_000)
+    // She edits the team version, then goes back to her own…
+    writeJsonAtomic(own(), { ...read(own()), layers: [{ id: 'team-edited', items: [] }] })
+    expect(switchUnshareChoice('a-song', ALICE, own(), T0 + 130_000)).toMatchObject({ kept: 'own', automatic: false })
+    expect(read(own()).layers[0].id).toBe('mine')
+    // …edits that, and returns to the team version — her edit to it is there.
+    writeJsonAtomic(own(), { ...read(own()), layers: [{ id: 'mine-edited', items: [] }] })
+    switchUnshareChoice('a-song', ALICE, own(), T0 + 140_000)
+    expect(read(own()).layers[0].id).toBe('team-edited')
+    switchUnshareChoice('a-song', ALICE, own(), T0 + 150_000)
+    expect(read(own()).layers[0].id).toBe('mine-edited')
+  })
+
+  it('switching away from the team version with no own file means no file', () => {
+    setup({ ownAt: null, teamAt: T0 })
+    applyUnshareDefault('a-song', ALICE, own(), T0 + 5000)
+    switchUnshareChoice('a-song', ALICE, own(), T0 + 6000)
+    expect(fs.existsSync(own())).toBe(false)
+  })
+
+  it('records each annotator separately', () => {
+    setup({ ownAt: T0 + 60_000, teamAt: T0 })
+    applyUnshareDefault('a-song', ALICE, own(), T0 + 120_000)
+    applyUnshareDefault('a-song', 'bob', own('bob'), T0 + 120_000)
+    const rec = readUnshareRecord('a-song')!
+    expect(rec.choices[ALICE].kept).toBe('own')
+    expect(rec.choices.bob.kept).toBe('team')
+    expect(dismissUnshareNotice('a-song', 'bob')?.dismissed).toBe(true)
+  })
+
+  it('forgets the record when the song is deleted', () => {
+    setup({ ownAt: null, teamAt: T0 })
+    removeSharedSong('a-song')
+    expect(readUnshareRecord('a-song')).toBeNull()
+    expect(applyUnshareDefault('a-song', ALICE, own(), T0)).toBeNull()
+  })
+})
+
+describe('restoring an archived team copy', () => {
+  const T0 = Date.parse('2026-10-01T00:00:00Z')
+
+  it('lists only this song\'s archives, newest first, with rev and item count', () => {
+    initSharedRepo('a-song', meta(), doc(3, 2))
+    archiveSharedSong('a-song', T0)
+    initSharedRepo('a-song', meta(), doc(5, 4))
+    archiveSharedSong('a-song', T0 + 60_000)
+    initSharedRepo('a-song-two', meta(), doc(1, 1))
+    archiveSharedSong('a-song-two', T0)
+    const list = listSongArchives('a-song')
+    expect(list.map((a) => [a.rev, a.items])).toEqual([[5, 4], [3, 2]])
+    expect(list[0].archivedAt).toBe(new Date(T0 + 60_000).toISOString())
+  })
+
+  it('moves the folder back with its history and drops the un-share record', () => {
+    initSharedRepo('a-song', meta(), doc(3, 2))
+    const rec = archiveSharedSong('a-song', T0)
+    expect(restoreSongArchive('a-song', rec.archive)).toBeNull()
+    expect(isSharedSong('a-song')).toBe(true)
+    expect(JSON.parse(fs.readFileSync(sharedDocPath('a-song'), 'utf-8')).rev).toBe(3)
+    expect(readUnshareRecord('a-song')).toBeNull()
+    expect(listSongArchives('a-song')).toEqual([])
+    if (hasGit()) expect(historyFor('a-song').length).toBe(1)
+  })
+
+  it('refuses another song\'s archive, a path, or a shared song', () => {
+    initSharedRepo('a-song-two', meta(), doc(1, 1))
+    const other = archiveSharedSong('a-song-two', T0)
+    expect(restoreSongArchive('a-song', other.archive)).not.toBeNull()
+    expect(restoreSongArchive('a-song', '../shared/a-song-2026-10-01T00-00-00-000Z')).not.toBeNull()
+    initSharedRepo('a-song', meta(), doc(1, 1))
+    const mine = archiveSharedSong('a-song', T0)
+    initSharedRepo('a-song', meta(), doc(2, 1))
+    expect(restoreSongArchive('a-song', mine.archive)).toBe('already shared')
   })
 })

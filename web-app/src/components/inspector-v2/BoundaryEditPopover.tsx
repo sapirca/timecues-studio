@@ -7,6 +7,7 @@
  * last one) as a context-only read-out.
  */
 
+import { colorSection } from './shared/colorSection';
 import { type CSSProperties } from 'react';
 import type { SectionBlock } from '../../types/sectionBlock';
 import { useSettings } from '../../context/SettingsContext';
@@ -45,25 +46,31 @@ interface BoundaryEditPopoverProps {
   /** Resolved grid segments — keeps the bar.beat readout in step with a
    *  split grid, where each segment counts in its own meter from its own bar 1. */
   segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
-  /** Current playhead — enables the crosshair snap button on the Start row. */
-  currentTime?: number;
   /** When provided, a "Split" button is rendered on the footer next to Delete.
    *  Only enabled when the playhead sits strictly inside this boundary's
    *  segment (Manual section editor). */
   onSplit?: () => void;
   canSplit?: boolean;
+  /** Passed to the card's Delete button — see AnnotationPointCard. */
+  deleteLabel?: string;
+  deleteTitle?: string;
+  /** Header text in place of "Boundary #N"; the number then shows as a large
+   *  chip instead (see AnnotationPointCard's `numberChip`). */
+  title?: string;
 }
 
 export function BoundaryEditPopover({
   index, section, endTime, popoverRef, positionStyle,
   onChange, onDelete, onClose,
   onPlay, onStop, isPlaying,
-  bpm, gridOffset, beatsPerBar, segments, currentTime,
-  onSplit, canSplit,
+  bpm, gridOffset, beatsPerBar, segments,
+  onSplit, canSplit, deleteLabel, deleteTitle, title,
 }: BoundaryEditPopoverProps) {
   const { settings } = useSettings();
   const sectionTypes = getSectionTypes(settings.sectionTypeVocabulary);
-  const color = sectionColor(section.type);
+  const typeColor = sectionColor(section.type);
+  // The section's own colour, when it has one, heads the card too.
+  const color = section.color ?? typeColor;
 
   const splitButton = onSplit ? (
     <button
@@ -94,7 +101,7 @@ export function BoundaryEditPopover({
           onChange({ type: nextType, label: sectionLabel(nextType) });
         }}
         className="flex-1 min-w-0 bg-[#0a0b0d] border border-white/[0.08] text-[11px] font-mono uppercase tracking-wider rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-violet-400/40 cursor-pointer"
-        style={{ color }}
+        style={{ color: typeColor }}
       >
         {sectionTypes.map((t) => (
           <option key={t} value={t} className="bg-[#14171d] text-slate-200 normal-case tracking-normal">{t}</option>
@@ -106,7 +113,8 @@ export function BoundaryEditPopover({
   return (
     <AnnotationPointCard
       kind="boundary"
-      layerName={`Boundary #${index + 1}`}
+      layerName={title ?? `Boundary #${index + 1}`}
+      numberChip={title !== undefined ? index + 1 : undefined}
       layerColor={color}
       start={section.time}
       end={endTime}
@@ -119,7 +127,6 @@ export function BoundaryEditPopover({
       gridOffset={gridOffset}
       beatsPerBar={beatsPerBar}
       segments={segments}
-      currentTime={currentTime}
       onChange={(patch) => {
         const out: Partial<SectionBlock> = {};
         if (patch.start !== undefined) out.time = patch.start;
@@ -130,6 +137,8 @@ export function BoundaryEditPopover({
         if (Object.keys(out).length > 0) onChange(out);
       }}
       onDelete={onDelete}
+      deleteLabel={deleteLabel}
+      deleteTitle={deleteTitle}
       onPlay={onPlay}
       onStop={onStop}
       isPlaying={isPlaying}
@@ -137,6 +146,13 @@ export function BoundaryEditPopover({
       popoverRef={popoverRef}
       positionStyle={positionStyle}
       extras={extras}
+      sections={[colorSection({
+        color: section.color,
+        fallbackColor: typeColor,
+        fallbackName: 'type colour',
+        readOnly: false,
+        onChange: (c) => onChange({ color: c }),
+      })]}
       footerLeftExtras={splitButton}
     />
   );

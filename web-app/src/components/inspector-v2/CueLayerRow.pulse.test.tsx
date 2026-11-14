@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { render } from '@testing-library/react';
 import { CueLayerRow } from './CueLayerRow';
+import { PlayheadClockContext, createPlayheadClock } from '../../hooks/usePlayhead';
 import type { CueItem } from '../../types/annotationLayer';
 
 const DURATION = 8;
@@ -34,10 +35,10 @@ describe('CueLayerRow snap flash', () => {
 
   it('stops pinging a snapped cue 800 ms after it is placed', () => {
     const { container, rerender } = render(
-      <CueLayerRow items={[]} color="#4ade80" duration={DURATION} currentTime={0} gridProps={GRID} />,
+      <CueLayerRow items={[]} color="#4ade80" duration={DURATION} gridProps={GRID} />,
     );
     rerender(
-      <CueLayerRow items={[cue('a', 1.0)]} color="#4ade80" duration={DURATION} currentTime={0} gridProps={GRID} />,
+      <CueLayerRow items={[cue('a', 1.0)]} color="#4ade80" duration={DURATION} gridProps={GRID} />,
     );
     expect(pings(container)).toHaveLength(1);
 
@@ -47,16 +48,16 @@ describe('CueLayerRow snap flash', () => {
 
   it('does not strand the first cue when a second one is placed mid-flash', () => {
     const { container, rerender } = render(
-      <CueLayerRow items={[]} color="#4ade80" duration={DURATION} currentTime={0} gridProps={GRID} />,
+      <CueLayerRow items={[]} color="#4ade80" duration={DURATION} gridProps={GRID} />,
     );
     rerender(
-      <CueLayerRow items={[cue('a', 1.0)]} color="#4ade80" duration={DURATION} currentTime={0} gridProps={GRID} />,
+      <CueLayerRow items={[cue('a', 1.0)]} color="#4ade80" duration={DURATION} gridProps={GRID} />,
     );
     act(() => { vi.advanceTimersByTime(400); });
     // Second cue lands while the first is still pinging — a fresh `items`
     // array, which is exactly what used to kill the first cue's timer.
     rerender(
-      <CueLayerRow items={[cue('a', 1.0), cue('b', 2.0)]} color="#4ade80" duration={DURATION} currentTime={0} gridProps={GRID} />,
+      <CueLayerRow items={[cue('a', 1.0), cue('b', 2.0)]} color="#4ade80" duration={DURATION} gridProps={GRID} />,
     );
     expect(pings(container)).toHaveLength(2);
 
@@ -69,15 +70,19 @@ describe('CueLayerRow snap flash', () => {
 
   it('keeps quiet while the playhead moves over the cues', () => {
     const items = [cue('a', 1.0), cue('b', 2.0)];
-    const { container, rerender } = render(
-      <CueLayerRow items={items} color="#4ade80" duration={DURATION} currentTime={0} gridProps={GRID} />,
+    const clock = createPlayheadClock(0);
+    const lane = (list: CueItem[]) => (
+      <PlayheadClockContext.Provider value={clock}>
+        <CueLayerRow items={list} color="#4ade80" duration={DURATION} gridProps={GRID} visualize />
+      </PlayheadClockContext.Provider>
     );
+    const { container, rerender } = render(lane(items));
     act(() => { vi.advanceTimersByTime(900); });
     for (const t of [0.5, 1.0, 1.5, 2.0, 2.5]) {
-      // Playback re-renders with a fresh array every frame; nothing moved.
-      rerender(
-        <CueLayerRow items={[...items]} color="#4ade80" duration={DURATION} currentTime={t} gridProps={GRID} />,
-      );
+      // The playhead crossing a cue re-renders the row (Visualize highlight),
+      // and a parent may hand it a fresh array while it does; nothing moved.
+      act(() => clock.set(t));
+      rerender(lane([...items]));
     }
     expect(pings(container)).toHaveLength(0);
   });

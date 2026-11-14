@@ -24,10 +24,11 @@ import { BarBeatInput } from './inspector-v2/BarBeatInput';
 import { ConsensusClusterControls } from './inspector-v2/ConsensusClusterControls';
 import type { AnnotationPanelController, AnnotationPanelCapabilities } from './inspector-v2/shared/AnnotationPanelController';
 import { emptyCapabilities } from './inspector-v2/shared/AnnotationPanelController';
-import { agreementCount, clusterPoints, computeClusterTime } from '../utils/boundaryClustering';
+import { agreementCount, clusterPoints, clusterToAutoGuessPoint, computeClusterTime } from '../utils/boundaryClustering';
 import { sendConsensusConfig, type BoundaryConsensusConfig } from '../state/consensusHandoff';
 import { useConsensusHandoff } from '../hooks/useConsensusHandoff';
 import { formatClockTime } from '../utils/clockTime';
+import { usePlayheadClock, usePlayheadEffect, usePlayheadValue } from '../hooks/usePlayhead';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -73,21 +74,8 @@ function clusterBoundaries(
   toleranceSec: number,
   centroidMethod: AutoGuessCentroidMethod = 'mean',
 ): AutoGuessPoint[] {
-  return clusterPoints(allPoints, toleranceSec).map(({ members }, clusterId) => {
-    const sources: AutoGuessSource[] = members.map((m) => ({ algorithmId: m.algorithmId, originalTime: m.time }));
-    const meanTime = members.reduce((s, m) => s + m.time, 0) / members.length;
-    const centroidTime = computeClusterTime(members, centroidMethod);
-    return {
-      id: generateId(),
-      time: centroidTime,
-      originalTime: meanTime, // always the mean — anchor for "reset to mean"
-      sources,
-      clusterId,
-      clusterSize: members.length,
-      status: 'pending' as const,
-      correctionSource: centroidMethod !== 'mean' ? centroidMethod : undefined,
-    };
-  });
+  return clusterPoints(allPoints, toleranceSec).map(({ members }, clusterId) =>
+    clusterToAutoGuessPoint(members, clusterId, centroidMethod));
 }
 
 // Cluster badge palette — coloured by how many distinct algorithms agreed
@@ -124,8 +112,6 @@ export interface AlgorithmRow {
 
 export interface AutoGuessPanelProps {
   songId: string;
-  /** Current playback time — used to set adjusted time from player. */
-  currentTime: number;
   /** All loaded algorithm section results. */
   algorithmRows: AlgorithmRow[];
   /**
@@ -143,11 +129,16 @@ export interface AutoGuessPanelProps {
   /** Page-level subscription that fires whenever the toolbar-visible state
    *  changes. Fed to the shared AnnotationToolbar above this panel. */
   onCapabilitiesChange?: (caps: AnnotationPanelCapabilities) => void;
-  /** Copy the selected auto-guess points into the song's existing manual
-   *  annotation as section boundaries. Mirrors DetectorOutputReview's
-   *  "Copy to manual layer" — same affordance, different target store
-   *  (boundaries live in ManualAnnotation, not the layers doc). */
-  onCopyToManualAnnotation?: (sections: SectionBlock[]) => void;
+  /** Copy the selected auto-guess points into the song's boundaries layer as
+   *  sections, creating that layer if there isn't one. Named for where they
+   *  land: it used to be `onCopyToManualAnnotation`, from when boundaries
+   *  lived in a manual annotation rather than the layers document. Mirrors
+   *  DetectorOutputReview's "Copy to manual layer"; since the boundaries
+   *  refactor it is the same target store as every other kind — the layers
+   *  document — so only the item shape differs. Auto-guess itself stays out
+   *  of that document (see types/autoGuess.ts): it is a review surface, and
+   *  this is how a point leaves it. */
+  onCopyToBoundaryLayer?: (sections: SectionBlock[]) => void;
   /** Open Consensus Inspect with these clustering parameters, so they can be
    *  tuned against a live F1 before anything is generated here. The config is
    *  parked for that stage first (see state/consensusHandoff). Omit and the
@@ -160,14 +151,13 @@ export interface AutoGuessPanelProps {
 function AutoGuessPanelInner(
   {
     songId,
-    currentTime,
     algorithmRows,
     initialAnnotation,
     onAnnotationChange,
     onSeekAndPlay,
     songInfo,
     onCapabilitiesChange,
-    onCopyToManualAnnotation,
+    onCopyToBoundaryLayer,
     onTuneInConsensus,
   }: AutoGuessPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
@@ -273,21 +263,6 @@ function AutoGuessPanelInner(
     return () => { cancelled = true; };
   }, [songId, initialAnnotation]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Incoming hand-off from Consensus Inspect ("Use for Auto-guess") ──────
-  // Only the controls move. The stored points keep the parameters they were
-  // built with until the reviewer presses Generate, which is the one action
-  // that may overwrite reviewed work.
-  useConsensusHandoff('autoGuess', (config) => {
-    handoffRef.current = config;
-    handoffSongIdRef.current = songId;
-    setClusterTolerance(config.clusterWindow);
-    setMinConsensus(config.minAgreement);
-    setCentroidMethod(config.centroid);
-    config.algoIds.forEach((id) => offeredAlgorithmIdsRef.current.add(id));
-    setSelectedAlgorithmIds(new Set(config.algoIds));
-    setHandoffNotice(config);
-  });
-
   // Clamp minConsensus whenever the selected algorithm count shrinks
   useEffect(() => {
     const maxAllowed = Math.max(1, selectedAlgorithmIds.size);
@@ -311,6 +286,37 @@ function AutoGuessPanelInner(
     onAnnotationChange?.(next);
     persistAnn(next);
   }, [onAnnotationChange, persistAnn]);
+
+  // ── Incoming hand-off from Consensus Inspect ("Use for Auto-guess") ──────
+  // The controls move, and when the boundaries came along they REPLACE the
+  // stored points — never merge. Merging kept the old review's leftovers
+  // between the new boundaries, which is a set nobody chose. The reviewer's
+  // verdicts go with the old points; the button that sends here says so.
+  useConsensusHandoff('autoGuess', (config) => {
+    handoffSongIdRef.current = songId;
+    setClusterTolerance(config.clusterWindow);
+    setMinConsensus(config.minAgreement);
+    setCentroidMethod(config.centroid);
+    config.algoIds.forEach((id) => offeredAlgorithmIdsRef.current.add(id));
+    setSelectedAlgorithmIds(new Set(config.algoIds));
+    setHandoffNotice(config);
+    if (!config.points) {
+      handoffRef.current = config;
+      return;
+    }
+    // The parameters are baked into the points, as after a Generate.
+    handoffRef.current = null;
+    setConfirmRegenerate(false);
+    const now = new Date().toISOString();
+    updateAnn({
+      song: songId,
+      created_at: ann?.created_at ?? now,
+      updated_at: now,
+      clusterTolerance: config.clusterWindow,
+      ...(config.centroid !== 'mean' ? { centroidMethod: config.centroid } : {}),
+      points: config.points,
+    });
+  });
 
   // Auto-bump auto_guess_status from "none" → "wip" on the first content edit.
   // Uses points reference equality so status-only changes don't trigger.
@@ -408,11 +414,16 @@ function AutoGuessPanelInner(
     });
   }, [ann, updatePoint]);
 
+  // The playhead, read when a button is pressed rather than held in a prop —
+  // a prop would re-render this whole panel on every frame of playback.
+  const playheadClock = usePlayheadClock();
+
   const adjustFromPlayer = useCallback((id: string) => {
-    updatePoint(id, { time: currentTime, status: 'correct', correctionSource: 'player' });
-  }, [currentTime, updatePoint]);
+    updatePoint(id, { time: playheadClock.get(), status: 'correct', correctionSource: 'player' });
+  }, [playheadClock, updatePoint]);
 
   const addMissingPointFromPlayer = useCallback(() => {
+    const currentTime = playheadClock.get();
     const now = new Date().toISOString();
     const nextPoint: AutoGuessPoint = {
       id: generateId(),
@@ -440,7 +451,7 @@ function AutoGuessPanelInner(
         };
 
     updateAnn(next);
-  }, [ann, currentTime, songId, clusterTolerance, updateAnn]);
+  }, [ann, playheadClock, songId, clusterTolerance, updateAnn]);
 
   const adoptSourceTime = useCallback((pointId: string, source: AutoGuessSource) => {
     updatePoint(pointId, {
@@ -486,6 +497,26 @@ function AutoGuessPanelInner(
     if (filterStatus === 'pending') return p.status === 'pending' || p.status === 'partial';
     return p.status === filterStatus;
   }) ?? [];
+
+  // The point the playhead sits in — between it and the next visible one.
+  // Re-renders the list only when the highlight moves to another card.
+  const currentPointId = usePlayheadValue((t) => {
+    for (let i = 0; i < filteredPoints.length; i++) {
+      const nextTime = filteredPoints[i + 1]?.time ?? Infinity;
+      if (t >= filteredPoints[i].time && t < nextTime) return filteredPoints[i].id;
+    }
+    return null;
+  });
+
+  // "Add @ <time>" follows the clock in the DOM, not through a render.
+  const addTimeRef = useRef<HTMLSpanElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  usePlayheadEffect((t) => {
+    if (addTimeRef.current) addTimeRef.current.textContent = fmtTime(t);
+    if (addButtonRef.current) {
+      addButtonRef.current.title = `Add a missing boundary point at player time (${fmtTime(t)}), even if no algorithm suggested it`;
+    }
+  });
 
 
   // ── Page-level controller wiring ──────────────────────────────────────────
@@ -571,7 +602,9 @@ function AutoGuessPanelInner(
                 {' · '}<span className="font-mono">≥{handoffNotice.minAgreement}</span>
                 {' · '}<span className="font-mono">{CENTROID_METHODS.find((m) => m.id === handoffNotice.centroid)?.short}</span>
                 {' · '}<span className="font-mono">{handoffNotice.algoIds.length} detectors</span>
-                {' — press '}<span className="uppercase tracking-wider text-[10px] text-violet-300">generate</span> to rebuild with them.
+                {handoffNotice.points
+                  ? <> — replaced Auto-guess with its <span className="font-mono">{handoffNotice.points.length}</span> boundaries.</>
+                  : <>{' — press '}<span className="uppercase tracking-wider text-[10px] text-violet-300">generate</span> to rebuild with them.</>}
               </span>
               <button
                 onClick={() => { handoffRef.current = null; setHandoffNotice(null); }}
@@ -652,17 +685,17 @@ function AutoGuessPanelInner(
         )}
 
         <button
+          ref={addButtonRef}
           onClick={addMissingPointFromPlayer}
           className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-100 transition-colors flex items-center gap-1.5"
-          title={`Add a missing boundary point at player time (${fmtTime(currentTime)}), even if no algorithm suggested it`}
         >
           <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 010-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
           </svg>
-          Add @ <span className="font-mono normal-case tracking-normal">{fmtTime(currentTime)}</span>
+          Add @ <span ref={addTimeRef} className="font-mono normal-case tracking-normal" />
         </button>
 
-        {onCopyToManualAnnotation && ann && ann.points.length > 0 && (() => {
+        {onCopyToBoundaryLayer && ann && ann.points.length > 0 && (() => {
           // Mirrors DetectorOutputReview's two-button "copy to manual layer"
           // affordance. 'accepted' = ✓ only; 'all' = everything except explicit
           // ✗ (pending kept), so a single click pulls the raw cluster into
@@ -675,7 +708,7 @@ function AutoGuessPanelInner(
             const sections: SectionBlock[] = [...src]
               .sort((a, b) => a.time - b.time)
               .map((p) => ({ time: p.time, type: 'drop', label: 'Auto-guess' }));
-            onCopyToManualAnnotation(sections);
+            onCopyToBoundaryLayer(sections);
           };
           return (
             <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500 ml-1">
@@ -755,7 +788,7 @@ function AutoGuessPanelInner(
 
       {ann && filteredPoints.length > 0 && (
         <div className="flex flex-wrap items-start gap-1">
-          {filteredPoints.map((point, pi) => {
+          {filteredPoints.map((point) => {
             const agreeing = agreementCount(point);
             const { bg, text } = clusterBadgeStyle(agreeing);
             const isExpanded = expandedId === point.id;
@@ -772,8 +805,7 @@ function AutoGuessPanelInner(
             const railColor = point.status === 'pending' ? 'rgba(255,255,255,0.08)' : statusColor;
 
             // Highlight when the playhead sits between this boundary and the next visible one.
-            const nextTime = filteredPoints[pi + 1]?.time ?? Infinity;
-            const isCurrent = currentTime >= point.time && currentTime < nextTime;
+            const isCurrent = point.id === currentPointId;
 
             const chipCount = point.status === 'correct' && algorithmRows.length > 0
               ? algorithmRows.length
@@ -1078,13 +1110,7 @@ function AutoGuessPanelInner(
                             beatsPerBar={beatsPerBarFromTimeSignature(songInfo?.timeSignature)}
                             className="w-16 bg-[#0a0b0d] border border-white/[0.06] text-slate-200 text-[10px] font-mono rounded px-1.5 py-0.5 focus:outline-none focus:border-violet-500/50 disabled:text-slate-600 disabled:cursor-not-allowed"
                           />
-                          <button
-                            onClick={() => adjustFromPlayer(point.id)}
-                            className="px-2 py-0.5 rounded text-[10px] bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 text-violet-200 transition-colors"
-                            title={`Set time to player position: ${fmtTime(currentTime)}`}
-                          >
-                            @ {fmtTime(currentTime)}
-                          </button>
+                          <AdjustFromPlayerButton onClick={() => adjustFromPlayer(point.id)} />
                           {timeChanged && (
                             <button
                               onClick={() => resetTime(point.id)}
@@ -1129,6 +1155,24 @@ function AutoGuessPanelInner(
       )}
 
     </div>
+  );
+}
+
+/** "@ <time>" on an expanded point: sets its time to the player position. The
+ *  label and tooltip follow the clock directly, not through a render. */
+function AdjustFromPlayerButton({ onClick }: { onClick: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  usePlayheadEffect((t) => {
+    if (!ref.current) return;
+    ref.current.textContent = `@ ${fmtTime(t)}`;
+    ref.current.title = `Set time to player position: ${fmtTime(t)}`;
+  });
+  return (
+    <button
+      ref={ref}
+      onClick={onClick}
+      className="px-2 py-0.5 rounded text-[10px] bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 text-violet-200 transition-colors"
+    />
   );
 }
 

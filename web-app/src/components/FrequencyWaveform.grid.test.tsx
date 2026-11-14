@@ -46,13 +46,12 @@ const MAPPED = {
 const SEGMENTS = resolveGridSegments(MAPPED);
 
 /** The grid line positions the row actually rendered, in seconds. GridLines
- *  places each line at `left: (t / duration) * 100%`, so the percentage is the
- *  timestamp the surface believes in. */
+ *  strokes each line as `M<t> 0V1` in a viewBox measured in seconds, so the
+ *  path is the timestamp the surface believes in. */
 function renderedLineTimes(container: HTMLElement): number[] {
   const out: number[] = [];
-  for (const el of container.querySelectorAll<HTMLElement>('div[style*="left"]')) {
-    const m = /left:\s*([\d.]+)%/.exec(el.style.cssText);
-    if (m) out.push((parseFloat(m[1]) / 100) * DURATION);
+  for (const path of container.querySelectorAll('path[data-grid-kind]')) {
+    for (const m of (path.getAttribute('d') ?? '').matchAll(/M([\d.]+) 0V1/g)) out.push(parseFloat(m[1]));
   }
   return out.sort((a, b) => a - b);
 }

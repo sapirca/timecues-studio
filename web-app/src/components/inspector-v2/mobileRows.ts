@@ -10,10 +10,15 @@ export const SIGNAL_ROWS: { id: string; label: string; color: string }[] = [
   { id: 'chroma', label: 'Chroma', color: '#84cc16' },
   { id: 'tempogram', label: 'Tempogram', color: '#d946ef' },
   { id: 'ssm', label: 'SSM', color: '#f97316' },
-  { id: 'energy', label: 'Energy', color: '#f59e0b' },
+  { id: 'volume', label: 'Volume (RMS)', color: '#f1f5f9' },
+  // Row id 'energy' kept so saved views and URLs still find the row.
+  { id: 'energy', label: 'Beat strength', color: '#f59e0b' },
   { id: 'brightness', label: 'Brightness', color: '#22d3ee' },
   { id: 'novelty', label: 'Novelty', color: '#a78bfa' },
   { id: 'onsets', label: 'Onsets', color: '#f472b6' },
+  { id: 'density', label: 'Onset density', color: '#f87171' },
+  { id: 'busyness', label: 'Busyness', color: '#fde047' },
+  { id: 'bandwidth', label: 'Bandwidth', color: '#60a5fa' },
   { id: 'flux', label: 'Spectral Flux', color: '#10b981' },
 ];
 export const SIGNAL_ROW_IDS = new Set(SIGNAL_ROWS.map((s) => s.id));

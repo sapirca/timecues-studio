@@ -23,8 +23,11 @@ Endpoints
   GET  /api/ruptures/methods          → list of all 19 method descriptors
   GET  /api/ruptures/songs            → all slugs with per-method cache status
   GET  /api/ruptures/progress         → batch-job progress
-  POST /api/ruptures/analyze          → { slug, suffix }  — run one method on one song
-  POST /api/ruptures/run-all          → start background batch (idempotent)
+  POST /api/ruptures/analyze          → { slug, suffix, grid? }  — run one method on one song
+  POST /api/ruptures/run-all          → { grid? } start background batch (idempotent)
+
+`grid` is "user" (default: the song's grid as the annotator set it; 409 when
+the song has none) or "auto" (librosa's tracked beats).
 
 Cache
 -----
@@ -66,6 +69,7 @@ PORT = 8003
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import ANALYSIS_DIR, REPO_ROOT, find_audio, list_song_slugs, safe_segment  # noqa: E402
 from server_common import cached_result, cors_headers  # noqa: E402
+from grid_truth import NoUserGrid, cached_grid, grid_choice, user_beats  # noqa: E402
 
 MANIFEST     = ANALYSIS_DIR / "manifest.json"
 
@@ -145,9 +149,14 @@ def _auto_n_bkps(duration: float) -> int:
 
 # ─── Feature extraction ────────────────────────────────────────────────────────
 
-def extract_features(audio_path: "Path") -> "tuple[np.ndarray, np.ndarray, float]":
+def extract_features(audio_path: "Path", slug: str = "", grid: str = "auto",
+                     ) -> "tuple[np.ndarray, np.ndarray, float]":
     """
     Load audio and return (features, beat_times, duration).
+
+    The features are cut per beat. With grid="user" the beats are the song's
+    grid as the annotator set it (raises NoUserGrid when it has none); with
+    "auto" they are librosa's tracked beats.
 
     features   : float32, shape (n_beats, 39)  — MFCC(20) + Chroma(12) + SpectralContrast(7), z-scored
     beat_times : float64, shape (n_beats,)      — timestamps in seconds
@@ -157,8 +166,16 @@ def extract_features(audio_path: "Path") -> "tuple[np.ndarray, np.ndarray, float
     duration = float(librosa.get_duration(y=y, sr=sr))
     hop = 512
 
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop, trim=False)
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop)
+    if grid == "user":
+        # Boundaries land on the beats exactly as set, not on the analysis
+        # frame each falls in; two beats in one frame keep the first.
+        beat_times = np.asarray(user_beats(slug, duration), dtype=np.float64)
+        beat_frames = librosa.time_to_frames(beat_times, sr=sr, hop_length=hop)
+        keep = np.concatenate([[True], np.diff(beat_frames) > 0])
+        beat_frames, beat_times = beat_frames[keep], beat_times[keep]
+    else:
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop, trim=False)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop)
 
     if len(beat_frames) < 4:
         beat_times  = np.arange(0, duration, 0.5)
@@ -318,10 +335,13 @@ def analyze(
     audio_path: "Path | None" = None,
     features_cache: "tuple | None" = None,
     force: bool = False,
+    grid: str = "user",
 ) -> dict:
     """
-    Run one method on one song. Checks cache first.
-    features_cache: optional pre-computed (features, beat_times, duration) tuple.
+    Run one method on one song. Checks cache first — a saved result counts only
+    if it was made on the same `grid` ("user" | "auto", see extract_features).
+    features_cache: optional pre-computed (features, beat_times, duration) tuple,
+    computed on that same grid.
     Returns the result dict.
     """
     if not _LIBROSA_OK:
@@ -338,7 +358,7 @@ def analyze(
     cache_path = cache_dir / f"ruptures-{suffix}.json"
 
     hit = cached_result(cache_path, force)
-    if hit is not None:
+    if hit is not None and cached_grid(hit) == grid:
         return hit
 
     if audio_path is None:
@@ -351,7 +371,7 @@ def analyze(
     if features_cache is not None:
         features, beat_times, duration = features_cache
     else:
-        features, beat_times, duration = extract_features(audio_path)
+        features, beat_times, duration = extract_features(audio_path, slug, grid)
 
     bkp_frames = run_ruptures(features, duration, method["search"], method["model"], method.get("params"))
 
@@ -373,6 +393,7 @@ def analyze(
         "suffix":        suffix,
         "paperSection":  method["section"],
         "methodType":    method["type"],
+        "grid":          grid,
         "audioFile":     audio_path.name,
         "duration":      float(round(duration, 3)),
         "sections":      sections,
@@ -388,7 +409,7 @@ def analyze(
 
 # ─── Batch runner ──────────────────────────────────────────────────────────────
 
-def _batch_thread(songs: list[dict]) -> None:
+def _batch_thread(songs: list[dict], grid: str = "user") -> None:
     total = len(songs) * len(ALL_METHODS)
     with _batch_lock:
         _batch.update({"running": True, "total": total, "done": 0, "errors": 0,
@@ -405,7 +426,7 @@ def _batch_thread(songs: list[dict]) -> None:
 
         # Extract features once per song, reuse for all methods
         try:
-            feat_cache = extract_features(audio_path)
+            feat_cache = extract_features(audio_path, slug, grid)
         except Exception as e:
             print(f"[ruptures] Feature extraction failed for {slug}: {e}", file=sys.stderr)
             with _batch_lock:
@@ -419,13 +440,13 @@ def _batch_thread(songs: list[dict]) -> None:
                 _batch["current"] = f"{slug} / {suffix}"
 
             cache_path = ANALYSIS_DIR / slug / f"ruptures-{suffix}.json"
-            if cache_path.exists():
+            if cache_path.exists() and cached_grid(json.loads(cache_path.read_text())) == grid:
                 with _batch_lock:
                     _batch["done"] += 1
                 continue
 
             try:
-                analyze(slug, suffix, audio_path=audio_path, features_cache=feat_cache)
+                analyze(slug, suffix, audio_path=audio_path, features_cache=feat_cache, grid=grid)
                 with _batch_lock:
                     _batch["done"] += 1
             except Exception as e:
@@ -439,14 +460,14 @@ def _batch_thread(songs: list[dict]) -> None:
         _batch["current"]  = ""
 
 
-def start_batch() -> bool:
+def start_batch(grid: str = "user") -> bool:
     """Start background batch. Returns False if already running."""
     with _batch_lock:
         if _batch["running"]:
             return False
 
     songs = _load_manifest()
-    t = threading.Thread(target=_batch_thread, args=(songs,), daemon=True)
+    t = threading.Thread(target=_batch_thread, args=(songs, grid), daemon=True)
     t.start()
     return True
 
@@ -499,7 +520,7 @@ def handle_get(full_path: str):
 def handle_post(full_path: str, body: dict):
     path = full_path.split("?")[0]
     if path == "/api/ruptures/run-all":
-        started = start_batch()
+        started = start_batch(grid_choice(body))
         with _batch_lock:
             return 200, {"started": started, "progress": dict(_batch)}
     if path == "/api/ruptures/analyze":
@@ -511,7 +532,9 @@ def handle_post(full_path: str, body: dict):
         if suffix not in _SUFFIX_TO_METHOD:
             return 400, {"error": f"unknown suffix, valid: {list(_SUFFIX_TO_METHOD)}"}
         try:
-            return 200, analyze(slug, suffix, force=force)
+            return 200, analyze(slug, suffix, force=force, grid=grid_choice(body))
+        except NoUserGrid as e:
+            return 409, {"error": str(e)}
         except FileNotFoundError as e:
             return 404, {"error": str(e)}
         except RuntimeError as e:

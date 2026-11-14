@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir dtai-locomotif
 
 COPY tools/python/paths.py           /app/tools/python/paths.py
 COPY tools/python/server_common.py   /app/tools/python/server_common.py
+COPY tools/python/grid_truth.py      /app/tools/python/grid_truth.py
 COPY tools/python/pattern_server.py  /app/tools/python/pattern_server.py
 COPY data-default/                   /app/data-default/
 

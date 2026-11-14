@@ -27,7 +27,7 @@ OUT = REPO_ROOT / "data-default" / "demo-custom-registry.json"
 
 
 def main() -> None:
-    reg = _filtered_registry(include_experimental_loops_patterns=True)
+    reg = _filtered_registry(hide_private=True)
     for d in reg:
         d["file"] = os.path.basename(d.get("file", ""))
     reg = [d for d in reg if d.get("status") == "ok"]

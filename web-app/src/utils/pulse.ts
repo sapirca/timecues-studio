@@ -134,6 +134,15 @@ export function pulseTickTimes(opts: PulseTickOptions): number[] {
     ticks.push(line.t);
     if (ticks.length > max) return [];
   }
+  if (ticks.length > 0 || period == null || !(period > 0)) return ticks;
+  // No grid line of this rate falls inside the span — a 'bar' span shorter
+  // than a bar that holds no downbeat, or one a detector placed off the grid.
+  // The span still says the rate, so it is drawn at the rate from its own
+  // start rather than drawn as nothing.
+  for (let t = start; t <= end + 1e-9; t += period) {
+    ticks.push(t);
+    if (ticks.length > max) return [];
+  }
   return ticks;
 }
 

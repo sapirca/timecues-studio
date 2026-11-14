@@ -28,7 +28,7 @@ export interface StemManifest {
  *  The token travels verbatim to the stems daemon's `--model`. */
 export type DemucsModel = '6s' | '4s';
 
-export const DEFAULT_DEMUCS_MODEL: DemucsModel = '6s';
+export const DEFAULT_DEMUCS_MODEL: DemucsModel = '4s';
 
 /** Label + tooltip for each model, so every surface that offers the choice
  *  (Dataset Prep picker, Settings) words it the same way. */
@@ -36,12 +36,12 @@ export const DEMUCS_MODEL_OPTIONS: { id: DemucsModel; label: string; hint: strin
   {
     id: '6s',
     label: '6 stems',
-    hint: 'htdemucs_6s — vocals, drums, bass, other, guitar, piano. Slower, but guitar and piano land on their own tracks.',
+    hint: 'htdemucs_6s — vocals, drums, bass, other, guitar, piano. Slower; guitar and piano get their own tracks, but a sample can be cut across two stems.',
   },
   {
     id: '4s',
     label: '4 stems',
-    hint: 'htdemucs — vocals, drums, bass, other. Faster; guitar and piano stay folded into "other".',
+    hint: 'htdemucs — vocals, drums, bass, other. The default: faster, and a sample stays whole; guitar and piano stay folded into "other".',
   },
 ];
 
@@ -72,6 +72,39 @@ export async function fetchStemManifest(audioUrl: string): Promise<StemManifest 
     const data = await res.json();
     if (!data || typeof data !== 'object' || !data.stems) return null;
     return data as StemManifest;
+  } catch {
+    return null;
+  }
+}
+
+/** The pieces of a drum kit, when the drums stem has been split further — by a
+ *  separation detector that writes /stems/<filename-stem>/kitsep/manifest.json.
+ *  Playback only: they are not stems detectors run on, so they stay out of
+ *  StemSource and the stem filter. */
+export const KIT_PARTS = ['kick', 'snare', 'toms', 'hh', 'ride', 'crash'] as const;
+export type KitPart = (typeof KIT_PARTS)[number];
+
+export const KIT_PART_LABELS: Record<KitPart, string> = {
+  kick: 'Kick', snare: 'Snare', toms: 'Toms', hh: 'Hi-hat', ride: 'Ride', crash: 'Crash',
+};
+
+export interface KitManifest {
+  parts: Partial<Record<KitPart, string>>;
+}
+
+export function kitPartsFromManifest(m: KitManifest | null): KitPart[] {
+  if (!m) return [];
+  return KIT_PARTS.filter((p) => !!m.parts[p]);
+}
+
+export async function fetchKitManifest(audioUrl: string): Promise<KitManifest | null> {
+  const slug = stemSlugFromUrl(audioUrl);
+  try {
+    const res = await fetch(`/stems/${encodeURIComponent(slug)}/kitsep/manifest.json`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || typeof data !== 'object' || !data.parts) return null;
+    return data as KitManifest;
   } catch {
     return null;
   }

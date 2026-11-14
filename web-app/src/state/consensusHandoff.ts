@@ -14,7 +14,7 @@
 // ("Use for Auto-guess" / "Tune in Consensus Inspect"), the target panel
 // consumes the config once on arrival, and the slot empties again.
 
-import type { AutoGuessCentroidMethod } from '../types/autoGuess';
+import type { AutoGuessCentroidMethod, AutoGuessPoint } from '../types/autoGuess';
 
 /** The four knobs both surfaces expose, in the vocabulary they share. */
 export interface BoundaryConsensusConfig {
@@ -25,6 +25,12 @@ export interface BoundaryConsensusConfig {
   centroid: AutoGuessCentroidMethod;
   /** Detector row ids feeding the clustering. */
   algoIds: string[];
+  /** The boundaries the sender kept, already clustered and filtered. When
+   *  present the receiver REPLACES its points with these instead of only
+   *  taking the knobs: "Use for Auto-guess" means the boundaries that were
+   *  just scored, not a recipe the other panel re-cooks with its own
+   *  detector list. */
+  points?: AutoGuessPoint[];
 }
 
 /** Which panel a pending config is addressed to. */

@@ -16,9 +16,8 @@ class RandomCueDetector(CustomDetector):
     name = "example_random_cues"
     label = "random cues"
     output_kind = "cue"
-    is_algorithm = True
-    is_annotation = True
     description = "Sprinkles 8 evenly-spaced cues with random labels — useful for testing the picker / Accept-Reject UI."
+    windowable = True
     version = "0.1"
 
     N_CUES = 8

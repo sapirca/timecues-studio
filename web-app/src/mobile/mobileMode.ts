@@ -15,9 +15,11 @@
  * asked for. Nothing is stored for those visits.
  *
  * Order of precedence, first match wins:
- *   1. `?mobile=1` / `?mobile=0` — this visit only, for a quick look without
- *      changing the address. Deliberately NOT remembered: a single `?mobile=1`
- *      used to leave that browser in the phone shell on every later visit.
+ *   1. `?mobile=1` / `?mobile=0` — this TAB only, for a quick look without
+ *      changing the address (it survives reloads in that tab, which is what
+ *      makes it usable while signing in, and dies with the tab). Deliberately
+ *      not remembered beyond it: a single `?mobile=1` used to leave that
+ *      browser in the phone shell on every later visit.
  *   2. The `m.` host.
  *   3. A phone-sized touch screen, unless this browser has asked for the
  *      desktop site (the only thing stored, written by the account menu's
@@ -38,18 +40,26 @@ export interface DetectEnv {
   hostname: string;
   search: string;
   storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** Tab-scoped store for the `?mobile` override (sessionStorage). */
+  tabStorage?: Pick<Storage, 'getItem' | 'setItem'> | null;
   matchesPhone: boolean;
 }
+
+/** Where a `?mobile` override lives for the rest of the tab's life. */
+export const TAB_OVERRIDE_KEY = 'tc:mobile-shell-tab';
 
 function readEnv(): DetectEnv {
   let storage: DetectEnv['storage'] = null;
   try { storage = window.localStorage; } catch { /* private mode / blocked */ }
+  let tabStorage: DetectEnv['tabStorage'] = null;
+  try { tabStorage = window.sessionStorage; } catch { /* private mode / blocked */ }
   let matchesPhone = false;
   try { matchesPhone = window.matchMedia?.(PHONE_MEDIA_QUERY).matches ?? false; } catch { /* old engine */ }
   return {
     hostname: window.location.hostname,
     search: window.location.search,
     storage,
+    tabStorage,
     matchesPhone,
   };
 }
@@ -60,7 +70,15 @@ export function isMobileHost(hostname: string): boolean {
 
 export function detectMobileMode(env: DetectEnv = readEnv()): boolean {
   const q = new URLSearchParams(env.search).get('mobile');
-  if (q === '1' || q === '0') return q === '1';
+  if (q === '1' || q === '0') {
+    // Kept for the tab, not the browser: a reload (or a sign-in that reloads
+    // the page) should not drop you back into the other shell.
+    try { env.tabStorage?.setItem(TAB_OVERRIDE_KEY, q); } catch { /* quota */ }
+    return q === '1';
+  }
+  let tab: string | null = null;
+  try { tab = env.tabStorage?.getItem(TAB_OVERRIDE_KEY) ?? null; } catch { /* blocked */ }
+  if (tab === '1' || tab === '0') return tab === '1';
   if (isMobileHost(env.hostname)) return true;
   if (!env.matchesPhone) return false;
   let optedOut = false;

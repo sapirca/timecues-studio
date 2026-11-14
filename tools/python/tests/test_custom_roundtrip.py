@@ -6,8 +6,10 @@ shapes of every custom-detector item — silent drift here is the most-burned
 boundary in the repo. This test pins both sides:
 
   1. Build a synthetic detector output of each kind (Boundary, Cue, Span,
-     Loop, Pattern), push it through `_validate_items`, and assert the
-     accepted-dict keys match the keys the TypeScript types declare.
+     Loop, Riff), push it through the runner's validator, and assert the
+     accepted-dict keys match the keys the TypeScript types declare — for a
+     riff, the Riff Patterns layer's own types in annotationLayer.ts, since a
+     detector's riff IS that layer.
   2. JSON-roundtrip the envelope shape (the runner's persisted format) and
      assert it survives unchanged.
 
@@ -28,8 +30,10 @@ _TOOLS_PY = Path(__file__).resolve().parents[1]
 if str(_TOOLS_PY) not in sys.path:
     sys.path.insert(0, str(_TOOLS_PY))
 
-from custom_api import PatternOccurrence, PatternRow, Boundary, Cue, Loop, Pattern, Span  # noqa: E402
-from custom_runner import _validate_items  # noqa: E402
+from custom_api import (  # noqa: E402
+    Boundary, Cue, Loop, Riff, RiffEntry, RiffItem, RiffNode, RiffNote, RiffOccurrence, Span,
+)
+from custom_runner import _validate_items, _validate_riff  # noqa: E402
 
 
 # ─── TS type → expected key set ──────────────────────────────────────────────
@@ -46,14 +50,17 @@ _TS_TYPES_PATH = (
 )
 
 
-def _parse_ts_interface_fields(name: str) -> set[str]:
+_TS_LAYER_TYPES_PATH = _TS_TYPES_PATH.parent / "annotationLayer.ts"
+
+
+def _parse_ts_interface_fields(name: str, path: Path = _TS_TYPES_PATH) -> set[str]:
     """Return the set of field names declared on `export interface <name>`.
 
     Strips comments and recognizes a field as `<ident>?: ...;` or `<ident>: ...;`
     at the start of a line. Doesn't try to parse types — only names matter
     here, and a name mismatch is what the test is guarding against.
     """
-    src = _TS_TYPES_PATH.read_text()
+    src = path.read_text()
     # Find the interface block: `export interface Name {  ...  }`
     pattern = re.compile(
         rf"export\s+interface\s+{re.escape(name)}\s*\{{(.*?)\n\}}",
@@ -61,21 +68,23 @@ def _parse_ts_interface_fields(name: str) -> set[str]:
     )
     m = pattern.search(src)
     if not m:
-        raise AssertionError(f"interface {name} not found in {_TS_TYPES_PATH}")
+        raise AssertionError(f"interface {name} not found in {path}")
     body = m.group(1)
     # Strip `/* ... */` block comments and `// ...` line comments.
     body = re.sub(r"/\*.*?\*/", "", body, flags=re.DOTALL)
     body = re.sub(r"//[^\n]*", "", body)
 
     fields: set[str] = set()
+    depth = 0
     for line in body.splitlines():
         line = line.strip()
-        if not line:
-            continue
-        # `ident?: ...` or `ident: ...`
+        # `ident?: ...` or `ident: ...` — at the interface's own level only:
+        # the fields of a nested object type (`window?: { start_ms: … }`)
+        # belong to that object, not to the interface.
         m = re.match(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\??\s*:", line)
-        if m:
+        if m and depth == 0:
             fields.add(m.group(1))
+        depth += line.count("{") - line.count("}")
     return fields
 
 
@@ -86,7 +95,7 @@ def test_boundary_dict_matches_ts_interface():
     """Accepted Boundary dict keys must exactly match CustomBoundaryItem fields."""
     accepted, errs = _validate_items(
         [Boundary(time_ms=500, label="drop", importance="critical",
-                  candidates=[480, 520])],
+                  candidates=[480, 520], color="#f87171")],
         "boundary",
         duration_ms=10_000,
     )
@@ -127,7 +136,8 @@ def test_cue_dict_matches_ts_interface():
 
 def test_span_dict_matches_ts_interface():
     accepted, errs = _validate_items(
-        [Span(start_ms=1000, duration_ms=2000, label="vox", intensity=0.5)],
+        [Span(start_ms=1000, duration_ms=2000, label="vox", intensity=0.5, color="#38bdf8",
+              description="sung", pulse="8th")],
         "span",
         duration_ms=10_000,
     )
@@ -142,7 +152,7 @@ def test_span_dict_matches_ts_interface():
 
 def test_loop_dict_matches_ts_interface():
     accepted, errs = _validate_items(
-        [Loop(start_ms=1000, duration_ms=2000, label="drums", snap_zero_cross=True)],
+        [Loop(start_ms=1000, duration_ms=2000, label="drums", snap_zero_cross=True, color="#a3e635")],
         "loop",
         duration_ms=10_000,
     )
@@ -155,122 +165,79 @@ def test_loop_dict_matches_ts_interface():
     )
 
 
-def test_pattern_spans_validation_rejects_bad_holds():
-    # length < 2 is not a span
-    _, e1 = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1, spans=[[3, 1]])],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(err.field.startswith("spans") for err in e1)
-
-    # overlaps a highlighted_beats tick
-    _, e2 = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1,
-                 highlighted_beats=[5], spans=[[4, 3]], steps_per_cycle=16)],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(err.field.startswith("spans") for err in e2)
-
-    # runs past steps_per_cycle
-    _, e3 = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1,
-                 spans=[[14, 4]], steps_per_cycle=16)],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(err.field.startswith("spans") for err in e3)
-
-    # two spans overlapping each other
-    _, e4 = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1,
-                 spans=[[2, 3], [3, 2]], steps_per_cycle=16)],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(err.field.startswith("spans") for err in e4)
+# ─── Riffs: the one shape a repeated figure takes ────────────────────────────
 
 
+def _kick_riff(**over) -> Riff:
+    node = RiffNode(id="a", name="A", steps_per_cycle=16, color="#f87171",
+                    names=["four on the floor"],
+                    notes=[RiffNote(start=0, end=0.25, accent=120), RiffNote(start=1, end=1.25),
+                           RiffNote(start=2, end=3, label="C1", note=24)])
+    item = RiffItem(start=1.0, end=3.0, label="A", repeat_count=4,
+                    sequence=[RiffEntry(type="a", length_steps=16)],
+                    occurrences=[RiffOccurrence(index=3, event="variation",
+                                                added=[RiffNote(start=3.5, end=3.75, accent=70)],
+                                                missing=[1.0])])
+    return Riff(**{"nodes": [node], "items": [item], "drum": "kick", **over})
 
-# ─── Multi-row patterns (a drum groove is three lines, not one) ──────────────
 
-
-def test_pattern_rows_and_occurrences_survive_validation():
-    """The runner serializes a fixed key set; these have to be in it.
-
-    They were not, once — a detector could emit rows and occurrences and the
-    runner would quietly drop them on the way to the envelope, so the UI saw a
-    single-row pattern and nothing said why.
-    """
-    accepted, errs = _validate_items(
-        [Pattern(
-            start_ms=0, duration_ms=2000, label="groove", repeat_count=4,
-            highlighted_beats=[0, 4, 8, 12], steps_per_cycle=16,
-            rows=[
-                PatternRow(row="kick", highlighted_beats=[0, 8], accents=[120, 60]),
-                PatternRow(row="hat", highlighted_beats=[4, 12]),
-            ],
-            occurrences=[
-                PatternOccurrence(index=0, start_ms=0, deviation=0.0),
-                PatternOccurrence(index=1, start_ms=2000, deviation=0.25,
-                                  missing=[{"row": "hat", "step": 12}]),
-            ],
-        )],
-        "pattern", duration_ms=20_000,
-    )
+def test_a_riff_is_the_riff_patterns_layer_shape():
+    """Every key a detector's riff writes is a field of the app's Riff
+    Patterns types — the layer stores it as it comes."""
+    riff, errs = _validate_riff(_kick_riff(), duration_ms=20_000)
     assert errs == []
-    item = accepted[0]
-    assert [r["row"] for r in item["rows"]] == ["kick", "hat"]
-    assert item["rows"][0]["accents"] == [120, 60]
-    assert "accents" not in item["rows"][1], "a row that measured nothing carries no key"
-    assert item["occurrences"][1]["deviation"] == 0.25
-    assert item["occurrences"][1]["missing"] == [{"row": "hat", "step": 12}]
+    riff = json.loads(json.dumps(riff))
+    node, item = riff["nodes"][0], riff["items"][0]
+    layer = lambda name: _parse_ts_interface_fields(name, _TS_LAYER_TYPES_PATH)  # noqa: E731
+    assert set(node) == layer("RiffNode")
+    assert set(node["segments"][0]) <= layer("RiffBoundarySegment")
+    assert {"accent", "label", "note"} <= {k for sg in node["segments"] for k in sg}
+    assert set(item) <= layer("RiffPatternItem")
+    assert set(item["occurrences"][0]) == layer("RiffOccurrence")
+    assert set(item["sequence"][0]) == layer("RiffSeqEntry")
+    assert set(item["occurrences"][0]["added"][0]) <= layer("RiffBoundarySegment") - {"kind"}
+    assert riff["drum"] == "kick"
 
 
-def test_a_single_row_pattern_is_unchanged_by_the_new_fields():
-    accepted, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=2,
-                 highlighted_beats=[0, 8], steps_per_cycle=16)],
-        "pattern", duration_ms=20_000,
-    )
-    assert errs == []
-    assert "rows" not in accepted[0] and "occurrences" not in accepted[0]
+def test_a_node_s_rests_are_filled_in():
+    """A detector writes notes; the node stores them tiling its length."""
+    riff, _ = _validate_riff(_kick_riff(), duration_ms=20_000)
+    shape = [(sg["start"], sg["end"], sg["kind"]) for sg in riff["nodes"][0]["segments"]]
+    assert shape == [(0, 0.25, "tick"), (0.25, 1, "empty"), (1, 1.25, "tick"),
+                     (1.25, 2, "empty"), (2, 3, "tick"), (3, 4, "empty")]
 
 
-def test_a_row_step_outside_the_cycle_is_rejected():
-    _, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1, steps_per_cycle=16,
-                 rows=[PatternRow(row="kick", highlighted_beats=[0, 16])])],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(e.field.startswith("rows[0].highlighted_beats") for e in errs)
+def test_a_bad_node_goes_with_the_items_that_play_it():
+    bad = RiffNode(id="a", name="A", steps_per_cycle=16, subbeats_per_beat=5, notes=[])
+    riff, errs = _validate_riff(_kick_riff(nodes=[bad]), duration_ms=20_000)
+    assert riff["nodes"] == [] and riff["items"] == []
+    assert any(e.field == "nodes[0].subbeats_per_beat" for e in errs)
+    assert any("sequence" in (e.field or "") for e in errs)
 
 
-def test_more_accents_than_steps_is_rejected():
-    """accents is positional against highlighted_beats, so a longer list means
-    the detector lost track of which velocity belongs to which step."""
-    _, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1, steps_per_cycle=16,
-                 rows=[PatternRow(row="kick", highlighted_beats=[0], accents=[100, 90])])],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(e.field.startswith("rows[0].accents") for e in errs)
+def test_a_note_off_the_node_or_an_accent_out_of_range_is_dropped():
+    node = RiffNode(id="a", name="A", steps_per_cycle=16,
+                    notes=[RiffNote(start=3.5, end=4.5), RiffNote(start=0, end=0.25, accent=200),
+                           RiffNote(start=1, end=1.25)])
+    riff, errs = _validate_riff(Riff(nodes=[node], items=[]), duration_ms=20_000)
+    assert [sg["start"] for sg in riff["nodes"][0]["segments"] if sg["kind"] == "tick"] == [1]
+    assert len(errs) == 2
 
 
-def test_velocities_are_clamped_into_midi_range():
-    accepted, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1, steps_per_cycle=16,
-                 rows=[PatternRow(row="kick", highlighted_beats=[0, 4], accents=[999, -5])])],
-        "pattern", duration_ms=20_000,
-    )
-    assert errs == []
-    assert accepted[0]["rows"][0]["accents"] == [127, 1]
+def test_an_occurrence_must_name_a_play_of_its_item():
+    riff = _kick_riff()
+    riff.items[0].occurrences = [RiffOccurrence(index=4, event="fill"),
+                                 RiffOccurrence(index=0, event="louder")]
+    out, errs = _validate_riff(riff, duration_ms=20_000)
+    assert "occurrences" not in out["items"][0]
+    assert len(errs) == 2
 
 
-def test_a_deviation_outside_zero_to_one_is_rejected():
-    _, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, repeat_count=1, steps_per_cycle=16,
-                 occurrences=[PatternOccurrence(index=0, start_ms=0, deviation=1.5)])],
-        "pattern", duration_ms=20_000,
-    )
-    assert any(e.field.startswith("occurrences[0].deviation") for e in errs)
+def test_a_riff_detector_must_return_a_riff():
+    out, errs = _validate_riff([], duration_ms=20_000)
+    assert out == {"nodes": [], "combos": [], "items": []}
+    assert errs[0].field == "<return>"
+
 
 # ─── Envelope-level shape (what gets persisted + shipped to the UI) ──────────
 
@@ -292,7 +259,30 @@ def test_envelope_shape_matches_ts_interface():
     env["duration_ms"] = 10_000
 
     roundtripped = json.loads(json.dumps(env))
-    ts_fields = _parse_ts_interface_fields("CustomResultEnvelope")
+    # Set only on a section run's envelope (window, window_token) or on an
+    # output a section run was folded into (window_runs) — never on a
+    # whole-song run's. TS must still declare them.
+    window_only = {"window", "window_token", "window_runs"}
+    # Set only by a detector that offers Strict / Normal / Loose.
+    strictness_only = {"strictness"}
+    # Set only by a detector that offers a drum source, or a run that read drums.
+    drums_only = {"drum_source", "drum_read"}
+    # Set only by a detector that offers a section source.
+    sections_only = {"section_source", "section_read"}
+    # Set only by a detector whose output_kind is "lanes" (dropped_lanes: once
+    # a cached lane a run no longer returns was dropped); see the test below.
+    lanes_only = {"lanes", "dropped_lanes"}
+    # Set only by a detector that declares switches.
+    switches_only = {"switches"}
+    # Set only by a detector that declares sources.
+    sources_only = {"source", "source_read"}
+    # Set only by a detector whose output_kind is "riff": the lane's library.
+    riff_only = {"nodes", "combos", "drum", "summary"}
+    optional = (window_only | strictness_only | drums_only | sections_only | lanes_only
+                | switches_only | sources_only | riff_only)
+    all_ts_fields = _parse_ts_interface_fields("CustomResultEnvelope")
+    assert optional <= all_ts_fields
+    ts_fields = all_ts_fields - optional
     py_keys = set(roundtripped.keys())
     assert py_keys == ts_fields, (
         f"Envelope schema drift!\n"
@@ -332,40 +322,20 @@ def test_ts_file_exists():
     )
 
 
-def test_motif_survives_validation_and_is_omitted_when_unset():
-    """`motif` is what says two runs are the same figure coming back.
+def test_a_lane_matches_the_ts_lane_interface():
+    """A "lanes" detector's envelope carries `lanes`, each with the fields
+    CustomLane declares on the TS side."""
+    from custom_api import Cue, Lane
+    from custom_runner import _validate_lanes
 
-    The letter is computed by the generator and was then dropped on the way
-    out, because `Pattern` had no field to carry it — so the UI fell back to
-    the run's label and named every node after it, producing "Groove Drum
-    groove A (10 hits/bar) · Kick", which is truncated to "Gro…" on the canvas
-    and loses the only part worth reading.
-    """
-    accepted, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, label="Drum groove A (10 hits/bar)",
-                 repeat_count=4, highlighted_beats=[0, 8], steps_per_cycle=16,
-                 motif="A")],
-        "pattern", duration_ms=20_000,
-    )
+    lanes, errs = _validate_lanes(
+        [Lane(id="kick_notes", label="Kick notes", output_kind="cue", group="Kick",
+              items=[Cue(time_ms=500)]),
+         Lane(id="kick_pattern", label="Kick pattern", output_kind="riff", group="Kick",
+              items=_kick_riff())], duration_ms=10_000)
     assert errs == []
-    assert accepted[0]["motif"] == "A"
-
-    # A detector that names no motif emits no key, rather than a null the UI
-    # would have to special-case.
-    plain, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, label="x", repeat_count=1,
-                 highlighted_beats=[0], steps_per_cycle=16)],
-        "pattern", duration_ms=20_000,
-    )
-    assert errs == []
-    assert "motif" not in plain[0]
-
-
-def test_a_non_string_motif_is_an_error_not_a_coerced_label():
-    accepted, errs = _validate_items(
-        [Pattern(start_ms=0, duration_ms=2000, label="x", repeat_count=1,
-                 highlighted_beats=[0], steps_per_cycle=16, motif=7)],
-        "pattern", duration_ms=20_000,
-    )
-    assert accepted == []
-    assert any(e.field == "motif" for e in errs)
+    cue, riff = json.loads(json.dumps(lanes))
+    riff_only = {"nodes", "combos", "drum", "summary"}
+    assert set(cue) == _parse_ts_interface_fields("CustomLane") - riff_only
+    assert set(riff) <= _parse_ts_interface_fields("CustomLane")
+    assert {"nodes", "combos", "drum"} <= set(riff)

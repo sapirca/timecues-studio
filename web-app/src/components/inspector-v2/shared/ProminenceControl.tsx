@@ -20,7 +20,7 @@
  * and the way into the strip when it can.
  */
 
-import { useMemo } from 'react';
+import { useRef } from 'react';
 import type { CardSectionSpec } from './CardSection';
 import {
   PROMINENCE_INFO,
@@ -33,6 +33,7 @@ import {
   type ProminenceEnvelope,
 } from '../../../types/annotationLayer';
 import { formatClockTime as fmtTime } from '../../../utils/clockTime';
+import { usePlayheadClock, usePlayheadEffect, usePlayheadValue } from '../../../hooks/usePlayhead';
 
 /** Read-only arc summary ("Lead → Backing") for the editor-panel item cards,
  *  so the shape is visible without opening the canvas popover. Renders nothing
@@ -61,8 +62,6 @@ export interface ProminenceControlProps {
   /** Item bounds in track seconds — used to map the playhead into item time. */
   start: number;
   end: number;
-  /** Playhead in track seconds. Undefined ⇒ treated as outside the item. */
-  currentTime?: number;
   /** Layer colour, so the active chip matches the band on the canvas. */
   color: string;
   readOnly?: boolean;
@@ -70,20 +69,37 @@ export interface ProminenceControlProps {
 }
 
 export function ProminenceControl({
-  points, start, end, currentTime, color, readOnly = false, onChange,
+  points, start, end, color, readOnly = false, onChange,
 }: ProminenceControlProps) {
   const duration = Math.max(0, end - start);
-  const tRel = currentTime !== undefined ? currentTime - start : null;
-  const playheadInside = tRel !== null && tRel >= 0 && tRel <= duration;
   // Where a click lands: the playhead when it's inside the item, else the
-  // t=0 anchor (the only position that's always meaningful).
-  const applyAt = playheadInside ? tRel : 0;
+  // t=0 anchor (the only position that's always meaningful). Read from the
+  // playhead clock — what renders is only whether the playhead is inside and
+  // which level is active there, so the card re-renders on those changes and
+  // not on every frame of playback.
+  const applyAtFor = (t: number) => {
+    const tRel = t - start;
+    return tRel >= 0 && tRel <= duration ? tRel : 0;
+  };
+  const playheadClock = usePlayheadClock();
+  const playheadInside = usePlayheadValue((t) => t - start >= 0 && t - start <= duration);
+  const activeLevel = usePlayheadValue((t) => prominenceAt(points, applyAtFor(t))?.level ?? null);
 
-  const active = useMemo(() => prominenceAt(points, applyAt), [points, applyAt]);
-
-  const applyHint = playheadInside
-    ? `at the playhead (${fmtTime(currentTime!)}, ${applyAt.toFixed(2)}s in)`
-    : 'at the start of this annotation — move the playhead inside it to place a breakpoint mid-way';
+  // The tooltips name the exact spot, so they follow the clock by writing the
+  // attribute directly instead of through a render.
+  const levelButtons = useRef(new Map<string, HTMLButtonElement>());
+  usePlayheadEffect((t) => {
+    const tRel = t - start;
+    const inside = tRel >= 0 && tRel <= duration;
+    const applyHint = inside
+      ? `at the playhead (${fmtTime(t)}, ${tRel.toFixed(2)}s in)`
+      : 'at the start of this annotation — move the playhead inside it to place a breakpoint mid-way';
+    for (const level of PROMINENCE_LEVELS) {
+      const info = PROMINENCE_INFO[level];
+      const el = levelButtons.current.get(level);
+      if (el) el.title = `${info.label}\n${info.description}\n\nSets ${info.short} ${applyHint}.`;
+    }
+  }, [start, duration]);
 
   return (
     <div>
@@ -97,13 +113,17 @@ export function ProminenceControl({
       <div className="flex gap-1">
         {PROMINENCE_LEVELS.map((level) => {
           const info = PROMINENCE_INFO[level];
-          const isActive = active?.level === level;
+          const isActive = activeLevel === level;
           return (
             <button
               key={level}
+              ref={(el) => {
+                if (el) levelButtons.current.set(level, el);
+                else levelButtons.current.delete(level);
+              }}
               type="button"
               disabled={readOnly}
-              onClick={() => onChange(setProminenceAt(points, applyAt, level))}
+              onClick={() => onChange(setProminenceAt(points, applyAtFor(playheadClock.get()), level))}
               className={`flex-1 rounded px-1 py-1 text-[10px] leading-none border transition-colors ${
                 readOnly ? 'cursor-not-allowed opacity-60' : 'hover:bg-white/[0.06]'
               } ${isActive ? 'text-slate-50' : 'text-slate-300 border-white/[0.06] bg-[#0a0b0d]'}`}
@@ -112,7 +132,6 @@ export function ProminenceControl({
                 background: `${color}33`,
                 boxShadow: `inset 0 0 0 1px ${color}88`,
               } : undefined}
-              title={`${info.label}\n${info.description}\n\nSets ${info.short} ${applyHint}.`}
             >
               {info.short}
             </button>

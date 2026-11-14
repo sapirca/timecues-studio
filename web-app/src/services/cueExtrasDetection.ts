@@ -8,14 +8,6 @@ export interface CueExtrasCue {
   time: number;
   label: string;
   confidence: number | null;
-  /** How hard this drum was struck, 1-127, against the hardest hit of the
-   *  SAME drum in the track — so a full-force hi-hat is 127 even though it is
-   *  far quieter than any kick. Set only by `drum-transients`. */
-  velocity?: number;
-  /** The hit's actual level against the loudest hit anywhere in the track, in
-   *  dB (always <= 0). Unlike `velocity` this IS comparable across
-   *  instruments. Set only by `drum-transients`. */
-  levelDb?: number;
 }
 
 export interface CueExtrasDetectionResult {

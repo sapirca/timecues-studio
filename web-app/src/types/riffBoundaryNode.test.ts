@@ -7,10 +7,8 @@ import {
   boundarySegmentsFromHits,
   boundarySegmentsFromTaps,
   dropBoundaryTickAt,
-  isBoundaryNode,
   mergeBoundaryHits,
   moveBoundary,
-  newRiffBoundaryNode,
   newRiffNode,
   normalizeBoundarySegments,
   paintBoundaryRange,
@@ -509,14 +507,8 @@ describe('editor operations', () => {
 });
 
 describe('node plumbing', () => {
-  it('marks only boundary nodes, treating a node with no kind as a grid node', () => {
-    expect(isBoundaryNode(newRiffBoundaryNode('b', '#fff'))).toBe(true);
-    expect(isBoundaryNode(newRiffNode('g', '#fff'))).toBe(false);
-    expect(isBoundaryNode(undefined)).toBe(false);
-  });
-
-  it('starts a new boundary node as one full-length rest at its asked length', () => {
-    const node = newRiffBoundaryNode('b', '#fff', 8);
+  it('starts a new node as one full-length rest at its asked length', () => {
+    const node = newRiffNode('b', '#fff', 8);
     expect(riffNodeLengthBeats(node)).toBe(8);
     expect(shape(node.segments!)).toEqual([[0, 8, 'empty']]);
   });
@@ -527,7 +519,7 @@ describe('node plumbing', () => {
   });
 
   it('re-tiles blocks when the node is resized', () => {
-    const node = { ...newRiffBoundaryNode('b', '#fff', 4), segments: undefined as never };
+    const node = { ...newRiffNode('b', '#fff', 4), segments: undefined as never };
     const seeded = {
       ...node,
       segments: boundarySegmentsFromHits([1, 3].map((beat) => ({ beat })), 4, { maxTickBeats: 0.5 }),

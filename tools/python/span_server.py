@@ -54,7 +54,7 @@ import json
 import sys
 import warnings
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -63,7 +63,7 @@ PORT = 8009
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import find_audio, stem_audio, cache_name, REPO_ROOT, SPAN_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
-from server_common import cached_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
+from server_common import ModelServer, cached_result, write_result, cors_headers, err as _common_err, model_used, now_iso, time_ms  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -133,6 +133,7 @@ def _err(algo: str, msg: str) -> dict:
 def _ensure_silero():
     """Load Silero-VAD on first use. Subsequent calls are free."""
     global _silero_model, _silero_utils
+    model_used()
     if _silero_model is not None:
         return
     import torch
@@ -188,6 +189,7 @@ def _ensure_jdcnet():
     memory for the lifetime of the container.
     """
     global _jdcnet_model, _jdcnet_mean, _jdcnet_std
+    model_used()
     if _jdcnet_model is not None:
         return
     import numpy as np
@@ -317,10 +319,7 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
             payload["pitch_contour_file"] = pitch_path.name
         except Exception:
             pass
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=ALGORITHMS[algo]["available"]())
     return payload
 
 
@@ -458,7 +457,7 @@ def main():
         f"  torch={_TORCH_OK}  torchaudio={_TORCHAUDIO_OK}  librosa={_LIBROSA_OK}  jdcnet={_JDCNET_OK}",
         file=sys.stderr,
     )
-    server = HTTPServer((host, PORT), Handler)
+    server = ModelServer((host, PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

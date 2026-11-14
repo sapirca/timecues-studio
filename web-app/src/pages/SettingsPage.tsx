@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext, type ReactNode } from 'react';
+import { isValidElement, useCallback, useContext, useEffect, useMemo, useRef, useState, createContext, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAnnotator } from '../context/AnnotatorContext';
 import {
@@ -488,7 +488,7 @@ export function SettingsPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search settings…"
-              className="w-full bg-[#0a0b0d] border border-white/[0.08] rounded-lg pl-9 pr-8 py-2 text-base sm:text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-slate-500/40"
+              className="w-full bg-[#0a0b0d] border border-white/[0.08] rounded-lg pl-9 pr-8 py-2 text-base sm:text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-slate-500/40 [&::-webkit-search-cancel-button]:appearance-none"
             />
             {searchQuery && (
               <button
@@ -723,7 +723,7 @@ export function SettingsPage() {
 
           <Section
             title="Default signals"
-            hint="What's checked in the SIGNALS dropdown when a song opens."
+            hint="What's checked in the SIGNALS dropdown when the page opens. Your picks then carry over as you switch songs."
           >
             <div className="space-y-1.5">
               <Toggle
@@ -788,9 +788,14 @@ export function SettingsPage() {
                 onChange={(v) => update('defaultShowSsm', v)}
               />
               <Toggle
-                label="Energy (RMS)"
+                label="Beat strength (kick and bass landing on the beat)"
                 value={settings.defaultShowEnergy}
                 onChange={(v) => update('defaultShowEnergy', v)}
+              />
+              <Toggle
+                label="Volume (RMS)"
+                value={settings.defaultShowVolume}
+                onChange={(v) => update('defaultShowVolume', v)}
               />
               <Toggle
                 label="Brightness (spectral centroid)"
@@ -806,6 +811,21 @@ export function SettingsPage() {
                 label="Onsets (half-wave rectified flux — attacks only)"
                 value={settings.defaultShowOnsets}
                 onChange={(v) => update('defaultShowOnsets', v)}
+              />
+              <Toggle
+                label="Onset density (hits per beat)"
+                value={settings.defaultShowDensity}
+                onChange={(v) => update('defaultShowDensity', v)}
+              />
+              <Toggle
+                label="Busyness (notes per beat across 8 bands)"
+                value={settings.defaultShowBusyness}
+                onChange={(v) => update('defaultShowBusyness', v)}
+              />
+              <Toggle
+                label="Bandwidth (spread of frequencies)"
+                value={settings.defaultShowBandwidth}
+                onChange={(v) => update('defaultShowBandwidth', v)}
               />
               <Toggle
                 label="Spectral Flux (full L2 — attacks + releases)"
@@ -1386,23 +1406,9 @@ export function SettingsPage() {
           </Section>
 
           <Section
-            title="Experimental annotation types & models"
-            hint="Coming soon. Each toggle is independent; flip on locally to test in-progress paradigms and MIR models before they ship."
+            title="Experimental detectors"
+            hint="Detector families still being tried out. Each toggle is independent."
           >
-            <Toggle
-              label="Enable Loops and Riff Patterns (in development)"
-              value={settings.experimentalLoopsAndPatterns}
-              onChange={(v) => update('experimentalLoopsAndPatterns', v)}
-            />
-            <p className="text-[11px] text-slate-500">
-              <span className="font-medium text-slate-400">Loops</span> are grid-aware
-              seamless-playback regions for auditioning N-bar phrases.{' '}
-              <span className="font-medium text-slate-400">Riff Patterns</span> compose
-              reusable motif nodes into instances placed on the timeline. Backend supports
-              both; the UI is still being built and won't show until this flag is on.
-              Boundaries (Manual/Auto-guess), Cues, and Spans are always available — they
-              don't need this flag.
-            </p>
             <Toggle
               label="Enable SPAN-family detectors (Silero-VAD, JDCNet)"
               value={settings.experimentalSpanFamily}
@@ -1447,19 +1453,6 @@ export function SettingsPage() {
             </p>
             {!expAvail.loopFamily && <ExpUnavailableNote />}
             <Toggle
-              label="Enable LYRICS-family detectors (Whisper-base transcription)"
-              value={settings.experimentalLyricsFamily}
-              onChange={(v) => update('experimentalLyricsFamily', v)}
-              disabled={!expAvail.lyricsFamily}
-            />
-            <p className="text-[11px] text-slate-500">
-              OpenAI Whisper "base" multilingual transcription. ~140 MB checkpoint lazy-downloads
-              into the shared model-cache volume on first detect. Output: per-word and per-line
-              entries with coarse timestamps (~200 ms granularity). Refining the word-level
-              alignment with WhisperX / ctc-forced-aligner is the planned follow-up.
-            </p>
-            {!expAvail.lyricsFamily && <ExpUnavailableNote />}
-            <Toggle
               label="Enable PATTERN-family detectors (LoCoMotif motif discovery)"
               value={settings.experimentalPatternFamily}
               onChange={(v) => update('experimentalPatternFamily', v)}
@@ -1471,29 +1464,14 @@ export function SettingsPage() {
               (MIT, KU Leuven) finds variable-length repeating motifs in beat-synchronous chroma via DTW-warped
               matching. Detected motifs are cached in{' '}
               <code className="font-mono text-slate-400">data/algorithm-outputs/pattern/</code> and
-              surface in Algorithm Inspect; they have no manual annotation layer of their own.
+              surface in the Inspect tab; they have no manual annotation layer of their own.
               No model weights — pure DSP + numba JIT (one-time ~15 s warm-up on first call after server boot).
             </p>
             {!expAvail.patternFamily && <ExpUnavailableNote />}
-            <Toggle
-              label="Enable Setlist workspace (algorithmic DJ-style ordering)"
-              value={settings.experimentalSetlist}
-              onChange={(v) => update('experimentalSetlist', v)}
-            />
-            <p className="text-[11px] text-slate-500">
-              Adds a top-level <span className="font-medium text-slate-400">Setlist</span>{' '}
-              workspace at <code className="font-mono text-slate-400">/setlist</code> that orders
-              your corpus into a play sequence. v0 uses cached BPM (median across the 5 detectors)
-              with a greedy nearest-neighbour pass; meter and energy scorers join next. Saved
-              setlists persist per-annotator under{' '}
-              <code className="font-mono text-slate-400">data/setlists/&lt;you&gt;/&lt;name&gt;.json</code>.
-              No new model dependencies.
-            </p>
             <ExperimentalModelsPanel
               spanFamilyEnabled={settings.experimentalSpanFamily}
               cueExtrasEnabled={settings.experimentalCueExtras}
               loopFamilyEnabled={settings.experimentalLoopFamily}
-              lyricsFamilyEnabled={settings.experimentalLyricsFamily}
               patternFamilyEnabled={settings.experimentalPatternFamily}
             />
           </Section>
@@ -1559,7 +1537,7 @@ export function SettingsPage() {
               Newly uploaded songs are queued for Demucs in the background — one at a
               time, while you keep working. Songs that already have stems on disk are
               skipped, and nothing runs at all when the Demucs tooling isn't installed.
-              Dataset Prep's sidebar shows what's running and what's still waiting.
+              Prepare's sidebar shows what's running and what's still waiting.
             </p>
             <Field label="Stems per song">
               <div className="flex items-center gap-2 flex-wrap">
@@ -1581,11 +1559,12 @@ export function SettingsPage() {
               </div>
             </Field>
             <p className="text-[11px] text-slate-500">
-              <span className="font-medium text-slate-400">6 stems</span> (htdemucs_6s) adds
-              guitar and piano on their own tracks; <span className="font-medium text-slate-400">4 stems</span>{' '}
-              (htdemucs) leaves both inside <em>other</em> and finishes sooner. This is the
-              starting point for automatic runs — Dataset Prep's SOURCE row can pick either
-              model per re-stem.
+              <span className="font-medium text-slate-400">4 stems</span> (htdemucs, the default)
+              leaves guitar and piano inside <em>other</em>, finishes sooner, and keeps a sample
+              whole; <span className="font-medium text-slate-400">6 stems</span>{' '}
+              (htdemucs_6s) gives guitar and piano their own tracks but can cut one sound across
+              two stems. This is the starting point for automatic runs — Prepare's SOURCE
+              row can pick either model per re-stem.
             </p>
           </Section>
 
@@ -2235,6 +2214,23 @@ function DangerRow({
   );
 }
 
+/** The words a section's settings show — their text, and the string props
+ *  that become text (a Toggle's `label`, a Field's `hint`) — so search can
+ *  find a setting by what it is called. */
+function searchableText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(searchableText).join(' ');
+  if (isValidElement(node)) {
+    const props = node.props as Record<string, unknown>;
+    const own = ['label', 'title', 'hint', 'description']
+      .map((k) => (typeof props[k] === 'string' ? props[k] as string : ''))
+      .join(' ');
+    return `${own} ${searchableText(props.children as ReactNode)}`;
+  }
+  return '';
+}
+
 function Section({
   title,
   hint,
@@ -2267,10 +2263,13 @@ function Section({
   }, [collapseSeq]);
 
   const searchLower = searchQuery.toLowerCase();
+  // The settings inside count too: a search for a toggle's own label has to
+  // find the section it lives in, not only the section's title and hint.
   const matches =
     searchLower.length > 0 &&
     (title.toLowerCase().includes(searchLower) ||
-      (hint ?? '').toLowerCase().includes(searchLower));
+      (hint ?? '').toLowerCase().includes(searchLower) ||
+      searchableText(children).toLowerCase().includes(searchLower));
 
   useEffect(() => {
     if (matches) setOpen(true);

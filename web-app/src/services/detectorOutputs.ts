@@ -19,7 +19,7 @@
  */
 
 import { annotatorHeaders } from '../utils/annotatorHeaders';
-import type { CustomResultEnvelope } from '../types/customScript';
+import type { CustomResultEnvelope, DetectorStrictness, DrumSource, SectionSource } from '../types/customScript';
 
 const DETECTOR_OUTPUTS = '/api/detector-outputs';
 
@@ -113,11 +113,19 @@ export type DetectorRunResult =
 export async function runDetectorWithConflictCheck(
   name: string,
   slug: string,
-  opts?: { force?: boolean; confirmOverwrite?: boolean },
+  opts?: { force?: boolean; confirmOverwrite?: boolean; strictness?: DetectorStrictness; drumSource?: DrumSource; sectionSource?: SectionSource; switches?: Record<string, boolean>; source?: string },
 ): Promise<DetectorRunResult> {
   const params = new URLSearchParams({ slug });
   if (opts?.force) params.set('force', '1');
   if (opts?.confirmOverwrite) params.set('confirm_overwrite', '1');
+  if (opts?.strictness !== undefined) params.set('strictness', String(opts.strictness));
+  if (opts?.drumSource !== undefined) params.set('drum_source', opts.drumSource);
+  if (opts?.sectionSource !== undefined) params.set('section_source', opts.sectionSource);
+  if (opts?.source !== undefined) params.set('source', opts.source);
+  // The ticked ones; empty says "none ticked", absent keeps the song's last.
+  if (opts?.switches !== undefined) {
+    params.set('switches', Object.keys(opts.switches).filter((k) => opts.switches![k]).join(','));
+  }
   const res = await fetch(
     `/api/custom-scripts/run/${encodeURIComponent(name)}?${params}`,
     { method: 'POST', headers: annotatorHeaders() },

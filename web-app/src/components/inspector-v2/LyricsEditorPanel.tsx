@@ -16,7 +16,6 @@ import type {
   AnnotationLayersDocument,
   AnnotationStage,
   LyricsItem,
-  SnapMode,
 } from '../../types/annotationLayer';
 import type { PendingSelection } from './AnnotationOverlays';
 import {
@@ -26,17 +25,16 @@ import {
   pickDefaultLayerColor,
   setLayerStatus,
 } from '../../types/annotationLayer';
-import { snapModeLabel } from '../../utils/beatTimeFormat';
 import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
 import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { resolvePointAddTime } from './boundaryInsert';
+import { PLAYHEAD_SLOT, usePlayheadClock, usePlayheadValue } from '../../hooks/usePlayhead';
 import { AddItemAtEndCard } from './ItemCard';
 import { VocalRunsSection } from './VocalRunsSection';
 import type { VocalRunGrid } from '../../utils/vocalRuns';
 
 interface LyricsEditorPanelProps {
-  currentTime: number;
   /** Track length (seconds) — clamps line ends committed from a drag-region. */
   duration?: number;
   doc: AnnotationLayersDocument;
@@ -46,13 +44,8 @@ interface LyricsEditorPanelProps {
   selectedLayerId?: string | null;
   onSelectLayer?: (layerId: string | null) => void;
   /** Seek the playhead to a clicked lyric row (keeps the editor in sync with
-   *  the canvas karaoke highlight). */
+   *  the lane's Visualize highlight on the canvas). */
   onSeek?: (time: number) => void;
-  /** Grid-aware snap owned by the page (knows the tempo anchors, manual beat
-   *  overrides and the global Snap/Grid Lock switches). Lyrics pass their own
-   *  layer's SnapMode so a freed layer stays free — see the comment on `snap`
-   *  below for why lyrics don't just follow the global toggle. */
-  snapTime?: (t: number, mode: SnapMode) => number;
   onCapabilitiesChange?: (caps: AnnotationPanelCapabilities) => void;
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   pendingSelection?: PendingSelection | null;
@@ -67,27 +60,18 @@ interface LyricsEditorPanelProps {
    *  action is hidden (the Prominence lane is read-only for this document). */
   onAssignVocalLead?: (layerId: string) => void;
   /** Reader for the LIVE media clock (the page's `liveSongTime`). A word timed
-   *  off `currentTime` lands a render behind the syllable that was sung; see
-   *  `markTime`. Optional — falls back to the prop. */
+   *  off the playhead clock lands a frame behind the syllable that was sung;
+   *  see `markTime`. Optional — falls back to the playhead clock. */
   getSongTime?: () => number | null;
+  /** Fired once a new word or line has landed. A lyric arrives with no text,
+   *  so the page opens its card on the lane for the words to be typed in. */
+  onItemAdded?: (selection: { layerId: string; itemId: string }) => void;
 }
-
-/** Snap granularities offered for lyrics. 'bar' is deliberately absent: a word
- *  starting exactly on a downbeat happens, but forcing every word there would
- *  turn a vocal into a metronome. Ordered loosest → tightest. */
-const SNAP_OPTIONS: SnapMode[] = ['off', 'magnetic', '1/4beat', '1/2beat', 'beat'];
-
-const SNAP_TITLE =
-  'Snap granularity for this lyrics layer. Off keeps the exact sung timing. '
-  + 'Magnetic nudges a word onto the nearest 1/16 only when it is already within '
-  + 'about 30-40ms (tightened at fast tempi), so hand-tapped entries get tidied '
-  + 'but deliberate phrasing survives.';
 
 function LyricsEditorPanelInner(
   {
-    currentTime, duration = 0, doc, onDocChange, focusedLyrics, onFocusLyrics,
+    duration = 0, doc, onDocChange, focusedLyrics, onFocusLyrics,
     selectedLayerId = null, onSelectLayer, onSeek,
-    snapTime,
     onCapabilitiesChange,
     saveStatus = 'idle',
     pendingSelection = null,
@@ -96,20 +80,25 @@ function LyricsEditorPanelInner(
     vocalRunGrid,
     onAssignVocalLead,
     getSongTime,
+    onItemAdded,
   }: LyricsEditorPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
+  // The playhead is read from the clock, not a prop: handlers call
+  // `playheadClock.get()` when they fire, and the "@ <time>" labels re-render
+  // only when the time they print changes.
+  const playheadClock = usePlayheadClock();
   // When a word placed *right now* was sung. Called at the moment of the add,
-  // never captured: `currentTime` is the media clock one rAF, one setState and
-  // one inspector re-render later, and lyrics are the surface where a marker
-  // landing early is most audible. `atTime` is the caller's own reading (the
-  // M shortcut's, taken at the keydown) when it has one.
+  // never captured: the playhead clock is the media clock one rAF later, and
+  // lyrics are the surface where a marker landing early is most audible.
+  // `atTime` is the caller's own reading (the M shortcut's, taken at the
+  // keydown) when it has one.
   const markTime = useCallback(
     (atTime?: number) => resolvePointAddTime({
       live: atTime ?? getSongTime?.(),
-      fallback: currentTime,
+      fallback: playheadClock.get(),
     }),
-    [getSongTime, currentTime],
+    [getSongTime, playheadClock],
   );
   const lyricsLayers = useMemo(
     () => doc.layers.filter((l): l is AnnotationLayer<'lyrics'> => l.type === 'lyrics'),
@@ -133,29 +122,10 @@ function LyricsEditorPanelInner(
     if (activeLayer && activeLayer.id !== selectedLayerId) onSelectLayer(activeLayer.id);
   }, [activeLayer, selectedLayerId, onSelectLayer]);
 
-  // Lyrics are a measurement of a performance, not an authored grid event: a
-  // singer's onset sits ahead of or behind the beat on purpose, and that offset
-  // IS the phrasing. So this layer type ignores the global Snap toggle and
-  // obeys only its own SnapMode, which `newLyricsLayer` seeds to 'off'. An
-  // annotator working quantised material (rap on 1/16s, a chanted hook) opts in
-  // per layer via the toolbar picker; 'magnetic' is the middle setting that
-  // tidies a hand-tapped word (within `magneticToleranceSec`) without
-  // flattening a laid-back line.
-  const snapModeFor = useCallback(
-    (layerId: string | null): SnapMode => {
-      const target = layerId ? lyricsLayers.find((l) => l.id === layerId) : activeLayer;
-      return target?.snap ?? 'off';
-    },
-    [lyricsLayers, activeLayer],
-  );
-
-  const snap = useCallback(
-    (t: number, layerId: string | null = null) => {
-      const mode = snapModeFor(layerId);
-      return mode === 'off' || !snapTime ? t : snapTime(t, mode);
-    },
-    [snapModeFor, snapTime],
-  );
+  // Lyrics are never snapped. A word is a measurement of a performance, not an
+  // authored grid event: a singer's onset sits ahead of or behind the beat on
+  // purpose, and that offset IS the phrasing. Every time here is the exact
+  // audio-clock time, whatever Snap, Grid Lock or the layer's stored `snap` say.
 
   function patchLayer(layerId: string, patch: Partial<AnnotationLayer<'lyrics'>>) {
     onDocChange({
@@ -191,13 +161,13 @@ function LyricsEditorPanelInner(
     if (focusedLyrics?.itemId === itemId) onFocusLyrics?.(null);
   }
 
-  // Toggle word↔line. Switching to 'line' seeds an end (+1s, clamped grid);
-  // switching to 'word' drops the end.
+  // Toggle word↔line. Both are spans: switching to 'line' stretches the end
+  // to at least half a second; switching to 'word' keeps the end it has.
   function toggleKind(layerId: string, item: LyricsItem) {
     if (item.kind === 'word') {
       patchItem(layerId, item.id, { kind: 'line', end: Math.max(item.time + 0.5, (item.end ?? item.time + 1)) });
     } else {
-      patchItem(layerId, item.id, { kind: 'word', end: undefined });
+      patchItem(layerId, item.id, { kind: 'word' });
     }
   }
 
@@ -246,7 +216,8 @@ function LyricsEditorPanelInner(
     });
     onFocusLyrics?.({ layerId: targetId, itemId: item.id });
     onSelectLayer?.(targetId);
-  }, [doc, pickTarget, onDocChange, onFocusLyrics, onSelectLayer, onDuplicateSkipped]);
+    onItemAdded?.({ layerId: targetId, itemId: item.id });
+  }, [doc, pickTarget, onDocChange, onFocusLyrics, onSelectLayer, onDuplicateSkipped, onItemAdded]);
 
   // Drag-region → a LINE lyric spanning the selection (the natural analog of a
   // span/loop region for the lyrics paradigm).
@@ -281,8 +252,8 @@ function LyricsEditorPanelInner(
   // Dropping a word at the cursor instead would throw their drag away.
   const addAtLayer = useCallback((forcedLayerId: string | null, atTime?: number) => {
     if (pendingSelection) { confirmPendingForLayer(forcedLayerId); return; }
-    commitItem(newLyricsItem(snap(markTime(atTime), forcedLayerId), '', 'word'), forcedLayerId);
-  }, [commitItem, snap, markTime, pendingSelection, confirmPendingForLayer]);
+    commitItem(newLyricsItem(markTime(atTime), '', 'word'), forcedLayerId);
+  }, [commitItem, markTime, pendingSelection, confirmPendingForLayer]);
 
   const addViaToolbar = useCallback(
     (atTime?: number) => { addAtLayer(null, atTime); },
@@ -298,7 +269,7 @@ function LyricsEditorPanelInner(
     ? (pendingSelection.t2 != null
         ? `${fmtTime(Math.min(pendingSelection.t1, pendingSelection.t2))}\u2192${fmtTime(Math.max(pendingSelection.t1, pendingSelection.t2))}`
         : `@ ${fmtTime(pendingSelection.t1)}`)
-    : `@ ${fmtTime(currentTime)}`;
+    : `@ ${PLAYHEAD_SLOT}`;
 
   const addLayerViaToolbar = useCallback(() => {
     const layer = newLyricsLayer(`Lyrics ${lyricsLayers.length + 1}`, pickDefaultLayerColor(doc.layers));
@@ -352,6 +323,7 @@ function LyricsEditorPanelInner(
     let bestLayerId: string | null = null;
     let bestItemId: string | null = null;
     let bestDist = Infinity;
+    const currentTime = playheadClock.get();
     for (const l of doc.layers) {
       if (l.type !== 'lyrics' || !l.visible) continue;
       for (const it of l.items) {
@@ -362,7 +334,7 @@ function LyricsEditorPanelInner(
     if (!bestLayerId || !bestItemId || bestDist > 5) return;
     deleteItem(bestLayerId, bestItemId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, focusedLyrics, currentTime]);
+  }, [doc, focusedLyrics, playheadClock]);
 
   useImperativeHandle<AnnotationPanelController, AnnotationPanelController>(controllerRef, () => ({
     setStatus: setStage,
@@ -398,7 +370,7 @@ function LyricsEditorPanelInner(
       canExport: totalCount > 0,
       canDeleteAll: doc.layers.some((l) => l.type === 'lyrics'),
     });
-  }, [onCapabilitiesChange, doc, saveStatus, currentTime, totalCount, pendingSelection, addLabelSuffix]);
+  }, [onCapabilitiesChange, doc, saveStatus, totalCount, pendingSelection, addLabelSuffix]);
 
   const sortedItems = useMemo(
     () => (activeLayer?.items ?? []).slice().sort((a, b) => a.time - b.time),
@@ -406,8 +378,9 @@ function LyricsEditorPanelInner(
   );
 
   // Row under the playhead — the last item whose [time, end/next-start) spans
-  // currentTime. Lights up in sync with the canvas karaoke highlight.
-  const activeItemId = useMemo(() => {
+  // the playhead. Lights up in sync with the lane's Visualize highlight on the canvas; the
+  // list re-renders only when the lit row changes.
+  const activeItemId = usePlayheadValue((currentTime) => {
     let id: string | null = null;
     for (let i = 0; i < sortedItems.length; i++) {
       const it = sortedItems[i];
@@ -417,7 +390,7 @@ function LyricsEditorPanelInner(
       }
     }
     return id;
-  }, [sortedItems, currentTime]);
+  });
 
   return (
     <div className="space-y-3">
@@ -438,18 +411,6 @@ function LyricsEditorPanelInner(
             spellCheck={false}
           />
           <span className="text-[10px] font-mono text-slate-500 shrink-0">{activeLayer.items.length}</span>
-          {/* Per-layer snap granularity. Defaults to Off — no bar option, because
-              a sung word landing on a downbeat is a coincidence, not a rule. */}
-          <select
-            value={activeLayer.snap ?? 'off'}
-            onChange={(e) => patchLayer(activeLayer.id, { snap: e.target.value as SnapMode })}
-            title={SNAP_TITLE}
-            className="h-5 text-[9px] font-mono rounded border px-1 py-0 leading-none cursor-pointer focus:outline-none transition-colors bg-white/[0.03] border-white/[0.12] text-slate-400 hover:text-slate-200"
-          >
-            {SNAP_OPTIONS.map((m) => (
-              <option key={m} value={m}>{snapModeLabel(m)}</option>
-            ))}
-          </select>
           <button
             onClick={() => patchLayer(activeLayer.id, { visible: !activeLayer.visible })}
             className={`shrink-0 w-6 h-6 rounded flex items-center justify-center text-[11px] transition-colors ${
@@ -475,7 +436,6 @@ function LyricsEditorPanelInner(
         <VocalRunsSection
           layer={activeLayer}
           grid={vocalRunGrid}
-          currentTime={currentTime}
           onPatchLayer={patchLayer}
           onAssignVocalLead={onAssignVocalLead}
           onSeek={onSeek}
@@ -502,7 +462,7 @@ function LyricsEditorPanelInner(
                 }`}
               >
                 <button
-                  onClick={(e) => { e.stopPropagation(); patchItem(activeLayer.id, item.id, { time: snap(markTime()) }); }}
+                  onClick={(e) => { e.stopPropagation(); patchItem(activeLayer.id, item.id, { time: markTime() }); }}
                   className="shrink-0 font-mono text-[10px] text-slate-400 hover:text-sky-300 tabular-nums"
                   title="Set time to playhead"
                 >
@@ -513,6 +473,7 @@ function LyricsEditorPanelInner(
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => patchItem(activeLayer.id, item.id, { text: e.target.value })}
                   placeholder="(text)"
+                  dir="auto"
                   className="flex-1 min-w-0 bg-transparent border-0 text-[12px] text-slate-100 focus:outline-none focus:bg-white/[0.04] rounded px-1"
                   spellCheck={false}
                 />
@@ -527,15 +488,13 @@ function LyricsEditorPanelInner(
                 >
                   {item.kind}
                 </button>
-                {item.kind === 'line' && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); patchItem(activeLayer.id, item.id, { end: Math.max(item.time + 0.1, snap(markTime())) }); }}
-                    className="shrink-0 font-mono text-[9px] text-slate-500 hover:text-sky-300"
-                    title="Set line end to playhead"
-                  >
-                    ⇥end
-                  </button>
-                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); patchItem(activeLayer.id, item.id, { end: Math.max(item.time + 0.1, markTime()) }); }}
+                  className="shrink-0 font-mono text-[9px] text-slate-500 hover:text-sky-300"
+                  title={`Set ${item.kind} end to playhead`}
+                >
+                  ⇥end
+                </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); deleteItem(activeLayer.id, item.id); }}
                   className="shrink-0 w-5 h-5 rounded flex items-center justify-center text-slate-600 hover:text-red-400 hover:bg-red-500/10 text-[11px]"

@@ -19,14 +19,14 @@
 // segments. A one-segment map that showed prose instead of its row would
 // leave the song's tempo with nowhere to be set.
 
+import { useRef } from 'react';
 import type { ResolvedSegment } from '../../utils/gridSegments';
 import { canPlaceSegmentAt } from '../../utils/gridSegments';
 import { formatClockTime } from '../../utils/clockTime';
+import { usePlayheadEffect, usePlayheadValue } from '../../hooks/usePlayhead';
 
 export interface GridSegmentListEditorProps {
   segments: readonly ResolvedSegment[];
-  /** Current playhead, in seconds — where "Split here" would land. */
-  playerTime: number;
   selectedId?: string | null;
   locked?: boolean;
   /** Row click. `anchor` is the cursor position so the host can open the
@@ -44,7 +44,6 @@ export interface GridSegmentListEditorProps {
 
 export function GridSegmentListEditor({
   segments,
-  playerTime,
   selectedId,
   locked = false,
   onSelect,
@@ -55,8 +54,6 @@ export function GridSegmentListEditor({
 }: GridSegmentListEditorProps) {
   if (segments.length === 0) return null;
 
-  const splitCheck = canPlaceSegmentAt(segments, playerTime);
-  const canSplit = !locked && !!onSplitAtPlayhead && splitCheck.ok;
   const isUnsplit = segments.length === 1;
 
   return (
@@ -138,25 +135,7 @@ export function GridSegmentListEditor({
       )}
 
       {onSplitAtPlayhead && !locked && (
-        <button
-          type="button"
-          onClick={onSplitAtPlayhead}
-          disabled={!canSplit}
-          title={canSplit
-            ? `Start a new grid at ${formatClockTime(playerTime, 3)}`
-            : splitCheck.reason ?? 'Move the playhead first'}
-          className="w-full rounded-[5px] border border-cyan-400/40 bg-cyan-500/10 py-[7px] text-center text-[11.5px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-cyan-500/10"
-        >
-          ＋ Split the grid at the playhead
-        </button>
-      )}
-
-      {/* The playhead starts at the song's own downbeat, where a split is
-          meaningless — saying so before the curator has moved it reads as an
-          error on arrival. The reason only earns its amber once they are
-          somewhere a split was plausibly intended. */}
-      {!canSplit && !locked && onSplitAtPlayhead && splitCheck.reason && playerTime > segments[0].start && (
-        <p className="text-[10.5px] leading-snug text-amber-400/80">{splitCheck.reason}</p>
+        <SplitAtPlayhead segments={segments} onSplitAtPlayhead={onSplitAtPlayhead} />
       )}
 
       <p className="text-[10.5px] leading-[1.45] text-slate-500 text-pretty">
@@ -166,5 +145,50 @@ export function GridSegmentListEditor({
         segment into the one above it, which then counts on at its own tempo.
       </p>
     </div>
+  );
+}
+
+/** The split button and its reason line — the only part of the list that
+ *  follows the playhead, so only it re-renders as the song plays, and only
+ *  when whether a split is allowed (or why not) actually changes. */
+function SplitAtPlayhead({ segments, onSplitAtPlayhead }: {
+  segments: readonly ResolvedSegment[];
+  onSplitAtPlayhead: () => void;
+}) {
+  const canSplit = usePlayheadValue((t) => canPlaceSegmentAt(segments, t).ok);
+  const reason = usePlayheadValue((t) => canPlaceSegmentAt(segments, t).reason);
+  const pastOrigin = usePlayheadValue((t) => t > segments[0].start);
+  // The tooltip names the exact split time, so it follows the clock directly
+  // instead of through a render.
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  usePlayheadEffect((t) => {
+    const el = buttonRef.current;
+    if (!el) return;
+    const check = canPlaceSegmentAt(segments, t);
+    el.title = check.ok
+      ? `Start a new grid at ${formatClockTime(t, 3)}`
+      : check.reason ?? 'Move the playhead first';
+  }, [segments]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onSplitAtPlayhead}
+        disabled={!canSplit}
+        className="w-full rounded-[5px] border border-cyan-400/40 bg-cyan-500/10 py-[7px] text-center text-[11.5px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-cyan-500/10"
+      >
+        ＋ Split the grid at the playhead
+      </button>
+
+      {/* The playhead starts at the song's own downbeat, where a split is
+          meaningless — saying so before the curator has moved it reads as an
+          error on arrival. The reason only earns its amber once they are
+          somewhere a split was plausibly intended. */}
+      {!canSplit && reason && pastOrigin && (
+        <p className="text-[10.5px] leading-snug text-amber-400/80">{reason}</p>
+      )}
+    </>
   );
 }

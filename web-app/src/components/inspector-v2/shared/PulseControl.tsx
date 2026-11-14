@@ -48,7 +48,7 @@ export function PulseBadge({ rate, color }: {
       style={{ color, background: `${color}1a`, boxShadow: `inset 0 0 0 1px ${color}33` }}
       title={`Pulse: ${info.label} — ${info.description}`}
     >
-      {info.glyph} {info.short}
+      {info.badge}
     </span>
   );
 }

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { derivePillDisplay, type AnnotationStage } from '../../../types/annotationLayer';
 import type { ImportFormat } from './AnnotationPanelController';
+import { usePlayheadTitle } from '../../../hooks/usePlayhead';
 
 const ACCEPT: Record<ImportFormat, string> = {
   json: '.json',
@@ -125,11 +126,14 @@ export function SplitButton({
 }: {
   label: string; canSplit: boolean; disabledReason?: string; onSplit?: () => void;
 }) {
+  const title = canSplit ? `${label} (S)` : (disabledReason ?? 'Split is not available here');
+  const titleRef = usePlayheadTitle<HTMLButtonElement>(title);
   return (
     <button
+      ref={titleRef}
       onClick={onSplit}
       disabled={!canSplit || !onSplit}
-      title={canSplit ? `${label} (S)` : (disabledReason ?? 'Split is not available here')}
+      title={title}
       className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded transition-colors ${
         canSplit && onSplit
           ? 'bg-violet-500/15 hover:bg-violet-500/25 text-violet-200 border border-violet-400/40'
@@ -151,13 +155,16 @@ export function SnapStartButton({
 }: {
   label: string; canSnap: boolean; onSnap?: () => void;
 }) {
+  const title = canSnap
+    ? `Mark In — stash this as the start of a new item (${label}). Shortcut: I. Click Mark Out next to complete the region.`
+    : 'Switch to Spans / Loops to use Mark In';
+  const titleRef = usePlayheadTitle<HTMLButtonElement>(title);
   return (
     <button
+      ref={titleRef}
       onClick={onSnap}
       disabled={!canSnap || !onSnap}
-      title={canSnap
-        ? `Mark In — stash this as the start of a new item (${label}). Shortcut: I. Click Mark Out next to complete the region.`
-        : 'Switch to Spans / Loops to use Mark In'}
+      title={title}
       className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded border transition-colors ${
         canSnap && onSnap
           ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-400/50'
@@ -172,13 +179,16 @@ export function SnapEndButton({
 }: {
   label: string; canSnap: boolean; onSnap?: () => void;
 }) {
+  const title = canSnap
+    ? `Mark Out — commit a new item ending at ${label}. Shortcut: O.`
+    : 'Click Mark In first to start a new region';
+  const titleRef = usePlayheadTitle<HTMLButtonElement>(title);
   return (
     <button
+      ref={titleRef}
       onClick={onSnap}
       disabled={!canSnap || !onSnap}
-      title={canSnap
-        ? `Mark Out — commit a new item ending at ${label}. Shortcut: O.`
-        : 'Click Mark In first to start a new region'}
+      title={title}
       className={`flex-1 flex items-center justify-center whitespace-nowrap px-1 py-1 text-[10px] leading-none rounded border transition-colors ${
         canSnap && onSnap
           ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-400/50'

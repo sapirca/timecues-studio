@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { usePlayheadClock, usePlayheadEffect } from './usePlayhead';
 
 export interface BoundaryLayer {
   id: string;
@@ -26,39 +27,41 @@ const SEEK_FORWARD_THRESHOLD = 0.5;
  * playhead crosses a layer's boundary. Clicks are panned per-layer so the user
  * can compare e.g. Manual (left ear) against Consensus (right ear).
  *
- * `currentTime` and `isPlaying` come from the parent's PlayerPanel callbacks.
- * Boundaries falling within [cursor, currentTime + 0.1s) are scheduled ahead
- * via Web Audio's sample-accurate timeline; the cursor advances each tick to
- * avoid duplicates. Seek detection (large or backward time jumps) resets the
- * per-layer cursors so clicks aren't replayed or skipped.
+ * The song position comes from the playhead clock (usePlayhead), which the
+ * page's PlayerPanel publishes once per animation frame; this hook subscribes
+ * to it directly, so following the playhead re-renders nothing. `isPlaying`
+ * comes from the parent. Boundaries falling within [cursor, now + 0.1s) are
+ * scheduled ahead via Web Audio's sample-accurate timeline; the cursor
+ * advances each tick to avoid duplicates. Seek detection (large or backward
+ * jumps in the published time) resets the per-layer cursors so clicks aren't
+ * replayed or skipped.
  *
- * Placement runs off a song↔audio clock anchor rather than off the incoming
- * `currentTime` prop — see clockAnchorRef below for why that distinction is
- * the difference between pips that sit on the beat and pips that wander.
+ * Placement runs off a song↔audio clock anchor rather than off the published
+ * playhead time — see clockAnchorRef below for why that distinction is the
+ * difference between pips that sit on the beat and pips that wander.
  */
 export function useBoundaryAudioFeedback(
   layers: BoundaryLayer[],
-  currentTime: number,
   isPlaying: boolean,
   /** Player speed multiplier; song seconds advance this much per wall second. */
   playbackRate: number = 1,
 ) {
+  const playheadClock = usePlayheadClock();
   const ctxRef = useRef<AudioContext | null>(null);
   const cursorRef = useRef<Map<string, number>>(new Map());
   const layersRef = useRef(layers);
-  const currentTimeRef = useRef(currentTime);
-  const lastSeenTimeRef = useRef(currentTime);
+  const lastSeenTimeRef = useRef(playheadClock.get());
   const rateRef = useRef(playbackRate);
-  // Maps the song clock to the Web Audio clock: { ctxT, songT }. `currentTime`
-  // arrives via WaveSurfer audioprocess → rAF → a setState on the whole
-  // inspector page, so by the time a scheduler tick reads it, it is stale by a
-  // render's worth — tens of milliseconds, and more the heavier the tree is.
-  // Deriving each pip's audio-clock time from that prop (the old
-  // `ctx.currentTime + (t - now)`) folded that lag straight into the pip:
-  // every pip landed late by however long the last render took, so the same
-  // marker sat somewhere different against the music on every playthrough.
-  // Anchoring once per playback segment removes the prop from the placement
-  // math entirely — a pip's time reduces to `ctxT + (t - songT) / rate`, which
+  // Maps the song clock to the Web Audio clock: { ctxT, songT }. The playhead
+  // clock is fed from WaveSurfer audioprocess → a rAF coalesce, so by the time
+  // a scheduler tick reads it, it is up to a frame stale — and it used to be
+  // a whole inspector render staler still, when it travelled as a prop.
+  // Deriving each pip's audio-clock time from that value (the old
+  // `ctx.currentTime + (t - now)`) folded the lag straight into the pip:
+  // every pip landed late by however long the last frame/render took, so the
+  // same marker sat somewhere different against the music on every
+  // playthrough. Anchoring once per playback segment removes the published
+  // time from the placement math entirely — a pip's time reduces to `ctxT + (t - songT) / rate`, which
   // depends only on the anchor. The media element and the AudioContext share
   // the audio hardware clock, so one anchor holds for the whole segment.
   // Mirrors the fix already in MetronomePanel's scheduler.
@@ -67,7 +70,6 @@ export function useBoundaryAudioFeedback(
   // seek or a stop can silence the ones that haven't fired yet.
   const scheduledRef = useRef<Array<{ osc: OscillatorNode; env: GainNode; at: number }>>([]);
   layersRef.current = layers;
-  currentTimeRef.current = currentTime;
   rateRef.current = playbackRate;
 
   useEffect(() => {
@@ -77,14 +79,14 @@ export function useBoundaryAudioFeedback(
     };
   }, []);
 
-  /** Song time extrapolated from the audio clock — immune to the prop's lag,
-   *  and still ticking when a backgrounded tab freezes rAF. */
+  /** Song time extrapolated from the audio clock — immune to the published
+   *  time's lag, and still ticking when a backgrounded tab freezes rAF. */
   const estimateSongTime = useCallback((): number => {
     const ctx = ctxRef.current;
     const anchor = clockAnchorRef.current;
-    if (!ctx || !anchor) return currentTimeRef.current;
+    if (!ctx || !anchor) return playheadClock.get();
     return anchor.songT + (ctx.currentTime - anchor.ctxT) * rateRef.current;
-  }, []);
+  }, [playheadClock]);
 
   /** Silence every queued pip that hasn't started yet. Called on seek and on
    *  stop so the lookahead never leaves pips ringing at the wrong position. */
@@ -106,21 +108,23 @@ export function useBoundaryAudioFeedback(
     scheduledRef.current = keep;
   }, []);
 
-  useEffect(() => {
-    const delta = currentTime - lastSeenTimeRef.current;
+  // Seek detection, on every published playhead time — subscribed to the
+  // clock directly, so it runs per frame without re-rendering the caller.
+  usePlayheadEffect((time) => {
+    const delta = time - lastSeenTimeRef.current;
     if (delta < SEEK_BACKWARD_THRESHOLD || delta > SEEK_FORWARD_THRESHOLD) {
       cursorRef.current = new Map(
-        layersRef.current.map((l) => [l.id, currentTime]),
+        layersRef.current.map((l) => [l.id, time]),
       );
       cancelFutureClicks();
-      // Re-anchor ONLY on a real discontinuity. Re-anchoring on every prop
-      // value would put the prop's staleness back into the placement math,
+      // Re-anchor ONLY on a real discontinuity. Re-anchoring on every
+      // published time would put its staleness back into the placement math,
       // which is the whole thing the anchor exists to keep out.
       const ctx = ctxRef.current;
-      if (ctx) clockAnchorRef.current = { ctxT: ctx.currentTime, songT: currentTime };
+      if (ctx) clockAnchorRef.current = { ctxT: ctx.currentTime, songT: time };
     }
-    lastSeenTimeRef.current = currentTime;
-  }, [currentTime, cancelFutureClicks]);
+    lastSeenTimeRef.current = time;
+  });
 
   // A speed change rescales song-time-per-wall-second, so the standing anchor
   // no longer describes the transport. Re-anchor and drop what was queued
@@ -129,8 +133,8 @@ export function useBoundaryAudioFeedback(
     const ctx = ctxRef.current;
     if (!ctx || !isPlaying) return;
     cancelFutureClicks();
-    clockAnchorRef.current = { ctxT: ctx.currentTime, songT: currentTimeRef.current };
-  }, [playbackRate, isPlaying, cancelFutureClicks]);
+    clockAnchorRef.current = { ctxT: ctx.currentTime, songT: playheadClock.get() };
+  }, [playbackRate, isPlaying, cancelFutureClicks, playheadClock]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -144,10 +148,11 @@ export function useBoundaryAudioFeedback(
     const ctx = ctxRef.current;
     if (ctx.state === 'suspended') void ctx.resume();
 
+    const songT = playheadClock.get();
     cursorRef.current = new Map(
-      layersRef.current.map((l) => [l.id, currentTimeRef.current]),
+      layersRef.current.map((l) => [l.id, songT]),
     );
-    clockAnchorRef.current = { ctxT: ctx.currentTime, songT: currentTimeRef.current };
+    clockAnchorRef.current = { ctxT: ctx.currentTime, songT };
 
     const tick = () => {
       const anchor = clockAnchorRef.current;
@@ -188,7 +193,7 @@ export function useBoundaryAudioFeedback(
       window.clearInterval(interval);
       cancelFutureClicks();
     };
-  }, [isPlaying, estimateSongTime, cancelFutureClicks]);
+  }, [isPlaying, estimateSongTime, cancelFutureClicks, playheadClock]);
 }
 
 function scheduleClick(ctx: AudioContext, startAt: number, layer: BoundaryLayer) {

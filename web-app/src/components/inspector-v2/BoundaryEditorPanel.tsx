@@ -35,6 +35,7 @@ import type { AnnotationPanelController, AnnotationPanelCapabilities } from './s
 import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { useSectionEditPopover } from './useSectionEditPopover';
 import { formatClockTime as fmtTime } from '../../utils/clockTime';
+import { PLAYHEAD_SLOT, usePlayheadClock, usePlayheadValue } from '../../hooks/usePlayhead';
 import {
   parseTimeCuesJson,
   parseAudacity,
@@ -61,6 +62,8 @@ import {
   insertBoundaryAtPoint,
   makeSectionItem,
   makeUnsetCap,
+  NEW_SECTION_LABEL,
+  NEW_SECTION_TYPE,
   promoteCap,
   resolvePointAddTime,
   roundTime,
@@ -115,7 +118,6 @@ function buildSequenceSections(sequence: Array<{ type: string; label: string }>,
 
 export interface BoundaryEditorPanelProps {
   songId: string;
-  currentTime: number;
   duration: number;
   /** Required to start annotating. The panel disables the Start button if BPM is missing. */
   songBpm?: number;
@@ -128,9 +130,9 @@ export interface BoundaryEditorPanelProps {
   onPause?: () => void;
   isPlaying?: boolean;
   /** Reader for the LIVE media clock (PlayerPanel's `getTimeRef`). Every
-   *  point-add is placed against this, never against `currentTime` — see
+   *  point-add is placed against this, never against the playhead clock — see
    *  `resolvePointAddTime`. Optional: without it the panel falls back to the
-   *  prop, as it used to. */
+   *  playhead clock, as it used to. */
   getSongTime?: () => number | null;
   /** Imperative handle: parent calls this to open/close the section edit
    *  popover by index within the ACTIVE layer. */
@@ -143,13 +145,11 @@ export interface BoundaryEditorPanelProps {
    *  point — `insertBoundaryAtPoint` has always dropped it, this is what makes
    *  that visible. See shared/duplicateItem.ts. */
   onDuplicateSkipped?: (message: string) => void;
-  /** The page's grid-aware snapper (`snapToGridIfEnabled`). Every point-add
-   *  goes through it, so a section marked while the transport runs lands on
-   *  the grid like one dragged there does. It honours the GRID unit, beat
-   *  overrides and tempo segments, and is a no-op while Snap and Grid Lock are
-   *  both off. Optional: without it the panel places the raw time, which is
-   *  what it used to do — and what made **M** on a playing track the one add
-   *  in the app that ignored Snap entirely. */
+  /** The page's snapper (`snapToBeatOrFiner`). Every point-add and the cards'
+   *  snap-to-playhead buttons go through it, so a section marked while the
+   *  transport runs lands on the nearest beat — or finer GRID line — like one
+   *  dragged there does, whatever Snap and Grid Lock say. It honours beat overrides and tempo
+   *  segments. Optional: without it the panel places the raw time. */
   snapTime?: (t: number) => number;
   /** Page-level subscription that fires whenever toolbar-visible state changes. */
   onCapabilitiesChange?: (caps: AnnotationPanelCapabilities) => void;
@@ -180,7 +180,7 @@ export interface BoundaryEditorPanelProps {
 
 function BoundaryEditorPanelInner(
   {
-    songId, currentTime, duration,
+    songId, duration,
     songBpm, songBeatsPerBar = 4, songGridOffset = 0, suggestedSections,
     onSeekAndPlay, onPause, isPlaying,
     getSongTime,
@@ -203,6 +203,10 @@ function BoundaryEditorPanelInner(
     : MANUAL_BOUNDARY_PRESETS[settings.manualBoundariesDefault].name;
   const [showInfo, setShowInfo] = useState(false);
   const [showDefaultsModal, setShowDefaultsModal] = useState(false);
+  // The playhead is read from the clock, not a prop: handlers call
+  // `playheadClock.get()` when they fire, and the "@ <time>" labels re-render
+  // only when the time they print changes.
+  const playheadClock = usePlayheadClock();
 
   const boundaryLayers = useMemo(
     () => doc.layers.filter((l): l is AnnotationLayer<'boundaries'> => l.type === 'boundaries'),
@@ -219,7 +223,7 @@ function BoundaryEditorPanelInner(
     return boundaryLayers[0] ?? null;
   }, [boundaryLayers, selectedLayerId]);
 
-  const items = activeLayer?.items ?? [];
+  const items = useMemo(() => activeLayer?.items ?? [], [activeLayer]);
 
   // Bubble up the implicit selection so the sidebar's "active" pill and the
   // ADD-target arithmetic stay in sync with what the editor shows.
@@ -362,7 +366,7 @@ function BoundaryEditorPanelInner(
   getSongTimeRef.current = getSongTime;
 
   /** Where the next point-add lands — resolved at click time, never at render
-   *  time. While the transport runs, both `currentTime` and a click-pending
+   *  time. While the transport runs, both the playhead clock and a click-pending
    *  pill sit behind the cursor the annotator is actually listening to; see
    *  `resolvePointAddTime` for the rule.
    *
@@ -380,11 +384,18 @@ function BoundaryEditorPanelInner(
       // originating keydown (the M shortcut backs the dispatch lag out of it),
       // so it beats reading the clock again here a few milliseconds later.
       live: atTime ?? getSongTimeRef.current?.(),
-      fallback: currentTime,
+      fallback: playheadClock.get(),
       pendingPoint,
     });
     return snapTime ? snapTime(t) : t;
-  }, [currentTime, snapTime]);
+  }, [playheadClock, snapTime]);
+
+  // A card's snap-to-playhead buttons land where an add would: on the grid
+  // line nearest the playhead, even while the transport runs.
+  const snapPlayhead = useCallback(() => {
+    const t = playheadClock.get();
+    return snapTime ? snapTime(t) : t;
+  }, [playheadClock, snapTime]);
 
   // One marked point = the END of the section being annotated; see
   // boundaryInsert.ts for the rule and why a single mark can't be a start.
@@ -414,7 +425,7 @@ function BoundaryEditorPanelInner(
       const nextStart = idx + 1 < next.length ? next[idx + 1].time : duration;
       const at = pointAddTime();
       const insertionTime = Math.min(Math.max(at, current.time), Math.max(current.time, nextStart));
-      next.splice(idx + 1, 0, makeItem(roundTime(insertionTime), 'drop', 'Drop'));
+      next.splice(idx + 1, 0, makeItem(roundTime(insertionTime), NEW_SECTION_TYPE, NEW_SECTION_LABEL));
       return next;
     });
   }, [activeLayer, pointAddTime, duration, writeItems]);
@@ -424,7 +435,7 @@ function BoundaryEditorPanelInner(
   //    marked point, so it goes through insertBoundaryAtPoint — it ENDS the
   //    section being annotated rather than starting one.
   //  - Range (t2 != null): the drag already says where the section starts AND
-  //    stops, so it drops both — 'drop' at t1 (the section the user just
+  //    stops, so it drops both — an `other` section at t1 (the section the user just
   //    highlighted) and 'unset' at t2 (a placeholder end-cap so the new
   //    section stops at t2 instead of swallowing whatever follows).
   //
@@ -571,7 +582,7 @@ function BoundaryEditorPanelInner(
       const s = prev[idx];
       if (!s) return prev;
       const end = idx + 1 < prev.length ? prev[idx + 1].time : duration;
-      const mid = Math.round(currentTime * 1000) / 1000;
+      const mid = Math.round(playheadClock.get() * 1000) / 1000;
       if (mid <= s.time || mid >= end) return prev;
       const next = [...prev];
       next.splice(
@@ -581,7 +592,7 @@ function BoundaryEditorPanelInner(
       );
       return next;
     });
-  }, [activeLayer, currentTime, duration, writeItems]);
+  }, [activeLayer, playheadClock, duration, writeItems]);
 
   // ── Layer-level actions ───────────────────────────────────────────────────
 
@@ -667,19 +678,29 @@ function BoundaryEditorPanelInner(
 
   // ── Page-level controller wiring ──────────────────────────────────────────
   // Split-at-playhead resolves to whichever section currently contains the
-  // playhead; the toolbar shows it disabled when there is none.
-  const sectionAtPlayhead = (() => {
+  // playhead; the toolbar shows it disabled when there is none. The index is
+  // derived from the clock, so the panel re-renders when the playhead crosses
+  // a boundary rather than on every frame; the split itself re-resolves it at
+  // the moment it fires.
+  const sectionIndexAt = useCallback((t: number) => {
     for (let i = 0; i < items.length; i++) {
       const s = items[i];
       const next = i + 1 < items.length ? items[i + 1].time : duration;
-      if (currentTime >= s.time && currentTime < next) return i;
+      if (t >= s.time && t < next) return i;
     }
     return -1;
-  })();
+  }, [items, duration]);
+  const sectionAtPlayhead = usePlayheadValue(sectionIndexAt);
   const canSplitAtPlayhead = sectionAtPlayhead >= 0;
   const splitAtPlayhead = useCallback(() => {
-    if (sectionAtPlayhead >= 0) splitSection(sectionAtPlayhead);
-  }, [sectionAtPlayhead, splitSection]);
+    const idx = sectionIndexAt(playheadClock.get());
+    if (idx >= 0) splitSection(idx);
+  }, [sectionIndexAt, playheadClock, splitSection]);
+  // The popover's Split needs the playhead strictly inside the edited section.
+  const editingCanSplit = usePlayheadValue((t) => {
+    if (editingIdx === null || !items[editingIdx]) return false;
+    return t > items[editingIdx].time && t < sectionEnd(items, editingIdx, duration);
+  });
 
   const hasAnyLayer = boundaryLayers.length > 0;
 
@@ -713,7 +734,7 @@ function BoundaryEditorPanelInner(
   // canUndo/canRedo uniformly for every annotation type.
   useEffect(() => {
     if (!onCapabilitiesChange) return;
-    const splitLabel = `Split at ${fmtTime(currentTime)}`;
+    const splitLabel = `Split at ${PLAYHEAD_SLOT}`;
     const bpmReady = !!songBpm && songBpm > 0;
     const suggestedCount = suggestedSections?.length ?? 0;
     onCapabilitiesChange({
@@ -731,7 +752,7 @@ function BoundaryEditorPanelInner(
         ? (pendingSelection.t2 != null
             ? `+ Add ${fmtTime(Math.min(pendingSelection.t1, pendingSelection.t2))}→${fmtTime(Math.max(pendingSelection.t1, pendingSelection.t2))}`
             : `+ Add @ ${fmtTime(pendingSelection.t1)}`)
-        : `+ Add @ ${fmtTime(currentTime)}`,
+        : `+ Add @ ${PLAYHEAD_SLOT}`,
       canFillDefaults: bpmReady,
       fillDefaultsLabel: suggestedCount ? `✨ Fill (${suggestedCount})` : '✨ Fill defaults',
       fillDefaultsTooltip: bpmReady
@@ -745,7 +766,7 @@ function BoundaryEditorPanelInner(
     });
   }, [
     onCapabilitiesChange, doc, boundaryLayers, hasAnyLayer, saveStatus,
-    canSplitAtPlayhead, currentTime, pendingSelection,
+    canSplitAtPlayhead, pendingSelection,
     songBpm, suggestedSections, defaultLayoutName,
   ]);
 
@@ -786,8 +807,8 @@ function BoundaryEditorPanelInner(
               {visibleSections.map(({ s, i }) => {
                 const endTime = sectionEnd(items, i, duration);
                 const isLast = i === items.length - 1;
-                const isSectionPlaying = !!isPlaying && currentTime >= s.time && currentTime < endTime;
-                const isCurrentSection = currentTime >= s.time && currentTime < endTime;
+                const isCurrentSection = i === sectionAtPlayhead;
+                const isSectionPlaying = !!isPlaying && isCurrentSection;
                 return (
                   <SectionCard
                     key={s.id}
@@ -797,13 +818,13 @@ function BoundaryEditorPanelInner(
                     isLast={isLast}
                     highlightCurrent={isCurrentSection}
                     activeBpm={songBpm}
-                    onSnapStart={() => updateSection(i, 'time', currentTime)}
-                    onSnapEnd={() => updateSection(i, 'endTime', currentTime)}
+                    onSnapStart={() => updateSection(i, 'time', snapPlayhead())}
+                    onSnapEnd={() => updateSection(i, 'endTime', snapPlayhead())}
                     onSplit={() => splitSection(i)}
                     onTypeChange={(t) => updateSection(i, 'type', t)}
                     onLabelChange={(v) => updateSection(i, 'label', v)}
                     onToggleImportance={() => updateSection(i, 'importance', s.importance === 'optional' ? 'critical' : 'optional')}
-                    onAddCandidate={() => addCandidate(i, currentTime)}
+                    onAddCandidate={() => addCandidate(i, playheadClock.get())}
                     onRemoveCandidate={(ci) => removeCandidate(i, ci)}
                     onDelete={() => deleteSection(i)}
                     onPlay={() => onSeekAndPlay?.(s.time, endTime)}
@@ -826,8 +847,8 @@ function BoundaryEditorPanelInner(
         const idx = editingIdx;
         const s = items[idx];
         const endT = sectionEnd(items, idx, duration);
-        const sectionIsPlaying = !!isPlaying && currentTime >= s.time && currentTime < endT;
-        const canSplit = currentTime > s.time && currentTime < endT;
+        const sectionIsPlaying = !!isPlaying && idx === sectionAtPlayhead;
+        const canSplit = editingCanSplit;
         return (
           <BoundaryEditPopover
             index={idx}
@@ -841,6 +862,11 @@ function BoundaryEditorPanelInner(
               if (patch.label !== undefined)       updateSection(idx, 'label', patch.label);
               if (patch.description !== undefined) updateSection(idx, 'description', patch.description);
               if (patch.importance !== undefined)  updateSection(idx, 'importance', patch.importance);
+              // Colour is set AND cleared (undefined = back to the type colour),
+              // so it is keyed on presence, not on a value.
+              if ('color' in patch && activeLayer) {
+                writeItems(activeLayer.id, (prev) => prev.map((it, i) => (i === idx ? { ...it, color: patch.color } : it)));
+              }
             }}
             onDelete={() => { deleteSection(idx); closeEdit(); }}
             onClose={closeEdit}
@@ -850,7 +876,6 @@ function BoundaryEditorPanelInner(
             bpm={songBpm}
             gridOffset={songGridOffset}
             beatsPerBar={songBeatsPerBar}
-            currentTime={currentTime}
             onSplit={() => splitSection(idx)}
             canSplit={canSplit}
           />
@@ -932,7 +957,7 @@ function SectionsEmptyMessage({ bpmReady, onStartEmpty }: { bpmReady: boolean; o
           open the <span className="text-slate-300 not-italic">Annotate</span> sidebar and click <span className="text-slate-300 not-italic">+ Add</span> to place the first section from the start of the track to the playhead.
         </>
       ) : (
-        <span className="text-amber-400 not-italic font-mono">Set the BPM in the Dataprep tab</span>
+        <span className="text-amber-400 not-italic font-mono">Set the BPM in the Prepare tab</span>
       )}
     </div>
   );

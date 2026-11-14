@@ -447,4 +447,278 @@ export function readVersion(slug: string, sha: string): unknown | null {
 export function removeSharedSong(slug: string): void {
   try { fs.rmSync(sharedSongDir(slug), { recursive: true, force: true }) } catch { /* best-effort */ }
   removeLock(slug)
+  clearUnshareRecord(slug)
+}
+
+// ─── After collaboration stops ──────────────────────────────────────────────
+//
+// Turning a song back to per-annotator editing archives the team's folder —
+// and then every annotator has two candidate documents for the song: the
+// team's last version, and their own file from before the song was shared
+// (untouched the whole time, since a shared song's writes go to the team's
+// document). Nobody is asked up front. Each annotator, the first time their
+// copy of the song is read, gets whichever of the two is NEWER, and can switch
+// to the other one from the song afterwards. Both stay on disk, so the switch
+// is always available and never loses anything.
+//
+//   data/annotations/shared-archive/<slug>-<stamp>/        the team's folder, moved
+//   data/annotations/shared-archive/<slug>-<stamp>/kept/<annotator>/
+//                                                          what each switch set aside
+//   data/annotations/shared-archive/<slug>.json            the record below
+//
+// One record per slug: stopping collaboration a second time supersedes the
+// first, and making the song collaborative again drops it.
+
+export interface UnshareChoice {
+  /** Which document this annotator's file currently holds. */
+  kept: 'team' | 'own'
+  /** True while that is the automatic pick; false once they switched. */
+  automatic: boolean
+  decidedAt: string
+  /** Their own file as it was before the team's version replaced it — in
+   *  `kept/<annotator>/`, relative to the archive folder. Null when they had
+   *  none, or when the team's version never replaced it. */
+  ownCopy: string | null
+  /** The team's version as this annotator left it when they last switched
+   *  away from it, so switching back returns their edits, not the archive's
+   *  untouched copy. Null until they have switched away once. */
+  teamCopy: string | null
+  /** They had a document of their own for this song before it was shared. */
+  hadOwn: boolean
+  /** They closed the notice. The choice itself stays switchable. */
+  dismissed?: boolean
+}
+
+export interface UnshareRecord {
+  slug: string
+  /** Folder name under shared-archive/. */
+  archive: string
+  archivedAt: string
+  /** When the team's document was last written. */
+  teamUpdatedAt: string
+  choices: Record<string, UnshareChoice>
+}
+
+export function sharedArchiveRoot(): string {
+  return path.join(path.dirname(DATA_DIRS.sharedAnnotations), 'shared-archive')
+}
+
+function unshareRecordPath(slug: string): string {
+  return path.join(sharedArchiveRoot(), `${slug}.json`)
+}
+
+export function readUnshareRecord(slug: string): UnshareRecord | null {
+  const rec = readJsonSafe<UnshareRecord>(unshareRecordPath(slug))
+  if (!rec || typeof rec.archive !== 'string' || !rec.choices) return null
+  return rec
+}
+
+function writeUnshareRecord(rec: UnshareRecord): void {
+  writeJsonAtomic(unshareRecordPath(rec.slug), rec)
+}
+
+/** Songs that stopped being collaborative and still carry a record. */
+export function listUnsharedSlugs(): string[] {
+  try {
+    return fs.readdirSync(sharedArchiveRoot())
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => f.slice(0, -5))
+      .sort()
+  } catch { return [] }
+}
+
+export function clearUnshareRecord(slug: string): void {
+  try { fs.rmSync(unshareRecordPath(slug), { force: true }) } catch { /* best-effort */ }
+}
+
+/** Move a shared song's folder into the archive and leave the record that lets
+ *  each annotator pick up the team's version. Throws if the move fails — the
+ *  caller reports it, and the song stays shared. */
+export function archiveSharedSong(slug: string, now: number): UnshareRecord {
+  const root = sharedArchiveRoot()
+  fs.mkdirSync(root, { recursive: true })
+  let teamUpdatedAt = new Date(now).toISOString()
+  try { teamUpdatedAt = fs.statSync(sharedDocPath(slug)).mtime.toISOString() } catch { /* no doc yet */ }
+  const archive = `${slug}-${new Date(now).toISOString().replace(/[:.]/g, '-')}`
+  fs.renameSync(sharedSongDir(slug), path.join(root, archive))
+  removeLock(slug)
+  const rec: UnshareRecord = {
+    slug, archive, archivedAt: new Date(now).toISOString(), teamUpdatedAt, choices: {},
+  }
+  writeUnshareRecord(rec)
+  return rec
+}
+
+function readDoc(filePath: string): Record<string, unknown> | null {
+  const doc = readJsonSafe<Record<string, unknown>>(filePath)
+  return doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : null
+}
+
+/** Copy `filePath` into this annotator's `kept/` folder in the archive and
+ *  return its path relative to the archive folder. */
+function setAside(rec: UnshareRecord, annotatorId: string, filePath: string, label: string, now: number): string | null {
+  try {
+    const rel = path.join('kept', annotatorId, `${new Date(now).toISOString().replace(/[:.]/g, '-')}-${label}.json`)
+    const dest = path.join(sharedArchiveRoot(), rec.archive, rel)
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    fs.copyFileSync(filePath, dest)
+    return rel
+  } catch { return null }
+}
+
+/** Write `doc` as this annotator's file. `rev` keeps climbing past whatever was
+ *  there, so a tab still holding the old document is refused on save (409)
+ *  instead of quietly writing it back over the swap. The annotator's own
+ *  annotation clock travels with the person, not with the document. */
+function installDoc(ownPath: string, doc: Record<string, unknown>, prev: Record<string, unknown> | null): void {
+  const out: Record<string, unknown> = { ...doc }
+  delete out.seededFrom
+  delete out.time_spent_seconds
+  if (typeof prev?.time_spent_seconds === 'number') out.time_spent_seconds = prev.time_spent_seconds
+  const prevRev = typeof prev?.rev === 'number' ? prev.rev : 0
+  const docRev = typeof doc.rev === 'number' ? doc.rev : 0
+  out.rev = Math.max(prevRev, docRev) + 1
+  writeJsonAtomic(ownPath, out)
+}
+
+function teamDoc(rec: UnshareRecord): Record<string, unknown> | null {
+  return readDoc(path.join(sharedArchiveRoot(), rec.archive, 'layers.json'))
+}
+
+/** First read of this song by this annotator since collaboration stopped:
+ *  give them whichever document is newer. A no-op once they have a choice on
+ *  record, so it is safe to call on every read. */
+export function applyUnshareDefault(slug: string, annotatorId: string, ownPath: string, now: number): UnshareChoice | null {
+  const rec = readUnshareRecord(slug)
+  if (!rec) return null
+  if (rec.choices[annotatorId]) return rec.choices[annotatorId]
+
+  const decidedAt = new Date(now).toISOString()
+  let ownMtime: number | null = null
+  try { ownMtime = fs.statSync(ownPath).mtimeMs } catch { /* none */ }
+  const hadOwn = ownMtime !== null
+  const team = teamDoc(rec)
+
+  let choice: UnshareChoice
+  if (!team || (hadOwn && ownMtime! > Date.parse(rec.teamUpdatedAt))) {
+    choice = { kept: 'own', automatic: true, decidedAt, ownCopy: null, teamCopy: null, hadOwn }
+  } else {
+    const prev = hadOwn ? readDoc(ownPath) : null
+    const ownCopy = hadOwn ? setAside(rec, annotatorId, ownPath, 'own', now) : null
+    // Never replace a file we could not first keep a copy of.
+    if (hadOwn && !ownCopy) return null
+    installDoc(ownPath, team, prev)
+    choice = { kept: 'team', automatic: true, decidedAt, ownCopy, teamCopy: null, hadOwn }
+  }
+  rec.choices[annotatorId] = choice
+  writeUnshareRecord(rec)
+  return choice
+}
+
+/** Swap this annotator's file to the other document. Whatever is in the file
+ *  right now — including anything they changed since the last swap — is set
+ *  aside first and is what they get back if they switch again, so going back
+ *  and forth never costs an edit. */
+export function switchUnshareChoice(slug: string, annotatorId: string, ownPath: string, now: number): UnshareChoice | null {
+  const rec = readUnshareRecord(slug)
+  const cur = rec?.choices[annotatorId]
+  if (!rec || !cur) return null
+  const archiveDir = path.join(sharedArchiveRoot(), rec.archive)
+
+  const prev = readDoc(ownPath)
+  const asideNow = prev ? setAside(rec, annotatorId, ownPath, cur.kept, now) : null
+  if (prev && !asideNow) return null
+  const next: UnshareChoice = { ...cur, automatic: false, decidedAt: new Date(now).toISOString() }
+
+  if (cur.kept === 'team') {
+    next.teamCopy = asideNow
+    next.kept = 'own'
+    // Their own document, or none at all if they never had one.
+    const own = cur.ownCopy ? readDoc(path.join(archiveDir, cur.ownCopy)) : null
+    if (own) installDoc(ownPath, own, prev)
+    else { try { fs.rmSync(ownPath, { force: true }) } catch { /* best-effort */ } }
+  } else {
+    next.ownCopy = asideNow
+    next.kept = 'team'
+    const team = cur.teamCopy ? readDoc(path.join(archiveDir, cur.teamCopy)) : teamDoc(rec)
+    if (!team) return null
+    installDoc(ownPath, team, prev)
+  }
+  rec.choices[annotatorId] = next
+  writeUnshareRecord(rec)
+  return next
+}
+
+export function dismissUnshareNotice(slug: string, annotatorId: string): UnshareChoice | null {
+  const rec = readUnshareRecord(slug)
+  const cur = rec?.choices[annotatorId]
+  if (!rec || !cur) return null
+  cur.dismissed = true
+  writeUnshareRecord(rec)
+  return cur
+}
+
+// ─── Bringing an archived team copy back ────────────────────────────────────
+//
+// "Make collaborative" can restart from a team annotation that an earlier
+// "stop collaborating" archived: the folder moves back to shared/<slug>/, so
+// the team's document AND its whole version history come back as they were.
+
+export interface SongArchive {
+  /** Folder name under shared-archive/. */
+  name: string
+  archivedAt: string
+  rev: number | null
+  items: number
+}
+
+const ARCHIVE_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/
+
+/** Is `name` one of THIS song's archive folders? The stamp is checked, not just
+ *  the prefix, so song `a` never claims song `a-b`'s archives. */
+function isArchiveOf(slug: string, name: string): boolean {
+  return name.startsWith(`${slug}-`) && ARCHIVE_STAMP.test(name.slice(slug.length + 1))
+}
+
+function stampToIso(stamp: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(stamp)
+  return m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z` : stamp
+}
+
+/** This song's archived team copies, newest first. */
+export function listSongArchives(slug: string): SongArchive[] {
+  let names: string[]
+  try {
+    names = fs.readdirSync(sharedArchiveRoot(), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && isArchiveOf(slug, e.name))
+      .map((e) => e.name)
+  } catch { return [] }
+  return names
+    .map((name) => {
+      const doc = readDoc(path.join(sharedArchiveRoot(), name, 'layers.json'))
+      const layers = Array.isArray(doc?.layers) ? doc.layers as Array<{ items?: unknown }> : []
+      return {
+        name,
+        archivedAt: stampToIso(name.slice(slug.length + 1)),
+        rev: typeof doc?.rev === 'number' ? doc.rev : null,
+        items: layers.reduce((n, l) => n + (Array.isArray(l?.items) ? l.items.length : 0), 0),
+      }
+    })
+    .sort((a, b) => (a.archivedAt < b.archivedAt ? 1 : -1))
+}
+
+/** Move an archived team copy back into place, making the song shared again.
+ *  Returns an error string, or null on success. */
+export function restoreSongArchive(slug: string, name: string): string | null {
+  if (!isArchiveOf(slug, name) || path.basename(name) !== name) return 'not an archive of this song'
+  if (isSharedSong(slug)) return 'already shared'
+  const src = path.join(sharedArchiveRoot(), name)
+  try { if (!fs.statSync(src).isDirectory()) return 'no such archive' } catch { return 'no such archive' }
+  try {
+    fs.mkdirSync(DATA_DIRS.sharedAnnotations, { recursive: true })
+    fs.renameSync(src, sharedSongDir(slug))
+  } catch { return 'could not move the archive back' }
+  // The pick each annotator was offered was about this very copy.
+  clearUnshareRecord(slug)
+  return null
 }

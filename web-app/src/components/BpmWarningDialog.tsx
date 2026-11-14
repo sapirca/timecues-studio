@@ -47,7 +47,7 @@ export function BpmWarningDialog({
             <p className="text-[12px] text-slate-400 leading-relaxed">
               Boundaries snap to the grid, so annotating without a BPM means
               every section will land off-beat. Set BPM in{' '}
-              <span className="text-emerald-300">Dataset Prep</span> first — try
+              <span className="text-emerald-300">Prepare</span> first — try
               auto-detect, or tap along with the metronome.
             </p>
           </div>
@@ -75,7 +75,7 @@ export function BpmWarningDialog({
               }}
               className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border border-emerald-400/50 transition-colors"
             >
-              Set BPM in Dataset Prep
+              Set BPM in Prepare
             </button>
           </div>
         </Dialog.Content>

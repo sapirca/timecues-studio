@@ -31,8 +31,8 @@ export function DemoPage() {
           </div>
           <h1 className="text-lg font-medium text-slate-100 text-center">Try the full annotator anonymously</h1>
           <p className="text-[12px] text-slate-400 leading-relaxed text-center">
-            You'll land in <strong>Dataset Prep</strong> on the public sample songs.
-            From there switch to the Annotator Tool or Algorithm Inspect via the
+            You'll land in <strong>Prepare</strong> on the public sample songs.
+            From there switch to Annotate or Inspect via the
             workspace tab strip — see what the tool can do without signing up.
           </p>
 

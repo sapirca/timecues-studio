@@ -35,7 +35,7 @@ const docs = [
     out: 'video-tour.md',
     title: 'Video walkthrough',
     description:
-      'Every feature in a short clip — 77 in all, in tutorial order. Watch the whole tour or jump to any feature.',
+      'Every feature in a short clip — 73 in all, in tutorial order. Watch the whole tour or jump to any feature.',
   },
   {
     src: 'DATA.md',

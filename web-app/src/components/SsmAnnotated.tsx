@@ -41,7 +41,6 @@ export interface Props {
   beatGroupSize?: number;
   /** Multiplier on beat-grid line width (1 = default). */
   gridThickness?: number;
-  currentTime?: number;
   height?: number;
 }
 
@@ -136,7 +135,6 @@ export function SsmAnnotated({
   barGroupSize,
   beatGroupSize,
   gridThickness = 1,
-  currentTime = 0,
   height = 180,
 }: Props) {
   const baseAxis = hopSize && fftSize && sampleRate
@@ -164,10 +162,10 @@ export function SsmAnnotated({
 
   // The SSM playhead is a crosshair: its horizontal arm crosses every tile, so
   // unlike the other rows this overlay cannot be limited to the tile the
-  // vertical arm is on — it takes currentTime directly and every mounted tile
-  // redraws. Cheap: it is two lines on a transparent canvas, not a repaint of
-  // the matrix underneath.
-  const overlay = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom) => {
+  // vertical arm is on — `focusEveryTile` has every mounted tile redraw as the
+  // playhead moves. Cheap: it is two lines on a transparent canvas, not a
+  // repaint of the matrix underneath.
+  const overlay = useCallback((ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => {
     const totalPx = Math.max(1, Math.round(tile.totalW * tile.dpr));
     const H = Math.max(1, Math.round(tile.h * tile.dpr));
     ctx.save();
@@ -177,17 +175,21 @@ export function SsmAnnotated({
       duration, beatTimes, bpm, beatOffset, beatsPerBar,
       barGroupSize, beatGroupSize,
     });
-    drawPlayhead(ctx, totalPx, H, currentTime, duration, tile.dpr);
+    // focusX is already the playhead's x on the strip; feeding it as
+    // (t=focusX, duration=totalW) gives the same t/duration fraction on both
+    // arms without making this callback depend on the playhead.
+    if (focusX != null) drawPlayhead(ctx, totalPx, H, focusX, tile.totalW, tile.dpr);
     ctx.restore();
   }, [gridThickness, duration, beatTimes, bpm, beatOffset, beatsPerBar,
-      barGroupSize, beatGroupSize, currentTime]);
+      barGroupSize, beatGroupSize]);
 
   return (
     <TiledStrip
       height={Math.max(1, Math.round(height))}
       paint={paint}
       overlay={overlay}
-      overlayFocus={null}
+      focusDuration={duration}
+      focusEveryTile
       className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
     >
       {!hasData && (

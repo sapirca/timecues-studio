@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { StemSource } from '../../pages/InspectorPageV2';
 import { useCapabilities } from '../../hooks/useCapabilities';
 import { GPU_TOOLS_UNAVAILABLE_HINT } from '../../services/capabilities';
-import { DEMUCS_MODEL_OPTIONS, type DemucsModel } from '../../hooks/useDemucsStems';
+import { DEMUCS_MODEL_OPTIONS, KIT_PART_LABELS, type DemucsModel, type KitPart } from '../../hooks/useDemucsStems';
 
 interface StemSourcePickerProps {
   value: StemSource;
@@ -55,6 +55,14 @@ interface StemSourcePickerProps {
    * flight (during that window we don't yet know whether stems exist).
    */
   isSongLoaded?: boolean;
+  /** Pieces of the drum kit split out of the drums stem (empty when it has not
+   *  been split). Offered as a row of their own under Drums: choosing one
+   *  plays that piece and keeps the stem Drums, so everything that follows
+   *  the stem — the lock, the drum lanes — stays on drums. */
+  kitParts?: KitPart[];
+  /** The piece playing, or null for the whole drums stem. */
+  kitPart?: KitPart | null;
+  onKitPartChange?: (next: KitPart | null) => void;
 }
 
 const STEM_LABELS: Record<StemSource, string> = {
@@ -74,6 +82,48 @@ function modelLabel(model: DemucsModel): string {
   return DEMUCS_MODEL_OPTIONS.find((o) => o.id === model)?.label ?? model;
 }
 
+/**
+ * How tightly the row is packed so it stays on one line: 0 is the roomy
+ * default, each step trims padding and gaps, the last also shortens the stem
+ * button's label. Only when even that overflows does the row wrap.
+ */
+type Density = 0 | 1 | 2 | 3;
+const MAX_DENSITY: Density = 3;
+
+function pillPad(density: Density): string {
+  return density === 0 ? 'px-2.5' : density === 1 ? 'px-2' : 'px-1.5';
+}
+
+/**
+ * Fit a row on one line: each time its width or `contentKey` (which controls
+ * it shows) changes, start roomy and step tighter while it overflows. The
+ * steps happen in a layout effect, so the overflowing passes never paint.
+ * Kept out of the component so the one lint suppression below — measuring
+ * then re-rendering is what a layout effect is for — covers only this.
+ */
+function useOneLineDensity(contentKey: string) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowWidth, setRowWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setRowWidth(Math.round(entry.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const fitKey = `${rowWidth}|${contentKey}`;
+  const [fit, setFit] = useState<{ key: string; density: Density }>({ key: '', density: 0 });
+  const density: Density = fit.key === fitKey ? fit.density : 0;
+  useLayoutEffect(() => {
+    const el = rowRef.current;
+    if (el && density < MAX_DENSITY && el.scrollWidth > el.clientWidth + 1) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFit({ key: fitKey, density: (density + 1) as Density });
+    }
+  }, [density, fitKey]);
+  return { rowRef, density };
+}
+
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
@@ -86,7 +136,7 @@ export function StemSourcePicker({
   onChange,
   hideWhenNoStems = false,
   onRunStems,
-  stemModel = '6s',
+  stemModel = '4s',
   onStemModelChange,
   runStemsModel,
   runStemsStatus = 'idle',
@@ -99,6 +149,9 @@ export function StemSourcePicker({
   runStemsErrorTail,
   onDismissStemsError,
   isSongLoaded = true,
+  kitParts = [],
+  kitPart = null,
+  onKitPartChange,
 }: StemSourcePickerProps) {
   const { capabilities } = useCapabilities();
   const demucsInstalled = capabilities.demucs;
@@ -106,6 +159,13 @@ export function StemSourcePicker({
   const isStemming = runStemsStatus === 'running';
   const isError = runStemsStatus === 'error';
   const [showErrorLog, setShowErrorLog] = useState(false);
+
+  const { rowRef, density } = useOneLineDensity([
+    available.join(','), value === 'drums' ? kitParts.length : 0,
+    runStemsStatus, runStemsCancelMode ?? '', isSongLoaded, demucsInstalled, !!onStemModelChange,
+  ].join('|'));
+  const pad = pillPad(density);
+  const gap = density === 0 ? 'gap-1' : 'gap-0.5';
 
   // Auto-close the error modal if the parent clears the error state
   // (user clicked Dismiss or Retry — either way the modal is now stale).
@@ -126,9 +186,9 @@ export function StemSourcePicker({
     : GPU_TOOLS_UNAVAILABLE_HINT;
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5">
+    <div ref={rowRef} className={`flex items-center ${density === 0 ? 'gap-2' : 'gap-1.5'} px-2 py-1.5 min-w-0`}>
       <span className="text-[10px] uppercase tracking-wide text-slate-500 shrink-0">Source</span>
-      <div className="flex flex-wrap items-center gap-1">
+      <div className={`flex ${density === MAX_DENSITY ? 'flex-wrap' : 'flex-nowrap'} items-center ${gap}`}>
         {ALL_STEMS.map((s) => {
           const isAvailable = available.includes(s);
           const isActive = value === s;
@@ -139,7 +199,7 @@ export function StemSourcePicker({
               disabled={!isAvailable}
               onClick={() => onChange(s)}
               className={[
-                'px-2.5 py-1 rounded-full text-xs transition-colors border',
+                `${pad} py-1 rounded-full text-xs whitespace-nowrap transition-colors border`,
                 isActive
                   ? 'bg-slate-200 text-slate-900 border-slate-200'
                   : isAvailable
@@ -152,6 +212,9 @@ export function StemSourcePicker({
             </button>
           );
         })}
+        {value === 'drums' && kitParts.length > 0 && onKitPartChange && (
+          <KitPartRow parts={kitParts} value={kitPart} onChange={onKitPartChange} density={density} />
+        )}
         {!hasStems && !isStemming && !isError && isSongLoaded && (
           <span
             className="text-[10px] text-amber-400/70 ml-1"
@@ -239,10 +302,10 @@ export function StemSourcePicker({
               <button
                 type="button"
                 onClick={() => setShowErrorLog(true)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border border-red-500/50 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs whitespace-nowrap border border-red-500/50 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-colors"
                 title="Click to view the failure log."
               >
-                <span aria-hidden="true">✗</span>
+                <span aria-hidden="true">⚠</span>
                 <span>Stems failed — view log</span>
               </button>
               <button
@@ -258,7 +321,7 @@ export function StemSourcePicker({
                 <button
                   type="button"
                   onClick={onDismissStemsError}
-                  className="text-slate-500 hover:text-slate-300 text-xs px-1.5"
+                  className="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs border border-white/15 text-slate-400 hover:text-slate-200 hover:border-white/30 hover:bg-white/5 transition-colors"
                   title="Dismiss this error."
                   aria-label="Dismiss stemming error"
                 >
@@ -267,17 +330,19 @@ export function StemSourcePicker({
               )}
             </div>
           ) : (
-            <div className="ml-1 inline-flex items-center gap-1.5">
+            <div className={`ml-1 inline-flex items-center ${density === 0 ? 'gap-1.5' : 'gap-1'}`}>
               <button
                 type="button"
                 onClick={onRunStems}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-500/60 transition-colors"
+                className={`inline-flex items-center gap-1 ${pad} py-1 rounded-full text-xs whitespace-nowrap border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-500/60 transition-colors`}
                 title={hasStems
                   ? `Re-run Demucs stem separation for this song as ${modelLabel(stemModel)} (will ask before overwriting existing stems).`
                   : `Run Demucs stem separation for this song as ${modelLabel(stemModel)} (~a few minutes).`}
               >
                 <span aria-hidden="true">▶</span>
-                <span>{hasStems ? 'Re-stem this song' : 'Stem this song'}</span>
+                <span>{density >= 2
+                  ? (hasStems ? 'Re-stem' : 'Stem')
+                  : (hasStems ? 'Re-stem this song' : 'Stem this song')}</span>
               </button>
               {/* How many stems that run should produce. Sits next to the button
                   rather than behind a menu because it changes both how long the
@@ -295,7 +360,7 @@ export function StemSourcePicker({
                       onClick={() => onStemModelChange(opt.id)}
                       aria-pressed={stemModel === opt.id}
                       className={[
-                        'px-2 py-1 text-[11px] transition-colors',
+                        `${density === 0 ? 'px-2' : 'px-1.5'} py-1 text-[11px] whitespace-nowrap transition-colors`,
                         stemModel === opt.id
                           ? 'bg-slate-200 text-slate-900'
                           : 'text-slate-400 hover:text-slate-200 hover:bg-white/5',
@@ -340,6 +405,111 @@ export function StemSourcePicker({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The drum kit's pieces, as a sub-choice of Drums: "All" is the whole drums
+ *  stem. Set apart from the stem pills by a rule and smaller pills, so it reads
+ *  as a choice inside Drums rather than six more stems. */
+function KitPartRow({ parts, value, onChange, density }: {
+  parts: KitPart[];
+  value: KitPart | null;
+  onChange: (next: KitPart | null) => void;
+  density: Density;
+}) {
+  const options: (KitPart | null)[] = [null, ...parts];
+  return (
+    <div
+      className={`inline-flex items-center ${density === 0 ? 'gap-1 pl-2 ml-1' : 'gap-0.5 pl-1.5 ml-0.5'} border-l border-white/10`}
+      role="group"
+      aria-label="Drum kit piece to play"
+    >
+      <span className="text-[10px] uppercase tracking-wide text-slate-500 mr-0.5">Kit</span>
+      {options.map((p) => {
+        const isActive = value === p;
+        return (
+          <button
+            key={p ?? 'all'}
+            type="button"
+            onClick={() => onChange(p)}
+            aria-pressed={isActive}
+            data-testid={`kit-part-${p ?? 'all'}`}
+            className={[
+              `${density === 0 ? 'px-2' : 'px-1.5'} py-0.5 rounded-full text-[11px] whitespace-nowrap transition-colors border`,
+              isActive
+                ? 'bg-cyan-200 text-slate-900 border-cyan-200'
+                : 'bg-[#1a1f28] text-slate-300 border-white/10 hover:bg-[#222833] hover:border-white/20',
+            ].join(' ')}
+            title={p ? `Play only the ${KIT_PART_LABELS[p].toLowerCase()}, separated from the drums stem` : 'Play the whole drums stem'}
+          >
+            {p ? KIT_PART_LABELS[p] : 'All'}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The stem choice as one small dropdown, for the slim sticky transport: once
+ * the player has scrolled away its pill row goes with it, and the stem is
+ * still something you want to flip while listening. Same `value` / `onChange`
+ * as the picker above, so both always show the stem that is playing. Shown
+ * only when there is something to choose between.
+ */
+export function StemSourceSelect({
+  value,
+  available,
+  onChange,
+  kitParts = [],
+  kitPart = null,
+  onKitPartChange,
+}: Pick<StemSourcePickerProps, 'value' | 'available' | 'onChange' | 'kitParts' | 'kitPart' | 'onKitPartChange'>) {
+  if (!available.some((s) => s !== 'mix')) return null;
+  const isMix = value === 'mix';
+  const withKit = kitParts.length > 0 && !!onKitPartChange && available.includes('drums');
+  // A kit piece is the drums stem, narrowed: "drums/kick".
+  const selected = value === 'drums' && kitPart && withKit ? `drums/${kitPart}` : value;
+  return (
+    <div
+      className={`relative inline-flex items-center gap-1.5 h-8 pl-2 pr-1.5 text-[11px] rounded border transition-colors cursor-pointer focus-within:ring-1 focus-within:ring-cyan-500/50 ${
+        isMix
+          ? 'bg-white/[0.05] hover:bg-white/[0.10] border-white/[0.22] text-slate-100'
+          : 'bg-cyan-500/15 hover:bg-cyan-500/20 border-cyan-500/50 text-cyan-100'
+      }`}
+    >
+      <span className="text-[10px] uppercase tracking-wide text-slate-500" aria-hidden="true">Stem</span>
+      <span aria-hidden="true">
+        {STEM_LABELS[value]}
+        {value === 'drums' && kitPart && withKit && <> · {KIT_PART_LABELS[kitPart]}</>}
+      </span>
+      <svg className="shrink-0 opacity-70" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+        <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <select
+        value={selected}
+        onChange={(e) => {
+          const [stem, part] = e.target.value.split('/') as [StemSource, KitPart | undefined];
+          onChange(stem);
+          if (withKit) onKitPartChange!(part ?? null);
+        }}
+        title="Which stem the player plays"
+        aria-label="Stem"
+        data-testid="slim-stem-source"
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+      >
+        {ALL_STEMS.filter((s) => available.includes(s)).map((s) => (
+          <option key={s} value={s}>{STEM_LABELS[s]}</option>
+        ))}
+        {withKit && (
+          <optgroup label="Drum kit">
+            {kitParts.map((p) => (
+              <option key={p} value={`drums/${p}`}>{KIT_PART_LABELS[p]}</option>
+            ))}
+          </optgroup>
+        )}
+      </select>
     </div>
   );
 }

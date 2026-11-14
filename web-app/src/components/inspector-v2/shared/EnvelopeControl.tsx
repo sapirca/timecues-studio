@@ -24,7 +24,31 @@ import type { CardSectionSpec } from './CardSection';
 import {
   envelopeCoverageNote, envelopeViewport, fmtHz, peakSequenceNote, type EnergySpanExport,
 } from '../../../utils/energySpan';
-import { BRIGHTNESS_COLOR, EnvelopeCurve, envelopeSummary, fmtEnvMs } from './EnvelopeLane';
+import { useState } from 'react';
+import {
+  BRIGHTNESS_COLOR, ENERGY_COLOR, EnvelopeCurve, FLUX_COLOR, PEAK_COLOR, SPLIT_COLOR, VOLUME_COLOR, VOLUME_LINE_COLOR,
+  envelopeSummary, fmtEnvMs,
+} from './EnvelopeLane';
+
+/** Remembered per browser: whether the card draws brightness. A convenience,
+ *  so storage failing (private window, blocked site data) just means off. */
+const SHOW_BRIGHTNESS_KEY = 'tc:envelopeCard:showBrightness';
+
+function readShowBrightness(): boolean {
+  try {
+    return window.localStorage.getItem(SHOW_BRIGHTNESS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeShowBrightness(on: boolean): void {
+  try {
+    window.localStorage.setItem(SHOW_BRIGHTNESS_KEY, on ? '1' : '0');
+  } catch {
+    // Not remembered; the toggle still works for this card.
+  }
+}
 
 export interface EnvelopeControlProps {
   data: EnergySpanExport;
@@ -61,6 +85,17 @@ export function EnvelopeControl({ data, start, end, color }: EnvelopeControlProp
   const viewport = envelopeViewport(data, start, end);
   const coverage = envelopeCoverageNote(data, start, end);
   const sequence = peakSequenceNote(rejected?.peak_levels);
+  // Brightness is off by default: a build can brighten as it climbs, but
+  // brightness alone is not the energy moving, so it is there to switch on.
+  const [showBrightness, setShowBrightness] = useState(readShowBrightness);
+  const toggleBrightness = () => {
+    setShowBrightness((on) => {
+      writeShowBrightness(!on);
+      return !on;
+    });
+  };
+  const hasBeatStrength = data.curve.some((p) => p.beat_strength != null);
+  const hasFlux = data.curve.some((p) => p.flux != null);
 
   return (
     <div>
@@ -72,8 +107,8 @@ export function EnvelopeControl({ data, start, end, color }: EnvelopeControlProp
           'and a passage of three louder-and-louder swells reads as the rise it is.'
         }
       >
-        measured on the {data.stem} stem · energy {data.trend}
-        {data.brightness_trend && (
+        measured on the {data.stem} stem · volume {data.trend}
+        {showBrightness && data.brightness_trend && (
           <>
             {' · '}
             <span style={{ color: BRIGHTNESS_COLOR }}>brightness {data.brightness_trend}</span>
@@ -87,7 +122,7 @@ export function EnvelopeControl({ data, start, end, color }: EnvelopeControlProp
         * "energy decreasing" next to "brightness increasing" is a thing you
         * have to hold two facts in mind to interpret, and the interpretation is
         * always the same one — so say it. */}
-      {data.trend === 'decreasing' && data.brightness_trend === 'increasing' && (
+      {showBrightness && data.trend === 'decreasing' && data.brightness_trend === 'increasing' && (
         <span className="block text-[9px] text-slate-400 mb-1">
           level falling while the timbre opens up — the shape of a build
         </span>
@@ -110,7 +145,7 @@ export function EnvelopeControl({ data, start, end, color }: EnvelopeControlProp
         title={data.description}
       >
         {viewport
-          ? <EnvelopeCurve data={data} color={color} detail viewport={viewport} />
+          ? <EnvelopeCurve data={data} color={color} detail viewport={viewport} showBrightness={showBrightness} />
           : (
             <span className="absolute inset-0 flex items-center justify-center px-2 text-center text-[9px] text-slate-500">
               this band no longer covers the audio this was measured from
@@ -118,23 +153,69 @@ export function EnvelopeControl({ data, start, end, color }: EnvelopeControlProp
           )}
       </div>
 
-      {data.brightness_hz && (
-        <div
-          className="mt-1 flex items-center gap-1.5 text-[9px] font-mono"
-          style={{ color: `${BRIGHTNESS_COLOR}cc` }}
-          title="Spectral centroid — the same measurement the Bright signal lane draws, taken over this span. Peak is the brightest moment inside it."
+      {/* The key to the box above: every reading drawn in it has its own
+        * colour, and without a key they are lines to tell apart by guessing. */}
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[9px] font-mono">
+        <span
+          className="flex items-center gap-1"
+          style={{ color: VOLUME_LINE_COLOR }}
+          title="Volume (RMS) across the span — loudness alone — relative to its own loudest moment. The grey area under it is the same reading."
         >
+          <span className="inline-block w-3 h-2 rounded-[1px]" style={{ background: `${VOLUME_COLOR}66`, borderTop: `1.5px solid ${VOLUME_LINE_COLOR}` }} aria-hidden="true" />
+          volume
+        </span>
+        {hasBeatStrength && (
           <span
-            className="inline-block w-3 border-t"
-            style={{ borderColor: BRIGHTNESS_COLOR }}
-            aria-hidden="true"
-          />
-          <span>
-            brightness {fmtHz(data.brightness_hz.start)} → {fmtHz(data.brightness_hz.end)}
+            className="flex items-center gap-1"
+            style={{ color: ENERGY_COLOR }}
+            title="The Beat strength lane over this span — how hard the kick and bass land on the beat — relative to its own peak in the span. Measured against the song's beats when the span came from a detector; a span drawn by hand reads the bass hits alone."
+          >
+            <span className="inline-block w-3 border-t-2" style={{ borderColor: ENERGY_COLOR }} aria-hidden="true" />
+            beat strength
           </span>
-          <span className="ml-auto text-slate-500">peak {fmtHz(data.brightness_hz.peak)}</span>
-        </div>
-      )}
+        )}
+        {hasFlux && (
+          <span
+            className="flex items-center gap-1"
+            style={{ color: FLUX_COLOR }}
+            title="The Spectral Flux lane over this span — how much the sound changes from moment to moment, i.e. how busy it is — relative to its own peak in the span."
+          >
+            <span className="inline-block w-3 border-t" style={{ borderColor: FLUX_COLOR }} aria-hidden="true" />
+            flux
+          </span>
+        )}
+        {rejected && rejected.peaks_at_ms.length > 0 && (
+          <span className="flex items-center gap-1 text-slate-300" title="Where each separate swell of loudness peaks.">
+            <span className="inline-block h-2.5 border-l" style={{ borderColor: PEAK_COLOR }} aria-hidden="true" />
+            peaks
+          </span>
+        )}
+        {rejected && rejected.split_at_ms.length > 0 && (
+          <span className="flex items-center gap-1 text-slate-400" title="Where to split the span so each swell reads on its own.">
+            <span className="inline-block h-2.5 border-l border-dashed" style={{ borderColor: SPLIT_COLOR }} aria-hidden="true" />
+            split
+          </span>
+        )}
+        {data.brightness_hz && (
+          <button
+            type="button"
+            onClick={toggleBrightness}
+            aria-pressed={showBrightness}
+            className="flex items-center gap-1 rounded px-1 -mx-1 hover:bg-white/5"
+            style={{ color: showBrightness ? BRIGHTNESS_COLOR : '#64748b' }}
+            title="Show or hide the brightness line (the Bright signal lane — spectral centroid — on its own vertical scale). Off by default: brightness alone is not the energy moving."
+          >
+            <span
+              className="inline-block w-3 border-t"
+              style={{ borderColor: showBrightness ? BRIGHTNESS_COLOR : '#64748b', borderStyle: showBrightness ? 'solid' : 'dashed' }}
+              aria-hidden="true"
+            />
+            {showBrightness
+              ? <>brightness {fmtHz(data.brightness_hz.start)} → {fmtHz(data.brightness_hz.end)}</>
+              : '+ brightness'}
+          </button>
+        )}
+      </div>
 
       {env ? (
         <>

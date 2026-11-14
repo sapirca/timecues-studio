@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 import { CrosshairIcon } from './CrosshairIcon';
 import { InlineEditableName } from './InlineEditableName';
 import { getIsMobile } from '../../mobile/mobileMode';
+import { LiveLabel } from '../Playhead';
 
 export interface ItemCardShellProps {
   index: number;
@@ -255,6 +256,6 @@ export function AddItemAtEndCard({
       onClick={onClick}
       style={{ width }}
       className="self-stretch min-h-[80px] flex items-center justify-center text-[10px] uppercase tracking-wider text-slate-400 hover:text-violet-300 border border-dashed border-white/[0.08] hover:border-violet-500/40 hover:bg-white/[0.02] rounded transition-colors"
-    >{label}</button>
+    ><LiveLabel text={label} /></button>
   );
 }

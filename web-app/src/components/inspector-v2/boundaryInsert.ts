@@ -24,13 +24,16 @@
  * written once.
  */
 
+import { roundTime as roundTimeMs } from '../../utils/beatGrid';
 import type { BoundaryItem } from '../../types/annotationLayer';
 import { newId } from '../../types/annotationLayer';
-import { UNSET_TYPE, sectionLabel } from './sectionConstants';
+import { OTHER_TYPE, UNSET_TYPE, sectionLabel } from './sectionConstants';
 
-/** Type/label a freshly added section wears until the annotator types it. */
-export const NEW_SECTION_TYPE = 'drop';
-export const NEW_SECTION_LABEL = 'Drop';
+/** Type/label a freshly added section wears until the annotator types it.
+ *  `other` rather than a form word: a new boundary is not yet a Drop (or
+ *  anything else), and it may never be — some lanes are instructions. */
+export const NEW_SECTION_TYPE = OTHER_TYPE;
+export const NEW_SECTION_LABEL = sectionLabel(OTHER_TYPE);
 
 /** Two times closer than this are the same edge (50 ms) — the tolerance the
  *  range-add already uses when deciding whether an endpoint is novel. */
@@ -39,9 +42,12 @@ export const EDGE_EPS = 0.05;
 const byTime = (a: BoundaryItem, b: BoundaryItem) => a.time - b.time;
 
 /** Milliseconds are the storage resolution; keep add paths from writing
- *  float dust into the document. */
+ *  float dust into the document. The one rounding the app uses (beatGrid's),
+ *  so an add, a drag, a re-time and Grid Lock store the same number for the
+ *  same instant — a local `Math.round(t * 1000) / 1000` disagreed with it in
+ *  the last digit on a half-millisecond. */
 export function roundTime(t: number): number {
-  return Math.round(t * 1000) / 1000;
+  return roundTimeMs(t);
 }
 
 export function makeBoundaryItem(time: number, type: string, label: string): BoundaryItem {
@@ -102,17 +108,17 @@ export function insertBoundaryAtPoint(
  * Which instant a point-add commits at.
  *
  *  - `live` is the media clock, read at the moment of the click. It is the
- *    only honest answer while the transport is running: the React
- *    `currentTime` prop is the same number one rAF coalesce, one setState and
- *    one inspector re-render later, so committing on it marks where the
- *    playhead WAS.
+ *    only honest answer while the transport is running: the playhead clock
+ *    (hooks/usePlayhead) is the same number one rAF coalesce later, so
+ *    committing on it marks where the playhead WAS.
  *  - `pendingPoint` is the click-pending pill's own time, when one is showing.
  *    A pill is a mark the annotator dropped at some earlier moment; once
  *    playback has carried the cursor away from it, the cursor is what they are
  *    listening to when they press ADD, so the cursor wins. Within EDGE_EPS the
  *    pill wins instead — it holds the snapped value the click seeked to, which
  *    is exact where the media clock lands a few ms off it.
- *  - `fallback` (the prop) is used only when there is no live clock to read.
+ *  - `fallback` (the playhead clock's reading) is used only when there is no
+ *    live clock to read.
  */
 export function resolvePointAddTime(args: {
   live?: number | null;

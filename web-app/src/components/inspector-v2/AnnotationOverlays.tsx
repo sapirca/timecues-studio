@@ -1,10 +1,14 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { SectionBlock } from '../../types/sectionBlock';
 import type { AutoGuessPoint } from '../../types/autoGuess';
 import { isOnGridLine, SNAP_INDICATOR_COLOR } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag, useRegionSelectDrag } from '../../hooks/useTimelineDrag';
+import { isSelectToggle } from '../../hooks/useCrossLaneDrop';
 import { agreementCount } from '../../utils/boundaryClustering';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
+import { PlayheadLine } from '../Playhead';
+import { sectionColor } from './sectionConstants';
 
 /** Grid info needed to decide whether a boundary lies on a beat-grid line.
  *  Optional everywhere — when bpm is undefined, the snap indicator simply
@@ -17,12 +21,7 @@ export interface GridSnapInfo {
 
 // ─── Color map ────────────────────────────────────────────────────────────────
 
-const SECTION_COLORS: Record<string, string> = {
-  intro:     '#a78bfa', bridge: '#fb7185', buildup: '#fde047',
-  drop:      '#4ade80', breakdown: '#e879f9', outro: '#64748b',
-  silence:   '#334155', default: '#94a3b8',
-};
-function sectionBg(type: string) { return SECTION_COLORS[type] ?? SECTION_COLORS.default; }
+const sectionBg = sectionColor;
 
 // ─── Manual markers ─────────────────────────────────────────────────────────────
 
@@ -37,7 +36,7 @@ function ManualMarkerLine({ s, i, duration, grid, onPointerDown }: {
   /** When provided, the cap+number patch becomes a drag handle. */
   onPointerDown?: (e: React.PointerEvent, sectionIdx: number) => void;
 }) {
-  const color = sectionBg(s.type);
+  const color = s.color ?? sectionBg(s.type);
   const snapped = isOnGridLine(s.time, grid?.bpm, grid?.gridOffset, grid?.beatsPerBar);
   const draggable = !!onPointerDown;
   return (
@@ -152,29 +151,55 @@ export function PendingHighlightOverlay({ sel, duration, grid }: { sel: PendingS
 // gutter) keeps painting instead of being thrown away. `touch-pan-y` lets a
 // phone scroll the page with a vertical swipe over the row, while a
 // horizontal one paints the selection.
-export function RegionDragOverlay({ duration, onVizClick, onVizRegion, onRegionDragStart, z = 'z-[1]' }: {
+export function RegionDragOverlay({ duration, onVizClick, onVizRegion, onRegionDragStart, onSelectRegion, createColor, snapTime, hint, z = 'z-[1]' }: {
   duration: number;
   onVizClick: (t: number) => void;
   onVizRegion: (t1: number, t2: number) => void;
   onRegionDragStart?: () => void;
+  /** ⇧/⌘-drag: pick this lane's items inside the stretch instead of
+   *  highlighting it. Absent on lanes whose items can't be picked. */
+  onSelectRegion?: (t1: number, t2: number) => void;
+  /** Set on an editable lane whose drag CREATES an item (see laneCreate.ts):
+   *  the drag paints in the lane's colour instead of the teal highlight, so it
+   *  reads as the item it is about to become rather than a selection. */
+  createColor?: string;
+  /** Snap both ends live while dragging, so the band lands where the item
+   *  will — the item is snapped by the same rule when it is made. */
+  snapTime?: (t: number) => number;
+  /** Tooltip for the empty lane — what a click and a drag do here. */
+  hint?: string;
   z?: string;
 }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  // Decided at the press. The ref is what the gesture reads (its callbacks
+  // fire inside the same press, before a state update lands); the state only
+  // colours the drag after what it will do.
+  const selectingRef = useRef(false);
+  const [selecting, setSelecting] = useState(false);
   const drag = useRegionSelectDrag({
     containerRef: surfaceRef,
     durationGetter: () => duration,
-    onDragStart: onRegionDragStart,
+    transform: snapTime,
+    onDragStart: () => { if (!selectingRef.current) onRegionDragStart?.(); },
     onClick: onVizClick,
-    onRegion: (t1, t2) => onVizRegion(t1, t2),
+    onRegion: (t1, t2) => (selectingRef.current && onSelectRegion ? onSelectRegion(t1, t2) : onVizRegion(t1, t2)),
   });
   const sel = drag.preview;
+  const edge = selecting ? 'rgba(255,255,255,0.85)' : createColor ?? 'rgba(45,212,191,0.7)';
+  const fill = selecting ? 'rgba(255,255,255,0.12)' : createColor ? `${createColor}55` : 'rgba(45,212,191,0.13)';
 
   return (
     <div
       ref={surfaceRef}
       className={`absolute inset-0 touch-pan-y ${z}`}
       style={{ cursor: 'crosshair' }}
-      onPointerDown={drag.onPointerDown}
+      onPointerDown={(e) => {
+        const pick = !!onSelectRegion && isSelectToggle(e);
+        selectingRef.current = pick;
+        setSelecting(pick);
+        drag.onPointerDown(e);
+      }}
+      title={hint ?? (onSelectRegion ? 'Drag to highlight · ⇧-drag to select the items inside' : undefined)}
     >
       {sel && duration > 0 && (
         <div
@@ -183,9 +208,9 @@ export function RegionDragOverlay({ duration, onVizClick, onVizRegion, onRegionD
             left: `${(Math.min(sel.s, sel.e) / duration) * 100}%`,
             width: `${(Math.abs(sel.e - sel.s) / duration) * 100}%`,
             minWidth: 1,
-            background: 'rgba(45,212,191,0.13)',
-            borderLeft: '2px solid rgba(45,212,191,0.7)',
-            borderRight: Math.abs(sel.e - sel.s) > 0.1 ? '2px solid rgba(45,212,191,0.7)' : 'none',
+            background: fill,
+            borderLeft: `2px solid ${edge}`,
+            borderRight: Math.abs(sel.e - sel.s) > 0.1 ? `2px solid ${edge}` : 'none',
           }}
         />
       )}
@@ -198,7 +223,6 @@ export function RegionDragOverlay({ duration, onVizClick, onVizRegion, onRegionD
 export interface AutoGuessOverlayProps {
   points: AutoGuessPoint[];
   duration: number;
-  currentTime: number;
   isPlaying: boolean;
   onMarkCorrect: (id: string) => void;
   onMarkIncorrect: (id: string) => void;
@@ -217,14 +241,23 @@ export interface AutoGuessOverlayProps {
 }
 
 export function AutoGuessOverlay({
-  points, duration, currentTime, isPlaying,
+  points, duration, isPlaying,
   onMarkCorrect, onMarkIncorrect, onMarkPending, onPlay, onPause,
   expandedPointIds, onToggleExpanded,
   expandZoomThreshold = 0,
   zoomFactor = 1,
 }: AutoGuessOverlayProps) {
   const sorted = [...points].sort((a, b) => a.time - b.time);
-  const playheadPct = duration > 0 ? (currentTime / duration) * 100 : 0;
+  // The point whose [time, next point) holds the playhead while playing, as an
+  // index — the overlay re-renders when playback crosses a point, not per frame.
+  const playingIndex = usePlayheadValue((t) => {
+    if (!isPlaying) return -1;
+    for (let i = 0; i < sorted.length; i++) {
+      const nextTime = sorted[i + 1]?.time ?? duration;
+      if (t >= sorted[i].time && t < nextTime) return i;
+    }
+    return -1;
+  });
   // When threshold=0 the row stays in its legacy always-expanded mode.
   // Above 0 we collapse below the threshold and let users opt-in per-point.
   const autoExpanded = expandZoomThreshold <= 0 || zoomFactor >= expandZoomThreshold;
@@ -233,7 +266,7 @@ export function AutoGuessOverlay({
     <div className="relative w-full" style={{ height: 52, background: 'rgba(20,184,166,0.04)', borderRadius: 4 }}>
       {sorted.map((point, i) => {
         const nextTime = sorted[i + 1]?.time ?? duration;
-        const isThisPlaying = isPlaying && currentTime >= point.time && currentTime < nextTime;
+        const isThisPlaying = i === playingIndex;
         const pct = duration > 0 ? (point.time / duration) * 100 : 0;
         const lineColor =
           point.status === 'correct'   ? '#14b8a6' :
@@ -307,9 +340,9 @@ export function AutoGuessOverlay({
           </div>
         );
       })}
-      <div
-        className="absolute top-0 bottom-0 w-px pointer-events-none"
-        style={{ left: `${playheadPct}%`, background: 'rgba(255,255,255,0.75)', boxShadow: '0 0 3px rgba(255,255,255,0.4)', zIndex: 4 }}
+      <PlayheadLine
+        duration={duration}
+        style={{ background: 'rgba(255,255,255,0.75)', boxShadow: '0 0 3px rgba(255,255,255,0.4)', zIndex: 4 }}
       />
     </div>
   );
@@ -319,7 +352,6 @@ export function AutoGuessOverlay({
 
 export interface AnnotationOverlaysProps {
   duration: number;
-  currentTime: number;
   isPlaying: boolean;
   // Manual
   manualSections?: SectionBlock[];

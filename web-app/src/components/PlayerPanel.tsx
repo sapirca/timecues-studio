@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState, useMemo, useCallback, type RefObject } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback, type ReactNode, type RefObject } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { createSmoothMediaClock } from '../utils/smoothMediaClock';
 import { OverviewWaveform } from './OverviewWaveform';
 import type { ScaleMode } from '../utils/waveformAnalysis';
 import { zoomCenterFor } from '../utils/zoomCenter';
 import { visibleGridLines } from '../utils/beatGrid';
 import { GridLines } from './GridLines';
+import { GridPlayAlong } from './GridPlayAlong';
 import { useBarBeatOrigin } from '../context/SettingsContext';
+import { createPlayheadClock, type PlayheadSample } from '../hooks/usePlayhead';
 import { GridSegmentLane, GridSegmentCutOverlay } from './inspector-v2/GridSegmentLane';
 import type { ResolvedSegment } from '../utils/gridSegments';
 import { ManualGridEditor } from './inspector-v2/ManualGridEditor';
@@ -16,6 +19,7 @@ import { useExtendedZoom } from '../hooks/useExtendedZoom';
 import { isSamePointer, isSecondaryPointer, pointerIdOf, preventPressDefault } from '../hooks/useTimelineDrag';
 import { PAUSE_PLAYBACK_EVENT } from '../utils/playerEvents';
 import { UltraZoomDialog } from './UltraZoomDialog';
+import { isHorizontalWheel } from '../utils/wheel';
 
 const SCALE_STORAGE_KEY = 'tc.overviewWaveformScale';
 
@@ -90,7 +94,11 @@ interface PlayerPanelProps {
   gridThickness?: number;
   onBufferReady?: (buf: AudioBuffer) => void;
   onReady?: () => void;
-  onTimeUpdate?: (time: number) => void;
+  /** The playhead, once a frame while playing and on every seek. While
+   *  playing, `sample` says when the time was read off the media clock, so
+   *  the playhead clock can tell how old it is by the time it is drawn
+   *  (hooks/usePlayhead, usePaintClock). */
+  onTimeUpdate?: (time: number, sample?: PlayheadSample) => void;
   /** Called whenever zoom or container width changes; parent computes scrollLeft from playerTime.
    *  `atMaxZoom` is true when the +zoom button would no-op (used by the toolbar to disable it). */
   onViewChange?: (zoomFactor: number, containerWidth: number, atMaxZoom: boolean) => void;
@@ -154,6 +162,12 @@ interface PlayerPanelProps {
   onGridOffsetDragStart?: (currentOffset: number) => void;
   /** When true, render bar numbers (1, 2, 3…) above the bar lines. */
   showBarNumbers?: boolean;
+  /** With bar numbers on, also count every grid line inside the bar (each
+   *  beat, or each sub-beat when the grid is subdivided), as zoom allows. */
+  numberEveryLine?: boolean;
+  /** Play the beat grid along with the playhead: the current bar banded,
+   *  each beat lit as it sounds (see GridPlayAlong). */
+  visualizeGrid?: boolean;
   /** Per-beat overrides (Manual mode). Sparse map keyed by global integer
    *  beat index → absolute timestamp in seconds. Pinned beats render at
    *  their override positions and are tagged so the editor can recolor
@@ -227,6 +241,13 @@ interface PlayerPanelProps {
     onLoopToggle: () => void;
     onDismiss: () => void;
   } | null;
+  /** Put the transport row above the waveform instead of under it, so the
+   *  waveform sits directly on whatever lanes the page draws below it. */
+  transportAbove?: boolean;
+  /** Extra controls appended to the end of the transport row — a page's own
+   *  view controls (zoom / grid / signals) ride here instead of taking a row
+   *  of their own above the player. The row wraps when they don't fit. */
+  transportTrailing?: ReactNode;
 }
 
 function formatTime(s: number) {
@@ -254,7 +275,7 @@ function parseTrackName(trackName?: string): { artist: string; song: string } | 
   return { artist: 'Unknown Artist', song: trimmed };
 }
 
-export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, beatOffset = 0, beatsPerBar = 4, barGroupSize, subBeatDivision, beatGroupSize, gridThickness = 1, onBufferReady, onReady, onTimeUpdate, onViewChange, seekRef, playRef, pauseRef, getTimeRef, externalTimeRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, getZoomFocusTime, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef, onScrollChange, onPlayingChange, playbackRate = 1, accent = DEFAULT_PLAYER_ACCENT, onGridOffsetChange, onGridOffsetDragStart, showBarNumbers = false, beatOverrides, gridSegments, showGridSegmentLane = false, onSegmentSelect, onSegmentHeadDrag, onSegmentHeadDragStart, onSegmentHeadDragEnd, onDeleteGridSegment, onSplitGridAt, selectedSegmentId, cutLabelSegmentId = null, snapSegmentTime, segmentSnapOn = false, gridMode, onBeatDrag, onClearBeatOverride, manualEditLocked = false, pendingSelection, previewRegion, onUserSeek, onUserRegion, onPreviewEnd, previewControls }: PlayerPanelProps) {
+export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, beatOffset = 0, beatsPerBar = 4, barGroupSize, subBeatDivision, beatGroupSize, gridThickness = 1, onBufferReady, onReady, onTimeUpdate, onViewChange, seekRef, playRef, pauseRef, getTimeRef, externalTimeRef, wsScrollRef, zoomInRef, zoomOutRef, zoomResetRef, getZoomFocusTime, pinchZoomInRef, pinchZoomOutRef, scrollToTimeRef, zoomToRangeRef, onScrollChange, onPlayingChange, playbackRate = 1, accent = DEFAULT_PLAYER_ACCENT, onGridOffsetChange, onGridOffsetDragStart, showBarNumbers = false, numberEveryLine = false, visualizeGrid = false, beatOverrides, gridSegments, showGridSegmentLane = false, onSegmentSelect, onSegmentHeadDrag, onSegmentHeadDragStart, onSegmentHeadDragEnd, onDeleteGridSegment, onSplitGridAt, selectedSegmentId, cutLabelSegmentId = null, snapSegmentTime, segmentSnapOn = false, gridMode, onBeatDrag, onClearBeatOverride, manualEditLocked = false, pendingSelection, previewRegion, onUserSeek, onUserRegion, onPreviewEnd, previewControls, transportAbove = false, transportTrailing }: PlayerPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   // Last trackName the WS-init effect saw, and the zoom/center-time to restore
@@ -277,16 +298,6 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   // the whole point of the end-check is to run *before* React is involved.
   const previewRegionRef = useRef(previewRegion);
   const onPreviewEndRef = useRef(onPreviewEnd);
-  // Tracks the pending requestAnimationFrame id used to coalesce WaveSurfer's
-  // sub-frame `audioprocess` events into one setCurrentTime + onTimeUpdate
-  // per displayed frame. Lives on the component (not inside the WS-init
-  // effect closure) so the seek path can also cancel it.
-  const audioProcessRafRef = useRef<number | null>(null);
-  // The scroll offset that went out with the last published time. The
-  // per-frame audioprocess flush publishes a time only while this still
-  // matches WaveSurfer's live offset — otherwise WS is mid auto-scroll and
-  // the 'scroll' handler owns the frame (see below).
-  const publishedScrollRef = useRef(0);
   // The playhead is positioned by direct DOM write, not by React style props.
   // WaveSurfer scrolls its own container every frame while playing, so a
   // playhead placed from the `scrollLeft` React state trails the waveform (and
@@ -324,11 +335,30 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   const barBeatOrigin = useBarBeatOrigin();
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  // The elapsed-time digits, for the frames where an outside clock owns them.
+  // The playback time and WaveSurfer's scroll offset both move every frame
+  // while a track plays (the scroll only once zoomed in). Neither is state:
+  // as state, each frame re-rendered this whole panel and every overlay in
+  // it. The time lives in a ref and reaches the screen by direct DOM writes
+  // (the playhead via placePlayhead, the digits below); the scroll lives in
+  // `scrollClock`, which the waveform canvas and each scrolling overlay layer
+  // (`scrollLayerRef`) follow on their own.
+  const currentTimeRef = useRef(0);
+  // The elapsed-time digits — written, not rendered, for the reason above.
   const elapsedReadoutRef = useRef<HTMLSpanElement | null>(null);
+  const setCurrentTime = useCallback((t: number) => {
+    currentTimeRef.current = t;
+    const readout = elapsedReadoutRef.current;
+    if (readout) readout.textContent = formatTime(t);
+  }, []);
   const [duration, setDuration] = useState(0);
-  const [scrollLeft, setScrollLeft] = useState(0);
+  const [scrollClock] = useState(createPlayheadClock);
+  const setScrollLeft = scrollClock.set;
+  const scrollLayerRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const place = () => { el.style.transform = `translateX(-${scrollClock.get()}px)`; };
+    place();
+    return scrollClock.subscribe(place);
+  }, [scrollClock]);
   const [containerWidth, setContainerWidth] = useState(0);
   const [volume, setVolumeState] = useState(1);
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
@@ -408,7 +438,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
         }
         return;
       }
-      if (e.deltaX === 0) return;
+      if (!isHorizontalWheel(e)) return;
       e.preventDefault();
       const ws = wsRef.current;
       if (ws) ws.setScroll(ws.getScroll() + e.deltaX);
@@ -434,7 +464,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     // out to the whole-track view.
     const isStemSwap = isReady && lastTrackNameRef.current !== undefined && lastTrackNameRef.current === trackName;
     restoreViewRef.current = isStemSwap && zoom > 0 && effectiveZoom > 0
-      ? { zoom, centerTime: (scrollLeft + containerWidth / 2) / effectiveZoom }
+      ? { zoom, centerTime: (scrollClock.get() + containerWidth / 2) / effectiveZoom }
       : null;
     lastTrackNameRef.current = trackName;
 
@@ -471,6 +501,12 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       cursorWidth: 0,
       height: 96,
       normalize: false,
+      // The follow-scroll is done below (`follow`), off the smoothed clock and
+      // in the same frame as the playhead. WaveSurfer's own scrolls off the
+      // raw media clock, whose uneven steps juddered the zoomed-in view, and
+      // its scroll only reached the waveform canvas and the lanes a frame
+      // after the playhead had moved.
+      autoScroll: false,
     });
 
     const t0 = performance.now();
@@ -545,90 +581,84 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
       }
     });
 
-    // WaveSurfer fires `audioprocess` faster than the display can repaint
-    // (one event per audio-buffer slice). Each one used to call setCurrentTime
-    // synchronously, which re-reconciled the entire inspector tree per event
-    // and visibly stuttered the playhead at high zoom. Coalesce to one
-    // setState + onTimeUpdate per animation frame.
-    let pendingProcessTime: number | null = null;
-    // Set by the 'scroll' handler on the frames where IT published the time.
-    // Read and cleared here — see the note below.
-    let scrollPublishedTime = false;
-    const flushProcessTime = () => {
-      audioProcessRafRef.current = null;
-      const scrollAlreadyPublished = scrollPublishedTime;
-      scrollPublishedTime = false;
-      if (pendingProcessTime === null) return;
-      const t = pendingProcessTime;
-      pendingProcessTime = null;
-      // When WS auto-scrolls, its 'scroll' handler is the publisher for that
-      // frame (it alone can read the clock at the instant the offset it
-      // reports was computed). A time published from here would be paired
-      // with the previous frame's offset, and at high zoom one frame of
-      // scroll is tens of pixels — the playhead would jitter back and forth
-      // against the waveform every frame.
-      //
-      // But "playing" is NOT the same as "a scroll event is coming". WS only
-      // auto-scrolls once the playhead reaches the viewport's centre
-      // (autoCenter), and not at all while the offset is pinned at either end
-      // of the track. Seek into the left half of a zoomed-in view and press
-      // play and no scroll fires until the playhead crosses the centre — and
-      // guarding on `isPlaying` alone published nothing for that whole
-      // stretch: the player's own playhead (placed straight off the media
-      // clock) swept, while every currentTime-driven viz row below — 3-Band,
-      // lane rows, karaoke — sat frozen where the seek left it and only
-      // snapped into place on pause.
-      //
-      // So defer to the scroll handler only when it actually published this
-      // frame. On the frames WS holds still, the offset hasn't moved, and
-      // this path's time is paired with it correctly.
-      if (ws.isPlaying() && scrollAlreadyPublished) return;
-      publishedScrollRef.current = ws.getScroll();
-      setCurrentTime(t);
-      onTimeUpdateRef.current?.(t);
+    // The shown time while playing: the media clock, smoothed so each frame
+    // advances by the same amount (see utils/smoothMediaClock).
+    const smoothClock = createSmoothMediaClock();
+
+    // Scroll so the playhead at `t` stays in view — WaveSurfer's autoCenter
+    // rule: a time off screen is brought to the centre, and while playing the
+    // view follows once the playhead passes the centre. The new offset is
+    // handed to the waveform canvas, the overlays and the lanes right here,
+    // not on WaveSurfer's 'scroll' event, which arrives a frame later.
+    const follow = (t: number, playing: boolean) => {
+      const z = effectiveZoomRef.current;
+      const sc = ws.getWrapper().parentElement;
+      if (z <= 0 || !sc) return;
+      const cw = sc.clientWidth;
+      const maxScroll = sc.scrollWidth - cw;
+      if (maxScroll <= 0) return;
+      const x = t * z;
+      const cur = ws.getScroll();
+      let next = cur;
+      if (x < cur || x > cur + cw) next = x - cw / 2;
+      if (playing && x - next - cw / 2 > 0) next = x - cw / 2;
+      next = Math.max(0, Math.min(maxScroll, next));
+      if (Math.abs(next - cur) < 0.01) return;
+      ws.setScroll(next);
+      const sl = ws.getScroll();
+      setScrollLeft(sl);
+      onScrollChangeRef.current?.(sl);
     };
+
+    // Once per frame while playing (WaveSurfer's timer runs on rAF). The
+    // scroll, the playhead and the time every lane draws from are all set
+    // here, in one frame, from one smoothed reading.
     ws.on('audioprocess', () => {
-      const t = ws.getCurrentTime();
-      placePlayhead(t);
+      const raw = ws.getCurrentTime();
+      const at = performance.now();
+      const playing = ws.isPlaying();
+      const rate = ws.getPlaybackRate();
       // Preview-region end is decided HERE, against the media clock, rather
       // than in the parent against `playerTime`. That prop is this same value
-      // after a rAF coalesce, a setState, a full inspector re-render and an
-      // effect — 50 ms or more once the tree is heavy, and the element keeps
-      // playing throughout. Measured on a 157 ms selection whose end sits
-      // 20 ms before the first onset: with the check on the laggy prop, a
-      // >=50 ms delay leaks the song's attack at 41 dB above the selection's
-      // own noise floor ("I highlighted a quiet area and still hear
-      // something"); at 0-33 ms nothing leaks. Reading the clock the media
-      // element actually keeps removes the lag from the decision entirely.
-      // Same lesson as the anchor in useBoundaryAudioFeedback / MetronomePanel:
+      // after a setState, a full inspector re-render and an effect — 50 ms or
+      // more once the tree is heavy, and the element keeps playing
+      // throughout. Measured on a 157 ms selection whose end sits 20 ms
+      // before the first onset: with the check on the laggy prop, a >=50 ms
+      // delay leaks the song's attack at 41 dB above the selection's own
+      // noise floor ("I highlighted a quiet area and still hear something");
+      // at 0-33 ms nothing leaks. Reading the clock the media element
+      // actually keeps removes the lag from the decision entirely. The RAW
+      // reading, too: the smoothed one is for the eye, not the ear. Same
+      // lesson as the anchor in useBoundaryAudioFeedback / MetronomePanel:
       // never place audio off a value that has been through React.
       const preview = previewRegionRef.current;
-      if (preview && t >= preview.end) {
+      let t: number;
+      if (preview && raw >= preview.end) {
+        smoothClock.reset();
         if (preview.loop) {
           ws.setTime(preview.start);
-          pendingProcessTime = preview.start;
+          t = preview.start;
         } else {
           ws.pause();
-          pendingProcessTime = t;
+          t = raw;
           onPreviewEndRef.current?.();
         }
       } else {
-        pendingProcessTime = t;
+        t = playing ? smoothClock.sample(raw, at, rate) : raw;
       }
-      if (audioProcessRafRef.current === null) {
-        audioProcessRafRef.current = requestAnimationFrame(flushProcessTime);
-      }
+      const stillPlaying = ws.isPlaying();
+      follow(t, stillPlaying);
+      placePlayhead(t);
+      setCurrentTime(t);
+      onTimeUpdateRef.current?.(t, stillPlaying ? { at, rate } : undefined);
     });
     ws.on('seeking', () => {
-      // Seeks are one-shot user actions — flush immediately so the playhead
-      // doesn't appear to lag the click, and cancel any pending audioprocess
-      // frame so it can't overwrite the seek target.
-      if (audioProcessRafRef.current !== null) {
-        cancelAnimationFrame(audioProcessRafRef.current);
-        audioProcessRafRef.current = null;
-      }
-      pendingProcessTime = null;
+      // Seeks are one-shot user actions — publish immediately so the playhead
+      // doesn't appear to lag the click, and bring an off-screen target into
+      // view. The smoothed clock starts over from the new position.
+      smoothClock.reset();
       const t = ws.getCurrentTime();
+      follow(t, false);
       placePlayhead(t);
       setCurrentTime(t);
       onTimeUpdateRef.current?.(t);
@@ -639,27 +669,18 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     ws.on('interaction', (t: number) => {
       onUserSeekRef.current?.(t);
     });
-    ws.on('play', () => { setIsPlaying(true); onPlayingChangeRef.current?.(true); });
-    ws.on('pause', () => { setIsPlaying(false); onPlayingChangeRef.current?.(false); });
+    ws.on('play', () => { smoothClock.reset(); setIsPlaying(true); onPlayingChangeRef.current?.(true); });
+    ws.on('pause', () => { smoothClock.reset(); setIsPlaying(false); onPlayingChangeRef.current?.(false); });
     ws.on('finish', () => { setIsPlaying(false); onPlayingChangeRef.current?.(false); });
     ws.on('scroll', (_vs: number, _ve: number, sl: number) => {
+      // The DOM's echo of a scroll — `follow`'s a frame ago (already applied,
+      // so these are no-ops) or the user's own wheel/drag. The time is not
+      // published here: while playing, the audioprocess tick does that every
+      // frame, and a raw reading paired with this offset would put the
+      // unsmoothed jitter straight back.
       setScrollLeft(sl);
       onScrollChangeRef.current?.(sl);
-      // Re-place against the scroll that just landed, before React sees it.
-      placePlayhead(ws.isPlaying() ? ws.getCurrentTime() : undefined);
-      // While playing, WaveSurfer auto-scrolls once per frame and this is the
-      // instant it did. Read the clock HERE so the time published to React is
-      // the one that belongs to this scroll offset. Pairing a fresher time
-      // with the previous frame's offset (or vice versa) leaves the playhead
-      // jittering back and forth against the timeline at high zoom, because
-      // one frame of scroll is tens of pixels there.
-      publishedScrollRef.current = sl;
-      if (ws.isPlaying()) {
-        const t = ws.getCurrentTime();
-        scrollPublishedTime = true;
-        setCurrentTime(t);
-        onTimeUpdateRef.current?.(t);
-      }
+      placePlayhead();
     });
     // Without this, decodeAudioData rejections are swallowed and the player
     // sits on "LOADING…" forever — most often when the WAV/audio file uses a
@@ -691,10 +712,6 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     wsRef.current = ws;
 
     return () => {
-      if (audioProcessRafRef.current !== null) {
-        cancelAnimationFrame(audioProcessRafRef.current);
-        audioProcessRafRef.current = null;
-      }
       try {
         ws.destroy();
       } catch (err) {
@@ -725,14 +742,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   }, [playbackRate, isReady]);
 
   // Latest values for use inside the zoom-apply effect without re-firing on every tick.
-  const currentTimeRef = useRef(0);
-  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   const containerWidthRef = useRef(0);
   useEffect(() => { containerWidthRef.current = containerWidth; }, [containerWidth]);
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
-  const scrollLeftRef = useRef(0);
-  useEffect(() => { scrollLeftRef.current = scrollLeft; }, [scrollLeft]);
   const getZoomFocusTimeRef = useRef(getZoomFocusTime);
   useEffect(() => { getZoomFocusTimeRef.current = getZoomFocusTime; }, [getZoomFocusTime]);
 
@@ -819,7 +832,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     const rect = e.currentTarget.getBoundingClientRect();
     // Convert screen X → track time. The container is scrolled by `scrollLeft`,
     // so the track time at the click is (clientX - rectLeft + scrollLeft) / pxPerSec.
-    const t = (e.clientX - rect.left + scrollLeft) / effectiveZoom;
+    const t = (e.clientX - rect.left + scrollClock.get()) / effectiveZoom;
     gridDragRef.current = { startTime: t, startOffset: effectiveAnchor, rectLeft: rect.left };
     onGridOffsetDragStart?.(effectiveAnchor);
     e.preventDefault();
@@ -828,7 +841,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     const onMove = (ev: PointerEvent) => {
       const drag = gridDragRef.current;
       if (!drag || !isSamePointer(pointerId, ev)) return;
-      const tNow = (ev.clientX - drag.rectLeft + scrollLeft) / effectiveZoom;
+      const tNow = (ev.clientX - drag.rectLeft + scrollClock.get()) / effectiveZoom;
       const next = drag.startOffset + (tNow - drag.startTime);
       onGridOffsetChange(Math.max(0, next));
     };
@@ -843,15 +856,16 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
-  }, [duration, effectiveZoom, scrollLeft, effectiveAnchor, onGridOffsetChange, onGridOffsetDragStart]);
+  }, [duration, effectiveZoom, scrollClock, effectiveAnchor, onGridOffsetChange, onGridOffsetDragStart]);
 
   // Anything that moves the playhead without a WaveSurfer event — a zoom step,
-  // a seek published through React, the first paint after `ready` — still has
-  // to re-place it. The live-scroll read inside placePlayhead keeps this in
-  // agreement with the event-driven path rather than competing with it.
+  // the first paint after `ready` — still has to re-place it. Seeks and
+  // scrolls re-place it from their own WS events. The live-scroll read inside
+  // placePlayhead keeps this in agreement with the event-driven path rather
+  // than competing with it.
   useEffect(() => {
-    placePlayheadRef.current?.(currentTime);
-  }, [currentTime, effectiveZoom, scrollLeft, isReady, duration]);
+    placePlayheadRef.current?.(currentTimeRef.current);
+  }, [effectiveZoom, isReady, duration]);
 
   // Waveform total pixel width for overlay alignment.
   // Use Math.ceil to match WaveSurfer's internal scrollWidth = Math.ceil(duration * minPxPerSec).
@@ -1142,6 +1156,24 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
     return step;
   }, [bpm, beatsPerBar, effectiveZoom]);
 
+  // "Show beat numbers": every beat carries its song-wide count. Label
+  // every beat while the widest number fits between two beats, then every
+  // 2nd, 4th… beat, then bar numbers alone (0), from where barNumberStep
+  // takes over. On a compound pulse only every Nth beat has a line, so the
+  // stride starts at N.
+  const beatNumberStep = useMemo(() => {
+    if (!numberEveryLine || !bpm || !beatsPerBar || effectiveZoom <= 0 || barGroupSize != null) return 0;
+    const pulse = (subBeatDivision ?? 1) > 1 ? 1 : Math.max(1, beatGroupSize ?? 1);
+    const pxPerBeat = (60 / bpm) * effectiveZoom;
+    // The labels are 9px monospace (~5.5px a digit), drawn 2px right of
+    // their line; leave 4px before the next one starts.
+    const digits = String(Math.max(0, Math.ceil((duration * bpm) / 60))).length;
+    const minPxPerLabel = digits * 5.5 + 6;
+    let step = pulse;
+    while (pxPerBeat * step < minPxPerLabel) step *= 2;
+    return step <= beatsPerBar ? step : 0;
+  }, [numberEveryLine, bpm, beatsPerBar, effectiveZoom, barGroupSize, subBeatDivision, beatGroupSize, duration]);
+
   // ── Drag-to-select on the top waveform ─────────────────────────────────────
   // Mirrors RegionDragOverlay on the signal rows: short clicks fall through as
   // seeks via onUserSeek; drags above the 6px threshold emit a Mark In/Out
@@ -1153,9 +1185,9 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
   const timeAtClientX = useCallback((clientX: number, rect: DOMRect): number => {
     if (rect.width <= 0 || effectiveZoom <= 0 || duration <= 0) return 0;
     const localX = clientX - rect.left;
-    const t = (scrollLeft + localX) / effectiveZoom;
+    const t = (scrollClock.get() + localX) / effectiveZoom;
     return Math.max(0, Math.min(duration, t));
-  }, [duration, effectiveZoom, scrollLeft]);
+  }, [duration, effectiveZoom, scrollClock]);
 
   const handleSelectPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || e.isPrimary === false) return;
@@ -1203,7 +1235,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
 
   return (
     <>
-    <div className="rounded-md border border-white/[0.06] bg-[#14171d] overflow-hidden">
+    <div className={`rounded-md border border-white/[0.06] bg-[#14171d] overflow-hidden${transportAbove ? ' flex flex-col' : ''}`}>
       {/* Waveform + beat grid */}
       <div className="relative bg-[#0a0b0d]" style={{ minHeight: 96 }}>
         {/* OverviewWaveform draws peak/RMS, grid, clip caps. z-1, under WS so
@@ -1212,7 +1244,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           audioBuffer={audioBuffer}
           containerWidth={containerWidth}
           pxPerSec={effectiveZoom}
-          scrollLeft={scrollLeft}
+          scrollClock={scrollClock}
           peakColor={accent.progressColor}
           rmsColor={accent.waveColor}
           scaleMode={scaleMode}
@@ -1226,9 +1258,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           style={{ zIndex: 2, overscrollBehaviorX: 'none' }}
         />
 
-        {/* Playhead. Positioned from the same (currentTime, scrollLeft) pair
-            the waveform canvas and every viz row use, which is the whole
-            point — see the WaveSurfer.create comment above. z-2 keeps the
+        {/* Playhead. Placed by placePlayhead (never by a style prop) from the
+            same (time, scroll) pair the waveform canvas and every viz row
+            use, which is the whole point — see the WaveSurfer.create
+            comment above. z-2 keeps the
             old stacking: above the waveform, below the drag-select and
             highlight overlays. */}
         {isReady && duration > 0 && effectiveZoom > 0 && (
@@ -1238,11 +1271,12 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             className="absolute top-0 pointer-events-none"
             style={{
               left: 0,
-              transform: `translateX(${currentTime * effectiveZoom - scrollLeft}px)`,
               width: 2,
               height: 96,
               background: '#ef4444',
               zIndex: 2,
+              // Its own layer: moving it every frame then repaints nothing.
+              willChange: 'transform',
             }}
           />
         )}
@@ -1271,7 +1305,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
                 <div
                   className="absolute top-0 bottom-0 pointer-events-none"
                   style={{
-                    left: lo * effectiveZoom - scrollLeft,
+                    left: lo * effectiveZoom - scrollClock.get(),
                     width: Math.max(1, (hi - lo) * effectiveZoom),
                     background: 'rgba(45,212,191,0.13)',
                     borderLeft: '2px solid rgba(45,212,191,0.7)',
@@ -1289,12 +1323,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             translateX-scroll pattern so % offsets align with the waveform. */}
         {isReady && pendingSelection && duration > 0 && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
-            <div
+            <div ref={scrollLayerRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
                 height: '100%',
-                transform: `translateX(-${scrollLeft}px)`,
               }}
             >
               <PendingHighlightOverlay
@@ -1314,12 +1347,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             so the band trims at the visible edges. */}
         {isReady && previewRegion && duration > 0 && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
-            <div
+            <div ref={scrollLayerRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
                 height: '100%',
-                transform: `translateX(-${scrollLeft}px)`,
               }}
             >
               <PendingHighlightOverlay
@@ -1338,12 +1370,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             position so it stays put as WaveSurfer auto-scrolls. */}
         {isReady && previewRegion && previewControls && duration > 0 && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
-            <div
+            <div ref={scrollLayerRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
                 height: '100%',
-                transform: `translateX(-${scrollLeft}px)`,
               }}
             >
               <div
@@ -1392,12 +1423,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
         {/* Beat grid overlay — z-10 keeps it above WaveSurfer's canvas */}
         {isReady && beatLines.length > 0 && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
-            <div
+            <div ref={scrollLayerRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
                 height: '100%',
-                transform: `translateX(-${scrollLeft}px)`,
               }}
             >
               <GridLines
@@ -1406,7 +1436,9 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
                 thickness={gridThickness}
                 showBarNumbers={showBarNumbers}
                 barNumberStep={barNumberStep}
+                beatNumberStep={beatNumberStep}
               />
+              {visualizeGrid && <GridPlayAlong lines={beatLines} duration={duration} />}
             </div>
           </div>
         )}
@@ -1418,12 +1450,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             flags + alt-drag overlay. Only rendered in Manual grid mode. */}
         {isReady && gridMode === 'manual' && bpm && onBeatDrag && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-[15]">
-            <div
+            <div ref={scrollLayerRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
                 height: '100%',
-                transform: `translateX(-${scrollLeft}px)`,
               }}
             >
               <ManualGridEditor
@@ -1449,12 +1480,11 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             for someone who is just listening. */}
         {isReady && gridSegments && gridSegments.length > 1 && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-[16]">
-            <div
+            <div ref={scrollLayerRef}
               style={{
                 position: 'relative',
                 width: waveformWidth,
                 height: '100%',
-                transform: `translateX(-${scrollLeft}px)`,
               }}
             >
               <GridSegmentCutOverlay
@@ -1482,11 +1512,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           same scroll transform as everything else on the timeline. */}
       {isReady && showGridSegmentLane && gridSegments && gridSegments.length > 0 && duration > 0 && (
         <div className="relative overflow-hidden">
-          <div
+          <div ref={scrollLayerRef}
             style={{
               position: 'relative',
               width: waveformWidth,
-              transform: `translateX(-${scrollLeft}px)`,
             }}
           >
             <GridSegmentLane
@@ -1513,7 +1542,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           row and hand over at the exact scroll position where it goes out of
           sight — two visible play buttons at once is the bug that motivates
           the attribute (see InspectorPageV2's `headerCollapsed`). */}
-      <div data-transport-row className="flex items-center gap-3 px-3 py-2 border-t border-white/[0.05] flex-wrap">
+      <div data-transport-row className={`flex items-center gap-3 px-3 py-2 border-white/[0.05] flex-wrap ${transportAbove ? 'order-first border-b' : 'border-t'}`}>
         {/* Transport: jump-to-start · skip back · play/pause · skip forward · jump-to-end */}
         <div className="flex items-center gap-1 shrink-0">
           <button
@@ -1536,7 +1565,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             onClick={() => {
               const ws = wsRef.current;
               if (!ws || duration <= 0) return;
-              ws.seekTo(Math.max(0, Math.min(1, (currentTime - 2) / duration)));
+              ws.seekTo(Math.max(0, Math.min(1, (ws.getCurrentTime() - 2) / duration)));
             }}
             disabled={!isReady}
             aria-label="Skip back 2 seconds"
@@ -1578,7 +1607,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             onClick={() => {
               const ws = wsRef.current;
               if (!ws || duration <= 0) return;
-              ws.seekTo(Math.max(0, Math.min(1, (currentTime + 2) / duration)));
+              ws.seekTo(Math.max(0, Math.min(1, (ws.getCurrentTime() + 2) / duration)));
             }}
             disabled={!isReady}
             aria-label="Skip forward 2 seconds"
@@ -1617,7 +1646,7 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
             engine sounds the audio this component gets no time updates, and a
             readout frozen under a sweeping cursor reads as a stuck player. */}
         <span className="font-mono text-[13px] text-slate-200 tabular-nums">
-          <span ref={elapsedReadoutRef}>{formatTime(currentTime)}</span>
+          <span ref={elapsedReadoutRef}>{formatTime(0)}</span>
           <span className="text-slate-700 mx-1">/</span>
           <span className="text-slate-500">{formatTime(duration)}</span>
         </span>
@@ -1684,6 +1713,10 @@ export function PlayerPanel({ url, trackName, bpm, timeSignature, beatTimes, bea
           <span className={`text-[11px] font-mono px-2 py-0.5 rounded tabular-nums ${accent.pill}`}>
             {Math.round(bpm)} BPM{timeSignature ? ` · ${timeSignature}` : ''}
           </span>
+        )}
+
+        {transportTrailing && (
+          <div className={`flex items-center min-w-0 ${isReady ? '' : 'ml-auto'}`}>{transportTrailing}</div>
         )}
       </div>
     </div>

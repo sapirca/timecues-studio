@@ -5,7 +5,7 @@ import {
   fetchTeamStats,
   type TeamStatsAnnotator,
   type TeamStatsResponse,
-  type TeamStatsSourceStats,
+  type TeamStatsLayerStats,
 } from '../services/teamStats';
 import { AnnotatorComparisonPanel } from '../components/AnnotatorComparisonPanel';
 import { useAdmin } from '../hooks/useAdmin';
@@ -25,10 +25,33 @@ import {
 
 type Tab = 'annotators' | 'agreement' | 'members';
 
-const SOURCE_TONE = {
+const LAYER_TONE: Record<string, string> = {
   boundaries: 'text-amber-300',
-  autoGuess: 'text-violet-300',
-} as const;
+  cues: 'text-emerald-300',
+  spans: 'text-sky-300',
+  loops: 'text-pink-300',
+  'riff-patterns': 'text-cyan-300',
+  lyrics: 'text-fuchsia-300',
+};
+
+const LAYER_LABEL: Record<string, string> = {
+  boundaries: 'Boundaries',
+  cues: 'Cues',
+  spans: 'Spans',
+  loops: 'Loops',
+  'riff-patterns': 'Riff Patterns',
+  lyrics: 'Lyrics',
+};
+
+/** What one item of each layer type is called, for the "N items" line. */
+const ITEM_NOUN: Record<string, string> = {
+  boundaries: 'pts',
+  cues: 'cues',
+  spans: 'spans',
+  loops: 'loops',
+  'riff-patterns': 'riffs',
+  lyrics: 'words',
+};
 
 export function TeamPage() {
   const { annotator } = useAnnotator();
@@ -122,17 +145,6 @@ function AnnotatorsTab({
   currentAnnotatorId: string | null;
   tiersByEmail: Record<string, AccessTier>;
 }) {
-  const totals = useMemo(() => {
-    let boundaries = 0, autoGuess = 0, custom = 0, time = 0;
-    for (const a of data.annotators) {
-      boundaries += a.boundaries.count;
-      autoGuess += a.autoGuess.count;
-      custom += a.custom.count;
-      time += a.totalTimeSeconds;
-    }
-    return { boundaries, autoGuess, custom, time, annotators: data.annotators.length };
-  }, [data.annotators]);
-
   if (data.annotators.length === 0) {
     return (
       <section className="rounded-lg border border-white/[0.06] bg-[#14171d]/60 p-6 text-center">
@@ -143,19 +155,6 @@ function AnnotatorsTab({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-lg border border-white/[0.06] bg-[#14171d]/60 p-4">
-        <header className="text-xs uppercase tracking-wider text-slate-400 mb-3">
-          Overview
-        </header>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <Stat label="Annotators" value={totals.annotators.toString()} />
-          <Stat label="Boundaries" value={totals.boundaries.toString()} tone="text-amber-300" />
-          <Stat label="Auto-guess" value={totals.autoGuess.toString()} tone="text-violet-300" />
-          <Stat label="Custom" value={totals.custom.toString()} tone="text-emerald-300" />
-          <Stat label="Time logged" value={fmtDuration(totals.time)} />
-        </div>
-      </section>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {data.annotators.map((a) => (
           <AnnotatorCard
@@ -163,6 +162,7 @@ function AnnotatorsTab({
             a={a}
             isMe={a.id === currentAnnotatorId}
             tier={tiersByEmail[a.id] ?? null}
+            layerTypes={data.layerTypes}
           />
         ))}
       </div>
@@ -170,7 +170,17 @@ function AnnotatorsTab({
   );
 }
 
-function AnnotatorCard({ a, isMe, tier }: { a: TeamStatsAnnotator; isMe: boolean; tier: AccessTier | null }) {
+function AnnotatorCard({
+  a,
+  isMe,
+  tier,
+  layerTypes,
+}: {
+  a: TeamStatsAnnotator;
+  isMe: boolean;
+  tier: AccessTier | null;
+  layerTypes: string[];
+}) {
   const tierBadge = tier ? TIER_TONE[tier] : null;
   return (
     <article className={`rounded-lg border ${isMe ? 'border-cyan-500/30' : 'border-white/[0.06]'} bg-[#14171d]/60 p-4 space-y-3`}>
@@ -193,8 +203,7 @@ function AnnotatorCard({ a, isMe, tier }: { a: TeamStatsAnnotator; isMe: boolean
             )}
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            {a.totalAnnotations} annotation{a.totalAnnotations === 1 ? '' : 's'} ·{' '}
-            {fmtDuration(a.totalTimeSeconds)} logged
+            {a.songCount} song{a.songCount === 1 ? '' : 's'} annotated
           </p>
         </div>
         <div className="text-right text-xs text-slate-400 shrink-0">
@@ -202,9 +211,10 @@ function AnnotatorCard({ a, isMe, tier }: { a: TeamStatsAnnotator; isMe: boolean
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-2">
-        <SourceCell label="Boundaries" stats={a.boundaries} tone={SOURCE_TONE.boundaries} />
-        <SourceCell label="Auto-guess" stats={a.autoGuess} tone={SOURCE_TONE.autoGuess} />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {layerTypes.map((t) => (
+          <LayerCell key={t} type={t} stats={a.layers[t]} />
+        ))}
       </div>
 
       {a.custom.count > 0 && (
@@ -221,47 +231,26 @@ function AnnotatorCard({ a, isMe, tier }: { a: TeamStatsAnnotator; isMe: boolean
   );
 }
 
-function SourceCell({
-  label,
-  stats,
-  tone,
-}: {
-  label: string;
-  stats: TeamStatsSourceStats;
-  tone: string;
-}) {
-  const reviewedPct = stats.count > 0 ? Math.round((stats.reviewedCount / stats.count) * 100) : 0;
+function LayerCell({ type, stats }: { type: string; stats: TeamStatsLayerStats | undefined }) {
+  const count = stats?.count ?? 0;
+  const reviewed = stats?.reviewedCount ?? 0;
+  const items = stats?.totalItems ?? 0;
+  const reviewedPct = count > 0 ? Math.round((reviewed / count) * 100) : 0;
   return (
-    <div className="rounded border border-white/[0.04] bg-black/20 p-2.5">
-      <div className={`text-xs uppercase tracking-wider ${tone}`}>{label}</div>
+    <div className={`rounded border border-white/[0.04] bg-black/20 p-2.5 ${count === 0 ? 'opacity-40' : ''}`}>
+      <div className={`text-xs uppercase tracking-wider ${LAYER_TONE[type] ?? 'text-slate-300'}`}>
+        {LAYER_LABEL[type] ?? type}
+      </div>
       <div className="mt-1 flex items-baseline gap-1.5">
-        <span className="text-xl font-medium text-slate-100 tabular-nums">{stats.count}</span>
-        <span className="text-xs text-slate-400">songs</span>
+        <span className="text-xl font-medium text-slate-100 tabular-nums">{count}</span>
+        <span className="text-xs text-slate-400">song{count === 1 ? '' : 's'}</span>
       </div>
       <div className="text-xs text-slate-300 mt-1 space-y-0.5">
-        <div title={`${stats.reviewedCount} of ${stats.count} reviewed`}>
-          {stats.count > 0 ? `${reviewedPct}% reviewed` : '—'}
-        </div>
+        <div title={`${reviewed} of ${count} reviewed`}>{count > 0 ? `${reviewedPct}% reviewed` : '—'}</div>
         <div className="text-slate-400 tabular-nums">
-          {fmtDuration(stats.totalTimeSeconds)}
-          {stats.count > 0 && stats.totalTimeSeconds > 0 && (
-            <span className="text-slate-500">
-              {' · '}
-              {fmtDuration(stats.totalTimeSeconds / stats.count)} avg
-            </span>
-          )}
+          {items.toLocaleString()} {ITEM_NOUN[type] ?? 'items'}
         </div>
-        <div className="text-slate-400 tabular-nums">{stats.totalBoundaries} pts</div>
       </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded border border-white/[0.04] bg-black/20 p-3">
-      <div className="text-xs uppercase tracking-wider text-slate-400">{label}</div>
-      <div className={`text-lg font-medium tabular-nums mt-1 ${tone ?? 'text-slate-100'}`}>{value}</div>
     </div>
   );
 }
@@ -893,17 +882,6 @@ function InviteAnnotatorSection({ onChanged }: { onChanged: () => void | Promise
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function fmtDuration(secs: number): string {
-  if (!Number.isFinite(secs) || secs <= 0) return '—';
-  const s = Math.round(secs);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${sec}s`;
-  return `${sec}s`;
-}
 
 function fmtRelative(iso: string): string {
   const then = new Date(iso).getTime();

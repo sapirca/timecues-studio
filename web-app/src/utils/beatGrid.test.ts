@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   adaptiveGridThicknessScale,
+  stepTimeOnGrid,
   beatDuration,
   beatIndexAt,
   beatTimeAt,
@@ -15,8 +16,6 @@ import {
   setBarBeatOrigin,
   foldGridOffset,
   gridOffsetBarShift,
-  coarsenSnapDivision,
-  MIN_SNAP_STEP_PX,
 } from './beatGrid';
 import { resolveGridSegments, beatOverrideKey } from './gridSegments';
 import { makeEmptySongInfo } from '../types/songInfo';
@@ -266,55 +265,6 @@ describe('snapTimeToGrid with a magnetic tolerance', () => {
   });
 });
 
-describe('coarsenSnapDivision — the snap a hand can actually aim at', () => {
-  // The song from the bug report: 100 BPM 4/4 (0.6s a beat, 2.4s a bar), five
-  // minutes long, drawn ~1400px wide at fit zoom → ~4.5 px per second.
-  const FIT_PX_PER_SEC = 1400 / 312.6;
-
-  it('widens a beat nobody can aim at into a bar', () => {
-    // 0.6s × 4.5 px/s = 2.7px a beat — a snap you can neither see nor steer.
-    // A bar is 10.8px, which you can.
-    expect(coarsenSnapDivision('beat', 100, 4, FIT_PX_PER_SEC)).toBe('bar');
-  });
-
-  it('hands the beat back as soon as zoom makes it targetable', () => {
-    // Four times in, a beat is ~11px. Nothing to widen.
-    expect(coarsenSnapDivision('beat', 100, 4, FIT_PX_PER_SEC * 4)).toBe('beat');
-  });
-
-  it('keeps widening past the bar on a grid that is still too fine', () => {
-    // 30 BPM 4/4 is 8s a bar, but at 0.5 px/s a bar is only 4px.
-    expect(coarsenSnapDivision('beat', 30, 4, 0.5)).toBe('2bar');
-  });
-
-  it('never refines: a division already wide enough is returned untouched', () => {
-    expect(coarsenSnapDivision('bar', 100, 4, FIT_PX_PER_SEC)).toBe('bar');
-    expect(coarsenSnapDivision('4bar', 100, 4, FIT_PX_PER_SEC)).toBe('4bar');
-    expect(coarsenSnapDivision('1/4beat', 100, 4, FIT_PX_PER_SEC * 40)).toBe('1/4beat');
-  });
-
-  it('walks the ladder from wherever the requested division sits', () => {
-    // A 1/16 at 100 BPM is 0.15s. At 20 px/s that is 3px — too fine; the
-    // half-beat (0.3s → 6px) is the first rung that clears the bar.
-    expect(coarsenSnapDivision('1/4beat', 100, 4, 20)).toBe('1/2beat');
-    expect(MIN_SNAP_STEP_PX).toBe(6);
-  });
-
-  it('is a no-op without a usable width or tempo', () => {
-    expect(coarsenSnapDivision('beat', 100, 4, 0)).toBe('beat');
-    expect(coarsenSnapDivision('beat', 0, 4, FIT_PX_PER_SEC)).toBe('beat');
-  });
-
-  it('only ever lands on lines the finer grid already had', () => {
-    // The whole point of coarsening rather than re-gridding: every landing
-    // spot of the widened division is still a beat of the original one.
-    const widened = coarsenSnapDivision('beat', 100, 4, FIT_PX_PER_SEC);
-    const t = snapTimeToGrid(93.1, 100, 0, 4, widened);
-    expect(t).toBeCloseTo(snapTimeToGrid(t, 100, 0, 4, 'beat'), 9);
-    expect(t / 0.6).toBeCloseTo(Math.round(t / 0.6), 9);
-  });
-});
-
 describe('snapping onto the unit the grid is drawn at', () => {
   // 120 BPM 4/4: a beat is 0.5s, so a triplet is 1/6s and a 32nd is 1/16s.
   // These are the divisions the beat-grid unit selector offers; a snap that
@@ -338,21 +288,6 @@ describe('snapping onto the unit the grid is drawn at', () => {
     }
   });
 
-  it('coarsens a triplet along the triplet ladder, never onto a binary line', () => {
-    // 100 BPM: a 1/6 is 0.1s. At 20 px/s that is 2px — too fine to aim at;
-    // the 1/3 (0.2s → 4px) is still too fine, so the beat (0.6s → 12px) wins.
-    expect(coarsenSnapDivision('1/6beat', 100, 4, 20)).toBe('beat');
-    // With more room the 1/3 is targetable and is where it stops — 1/2 beat
-    // would be wider, and wrong: no triplet line sits there.
-    expect(coarsenSnapDivision('1/6beat', 100, 4, 40)).toBe('1/3beat');
-    expect(coarsenSnapDivision('1/3beat', 100, 4, 40)).toBe('1/3beat');
-  });
-
-  it('coarsening a triplet still only lands on lines the triplet grid had', () => {
-    const widened = coarsenSnapDivision('1/6beat', 100, 4, 40);
-    const t = snapTimeToGrid(93.1, 100, 0, 4, widened);
-    expect(t).toBeCloseTo(snapTimeToGrid(t, 100, 0, 4, '1/6beat'), 9);
-  });
 });
 
 describe('folding the grid offset into the first bar', () => {
@@ -590,5 +525,36 @@ describe('adaptiveGridThicknessScale', () => {
   it('falls back to 1x on a nonsense zoom', () => {
     expect(adaptiveGridThicknessScale(0)).toBe(1);
     expect(adaptiveGridThicknessScale(NaN)).toBe(1);
+  });
+});
+
+describe('stepTimeOnGrid', () => {
+  // 120 BPM → a beat every 0.5 s, offset 0.1 s, 4/4.
+  const step = (t: number, dir: 1 | -1, division: Parameters<typeof stepTimeOnGrid>[5] = 'beat') =>
+    stepTimeOnGrid(t, dir, 120, 0.1, 4, division);
+
+  it('moves from a line to its neighbour', () => {
+    expect(step(1.1, 1)).toBeCloseTo(1.6);
+    expect(step(1.1, -1)).toBeCloseTo(0.6);
+  });
+
+  it('moves from between lines to the line on that side, never two', () => {
+    expect(step(1.2, 1)).toBeCloseTo(1.6);
+    expect(step(1.2, -1)).toBeCloseTo(1.1);
+    expect(step(1.5, -1)).toBeCloseTo(1.1);
+  });
+
+  it('treats a playhead a hair off a line as on it', () => {
+    expect(step(1.1004, 1)).toBeCloseTo(1.6);
+    expect(step(1.0996, -1)).toBeCloseTo(0.6);
+  });
+
+  it('steps sub-beats and bars', () => {
+    expect(step(1.1, 1, '1/4beat')).toBeCloseTo(1.225);
+    expect(step(1.1, 1, 'bar')).toBeCloseTo(2.1);
+  });
+
+  it('lands on a pinned beat', () => {
+    expect(stepTimeOnGrid(0.1, 1, 120, 0.1, 4, 'beat', { '1': 0.65 })).toBeCloseTo(0.65);
   });
 });

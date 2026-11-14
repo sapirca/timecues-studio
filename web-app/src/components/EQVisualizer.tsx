@@ -4,12 +4,12 @@ import { BeatGridOverlay, type LaneGridProps } from './inspector-v2/BeatGridOver
 import { getBandColors, type BandColors } from '../utils/bandPalettes';
 import { useSettings } from '../context/SettingsContext';
 import { TiledStrip, type TileGeom } from './TiledStrip';
+import { PlayheadLine } from './Playhead';
 
 interface Props {
   mirCurves: MirCurves | null;
   loading?: boolean;
   duration: number;
-  currentTime: number;
   height?: number;
   onSeek?: (time: number) => void;
   gridProps?: LaneGridProps;
@@ -117,7 +117,7 @@ function drawLanes(
   }
 }
 
-export default function EQVisualizer({ mirCurves, loading = false, duration, currentTime, height = 54, onSeek, gridProps }: Props) {
+export default function EQVisualizer({ mirCurves, loading = false, duration, height = 54, onSeek, gridProps }: Props) {
   const [theme, setTheme] = useState<'light' | 'dark'>(isLightTheme() ? 'light' : 'dark');
   const { settings } = useSettings();
   const colors = getBandColors(settings.bandPalette, theme);
@@ -144,7 +144,6 @@ export default function EQVisualizer({ mirCurves, loading = false, duration, cur
   }, [mirCurves, colors]);
 
   const hasData = !!(mirCurves && (mirCurves.lowBand?.length || mirCurves.midBand?.length || mirCurves.highBand?.length));
-  const pct = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!onSeek || duration <= 0) return;
@@ -177,9 +176,9 @@ export default function EQVisualizer({ mirCurves, loading = false, duration, cur
         <BeatGridOverlay {...gridProps} duration={duration} />
       )}
       {duration > 0 && (
-        <div
-          className="absolute top-0 bottom-0 w-px pointer-events-none"
-          style={{ left: `${pct}%`, background: 'rgba(255,255,255,0.75)', boxShadow: '0 0 3px rgba(255,255,255,0.5)' }}
+        <PlayheadLine
+          duration={duration}
+          style={{ background: 'rgba(255,255,255,0.75)', boxShadow: '0 0 3px rgba(255,255,255,0.5)' }}
         />
       )}
     </div>

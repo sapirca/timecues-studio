@@ -12,13 +12,16 @@
 
 import { useRef } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react';
 import { setCardSectionOpen, useCardSectionOpen } from './CardSection';
 import { SpanEditPopover } from '../SpanEditPopover';
 import { SpanLaneRow } from '../SpanLaneRow';
 import { SettingsProvider } from '../../../context/SettingsContext';
+import { PlayheadClockContext, createPlayheadClock } from '../../../hooks/usePlayhead';
+import { EnvelopeCurve } from './EnvelopeLane';
 import {
   buildEnergySpanExport,
+  envelopeViewport,
   type EnergySpanExport,
   type EnergySpanResult,
 } from '../../../utils/energySpan';
@@ -135,19 +138,22 @@ function Popover({ item }: { item: SpanItem }) {
   );
 }
 
+const LANE_CLOCK = createPlayheadClock(11);
+
 /** Mirrors what InspectorPageV2 does: the lane grows its editor only while
  *  the open card's Prominence section is expanded. */
 function Lane({ item }: { item: SpanItem }) {
   const editing = useCardSectionOpen('prominence', false);
   return (
-    <SpanLaneRow
-      items={[item]}
-      color="#38bdf8"
-      duration={60}
-      currentTime={11}
-      prominenceEditItemId={editing ? item.id : null}
-      onProminenceChange={vi.fn()}
-    />
+    <PlayheadClockContext.Provider value={LANE_CLOCK}>
+      <SpanLaneRow
+        items={[item]}
+        color="#38bdf8"
+        duration={60}
+        prominenceEditItemId={editing ? item.id : null}
+        onProminenceChange={vi.fn()}
+      />
+    </PlayheadClockContext.Provider>
   );
 }
 
@@ -258,6 +264,12 @@ describe('the lane half — the band', () => {
     expect(screen.queryByText('Energy: decreasing (drums)')).not.toBeInTheDocument();
     // The trend survives the label, in one character.
     expect(screen.getByText('↘')).toBeInTheDocument();
+  });
+
+  it('names the stem it was measured on, so stacked readings are told apart', () => {
+    render(<Lane item={span()} />);
+
+    expect(screen.getByText('drums')).toBeInTheDocument();
   });
 
   it('still labels an ordinary span', () => {
@@ -373,10 +385,9 @@ describe('the card on a band that has been dragged', () => {
 
 
 // ─── The brightness curve ──────────────────────────────────────────────────
-// Level alone calls the bar before a drop 'decreasing', which is true of the
-// level and the opposite of what the passage does. Both surfaces have to carry
-// the second reading, or the band and the card go on saying the wrong thing
-// about the most common gesture in the corpus.
+// Brightness is a supporting reading, not the energy moving: a build can
+// brighten as it climbs, but so does a hi-hat pattern. So it is off unless the
+// card's toggle turns it on — on the band it is never drawn at all.
 
 /** Points of the cyan brightness polyline, in the box's own 0–100 coordinates. */
 function brightnessPoints(container: HTMLElement): string | null {
@@ -384,41 +395,35 @@ function brightnessPoints(container: HTMLElement): string | null {
 }
 
 describe('a span whose timbre moved', () => {
-  it('draws the brightness curve on the band', () => {
+  it('draws no brightness curve on the band', () => {
     const { container } = render(
       <Lane item={span({ description: JSON.stringify(buildExport()) })} />,
     );
 
-    expect(brightnessPoints(container)).not.toBeNull();
-  });
-
-  it('draws no brightness curve for a blob that never measured one', () => {
-    const { container } = render(<Lane item={span()} />);
-
     expect(brightnessPoints(container)).toBeNull();
   });
 
-  it('shows both arrows on the band only when the two trends disagree', () => {
-    const { container: build } = render(
+  it('shows one arrow on the band — the volume trend', () => {
+    const { container } = render(
       <Lane item={span({ description: JSON.stringify(buildExport()) })} />,
     );
-    expect(build.textContent).toContain('↘↗');
-    cleanup();
-
-    // Level and timbre both rising is just a loud passage — one arrow.
-    const agreeing = buildExport({ trend: 'increasing', startEnergy: 0.2, endEnergy: 1 });
-    const { container: loud } = render(
-      <Lane item={span({ description: JSON.stringify(agreeing) })} />,
-    );
-    expect(loud.textContent).toContain('↗');
-    expect(loud.textContent).not.toContain('↗↗');
+    expect(container.textContent).toContain('↘');
+    expect(container.textContent).not.toContain('↗');
   });
 
-  it('puts the frequencies and the reading on the card', () => {
-    render(<Popover item={span({ description: JSON.stringify(buildExport()) })} />);
+  it('keeps brightness off the card until it is switched on', () => {
+    const { container } = render(<Popover item={span({ description: JSON.stringify(buildExport()) })} />);
 
+    expect(brightnessPoints(container)).toBeNull();
+    expect(screen.queryByText(/brightness 900Hz → 4\.2kHz/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('level falling while the timbre opens up — the shape of a build'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ brightness/ }));
+
+    expect(brightnessPoints(container)).not.toBeNull();
     expect(screen.getByText(/brightness 900Hz → 4\.2kHz/)).toBeInTheDocument();
-    expect(screen.getByText(/peak 4\.2kHz/)).toBeInTheDocument();
     // Exact, so the JSON in the description textarea doesn't answer for the
     // readout — it carries the same sentence inside the blob it holds.
     expect(
@@ -426,11 +431,22 @@ describe('a span whose timbre moved', () => {
     ).toBeInTheDocument();
   });
 
+  it('remembers the brightness switch for the next card', () => {
+    const description = JSON.stringify(buildExport());
+    render(<Popover item={span({ description })} />);
+    fireEvent.click(screen.getByRole('button', { name: /\+ brightness/ }));
+    cleanup();
+
+    const { container } = render(<Popover item={span({ description })} />);
+    expect(brightnessPoints(container)).not.toBeNull();
+  });
+
   it('leaves the build sentence off a span that only got quieter', () => {
     const darkening = buildExport({
       brightness: { trend: 'decreasing', start: 1, end: 0.4, startHz: 4200, endHz: 900, peakHz: 4200 },
     });
     render(<Popover item={span({ description: JSON.stringify(darkening) })} />);
+    fireEvent.click(screen.getByRole('button', { name: /\+ brightness/ }));
 
     expect(
       screen.queryByText('level falling while the timbre opens up — the shape of a build'),
@@ -441,15 +457,81 @@ describe('a span whose timbre moved', () => {
     // Its vertical scale comes from the whole measurement, never the visible
     // slice — so trimming a band drops points off the line instead of
     // restretching the ones that are left onto a new range.
-    const description = JSON.stringify(buildExport());
-    const { container: whole } = render(<Lane item={span({ description })} />);
-    const before = brightnessPoints(whole)!.split(' ').map((p) => p.split(',')[1]);
+    const data = buildExport();
+    const draw = (end: number) => render(
+      <div style={{ position: 'relative' }}>
+        <EnvelopeCurve data={data} color="#38bdf8" showBrightness viewport={envelopeViewport(data, 10, end)!} />
+      </div>,
+    ).container;
+    const before = brightnessPoints(draw(14))!.split(' ').map((p) => p.split(',')[1]);
     cleanup();
-
-    const { container: cut } = render(<Lane item={span({ description, end: 12 })} />);
-    const after = brightnessPoints(cut)!.split(' ').map((p) => p.split(',')[1]);
+    const after = brightnessPoints(draw(12))!.split(' ').map((p) => p.split(',')[1]);
 
     // 10s–12s survives: the 0ms and 1000ms samples, at the heights they had.
     expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
+  });
+});
+
+// ─── The Beat strength and Flux lanes on the card ────────────────────────────
+// An energy shift is found on the Beat strength and Flux lanes, so the card
+// draws those two, each in its lane's colour, over the grey volume contour.
+
+function lanePoints(container: HTMLElement, stroke: string): string | null {
+  return container.querySelector(`polyline[stroke="${stroke}"]`)?.getAttribute('points') ?? null;
+}
+
+describe('the Beat strength and Flux signals', () => {
+  const withLanes = () => {
+    const blob = buildExport();
+    blob.curve = blob.curve.map((p, i) => ({ ...p, beat_strength: [0.9, 0.5, 0.3, 1][i], flux: [1, 0.4, 0.2, 0.8][i] }));
+    return blob;
+  };
+
+  it('draws both on the card, amber and green, with a key', () => {
+    const { container } = render(<Popover item={span({ description: JSON.stringify(withLanes()) })} />);
+
+    expect(lanePoints(container, '#f59e0b')).not.toBeNull();
+    expect(lanePoints(container, '#10b981')).not.toBeNull();
+    expect(screen.getByText('beat strength')).toBeInTheDocument();
+    expect(screen.getByText('flux')).toBeInTheDocument();
+    expect(screen.getByText('volume')).toBeInTheDocument();
+  });
+
+  it('keeps the band to the volume contour', () => {
+    const { container } = render(<Lane item={span({ description: JSON.stringify(withLanes()) })} />);
+
+    expect(lanePoints(container, '#f59e0b')).toBeNull();
+    expect(lanePoints(container, '#10b981')).toBeNull();
+  });
+
+  it('draws neither for a blob measured before they were', () => {
+    const { container } = render(<Popover item={span({ description: JSON.stringify(buildExport()) })} />);
+
+    expect(lanePoints(container, '#f59e0b')).toBeNull();
+    expect(lanePoints(container, '#10b981')).toBeNull();
+    expect(screen.queryByText('flux')).not.toBeInTheDocument();
+  });
+});
+
+// ─── Plain volume, as a line of its own ──────────────────────────────────────
+// The grey contour is volume, but it shares its grey with the A/D/S/R line and
+// reads as backdrop; the card also draws it as a signal in its own colour.
+
+describe('the volume signal', () => {
+  it('draws the loudness curve as a line on the card', () => {
+    const data = buildExport();
+    const { container } = render(<Popover item={span({ description: JSON.stringify(data) })} />);
+
+    const pts = lanePoints(container, '#f1f5f9')!.split(' ');
+    expect(pts).toHaveLength(data.curve.length);
+    // Same axis as the contour: a point at full loudness sits at the top.
+    const loudest = data.curve.findIndex((p) => p.energy === Math.max(...data.curve.map((q) => q.energy)));
+    expect(Number(pts[loudest].split(',')[1])).toBeCloseTo((1 - data.curve[loudest].energy) * 100, 1);
+  });
+
+  it('stays off the band, which keeps to the contour', () => {
+    const { container } = render(<Lane item={span({ description: JSON.stringify(buildExport()) })} />);
+
+    expect(lanePoints(container, '#f1f5f9')).toBeNull();
   });
 });

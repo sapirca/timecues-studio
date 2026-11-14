@@ -25,12 +25,13 @@
  * contour is what the audio did; seeing them apart is how you notice the
  * envelope reading is a poor fit for the sound.
  *
- * Over both sits the brightness line, in the Bright signal lane's own cyan —
- * an export measures spectral centroid across the same window, and the one
- * gesture this whole feature exists to capture, the build, is the one where
- * that line climbs while the contour under it sinks. Same colour as the lane
- * deliberately: it is the same measurement, and someone who just saw the rise
- * on the Bright row should recognise it here without being told.
+ * On the card, over both, run the inspector's own Beat strength and Flux signals for
+ * the span, each in its lane's colour — the two readings an energy shift is
+ * found on — and plain volume as a near-white line of its own. The contour
+ * underneath turns a neutral grey there, since amber belongs to the Energy
+ * lane. Brightness (the Bright
+ * lane's cyan) is off by default and switched on from the card: a build can
+ * brighten as it climbs, but brightness alone is not the energy moving.
  */
 
 import { useMemo } from 'react';
@@ -61,6 +62,29 @@ const TREND_GLYPH: Record<EnergyTrend, string> = {
  *  a span and the row it was read off are the same thing to look at. */
 export const BRIGHTNESS_COLOR = '#22d3ee';
 
+/** The Beat strength lane's colour (the row that was Energy), for its line on the card. The band
+ *  on the timeline keeps its layer's colour — that is what identifies the
+ *  layer there — but on the card every reading needs its own colour, or they
+ *  read as one. */
+export const ENERGY_COLOR = '#f59e0b';
+
+/** The Flux signal lane's colour. */
+export const FLUX_COLOR = '#10b981';
+
+/** Plain volume — the contour on the card. Neutral, so the lane colours above
+ *  it are the ones that read as signals. */
+export const VOLUME_COLOR = '#94a3b8';
+
+/** The volume LINE on the card: the same loudness the grey contour fills,
+ *  drawn as a signal of its own. The fill alone shares its grey with the
+ *  A/D/S/R polyline and reads as a backdrop rather than a reading. Near-white,
+ *  so it is told apart from every lane colour and from the grey beneath it. */
+export const VOLUME_LINE_COLOR = '#f1f5f9';
+
+/** The gesture peaks, and (dashed) where to split between them. */
+export const PEAK_COLOR = 'rgba(255,255,255,0.8)';
+export const SPLIT_COLOR = 'rgba(255,255,255,0.35)';
+
 /** Times read in ms up to a second and in seconds past it — a 42ms attack and
  *  a 3.4s release are both natural, and "3400ms" is neither. */
 export function fmtEnvMs(ms: number): string {
@@ -70,7 +94,6 @@ export function fmtEnvMs(ms: number): string {
 
 /** One-line read of an export, for a folded card section or a band tooltip. */
 export function envelopeSummary(data: EnergySpanExport): string {
-  const bright = brightnessSummary(data);
   const head = data.envelope
     ? (() => {
         const e = data.envelope!;
@@ -86,7 +109,7 @@ export function envelopeSummary(data: EnergySpanExport): string {
             : 'no envelope'
         }`
       : data.trend;
-  return bright ? `${head} · ${bright}` : head;
+  return head;
 }
 
 /** The brightness half of a one-line read — null when nothing was measured, so
@@ -112,6 +135,8 @@ interface EnvelopeCurveProps {
    *  trimmed band re-fits the measurement into its new width, which slides
    *  every peak off the audio it was measured from. */
   viewport?: EnvelopeViewport;
+  /** Draw the brightness line. Off unless the card's toggle turns it on. */
+  showBrightness?: boolean;
 }
 
 /**
@@ -123,7 +148,10 @@ interface EnvelopeCurveProps {
  * element placed in percent instead: stretched glyphs are the usual cost of
  * that trick, and the letters A/D/S/R are the part that has to stay readable.
  */
-export function EnvelopeCurve({ data, color, detail = false, viewport }: EnvelopeCurveProps) {
+export function EnvelopeCurve({
+  data, color: layerColor, detail = false, viewport, showBrightness = false,
+}: EnvelopeCurveProps) {
+  const color = detail ? VOLUME_COLOR : layerColor;
   const durationMs = data.duration_ms;
   // No viewport given: the box IS the measurement, which is the card's case
   // before anything has been dragged and the only case the tests of the pure
@@ -160,6 +188,7 @@ export function EnvelopeCurve({ data, color, detail = false, viewport }: Envelop
   // never from the visible slice, so trimming a band cuts the line without
   // reshaping it.
   const brightness = useMemo(() => {
+    if (!showBrightness) return '';
     const range = brightnessPlotRange(data.curve);
     const pts = clipCurve(data.curve, fromMs, toMs)
       .filter((p) => p.brightness != null)
@@ -171,7 +200,21 @@ export function EnvelopeCurve({ data, color, detail = false, viewport }: Envelop
         return `${xPct(p.t_ms).toFixed(2)},${y.toFixed(2)}`;
       });
     return pts.length >= 2 ? pts.join(' ') : '';
-  }, [data.curve, fromMs, toMs, xPct]);
+  }, [data.curve, fromMs, toMs, xPct, showBrightness]);
+
+  // The Beat strength and Flux lanes' signals, and plain volume, on the card only:
+  // each already a 0–1 fraction of its own peak in the span, so they share the
+  // contour's axis.
+  const { volumeLine, energyLine, fluxLine } = useMemo(() => {
+    const line = (key: 'energy' | 'beat_strength' | 'flux') => {
+      if (!detail) return '';
+      const pts = clipCurve(data.curve, fromMs, toMs)
+        .filter((p) => p[key] != null)
+        .map((p) => `${xPct(p.t_ms).toFixed(2)},${((1 - Math.max(0, Math.min(1, p[key]!))) * 100).toFixed(2)}`);
+      return pts.length >= 2 ? pts.join(' ') : '';
+    };
+    return { volumeLine: line('energy'), energyLine: line('beat_strength'), fluxLine: line('flux') };
+  }, [data.curve, fromMs, toMs, xPct, detail]);
 
   const stages = useMemo(
     () => (data.envelope ? adsrStages(data.envelope, durationMs, { fromMs, toMs }) : []),
@@ -256,9 +299,39 @@ export function EnvelopeCurve({ data, color, detail = false, viewport }: Envelop
             vectorEffect="non-scaling-stroke"
           />
         )}
-        {/* Last, so it reads over the fill rather than through it — the two
-          * curves crossing is the thing worth seeing, and the one underneath
-          * is a filled body the thin line would otherwise disappear into. */}
+        {/* Over the fill rather than through it — a thin line drawn under a
+          * filled body disappears into it. */}
+        {volumeLine && (
+          <polyline
+            points={volumeLine}
+            fill="none"
+            stroke={VOLUME_LINE_COLOR}
+            strokeWidth={1.25}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+            data-signal="volume"
+          />
+        )}
+        {fluxLine && (
+          <polyline
+            points={fluxLine}
+            fill="none"
+            stroke={FLUX_COLOR}
+            strokeWidth={1.25}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {energyLine && (
+          <polyline
+            points={energyLine}
+            fill="none"
+            stroke={ENERGY_COLOR}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
         {brightness && (
           <polyline
             points={brightness}
@@ -275,7 +348,7 @@ export function EnvelopeCurve({ data, color, detail = false, viewport }: Envelop
           <line
             key={`peak-${i}`}
             x1={xPct(ms)} x2={xPct(ms)} y1={0} y2={100}
-            stroke={`${color}aa`}
+            stroke={detail ? PEAK_COLOR : `${color}aa`}
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
           />
@@ -284,7 +357,7 @@ export function EnvelopeCurve({ data, color, detail = false, viewport }: Envelop
           <line
             key={`split-${i}`}
             x1={xPct(ms)} x2={xPct(ms)} y1={0} y2={100}
-            stroke="rgba(255,255,255,0.35)"
+            stroke={SPLIT_COLOR}
             strokeWidth={1}
             strokeDasharray="2 3"
             vectorEffect="non-scaling-stroke"
@@ -357,24 +430,17 @@ export function EnvelopeFill({ data, color, start, end }: EnvelopeFillProps) {
   return (
     <>
       <EnvelopeCurve data={data} color={color} viewport={viewport} />
-      {/* The one mark that survives the label's removal. Pinned to the left
-        * edge, dim enough to read as a marker rather than as content, and
-        * inert — the band underneath handles the click.
-        *
-        * The brightness arrow joins it only when the two trends DISAGREE. A
-        * band that rises in both is just loud; a band falling in level while
-        * the timbre opens is a build, and that pair of arrows is the whole
-        * reading at 15px. Printing brightness always would spend the band's
-        * one legible mark on the case where it adds nothing. */}
+      {/* What survives the label's removal: the trend, and the stem it was
+        * measured on — the one word that tells two stacked readings of the
+        * same bars apart. Pinned to the left edge, dim enough to read as a
+        * marker rather than as content, and inert — the band underneath
+        * handles the click. */}
       <span
-        className="absolute left-0 top-0 bottom-0 flex items-center px-[3px] text-[9px] leading-none text-white/70 pointer-events-none select-none"
+        className="absolute left-0 top-0 bottom-0 max-w-full flex items-center gap-[3px] overflow-hidden whitespace-nowrap px-[3px] text-[9px] leading-none text-white/70 pointer-events-none select-none"
         style={{ textShadow: '0 0 4px rgba(0,0,0,0.95)' }}
-        aria-hidden="true"
       >
-        {TREND_GLYPH[data.trend]}
-        {data.brightness_trend && data.brightness_trend !== data.trend && (
-          <span style={{ color: BRIGHTNESS_COLOR }}>{TREND_GLYPH[data.brightness_trend]}</span>
-        )}
+        <span aria-hidden="true">{TREND_GLYPH[data.trend]}</span>
+        <span>{data.stem}</span>
       </span>
     </>
   );

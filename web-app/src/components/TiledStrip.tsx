@@ -22,7 +22,9 @@
  *               the data, or the `paint` callback changes.
  *   • overlay — cheap lines redrawn on every playhead tick (beat grid,
  *               playhead, axis labels). Kept separate so a moving playhead
- *               never re-runs the per-pixel paint underneath it.
+ *               never re-runs the per-pixel paint underneath it. The tick
+ *               comes straight from the playhead clock, so a moving playhead
+ *               never re-renders the strip or its caller either.
  *
  * `paint` and `overlay` receive the tile's own geometry plus the strip total,
  * so callers position everything in GLOBAL strip coordinates and let the tile
@@ -31,6 +33,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { usePlayheadEffect } from '../hooks/usePlayhead';
 
 export interface TileGeom {
   /** Tile's left edge in CSS px from the strip's left edge. */
@@ -50,14 +53,20 @@ interface Props {
   /** Per-pixel paint of this tile's slice. Runs off the main render path. */
   paint: (ctx: CanvasRenderingContext2D, tile: TileGeom) => void;
   /** Lines redrawn on every tick, on a transparent canvas above `paint`.
-   *  `focusX` is `overlayFocus` resolved to CSS px from the strip's left edge —
+   *  `focusX` is the playhead resolved to CSS px from the strip's left edge —
    *  draw the playhead there rather than closing over the current time, or
    *  this callback's identity changes every frame and every mounted tile
    *  repaints instead of the one or two the playhead touches. */
   overlay?: (ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => void;
-  /** The overlay's moving part as a fraction of the strip (currentTime /
-   *  duration). Only the tiles it touches repaint as it moves. */
-  overlayFocus?: number | null;
+  /** Track duration the playhead is measured against: when > 0 the overlay
+   *  follows the playhead clock (`focusX` = time / focusDuration of the strip),
+   *  and only the tiles it touches repaint as it moves. Absent or 0 ⇒ no
+   *  focus, and `focusX` is null. */
+  focusDuration?: number;
+  /** Redraw EVERY mounted tile's overlay as the playhead moves, not only the
+   *  one it is on — for an overlay whose moving part spans the whole strip
+   *  (the SSM's crosshair has a horizontal arm). */
+  focusEveryTile?: boolean;
   /** Override the tile width in CSS px. Rows whose paint is expensive per
    *  column (the spectrogram runs an FFT for each one) want narrower tiles so
    *  a tile scrolling into view costs less. */
@@ -136,7 +145,8 @@ export function TiledStrip({
   height,
   paint,
   overlay,
-  overlayFocus = null,
+  focusDuration = 0,
+  focusEveryTile = false,
   tileWidth,
   className,
   style,
@@ -224,7 +234,8 @@ export function TiledStrip({
             geom={{ x0, w: Math.min(tileW, cssW - x0), totalW: cssW, h: height, dpr }}
             paint={paint}
             overlay={overlay}
-            focusX={overlayFocus == null ? null : overlayFocus * cssW}
+            focusDuration={focusDuration}
+            focusEveryTile={focusEveryTile}
           />
         );
       })}
@@ -237,10 +248,11 @@ interface TileProps {
   geom: TileGeom;
   paint: (ctx: CanvasRenderingContext2D, tile: TileGeom) => void;
   overlay?: (ctx: CanvasRenderingContext2D, tile: TileGeom, focusX: number | null) => void;
-  focusX: number | null;
+  focusDuration: number;
+  focusEveryTile: boolean;
 }
 
-function StripTile({ geom, paint, overlay, focusX }: TileProps) {
+function StripTile({ geom, paint, overlay, focusDuration, focusEveryTile }: TileProps) {
   const baseRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const { x0, w, totalW, h, dpr } = geom;
@@ -266,35 +278,44 @@ function StripTile({ geom, paint, overlay, focusX }: TileProps) {
   // redraws this tile, while a moving playhead redraws only the tile it is on
   // and the one it just left. Everyone else keeps the overlay they have —
   // clearing them would wipe their beat grid.
-  // Latest overlay callback and focus, published from an effect so the
-  // focus-driven effect below can call the current one without listing it as a
-  // dependency — depending on it directly would redraw every tile on every
-  // tick, which is exactly what the split is here to avoid. Declared first so
-  // it has already run by the time either draw effect fires in this commit.
-  const latestRef = useRef({ overlay, focusX });
-  useEffect(() => { latestRef.current = { overlay, focusX }; });
+  // Latest overlay callback, and the focus the playhead clock last published,
+  // held in refs so the clock-driven draw below can use the current ones
+  // without listing them as dependencies — depending on the callback directly
+  // would redraw every tile on every tick, which is exactly what the split is
+  // here to avoid.
+  // Published in a layout effect declared ahead of the clock's, so it is
+  // current by the time either draw fires in this commit.
+  const overlayFnRef = useRef(overlay);
+  useLayoutEffect(() => { overlayFnRef.current = overlay; });
+  const focusXRef = useRef<number | null>(null);
 
   const drawOverlay = useCallback(() => {
     const canvas = overlayRef.current;
-    const { overlay: fn, focusX: fx } = latestRef.current;
+    const fn = overlayFnRef.current;
     if (!canvas || !fn) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, pxW, pxH);
-    fn(ctx, { x0, w, totalW, h, dpr }, fx);
+    fn(ctx, { x0, w, totalW, h, dpr }, focusXRef.current);
   }, [x0, w, totalW, h, dpr, pxW, pxH]);
 
   // Structural: the grid, labels or geometry changed — this tile redraws.
   useEffect(() => { drawOverlay(); }, [overlay, drawOverlay]);
 
-  // The playhead moved: only the tile it is on, and the one it just left.
+  // The playhead moved: only the tile it is on, and the one it just left
+  // (every tile, for an overlay that spans the strip). Straight from the
+  // clock — no render of this tile, the strip, or the row that owns it.
   const wasFocusedRef = useRef(false);
-  useEffect(() => {
-    const focused = focusX != null && focusX >= x0 - 24 && focusX <= x0 + w + 24;
+  usePlayheadEffect((t) => {
+    const fx = focusDuration > 0 ? (t / focusDuration) * totalW : null;
+    focusXRef.current = fx;
+    if (!overlayFnRef.current) return;
+    if (focusEveryTile) { drawOverlay(); return; }
+    const focused = fx != null && fx >= x0 - 24 && fx <= x0 + w + 24;
     if (focused || wasFocusedRef.current) drawOverlay();
     wasFocusedRef.current = focused;
-  }, [focusX, x0, w, drawOverlay]);
+  }, [focusDuration, focusEveryTile, totalW, x0, w, drawOverlay]);
 
   // Hand the backing stores back at unmount instead of waiting for GC: at high
   // zoom tiles are mounted and dropped continuously while panning, and a tile's

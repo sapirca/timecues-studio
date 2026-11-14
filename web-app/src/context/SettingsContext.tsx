@@ -58,11 +58,16 @@ export interface UserSettings {
   seekStepLargeSeconds: number;
 
   // MIR signal overlays (the analysis curves below the waveform)
+  /** Plain loudness (per-frame RMS) — the Volume row. */
+  defaultShowVolume: boolean;
   defaultShowEnergy: boolean;
   defaultShowBrightness: boolean;
   defaultShowNovelty: boolean;
   defaultShowOnsets: boolean;
   defaultShowFlux: boolean;
+  defaultShowDensity: boolean;
+  defaultShowBusyness: boolean;
+  defaultShowBandwidth: boolean;
   defaultShowChroma: boolean;
   defaultShowTempogram: boolean;
   defaultShowSsm: boolean;
@@ -93,8 +98,8 @@ export interface UserSettings {
    *  background, one song at a time. Songs that already have stems on disk are
    *  skipped. Ignored entirely when the Demucs tooling isn't installed. */
   autoStemOnUpload: boolean;
-  /** How many stems a separation produces — '6s' (vocals/drums/bass/other/
-   *  guitar/piano) or '4s' (vocals/drums/bass/other, quicker). Seeds both the
+  /** How many stems a separation produces — '4s' (vocals/drums/bass/other,
+   *  the default) or '6s' (adds guitar/piano, slower). Seeds both the
    *  automatic post-upload runs and the Dataset Prep re-stem control. */
   defaultStemModel: DemucsModel;
 
@@ -108,10 +113,6 @@ export interface UserSettings {
    *  Set to 0 to always show the full button cluster (the legacy behavior). */
   autoGuessExpandZoomThreshold: number;
 
-  // Experimental: Loops + Riff Patterns annotation tabs. Off by default so they
-  // stay hidden in shipped builds; flip on locally to test as the UI lands.
-  // Boundaries (Manual), Cues, and Spans are always available.
-  experimentalLoopsAndPatterns: boolean;
   // Experimental: SPAN-family detection algorithms (Silero-VAD, JDCNet voicing,
   // future MIRFLEX). Output is voiced/instrument intervals. Hidden by default;
   // needs the `experimental-models` docker compose profile to be running so the
@@ -125,22 +126,13 @@ export interface UserSettings {
   experimentalCueExtras: boolean;
   // Experimental: LOOP-family detectors (chroma autocorrelation v0). Output is
   // `LoopItem[]` — labeled intervals representing seamless N-bar phrases.
-  // Distinct from `experimentalLoopsAndPatterns` which gates the *manual*
-  // loop annotation tab. This flag gates the *detector* outputs.
+  // Gates the *detector* outputs; the manual Loops layer is always available.
   experimentalLoopFamily: boolean;
-  // Experimental: LYRICS family detectors (Whisper vocal transcription).
-  // Output is `LyricsItem[]` (word- and line-level entries). Lazy-downloads
-  // a ~140 MB Whisper-base checkpoint on first use.
-  experimentalLyricsFamily: boolean;
   // Experimental: PATTERN family detectors (LoCoMotif motif discovery) —
   // variable-length repeating motifs found via DTW-warped matching on
   // beat-synchronous chroma. They surface in Algorithm Inspect only; there is
   // no manual Patterns annotation layer for them to land in.
   experimentalPatternFamily: boolean;
-  // Experimental: Setlist workspace — algorithmic DJ-style ordering of the
-  // corpus using cached BPM (+ meter and energy as those scorers land). New
-  // top-level workspace tab at /setlist; off by default.
-  experimentalSetlist: boolean;
 
   // Manual BOUNDARIES (sections) default — which layout the "✨ Fill default"
   // button applies when there are no algorithm-suggested sections.
@@ -188,11 +180,15 @@ export const DEFAULT_SETTINGS: UserSettings = {
   seekStepMediumSeconds: 5,
   seekStepLargeSeconds: 10,
 
+  defaultShowVolume: false,
   defaultShowEnergy: false,
   defaultShowBrightness: false,
   defaultShowNovelty: false,
   defaultShowOnsets: false,
   defaultShowFlux: false,
+  defaultShowDensity: false,
+  defaultShowBusyness: false,
+  defaultShowBandwidth: false,
   defaultShowChroma: false,
   defaultShowTempogram: false,
   defaultShowSsm: false,
@@ -220,7 +216,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
     // SPAN family
     'silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive',
     // CUE family extras
-    'basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients',
+    'basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets',
     // LYRICS family
     'whisper-base', 'ctc-forced-aligner',
     // PATTERN family
@@ -230,7 +226,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   enabledBpmDetectors: [],
 
   autoStemOnUpload: true,
-  defaultStemModel: '6s',
+  defaultStemModel: '4s',
 
   autoGuessClusterTolerance: 3,
   autoGuessCentroidMethod: 'mean',
@@ -245,18 +241,10 @@ export const DEFAULT_SETTINGS: UserSettings = {
   // simply hides the section, no broken-state UI. Returning users who
   // explicitly turned a flag off in Settings keep that choice because
   // localStorage overlays this default at hydration time.
-  experimentalLoopsAndPatterns: true,
   experimentalSpanFamily: true,
   experimentalCueExtras: true,
   experimentalLoopFamily: true,
-  experimentalLyricsFamily: true,
   experimentalPatternFamily: true,
-  // Default flips to true when run.sh was invoked with `--with-dj`. That sets
-  // VITE_WITH_DJ=1 in the Vite env, Vite inlines it here at build/dev time,
-  // and first-time visitors see the Setlist tab already enabled. Returning
-  // users keep whatever they explicitly chose in Settings — `readStored()`
-  // overlays their localStorage on top of this default.
-  experimentalSetlist: (import.meta.env.VITE_WITH_DJ as string | undefined) === '1',
 
   manualBoundariesDefault: 'house',
   manualBoundariesCustomLayout: 'intro:16, buildup:8, drop:32, breakdown:16, buildup:8, drop:32, outro:16',
@@ -325,17 +313,13 @@ function readStored(): UserSettings {
     ) {
       parsed.sectionVocabularyGenres = detectVocabularyGenres(parsed.sectionTypeVocabulary);
     }
-    // 2026-05-20 migration: experimentalAnnotationTypes → experimentalLoopsAndPatterns.
-    // Old flag gated Spans+Loops+Patterns; Spans is now always-on and the
-    // Patterns layer has since been removed, so the old setting maps onto what
-    // the flag gates today (Loops + Riff Patterns).
-    if (
-      parsed.experimentalLoopsAndPatterns === undefined &&
-      parsed.experimentalAnnotationTypes !== undefined
-    ) {
-      parsed.experimentalLoopsAndPatterns = !!parsed.experimentalAnnotationTypes;
-    }
+    // Loops, Riff Patterns and Lyrics are no longer experimental (2026-10-21),
+    // and the Setlist workspace is gone: drop their switches so a stored `false`
+    // can't outlive them.
     delete parsed.experimentalAnnotationTypes;
+    delete parsed.experimentalLoopsAndPatterns;
+    delete parsed.experimentalLyricsFamily;
+    delete parsed.experimentalSetlist;
     // "Overlay all on signals" was removed — drop its persisted keys so a stale
     // stored value can't outlive the feature.
     delete parsed.defaultShowSignalOverlays;
@@ -379,6 +363,16 @@ function readStored(): UserSettings {
         parsed.sectionTypeVocabulary = [...DEFAULT_VOCABULARY];
         parsed.sectionVocabularyGenres = detectVocabularyGenres(parsed.sectionTypeVocabulary);
       }
+    }
+    // 2026-09-27 migration: separations default to 4 stems. The 6-stem model
+    // files a sample under whichever instrument it most resembles and can cut
+    // one sound across two stems — El Jaguar's turkey call went half to guitar,
+    // half to vocals — where the 4-stem model keeps it whole in `other`. Stores
+    // saved before this hold `6s` and would win the spread below; flip them
+    // once behind a sentinel, so choosing 6 stems again in Settings persists.
+    if (!parsed._fourStemsDefaultMigrated) {
+      parsed.defaultStemModel = '4s';
+      parsed._fourStemsDefaultMigrated = true;
     }
     return { ...DEFAULT_SETTINGS, ...parsed } as UserSettings;
   } catch {

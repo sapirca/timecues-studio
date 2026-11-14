@@ -26,6 +26,9 @@ describe('scanDatasetFiles — export-bundle layout', () => {
       fileAt('my_song/cues/kick-hits.json'),
       fileAt('my_song/cues/fx-triggers.json'),
       fileAt('my_song/spans/sections.json'),
+      fileAt('my_song/lyrics/vocals.json'),
+      fileAt('my_song/loops/drop-loop.json'),
+      fileAt('my_song/riff-patterns/snare-pattern.json'),
       fileAt('my_song/stems/drums.wav'),
     ];
     const { songs, unrecognized } = scanDatasetFiles(files);
@@ -41,6 +44,9 @@ describe('scanDatasetFiles — export-bundle layout', () => {
       'boundaries:structure',
       'cues:fx-triggers',
       'cues:kick-hits',
+      'loops:drop-loop',
+      'lyrics:vocals',
+      'riff-patterns:snare-pattern',
       'spans:sections',
     ]);
     expect(song.stems.drums).toBeTruthy();

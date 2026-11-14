@@ -21,7 +21,9 @@
 #   By default ./data/ is mounted from the repo. To point at a folder elsewhere
 #   on disk (e.g. an external drive), set DATA_DIR in .env
 #   (e.g. DATA_DIR=/Users/me/timecues-data). Drag-drop uploads in the UI go
-#   into the same mounted directory.
+#   into the same mounted directory. Stems are served from a separate mount
+#   (default ./web-app/public/stems); set STEMS_DIR=$DATA_DIR/stems to keep
+#   them inside the same dataset folder, the way the prod VM lays them out.
 #
 # Platform support:
 #   Core services build natively for both linux/amd64 and linux/arm64 — so
@@ -131,8 +133,15 @@ services:
       # Authorized JavaScript origins in Cloud Console, not by hiding the ID).
       # Override in .env to point sign-in at your own OAuth app.
       VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-92459674081-9lq6nitf72ptj0sg8sn05vp3g8nus4ph.apps.googleusercontent.com}
+      # Username sign-in is passwordless, so the server allows it only from the
+      # machine itself — and a browser reaching this container through Docker
+      # is not that. Set TC_LOCAL_LOGIN=1 in .env for an install only you can
+      # reach; never on a public one (web-app/server/auth.mjs).
+      TC_LOCAL_LOGIN: ${TC_LOCAL_LOGIN:-}
     ports:
-      - "5173:5173"
+      # WEB_BIND=127.0.0.1 keeps the app off the LAN — set it whenever
+      # TC_LOCAL_LOGIN=1 is on, since username sign-in has no password.
+      - "${WEB_BIND:-0.0.0.0}:5173:5173"
     volumes:
       # Source code: live-reload during dev. The node_modules anonymous
       # volume right after preserves the image's Linux-built deps from
@@ -150,7 +159,7 @@ services:
       # data-default/ at /app/data-default is BAKED INTO the image (no mount).
       # Stems output dir, shared with the `stems` service — Demucs writes WAVs
       # here and Vite serves them statically at /stems/<slug>/<source>.wav.
-      - ./web-app/public/stems:/app/web-app/public/stems
+      - ${STEMS_DIR:-./web-app/public/stems}:/app/web-app/public/stems
     depends_on:
       - core-mir
       - mir-eval
@@ -226,7 +235,7 @@ services:
     user: "${HOST_UID:-0}:${HOST_GID:-0}"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
-      - ./web-app/public/stems:/app/web-app/public/stems
+      - ${STEMS_DIR:-./web-app/public/stems}:/app/web-app/public/stems
     expose: ["8006"]
     networks:
       default:
@@ -249,7 +258,7 @@ services:
     user: "${HOST_UID:-0}:${HOST_GID:-0}"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
-      - ./web-app/public/stems:/app/web-app/public/stems
+      - ${STEMS_DIR:-./web-app/public/stems}:/app/web-app/public/stems
     expose: ["8006"]
     networks:
       default:
@@ -453,7 +462,10 @@ services:
   # subsequent calls are fast).
   pattern:
     image: timecues/pattern:latest
-    mem_limit: 1g
+    # 1.25 GB: one 5-minute song peaks at ~1.12 GB (whole-song CQT chroma +
+    # beat tracking). Chunking the chroma does not reproduce it — its tuning
+    # and per-frame normalisation are song-wide — so the cap fits the work.
+    mem_limit: 1280m
     profiles: ["experimental-models"]
     build:
       context: .

@@ -36,11 +36,11 @@ export function AnnotatorBadge({ inline = false }: { inline?: boolean } = {}) {
     .join('');
 
   return (
-    <div ref={ref} className={`${inline ? 'relative' : 'fixed top-3 right-3 z-50'} text-xs flex items-center gap-1.5`}>
+    <div ref={ref} className={`${inline ? 'relative' : 'fixed top-3 right-3 z-50'} text-xs flex items-center gap-1.5 min-w-0`}>
       <button
         type="button"
         onClick={() => navigate('/settings')}
-        className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-800/90 hover:bg-gray-700/90 border border-gray-700 text-gray-300 hover:text-white shadow-lg backdrop-blur-sm text-base leading-none"
+        className="w-8 h-8 shrink-0 flex items-center justify-center rounded-full bg-gray-800/90 hover:bg-gray-700/90 border border-gray-700 text-gray-300 hover:text-white shadow-lg text-base leading-none"
         title="Settings"
         aria-label="Settings"
       >
@@ -49,13 +49,13 @@ export function AnnotatorBadge({ inline = false }: { inline?: boolean } = {}) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-gray-800/90 hover:bg-gray-700/90 border border-gray-700 text-gray-200 shadow-lg backdrop-blur-sm"
+        className="min-w-0 flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-gray-800/90 hover:bg-gray-700/90 border border-gray-700 text-gray-200 shadow-lg"
         title={annotator.email ?? annotator.id}
       >
-        <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold">
+        <span className="w-5 h-5 shrink-0 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold">
           {initials || '?'}
         </span>
-        <span className="max-w-[140px] truncate">{annotator.displayName}</span>
+        <span className="min-w-0 max-w-[140px] truncate">{annotator.displayName}</span>
         <span className="text-gray-500">▾</span>
       </button>
       {open && (

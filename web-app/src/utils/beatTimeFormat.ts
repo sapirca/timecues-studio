@@ -1,6 +1,5 @@
 import { formatBeatPosition, getBarBeatOrigin } from './beatGrid';
 import type { BarBeatOrigin, SnapDivision } from './beatGrid';
-import type { SnapMode } from '../types/annotationLayer';
 // Type-only, so nothing of the component module is pulled in at runtime — the
 // unit union is declared next to the selector that offers it.
 import type { BeatGridUnit } from '../components/inspector-v2/SharedVizPanel';
@@ -24,34 +23,6 @@ export function formatBeatTime(
     return `${fracBars.toFixed(2)} bars  (${barBeat})`;
   }
   return barBeat;
-}
-
-/** Map a SnapMode to the snapTimeToGrid division string. 'magnetic' rides the
- *  1/16 grid — the finest line a listener still hears as a rhythmic position —
- *  and gets its pull limited by `magneticToleranceSec` instead of by a coarser
- *  division. */
-export function snapModeToDivision(mode: SnapMode): SnapDivision {
-  switch (mode) {
-    case 'bar':      return 'bar';
-    case '1/2beat':  return '1/2beat';
-    case '1/4beat':  return '1/4beat';
-    case 'magnetic': return '1/4beat';
-    default:         return 'beat';
-  }
-}
-
-/** Widest gap 'magnetic' will close, in seconds.
- *
- *  Capped at 40 ms because that is roughly where a karaoke highlight starts
- *  looking out of sync with the voice — a correction bigger than that is no
- *  longer invisible. Also capped at a quarter of the 1/16 spacing so the mode
- *  keeps its meaning at fast tempi: at 180 BPM a 1/16 is only 83 ms, and a
- *  flat 40 ms window would swallow every position and silently become an
- *  always-snap. */
-export function magneticToleranceSec(bpm: number): number {
-  if (!(bpm > 0)) return 0;
-  const sixteenthSec = (60 / bpm) / 4;
-  return Math.min(0.04, sixteenthSec * 0.25);
 }
 
 /**
@@ -111,18 +82,6 @@ export function beatGridUnitLabel(unit: BeatGridUnit): string {
     case '4bar':          return '4 Bars (Phrase)';
     case '8bar':          return '8 Bars (Block)';
     case '16bar':         return '16 Bars';
-  }
-}
-
-/** Human label for a SnapMode granularity (used in layer settings UI). */
-export function snapModeLabel(mode: SnapMode): string {
-  switch (mode) {
-    case 'off':      return 'Off';
-    case 'magnetic': return 'Magnetic';
-    case 'bar':      return '1 Bar';
-    case 'beat':     return '1 Beat';
-    case '1/2beat':  return '½ Beat';
-    case '1/4beat':  return '¼ Beat';
   }
 }
 

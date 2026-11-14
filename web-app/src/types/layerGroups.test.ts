@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  addLayerToGroupNamed,
   deleteGroupAndLayers,
   groupLayers,
   groupPillDisplay,
@@ -211,5 +212,31 @@ describe('updateGroup', () => {
     expect(collapsed.groups!.find((g) => g.id === second.group!.id)).toMatchObject({
       name: 'Kick work', collapsed: false,
     });
+  });
+});
+
+describe('addLayerToGroupNamed', () => {
+  it('makes the group on the first copy and finds it on the next', () => {
+    const spans = newSpanLayer('Breakdowns, builds & rolls', '#f87171');
+    const other = newCueLayer('my cues', '#34d399');
+    const cues = newCueLayer('Drops & hits', '#38bdf8');
+    let d = doc([spans, other, cues]);
+    d = addLayerToGroupNamed(d, spans.id, 'Rhythmic figures');
+    expect(d.groups).toHaveLength(1);
+    d = addLayerToGroupNamed(d, cues.id, 'Rhythmic figures');
+    expect(d.groups).toHaveLength(1);
+    const gid = d.groups![0].id;
+    expect(layersInGroup(d, gid).map((l) => l.name)).toEqual(['Breakdowns, builds & rolls', 'Drops & hits']);
+    // Members stay contiguous: the copy that joined later is pulled up behind the first.
+    expect(names(d)).toEqual(['Breakdowns, builds & rolls', 'Drops & hits', 'my cues']);
+  });
+
+  it('starts a fresh group once the annotator has renamed theirs', () => {
+    const a = newSpanLayer('a', '#f87171');
+    const b = newCueLayer('b', '#38bdf8');
+    let d = addLayerToGroupNamed(doc([a, b]), a.id, 'Rhythmic figures');
+    d = updateGroup(d, d.groups![0].id, { name: 'My figures' });
+    d = addLayerToGroupNamed(d, b.id, 'Rhythmic figures');
+    expect(d.groups!.map((g) => g.name)).toEqual(['My figures', 'Rhythmic figures']);
   });
 });

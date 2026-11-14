@@ -10,6 +10,7 @@ import { render, fireEvent, screen } from '@testing-library/react';
 import { GridSegmentListEditor } from './GridSegmentListEditor';
 import { resolveGridSegments } from '../../utils/gridSegments';
 import { makeEmptySongInfo } from '../../types/songInfo';
+import { createPlayheadClock, PlayheadClockContext } from '../../hooks/usePlayhead';
 
 function mount() {
   const onDelete = vi.fn();
@@ -21,7 +22,12 @@ function mount() {
     gridMode: 'mapped',
     gridSegments: [{ id: 'gs_a', start: 41, bpm: 90, timeSignature: '6/8' }],
   });
-  render(<GridSegmentListEditor segments={segments} playerTime={41} onDelete={onDelete} />);
+  const clock = createPlayheadClock(41);
+  render(
+    <PlayheadClockContext.Provider value={clock}>
+      <GridSegmentListEditor segments={segments} onDelete={onDelete} />
+    </PlayheadClockContext.Provider>,
+  );
   return { onDelete, segments };
 }
 

@@ -29,8 +29,10 @@ Usage
 import json
 import os
 import sys
+import threading
 import time
 import warnings
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -60,6 +62,7 @@ PORT = 8002
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import ANALYSIS_DIR, REPO_ROOT, MSAF_DIR, find_audio, safe_segment  # noqa: E402
 from server_common import cached_result, cors_headers  # noqa: E402
+from grid_truth import NoUserGrid, cached_grid, grid_choice, user_beats  # noqa: E402
 
 MANIFEST     = ANALYSIS_DIR / "manifest.json"
 
@@ -148,9 +151,50 @@ def classify_sections(y: np.ndarray, sr: int, boundaries: np.ndarray) -> list[di
     ]
 
 
+# ─── Which beats msaf cuts its features at ─────────────────────────────────────
+
+_beats_lock = threading.Lock()
+
+
+@contextmanager
+def _msaf_beats(beat_times_s):
+    """msaf averages its features per beat, and its only way in for beats of
+    our own is reading reference annotations off disk. With `beat_times_s`
+    (the song's grid) its beat estimator answers with those instead, for this
+    call only; with None it tracks its own (librosa, on the percussive part).
+
+    Either way its single-file feature cache is cleared first: it is keyed by
+    the audio file's name alone, so it would hand a run on one grid the beats
+    the last run of that song used."""
+    with _beats_lock:
+        try:
+            os.remove(msaf.config.features_tmp_file)
+        except OSError:
+            pass
+        if beat_times_s is None:
+            yield
+            return
+        original = msaf.base.Features.estimate_beats
+
+        def estimate_beats(self):
+            times = np.asarray([t for t in beat_times_s if t > 0], dtype=float)
+            frames = librosa.time_to_frames(times, sr=self.sr, hop_length=self.hop_length)
+            return times, frames
+
+        msaf.base.Features.estimate_beats = estimate_beats
+        try:
+            yield
+        finally:
+            msaf.base.Features.estimate_beats = original
+
+
 # ─── Full pipeline ─────────────────────────────────────────────────────────────
 
-def analyze(slug: str, algorithm: str, force: bool = False) -> dict:
+def analyze(slug: str, algorithm: str, force: bool = False, grid: str = "user") -> dict:
+    """Run one algorithm on one song. `grid` is whose beats msaf's features
+    are cut at: "user" (the song's grid; NoUserGrid when it has none) or
+    "auto" (msaf's own). A saved result counts only for the grid it was
+    made on."""
     if not _LIBROSA_OK:
         raise RuntimeError("librosa not installed")
     if not _MSAF_OK:
@@ -163,7 +207,7 @@ def analyze(slug: str, algorithm: str, force: bool = False) -> dict:
     cache_path = cache_dir / f"{algorithm}.json"
 
     hit = cached_result(cache_path, force)
-    if hit is not None:
+    if hit is not None and cached_grid(hit) == grid:
         return hit
 
     audio_path = find_audio(slug)
@@ -174,7 +218,9 @@ def analyze(slug: str, algorithm: str, force: bool = False) -> dict:
     y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
     duration = float(librosa.get_duration(y=y, sr=sr))
 
-    boundaries, _labels = msaf.process(str(audio_path), boundaries_id=algorithm, feature="mfcc")
+    beats = user_beats(slug, duration) if grid == "user" else None
+    with _msaf_beats(beats):
+        boundaries, _labels = msaf.process(str(audio_path), boundaries_id=algorithm, feature="mfcc")
     boundaries = np.asarray(boundaries, dtype=float)
     if len(boundaries) == 0 or boundaries[0] != 0:
         boundaries = np.concatenate([[0.0], boundaries])
@@ -185,6 +231,7 @@ def analyze(slug: str, algorithm: str, force: bool = False) -> dict:
     result = {
         "algorithm":     algorithm,
         "algoName":      ALGORITHMS[algorithm],
+        "grid":          grid,
         "audioFile":     audio_path.name,
         "duration":      sections[-1]["endTime"] if sections else duration,
         "sections":      sections,
@@ -240,7 +287,9 @@ def handle_post(full_path: str, body: dict):
         if algorithm not in ALGORITHMS:
             return 400, {"error": f"unknown algorithm, valid: {list(ALGORITHMS)}"}
         try:
-            return 200, analyze(slug, algorithm, force=force)
+            return 200, analyze(slug, algorithm, force=force, grid=grid_choice(body))
+        except NoUserGrid as e:
+            return 409, {"error": str(e)}
         except FileNotFoundError as e:
             return 404, {"error": str(e)}
         except RuntimeError as e:

@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 interface InlineEditableNameProps {
   /** Current name/label shown when not editing and seeded into the input. */
   value: string;
+  /** Printed instead of `value` when not editing — a cramped host's short
+   *  form. The field still opens on the full `value`. */
+  displayValue?: string;
   /** Commit a new value. Called once on blur / Enter, only when it changed. */
   onChange: (next: string) => void;
   /** Shown (italic, muted) in place of an empty value and as the input hint. */
@@ -62,6 +65,7 @@ export function InlineEditableName({
   textClassName = '',
   textStyle,
   textRef,
+  displayValue,
   pencilClassName = '',
   inputClassName = '',
   stopPropagation = false,
@@ -110,6 +114,8 @@ export function InlineEditableName({
           else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
         }}
         placeholder={placeholder}
+        // A Hebrew label types and reads right to left; English stays left.
+        dir="auto"
         spellCheck={false}
         // size={1} lets the input shrink below its intrinsic width so a
         // flex-1/min-w-0 parent can actually constrain it.
@@ -121,8 +127,8 @@ export function InlineEditableName({
 
   return (
     <span className={className}>
-      <span ref={textRef} className={textClassName} style={textStyle} title={title}>
-        {value || <span className="italic opacity-60">{placeholder}</span>}
+      <span ref={textRef} dir="auto" className={textClassName} style={textStyle} title={title}>
+        {(displayValue ?? value) || <span className="italic opacity-60">{placeholder}</span>}
       </span>
       {!hidePencil && <button
         type="button"

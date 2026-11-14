@@ -39,7 +39,6 @@ function renderLane(item: SpanItem) {
       items={[item]}
       color="#38bdf8"
       duration={364}
-      currentTime={0}
       onSpanEdgeDrag={vi.fn()}
       onSpanMove={vi.fn()}
     />,

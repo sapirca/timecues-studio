@@ -15,29 +15,32 @@ guide in the same change set.
 > each other tab fetches the relevant reference layer + the cached
 > detection of every algorithm in that family and renders kind-specific
 > metrics (IoU + frame F1 for spans, bar-snap + phase-pop-free for loops,
-> WER + word-onset F1 for lyrics). Tabs only appear when the matching family flag is on.
+> WER + word-onset F1 for lyrics). Lyrics is always there; Cues, Spans and Loops
+> appear only when the matching detector family flag is on.
 > The all-songs Eval view shows the same tables stacked.
 
 ## Where the flags live
 
-`Settings → Annotation → Experimental annotation types`. Each toggle is
+`Settings → Annotation → Experimental detectors`. Each toggle is
 independent:
 
-- **Enable Loops and Riff Patterns** — Loops ship the editor; Riff Patterns
-  composes reusable motif nodes into timeline instances.
 - **Enable SPAN-family detectors** — voicing / instrument-activity intervals
   via Silero-VAD, JDCNet, and PANNs (AudioSet-527 tagging).
 - **Enable CUE-family extras** — BeatNet beats / downbeats / meter,
   basic-pitch polyphonic note transcription.
 - **Enable LOOP-family detectors** — chroma-autocorrelation loop finder
   (pure DSP, no model weights).
-- **Enable LYRICS-family detectors** — Whisper-base multilingual vocal
-  transcription. Opens the LYRICS family (per-word + per-line entries).
 - **Enable PATTERN-family detectors** — LoCoMotif DTW-warped motif discovery
   on beat-synchronous chroma. Opens the PATTERN family (variable-length
   repeating motifs, grouped by motif id). The manual Patterns layer was removed;
   motifs now promote into a **Riff Patterns** layer instead — one node per
   motif, one instance per occurrence.
+
+The **Loops**, **Riff Patterns** and **Lyrics** annotation types are no longer
+experimental and have no switch — they are always available. The LYRICS-family
+detectors (Whisper-base multilingual vocal transcription, plus Ivrit — ivrit.ai's
+Hebrew-only model — and the CTC forced aligner; per-word + per-line entries)
+have no switch either: they appear whenever the lyrics model server is reachable.
 
 Flipping a flag on does not by itself bring up the backend services. See
 *Running the experimental servers* below.
@@ -56,7 +59,7 @@ through to the Initialize-models panel as `Deps missing`.
 
 **Local dev — full (`./run_all.sh`):** the same launcher with every model
 family installed (≡ `./run.sh --all`) — it pip-installs torch + the
-experimental deps (and builds a Python 3.11 venv for basic-pitch/autochord
+experimental deps (and builds a Python 3.11 venv for basic-pitch
 on Python ≥3.12), so all 9 detectors report `Ready`. ~3 GB of wheels on
 first run. To install just one family by hand instead, run the matching
 `pip install` line as listed in `run.sh`.
@@ -81,7 +84,7 @@ This brings up nine extra services alongside the core stack:
 | `beatnet` | 8010 | `tools/python/beatnet_server.py` — BeatNet (CRNN + DBN) |
 | `pitch`   | 8011 | `tools/python/pitch_server.py` — basic-pitch (Spotify, polyphonic notes) |
 | `panns`   | 8013 | `tools/python/panns_server.py` — PANNs CNN14 AudioSet-527 tagging |
-| `cue-extras` | 8014 | `tools/python/cue_extras_server.py` — librosa key, autochord, librosa onsets, drum transients |
+| `cue-extras` | 8014 | `tools/python/cue_extras_server.py` — librosa key, autochord, librosa onsets |
 | `percussive` | 8015 | `tools/python/percussive_server.py` — HPSS percussive spans |
 | `lyrics`  | 8016 | `tools/python/lyrics_server.py` — Whisper-base vocal transcription |
 | `pattern` | 8017 | `tools/python/pattern_server.py` — LoCoMotif motif discovery |
@@ -254,36 +257,22 @@ time is kept on the payload so downstream consumers (eval, MIDI export)
 can use it without re-running. Cache lives at
 `data/algorithm-outputs/pitch/<slug>/basic-pitch.json`.
 
-### librosa key + autochord + librosa onsets + drum transients
+### librosa key + autochord + librosa onsets
 
-Four pure-DSP detectors sharing one slim sidecar (`cue-extras` :8014):
+Three pure-DSP detectors sharing one slim sidecar (`cue-extras` :8014):
 
 - **librosa key** — Krumhansl-Schmuckler chord-tone-profile correlation
   against the 24 major/minor keys. Emits the global key as a cue at t=0
   plus per-segment cues at every detected key change (10 s sliding window,
   5 s hop). Output label format: `"A minor"`, `"F# major"`.
 - **autochord chords** — chord recognition via the `autochord` pip
-  package (chroma templates + Viterbi smoothing). Emits one cue per
+  package (chroma templates + Viterbi smoothing). **Opt-in:** it loads the
+  GPL NNLS-Chroma Vamp plugin, so nothing installs it for you — NOTICE.md
+  has the steps; until then it shows `Deps missing`. Emits one cue per
   chord transition, label like `"Am"` or `"G/B"`. No neural net.
 - **librosa onsets** — `librosa.onset.onset_detect` spectral-flux
   transient detection. One cue per onset event, with a confidence
   proportional to onset-envelope peak strength.
-- **drum transients** — the same hits librosa onsets finds, each named
-  `kick`, `snare` or `hat` by which part of the spectrum moved, and each
-  placed on the moment the drum starts rather than 20-30 ms later where
-  librosa onsets marks its peak — so at high zoom the tick sits on the
-  attack you hear, not on its decay. Run it on
-  the **Drums** stem: pick *Drums* in the right sidebar's **Stem filter**,
-  open **CUE EXTRAS** and tick *drum transients*. Its lane draws every hit
-  in its drum's colour — **red kick, blue snare, green hat** — and as tall
-  as it was struck: a full-height tick is that drum at its hardest, a short
-  stub is a ghost note. Hover a tick for `kick · velocity 112 · -3.2 dB`;
-  click it for the full output card. The two numbers mean different things:
-  **velocity** (1-127) compares a hit only with the other hits of the *same*
-  drum, so a full-force hi-hat is 127; the **dB level** compares it with
-  the loudest hit in the whole song, so it is the one that shows a kick is
-  louder than a hat. On heavily distorted drums the kick/snare/hat names
-  are unreliable.
 
 Cache at `data/algorithm-outputs/cue-extras/<slug>/<algo>.json`.
 
@@ -299,11 +288,11 @@ first `cues` annotation layer at a per-kind tolerance:
 | librosa-key changes        | 250 ms | mode transitions are perceptually wide |
 | autochord chord changes    | 250 ms | same |
 | librosa-onsets             |  50 ms | DSP onsets are tight by construction |
-| drum transients            |  50 ms | same hits as librosa-onsets, so the same tolerance |
+| each custom cue detector   |  50 ms | a cue is a moment, the same kind of claim as an onset |
 
 Columns: precision · recall · F1 · MNBD (mean nearest-cue distance, s).
 Each algorithm's prediction set is projected to `{time, label}[]`
-before scoring via `evaluateCueLayer` so all six share the same
+before scoring via `evaluateCueLayer` so every row shares the same
 boundary-style point-F1 metric.
 
 ## LYRICS family
@@ -313,7 +302,7 @@ timestamps. The full payload feeds `LyricsLayer` items downstream.
 
 ### Reference lyrics text
 
-When the LYRICS family flag is on, a **Reference lyrics** textarea appears
+When the lyrics model server is reachable, a **Reference lyrics** textarea appears
 in the LYRICS sidebar section of the inspector for the currently selected
 song. Pasting the song's lyrics there saves them under
 `data/lyrics-text/<slug>.txt` — shared across annotators since lyric text
@@ -329,6 +318,26 @@ as their alignment target. The panel auto-saves on a 600 ms debounce; word
   named volume on first detect. CPU-only torch wheels keep the sidecar
   multi-platform. Word-level timestamps are coarse (~200 ms) — refine
   with the CTC forced aligner below if you have the reference text.
+
+- **Ivrit** — ivrit.ai's Hebrew speech-recognition model (Apache-2.0),
+  run through `transformers`. Use it for Hebrew songs: Whisper base hears Hebrew
+  poorly. It always transcribes as Hebrew and ignores the **Whisper
+  language** picker, because the model no longer detects language reliably,
+  so on a song in another language it produces nonsense. ~3.2 GB checkpoint
+  lazy-downloaded into the HuggingFace cache on first detect, ~3 GB of RAM
+  while loaded, and slower than Whisper base on CPU (about 2 minutes for a
+  5-minute song). It is never pre-ticked: tick it in the run picker when you
+  want it.
+
+  Run it on the **vocals** stem. It hears the song one phrase at a time, cut
+  at the singer's own pauses (at most 28 s each), so memory stays at one
+  phrase and no word is split by a cut. On the vocals stem, instrumental
+  breaks and silence are skipped entirely — that is where speech models
+  invent text — and a word that would start in a breath is moved to where
+  the voice comes in. On the full mix there are no pauses to find, so it cuts
+  at the quietest moments instead and more of the music bleeds into the
+  words. Held notes spelled out ("אהההה") and loops (one word, or a short
+  phrase like "אוהו נה", repeated more than 8 words' worth) are dropped.
 
 - **CTC forced aligner** — `MahmoudAshraf97/ctc-forced-aligner` (MIT)
   pinned to `facebook/wav2vec2-base-960h` (Apache-2.0, English-only).
@@ -392,7 +401,7 @@ chroma-autocorr misses.
 
 **Promoting motifs into an annotation layer.** *Copy → Manual* on a LoCoMotif
 lane builds a **Riff Patterns** layer, not the Spans layer every other interval
-family produces: each `motif_id` becomes one boundary node and each occurrence
+family produces: each `motif_id` becomes one node (a single held note) and each occurrence
 an instance of it, so occurrences of the same figure stay tied together (same
 node, same colour) instead of collapsing into unrelated bands. The node's
 length is the median occurrence length, since DTW-warped occurrences differ.
@@ -455,55 +464,6 @@ curl -XPOST http://localhost:5173/api/span/initialize \
      -H 'content-type: application/json' \
      -d '{"algo": "silero-vad"}'
 ```
-
-## Setlist workspace
-
-A separate top-level workspace at `/setlist` that orders the corpus into a
-DJ-style play sequence. Off by default — flip on **Enable Setlist workspace
-(algorithmic DJ-style ordering)** under Settings → Experimental to expose
-the tab.
-
-### What it does
-
-Pulls the cached BPM (median across the 5 detectors) for every song in your
-corpus and runs a greedy nearest-neighbour pass over the included subset:
-seed with the lowest-BPM song, then repeatedly pick whichever remaining song
-has the smallest BPM gap to the tail of the sequence. Pairs whose BPMs
-differ by ≥ 8 score 0 and are effectively pushed to the end. Songs with no
-cached BPM trail at the very end in their original order.
-
-### Controls
-
-- **Strategy** — only `BPM ladder` ships in v0. The dropdown is the extension
-  point for `harmonic-mix` (once Phase 3 key/chord detectors land) and
-  future strategies.
-- **Weights** — sliders for BPM, Meter, and Energy. v0 honours BPM and
-  Meter; the Energy slider is disabled until that scorer ships.
-- **Corpus picker** — every song is included by default. Uncheck songs you
-  want to skip without removing them from the corpus.
-- **Generated order panel** — shows the ordered list with each pair's Δ BPM,
-  meter match (✓ / ✗), and combined score.
-
-### Saving & exporting
-
-Setlists persist per-annotator under
-`data/setlists/<your-id>/<name>.json`. The **Save** button writes the
-current order plus the strategy + weights used; the dropdown picker lists
-your saved setlists. **Export JSON** downloads the same payload locally.
-
-Server-side writes require team membership — public / demo visitors cannot
-save and will see *Save failed — are you signed in as a team member?*. The
-demo route is blocked entirely, since demo identities have no persistent
-storage.
-
-### What's next
-
-Meter scoring is wired in but currently weighted 0 by default; flip the
-slider up to bias same-meter neighbours. Energy and harmonic-mix scorers
-arrive once the underlying cached signals (energy curves are already in
-`mir_server.py`; key / chord wait on Phase 3) are plumbed through the
-strategy registry. See `future_work/README.md` for the broader DJ-set
-research track.
 
 ## When a feature graduates
 

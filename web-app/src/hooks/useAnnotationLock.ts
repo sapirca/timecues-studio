@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchLock, lockSong, unlockSong, takeOverSong, heartbeat,
-  stanceFor, type LockOutcome, type LockState, type LockStance, type LockView,
+  sessionId, stanceFor, type LockOutcome, type LockState, type LockStance, type LockView,
 } from '../services/annotationLocks';
 import { getCurrentAnnotatorId } from '../context/AnnotatorContext';
 
@@ -118,6 +118,23 @@ export function useAnnotationLock(slug: string | null): AnnotationLockApi {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [holding, slug, apply]);
+
+  // Your lease, but recorded for a tab that has gone silent — closed, or a
+  // reload in a fresh tab. The lease belongs to the person, so this tab takes
+  // it over quietly instead of every heartbeat and save being refused with
+  // "open in another tab" by a tab that no longer exists. A tab that is still
+  // beating (really open and visible) keeps it, and this one says so.
+  const orphaned = holding && !!lock && lock.sessionId !== sessionId() && lock.stale;
+  useEffect(() => {
+    if (!orphaned || !slug) return;
+    let cancelled = false;
+    void lockSong(slug).then((r) => {
+      if (cancelled) return;
+      if (r.ok) { apply(r.state, slug); setFailure(null); }
+      else if (r.conflict) apply(r.conflict, slug);
+    });
+    return () => { cancelled = true; };
+  }, [orphaned, slug, apply]);
 
   // Watch someone else's lease, so it stops saying "Alice is editing" once she
   // has handed the song back.

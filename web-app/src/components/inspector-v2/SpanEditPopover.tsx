@@ -4,13 +4,15 @@
  * boundaries / loops; see AnnotationPointCard.
  */
 
+import { colorSection } from './shared/colorSection';
 import { type CSSProperties } from 'react';
 import type { AnnotationLayer, SpanItem } from '../../types/annotationLayer';
 import { useSettings } from '../../context/SettingsContext';
-import { AnnotationPointCard, forwardCardPatch } from './shared/AnnotationPointCard';
+import { AnnotationPointCard, forwardCardPatch, type CardLaneMove } from './shared/AnnotationPointCard';
 import { prominenceSection } from './shared/ProminenceControl';
 import { pulseSection } from './shared/PulseControl';
 import { envelopeSection } from './shared/EnvelopeControl';
+import { adsrSection, type AdsrSectionProps } from './shared/adsrSection';
 import { parseEnergySpanExport } from '../../utils/energySpan';
 import { detectorBadgeLabel } from './shared/detectorBadge';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
@@ -30,11 +32,15 @@ interface SpanEditPopoverProps {
   /** Raw detector output for this span — shown as a collapsible JSON block on
    *  read-only cards. */
   rawOutput?: unknown;
+  /** Other lanes of this type to move the item to, from the header. */
+  laneMove?: CardLaneMove;
   popoverRef: React.RefObject<HTMLDivElement | null>;
   positionStyle: CSSProperties;
   onChange: (patch: Partial<SpanItem>) => void;
   onDelete: () => void;
   onClose: () => void;
+  /** Done on a draft item — see AnnotationPointCard's `onDone`. */
+  onDone?: () => void;
   /** Play this span (seek to start, play through, autopause at end). */
   onPlay?: () => void;
   onStop?: () => void;
@@ -48,15 +54,15 @@ interface SpanEditPopoverProps {
   /** Resolved grid segments — keeps the bar.beat readout in step with a
    *  split grid, where each segment counts in its own meter from its own bar 1. */
   segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
-  /** Current playhead — enables the crosshair snap button on each time row. */
-  currentTime?: number;
+  /** Extract ADSR for this span — see adsrSection. */
+  adsr?: Omit<AdsrSectionProps, 'envelope'>;
 }
 
 export function SpanEditPopover({
-  layer, span, readOnly = false, rawOutput, popoverRef, positionStyle,
-  onChange, onDelete, onClose,
+  layer, span, readOnly = false, rawOutput, laneMove, popoverRef, positionStyle,
+  onChange, onDelete, onClose, onDone,
   onPlay, onStop, isPlaying,
-  bpm, gridOffset, beatsPerBar, segments, currentTime,
+  bpm, gridOffset, beatsPerBar, segments, adsr,
 }: SpanEditPopoverProps) {
   const { settings } = useSettings();
   const suggestions = settings.spanTaxonomyEnabled ? settings.spanTaxonomy : undefined;
@@ -75,7 +81,6 @@ export function SpanEditPopover({
             points: span.prominence,
             start: span.start,
             end: span.end,
-            currentTime,
             color: layer.color,
             readOnly,
             onChange: (points) => onChange({ prominence: points }),
@@ -94,9 +99,15 @@ export function SpanEditPopover({
           readOnly,
           onChange: (pulse) => onChange({ pulse }),
         })]),
+        // An ⚡ Energy span already shows the envelope it was saved with.
+        ...(!energy && (adsr || span.envelope)
+          ? [adsrSection({ envelope: span.envelope, sources: [], extracting: false, ...adsr })]
+          : []),
+        colorSection({ color: span.color, fallbackColor: layer.color, readOnly, onChange: (color) => onChange({ color }) }),
       ]}
       readOnly={readOnly}
       layerName={layer.name}
+      laneMove={laneMove}
       layerColor={layer.color}
       badge={readOnly ? detectorBadgeLabel(layer.source) : undefined}
       rawOutput={rawOutput}
@@ -111,13 +122,13 @@ export function SpanEditPopover({
       gridOffset={gridOffset}
       beatsPerBar={beatsPerBar}
       segments={segments}
-      currentTime={currentTime}
       onChange={forwardCardPatch<SpanItem>(onChange)}
       onDelete={onDelete}
       onPlay={onPlay}
       onStop={onStop}
       isPlaying={isPlaying}
       onClose={onClose}
+      onDone={onDone}
       popoverRef={popoverRef}
       positionStyle={positionStyle}
     />

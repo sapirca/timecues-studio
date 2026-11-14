@@ -15,7 +15,7 @@
 7. [Sign-In & Identity](#sign-in--identity)
 8. [The Song Sidebar (everywhere)](#the-song-sidebar-everywhere)
 9. [Song Info Bar — Display name, BPM, Time Signature, Grid Offset](#song-info-bar)
-10. [Metronome Panel — the click track, tap tempo](#metronome-panel-dataset-prep)
+10. [Metronome Panel — the click track, tap tempo](#metronome-panel-prepare)
 11. [Check against the models — score the grid against the beat trackers](#check-against-the-models)
 12. [The Shared Visualization Canvas](#the-shared-visualization-canvas)
 13. [The Viz Control Bar (every dropdown, every checkbox)](#the-viz-control-bar)
@@ -23,7 +23,7 @@
 15. [Cue, Span, Loop, and Riff Pattern Layers](#cue-span-loop-and-riff-pattern-layers)
 16. [Inspect Workspace — single-song Algo-Inspect, Consensus, Evaluation](#inspect-workspace)
 17. [Inspect All — leaderboards, drill-down, AutoGuess grid search](#inspect-all)
-18. [Dataset Prep — BPM, batch, storage clear](#dataset-prep)
+18. [Prepare — BPM, batch, storage clear](#prepare)
 19. [Custom Detectors — full Python contract + UI](#custom-detectors)
 20. [Team Dashboard](#team-dashboard)
 21. [Settings — every preference, every default](#settings)
@@ -50,16 +50,16 @@ docker compose up --build
 
 ### First-time tour (≈ 5 minutes)
 
-> ⚠ **The first time you open a song, set it up in Dataprep before anything else.** Every annotation in TimeCues — section boundaries, cues, spans, loops, riff patterns — snaps to the song's beat grid. A song without a BPM, or with a misaligned downbeat, makes the rest of the app useless: the Annotator Tool refuses to open without a BPM, and Algorithm Inspect's metrics are meaningless until the grid is locked. Fix the audio, BPM, and grid in **Dataprep** *first*; only then move on to annotating or running detectors.
+> ⚠ **The first time you open a song, set it up in Prepare before anything else.** Every annotation in TimeCues — section boundaries, cues, spans, loops, riff patterns — snaps to the song's beat grid. A song without a BPM, or with a misaligned downbeat, makes the rest of the app useless: the Annotate tab refuses to open without a BPM, and Inspect's metrics are meaningless until the grid is locked. Fix the audio, BPM, and grid in **Prepare** *first*; only then move on to annotating or running detectors.
 
 1. **Open `http://localhost:5173`** — you land on the main page with two entry cards: **Enter Demo**, plus *one* of **Start a new dataset** (when the corpus has no admin yet) or **Enter `<corpus>`** (once an admin has claimed it). A single deploy hosts a single corpus, so these two states are mutually exclusive.
-2. **Click *Enter `<corpus>`*** and sign in (Google or *Username or email*). On a fresh deploy click *Start a new dataset* instead — that flow asks for a corpus name and lets you sign in with Google or *Username or email*, then drops you straight into Dataprep.
-3. **Land in Dataprep first.** Both sign-in flows put you on the **Dataprep** tab on purpose — that is where you upload audio and lock the grid before anything else works. If the manifest is empty, drop an MP3 into the upload zone (or copy files into `songs/<slug>/<slug>.mp3` on disk), then pick a song in the left sidebar.
-4. **Set BPM** — open the **Song setup** sidebar on the right and expand step **① Tempo**, then type a value or click one of the detected chips. Without BPM the Annotator Tool refuses to open and Inspect's evaluation is gated.
+2. **Click *Enter `<corpus>`*** and sign in (Google or *Username or email*). On a fresh deploy click *Start a new dataset* instead — type a corpus name, sign in with Google or *Username or email* if you aren't already, and click **Create dataset**; it drops you straight into Prepare.
+3. **Land in Prepare first.** Both sign-in flows put you on the **Prepare** tab on purpose — that is where you upload audio and lock the grid before anything else works. If the manifest is empty, drop an MP3 into the upload zone (or copy files into `songs/<slug>/<slug>.mp3` on disk), then pick a song in the left sidebar.
+4. **Set BPM** — open the **Song setup** sidebar on the right and expand step **① Tempo**, then type a value or click one of the detected chips. Without BPM the Annotate tab refuses to open and Inspect's evaluation is gated.
 5. **Lock the grid** — in step **② Downbeat**, press `G` (or click *Set bar 1 here*) at the first audible kick. Then open step **③ Check by ear**, turn the click on, and step the offset with the ‹ › arrows until the click sits on the kick.
-6. **Switch to the *Annotator Tool* tab** in the workspace header and start marking sections with `M`. Confirm the song row's grid-readiness glyph in the sidebar is **emerald ♩** before you begin — amber ♩ means the grid is not locked yet, red ♩ means BPM is still missing.
+6. **Switch to the *Annotate* tab** in the workspace header and start marking sections with `M`. Confirm the song row's grid-readiness glyph in the sidebar is **emerald ♩** before you begin — amber ♩ means the grid is not locked yet, red ♩ means BPM is still missing.
 
-A unified **← Back** chip sits at the top-left of every screen (workspaces, Login, Demo, New-dataset, Settings) and returns to the main page; only the main page itself omits it. The **TimeCues / Studio** brand mark sits immediately to the right of the back chip on every screen and is also a link back to the main page. On the five workspaces, the tab strip next to the brand switches between **Dataprep · Annotator Tool · Algorithm Inspect · Playground · Team** in one click.
+A unified **← Back** chip sits at the top-left of every screen (workspaces, Login, Demo, New-dataset, Settings) and returns to the main page; only the main page itself omits it. The **TimeCues / Studio** brand mark sits immediately to the right of the back chip on every screen and is also a link back to the main page. On the five workspaces, the tab strip next to the brand switches between **Prepare · Annotate · Inspect · Playground · Team** in one click.
 
 ---
 
@@ -72,44 +72,44 @@ Once you've finished the First-time tour, the next step depends on what you came
 | Page | Tab color | When you use it | Deep dive |
 |------|-----------|-----------------|-----------|
 | **Main page** (`/`) | — | Landing screen with entry points to Demo, a new dataset, or the existing corpus. | [The Main Page](#the-main-page) |
-| **Dataprep** (`/prep`) | emerald | First contact with a song — upload audio, set BPM, lock the grid, map it if the count restarts. Also runs batch algorithm passes and clears caches. | [Dataset Prep](#dataset-prep) |
-| **Annotator Tool** (`/annotate`) | cyan | Mark section boundaries (Manual / Auto-guess) and free-form layers (cues, spans, loops, riff patterns) on a single song. | [Annotation Workspace](#annotation-workspace), [Cue, Span, Loop, and Riff Pattern Layers](#cue-span-loop-and-riff-pattern-layers) |
-| **Algorithm Inspect** (`/inspect`) | violet | Run detectors against the audio and score them against your ground truth — per song or batched across the corpus (F1 / precision / recall / MNBD / CSR). | [Inspect Workspace](#inspect-workspace), [Inspect All](#inspect-all) |
+| **Prepare** (`/prep`) | emerald | First contact with a song — upload audio, set BPM, lock the grid, map it if the count restarts. Also runs batch algorithm passes and clears caches. | [Prepare](#prepare) |
+| **Annotate** (`/annotate`) | cyan | Mark section boundaries (Manual / Auto-guess) and free-form layers (cues, spans, loops, riff patterns) on a single song. | [Annotation Workspace](#annotation-workspace), [Cue, Span, Loop, and Riff Pattern Layers](#cue-span-loop-and-riff-pattern-layers) |
+| **Inspect** (`/inspect`) | violet | Run detectors against the audio and score them against your ground truth — per song or batched across the corpus (F1 / precision / recall / MNBD / CSR). | [Inspect Workspace](#inspect-workspace), [Inspect All](#inspect-all) |
 | **Playground** (`/custom`) | amber | Write, upload, and run Python detector scripts; they show up alongside the built-ins everywhere. | [Custom Detectors](#custom-detectors) |
 | **Team** (`/team`) | rose | Cross-annotator dashboard — member tier management, compare layers across the team. Admin / researcher only. | [Team Dashboard](#team-dashboard) |
 | **Settings** (`/settings`) | — | Every preference and default (BPM detectors shown, experimental flags, corpus identity, shared-corpus mode, …). | [Settings](#settings) |
 
 ### How to annotate a song
 
-1. **Lock BPM and grid in Dataprep first.** Boundaries snap to beats — without a locked grid every section lands off-beat. The song row's grid-readiness glyph turns **emerald ♩** when you're ready; red ♩ or amber ♩ means go back to Dataprep.
-2. **Switch to the *Annotator Tool* tab** and pick the song from the sidebar. If the song still has no BPM, the workspace opens a confirmation dialog rather than silently letting you annotate off-grid.
+1. **Lock BPM and grid in Prepare first.** Boundaries snap to beats — without a locked grid every section lands off-beat. The song row's grid-readiness glyph turns **emerald ♩** when you're ready; red ♩ or amber ♩ means go back to Prepare.
+2. **Switch to the *Annotate* tab** and pick the song from the sidebar. If the song still has no BPM, the workspace opens a confirmation dialog rather than silently letting you annotate off-grid.
 3. **Pick the annotation kind in the Annotate sidebar** — click a type chip (the **BOUNDARIES / CUES / SPANS / LOOPS / RIFF PATTERNS** tabs in the horizontal row above the *All annotations* list):
    - **Boundaries → Manual** — the canonical, audio-driven section boundaries. Press `M` while the song plays to mark a transition; `[` / `]` to step between boundaries, `Delete` to remove, `S` to split. See [Annotation Workspace](#annotation-workspace).
    - **Boundaries → Auto-guess** — clusters predictions from 30+ detectors and lets you accept / reject each candidate point. Best for bootstrapping ground truth on a new song. See [Auto-Guess Internals](#auto-guess-internals).
-   - **Cues / Spans / Loops / Patterns / Riff Patterns / Lyrics** — free-form layers. Cues = single points, Spans = labeled intervals, Loops = grid-aligned seamless playback regions, Patterns = labeled cycles, Riff Patterns = a library of reusable rhythmic nodes/combos placed as timed instances, Lyrics = word/line vocal timestamps. See [Cue, Span, Loop, and Pattern Layers](#cue-span-loop-and-pattern-layers).
+   - **Cues / Spans / Loops / Riff Patterns / Lyrics** — free-form layers. Cues = single points, Spans = labeled intervals, Loops = grid-aligned seamless playback regions, Riff Patterns = a library of reusable rhythmic nodes/combos placed as timed instances, Lyrics = word/line vocal timestamps. See [Cue, Span, Loop, and Pattern Layers](#cue-span-loop-and-pattern-layers).
 4. **Mark the workflow stage** (*in progress* → *reviewed*) on each layer when you're done. The sidebar's per-song indicator aggregates the stage across every track.
 
 ### How to research and test algorithms
 
 1. **Make sure a reference layer exists.** Auto-guess (reviewed) or Manual on at least a handful of songs is enough to start comparing — without ground truth, every metric is meaningless.
-2. **Switch to the *Algorithm Inspect* tab** and pick a song.
+2. **Switch to the *Inspect* tab** and pick a song.
 3. **Tick algorithms in the right sidebar** and hit **Run** — each detector's predictions stack as colored timelines on the waveform.
 4. **Choose a reference** (Manual / Auto-guess) and an **evaluation engine**: `mir_eval` for the research-standard F1 / precision / recall, or `Custom` for Mean Nearest-Boundary Distance (MNBD), Critical-Section Recall (CSR), candidate-aware matching, and the optional-weight slider. Metrics appear in the panel under the canvas.
-5. **Send the settings that scored well back to Auto-guess.** Tuning the consensus is only worth something if the parameters reach the annotation you keep: **⬇ Use for Auto-guess**, beside the Consensus Inspect verdict, opens the Annotator Tool's Auto-guess panel on exactly those settings, and **Tune in Consensus Inspect →** there brings them back for another pass. See [Auto-guess panel](#auto-guess-panel).
+5. **Send the consensus that scored well to Auto-guess.** Tuning the consensus is only worth something if it reaches the annotation you keep: **⬇ Copy to Annotator as Auto-guess**, beside the Consensus Inspect verdict, opens the Annotate's Auto-guess panel and **replaces** its points with exactly the boundaries on the preview's **Final** lane, and **Tune in Consensus Inspect →** there brings the settings back for another pass. See [Auto-guess panel](#auto-guess-panel).
 6. **Switch to the *All songs* sub-tab** to batch-run the same selection across the whole corpus. The leaderboard sorts by F1 / precision / recall / MNBD / CSR; each row expands to per-song scores. Use the **AutoGuess grid search** to sweep the auto-guess clustering parameters and find the F1-optimal settings. See [Inspect All](#inspect-all).
-7. **Pre-compute caches in Dataprep** if you want batched runs to be fast — the *Run all algorithms* button warms the cache for every detector × every song, so the batch view loads instantly later.
+7. **Pre-compute caches in Prepare** if you want batched runs to be fast — the *Run all algorithms* button warms the cache for every detector × every song, so the batch view loads instantly later.
 
 ### How to write a custom detector
 
 1. **Switch to the *Playground* tab.** Hidden in Demo Mode.
 2. **Write a Python file** following the contract in [Custom Detectors](#custom-detectors) — the registered entry point returns boundaries (or cues / spans) for an `(audio, sr, **kwargs)` input.
-3. **Upload it** through the Playground UI; the registry hot-reloads and the new detector appears alongside built-ins in Algorithm Inspect and Auto-guess.
+3. **Save it** in the Playground (**+ New**, paste, **Save**); the registry hot-reloads and the new detector appears alongside built-ins in Inspect and Auto-guess.
 4. **Iterate** — edit, re-upload, re-run. Cached results are keyed by the script's file hash, so a tweaked script always produces a fresh run.
 
 ### How to manage a corpus / team (admin-only)
 
 1. **Invite annotators** from the **Team page → Members tab**. Assign each one a tier (Admin / Researcher / Team); changes are persisted to `data/dataset-config.json → peopleByEmail`. See [Team Dashboard](#team-dashboard) and [Roles](#roles-admin-team-leader-vs-annotator).
-2. **Compare layers across annotators** from the Team page or the Annotator Tool's **Compare** sub-tab.
+2. **Compare layers across annotators** from the Team page or the Annotate's **Compare** sub-tab.
 3. **Tune defaults in Settings** — which BPM detectors are shown, which experimental layers are enabled, the corpus name, shared-corpus mode, sign-in modes, and so on. See [Settings](#settings).
 
 ---
@@ -159,8 +159,7 @@ that keeps first-time `docker compose up` and basic local dev lean, while
    without side effects.
 2. **Two gates per detector family** — even when a family's results are
    available, its inspector-sidebar surface stays hidden until you flip the
-   matching per-family flag in **Settings → Experimental annotation types &
-   models**. A family counts as *available* when its sidecar is reachable
+   matching per-family flag in **Settings → Experimental detectors**. A family counts as *available* when its sidecar is reachable
    **or** it already has cached results on disk: the toggle is **enabled** in
    either case, and **disabled** (with an install hint) only when there's
    neither. Because the read path is served in-process, previously-computed
@@ -171,9 +170,14 @@ that keeps first-time `docker compose up` and basic local dev lean, while
    - `experimentalSpanFamily` → Silero-VAD, JDCNet, PANNs, HPSS percussive
    - `experimentalCueExtras` → BeatNet, basic-pitch, librosa key, autochord, librosa onsets
    - `experimentalLoopFamily` → chroma-autocorrelation
-   - `experimentalLyricsFamily` → Whisper-base, CTC forced aligner (the
-     latter aligns the reference lyrics you paste in the Lyrics text panel)
-   - `experimentalLoopsAndPatterns` → the *annotation* paradigm (LoopEditorPanel, RiffPatternEditorPanel)
+   - `experimentalPatternFamily` → LoCoMotif motif discovery
+
+   The LYRICS-family detectors — Whisper-base, Ivrit, CTC forced aligner (the
+   last aligns the reference lyrics you paste in the Lyrics text panel —
+   English or Hebrew: lyrics written in Hebrew letters align against a Hebrew
+   model, a ~1.3 GB download on first use) — have no flag: they appear
+   whenever the lyrics model server is reachable. The Loops, Riff Patterns and
+   Lyrics *annotation* types have no flag either; they are always available.
 
 Switching modes later is just `docker compose down` + a new `up` line —
 your audio / annotations / caches under `data/` persist across all profile
@@ -191,9 +195,8 @@ run the launcher:
    `sklearn` / `soundfile`) — a small, fast install that covers basic
    boundary annotation + evaluation. **Only under `--all` / `./run_all.sh`**
    it additionally installs torch CPU wheels,
-   `tools/requirements-allin1.txt`, `tools/requirements-experimental.txt`,
-   and best-effort `tools/requirements-autochord.txt` (with an apt attempt
-   at the `vamp-plugin-sdk` system lib first) — roughly 3 GB of wheels on a
+   `tools/requirements-allin1.txt` and `tools/requirements-experimental.txt`
+   — roughly 3 GB of wheels on a
    clean machine. Subsequent runs detect the imports and skip the install.
    Note: `basic-pitch` is skipped on Python ≥3.12 — its `tensorflow<2.15.1`
    pin has no wheels for that interpreter; `run_all.sh` builds a Python 3.11
@@ -234,9 +237,9 @@ alias details, batch-run commands, and the switching-modes recipe.
 |------|------------|
 | **Slug** | The filename stem (without `.mp3`) of a song; used as the key in every cache directory and the JSON filename for annotations. |
 | **Annotator** | The signed-in identity. By default each annotator's work lives in its own per-annotator subdirectory (`<base>/<annotator-id>/<slug>.json`); a corpus opted into **shared mode** at creation skips the subdirectory so the whole team edits a single file per song (`<base>/<slug>.json`). |
-| **Boundaries** | Primary, audio-driven boundary annotation — the canonical ground truth. The layer row is labelled **Boundaries 1** (mirroring **Cues 1** / **Spans 1**, though boundaries are a single source per song, not an addable multi-layer); the per-category source picker (Boundaries → Manual / Auto-guess) still uses **Manual** to distinguish hand-drawn boundaries from the Auto-guess source. |
+| **Boundaries** | Primary, audio-driven boundary annotation — the canonical ground truth. Boundaries are layers like the rest — **New layer** adds **Boundaries 2**, **Boundaries 3** …, and every copy of a structure algorithm or boundary detector lands as a layer of its own; the per-category source picker (Boundaries → Manual / Auto-guess) still uses **Manual** to distinguish hand-drawn boundaries from the Auto-guess source. |
 | **Auto-guess** | Algorithm consensus: predictions from 30+ detectors are clustered in time and reviewed point-by-point. |
-| **Cue / Span / Loop / Pattern / Riff Pattern / Lyrics** | Free-form user-created annotation paradigms. Cues = single points, Spans = labeled intervals (may overlap), Loops = grid-aligned seamless playback regions, Patterns = labeled cycles that visually multiply across the song with a sub-beat chip grid (one chip per quarter-of-a-beat, i.e. 16 chips in 4/4, 12 in 3/4), Riff Patterns = a library of reusable **nodes** (short motifs — either a sub-beat *grid* node or a free-form *boundary* node whose blocks aren't quantised at all) and **combos** (node sequences) placed on the timeline as **instances**, Lyrics = word/line vocal timestamps (word = point, line = start–end). Cues and Spans are always available; Loops, Patterns, and Riff Patterns are gated behind the **Experimental annotation types → Loops and Patterns** flag, and Lyrics behind the **Experimental annotation types → Lyrics** flag, in Settings. |
+| **Cue / Span / Loop / Riff Pattern / Lyrics** | Free-form user-created annotation paradigms. Cues = single points, Spans = labeled intervals (may overlap), Loops = grid-aligned seamless playback regions, Riff Patterns = a library of reusable **nodes** (short motifs — each one a line of notes on its own pulse) and **combos** (node sequences) placed on the timeline as **instances**, Lyrics = word/line vocal timestamps (word = point, line = start–end). The old **Patterns** type (labeled cycles on a 16-chip sub-beat grid) is retired: saved Patterns layers were converted into Riff Patterns layers. All five are always available. |
 | **Boundary** | A section transition: a time + label + importance, optionally with alternative candidate times. |
 | **Critical / Optional** | Per-boundary importance flag (★ vs ☆). Critical-section recall (CSR) is reported separately from overall recall. |
 | **Candidate starts** | Multiple defensible start times for a single boundary (e.g. *bass cuts at 1:29.4 OR filter opens at 1:30.0*). Evaluation matches the closest candidate within tolerance. |
@@ -255,18 +258,18 @@ alias details, batch-run commands, and the switching-modes recipe.
 | Slot | Card | Shown when | What it does | Login required? |
 |---|---|---|---|---|
 | 1 | **Enter Demo** | always | Anonymous full UI on the public sample songs. Uploading and downloading are disabled. Edits are cached in your browser and never reach the server — clearing site data (cache / cookies) wipes them. | No |
-| 2 | **Start a new dataset** | no admin claimed yet (bootstrap) | Routes to `/new-dataset`, where you type a corpus name and sign in with **Google** *or* **Username or email**. On success you become the corpus's first admin and land in **Dataprep**. New datasets always start in per-annotator mode; admins can switch to shared-corpus mode later under **Settings → Corpus management**. | Yes — Google or Username/email |
-| 2 | **Enter `<corpus>`** | an admin exists | Sign in (Google or *Username or email*) and resume work on the existing corpus. The card title uses the corpus name; the body shows song count, member count, and the admin count (never specific addresses — the access list isn't exposed to anonymous visitors). When you're already signed in with a real identity, the eyebrow flips to **Signed in**, the call to action becomes **Continue →**, and the body names your tier (e.g. "Resume work on this corpus as admin"). Demo Mode does *not* count as signed in here — the synthetic *Demo visitor* identity can't access a real corpus, so the card keeps the **Returning user** eyebrow and the **Sign in →** call to action even while demo is active. | Yes — sign-in on click |
+| 2 | **Start a new dataset** | no admin claimed yet (bootstrap) | Routes to `/new-dataset`, where you type a corpus name and click **Create dataset**. If you're signed in already, the **Admin** box shows who that is (**Use a different account** to switch); otherwise sign in there with **Google** *or* **Username or email** — signing in doesn't create anything by itself. You become the corpus's first admin and land in **Prepare**. New datasets always start in per-annotator mode; admins can switch to shared-corpus mode later under **Settings → Corpus management**. | Yes — Google or Username/email |
+| 2 | **Enter `<corpus>`** | an admin exists | Sign in (Google or *Username or email*) and resume work on the existing corpus — the card opens the **Annotate** tab. The card title uses the corpus name; the body shows song count, member count, and the admin count (never specific addresses — the access list isn't exposed to anonymous visitors). When you're already signed in with a real identity, the eyebrow flips to **Signed in**, the call to action becomes **Continue →**, and the body names your tier (e.g. "Resume work on this corpus as admin"). Demo Mode does *not* count as signed in here — the synthetic *Demo visitor* identity can't access a real corpus, so the card keeps the **Returning user** eyebrow and the **Sign in →** call to action even while demo is active. | Yes — sign-in on click |
 
 The dataset's **corpus name** comes from the `corpusName` field in `data/dataset-config.json`. It's set when the first admin claims the dataset via the **Start a new dataset** flow, and is shown in three places: the **Enter `<corpus>`** card title on the main page, a cyan chip next to the *TimeCues / Studio* mark in the workspace header (hidden in Demo Mode), and (when set) the browser tab. When unset (e.g. legacy configs from before this flow existed), the labels fall back to "TimeCues Studio". Admins can rename it later from **Settings → Corpus management → Corpus identity**; leaving the field blank reverts every label to the "TimeCues Studio" fallback. Saving the new name reloads the page so the workspace header chip, landing-card title, and browser-tab title update immediately.
 
-> ℹ **The "Start a new dataset" card accepts both sign-in flows.** Google is offered as the default tab when `VITE_GOOGLE_CLIENT_ID` is configured because it ties admin to a verified email, but *Username or email* is available as a fallback so operators without a Google account (or deploys without a configured client ID) can still claim a fresh corpus. Whichever identity you use becomes the corpus's first admin; admin-tier additions after that go through `Team → Invite annotator`.
+> ℹ **The "Start a new dataset" card accepts both sign-in flows.** Google is offered as the default tab when `VITE_GOOGLE_CLIENT_ID` is configured because it ties admin to a verified email, but *Username or email* is available as a fallback so operators without a Google account (or deploys without a configured client ID) can still claim a fresh corpus — on the machine running TimeCues, or where `TC_LOCAL_LOGIN=1` is set (see [Sign-In & Identity](#sign-in--identity)). Whichever identity you use becomes the corpus's first admin; admin-tier additions after that go through `Team → Invite annotator`.
 
-Clicking the existing-dataset card routes through `/login?returnTo=/prep`; after sign-in you're sent straight to **Dataset Prep** so you can verify BPM / grid and pick a song before opening the Annotator Tool from the tab strip. The **Start a new dataset** card routes directly to `/new-dataset` (no `/login` detour, since it carries its own sign-in widget), and on success also lands in Dataset Prep. The unified **← Back** chip in the top-left of every screen returns to the main page.
+Clicking the existing-dataset card routes through `/login?returnTo=/prep`; after sign-in you're sent straight to **Prepare** so you can verify BPM / grid and pick a song before opening the Annotate tab from the tab strip. The **Start a new dataset** card routes directly to `/new-dataset` (no `/login` detour, since it carries its own sign-in widget), and on success also lands in Prepare. The unified **← Back** chip in the top-left of every screen returns to the main page.
 
 ### Demo Mode
 
-Demo Mode is a no-strings, no-sign-in path to try the annotator on the public sample songs. It lives at `/demo` and starts via the **Enter Demo** card on the main page; clicking *Start Demo →* drops you into **Dataset Prep** on the demo corpus, from which the tab strip leads to the Annotator Tool and Algorithm Inspect.
+Demo Mode is a no-strings, no-sign-in path to try the annotator on the public sample songs. It lives at `/demo` and starts via the **Enter Demo** card on the main page; clicking *Start Demo →* drops you into **Prepare** on the demo corpus, from which the tab strip leads to the Annotate tab and Inspect.
 
 Behaviour:
 - **Anonymous** — a synthetic `demo-anonymous` annotator is used internally; the server treats demo visitors as the public tier and serves only the shipped default corpus.
@@ -274,11 +277,12 @@ Behaviour:
 - **No server reads either** — demo `loadAnnotation()` / `loadAutoGuessAnnotation()` read from `localStorage` only, so demo visitors never see other users' work.
 - **Pre-seeded BPM and grid** — each of the three shipped CC0 tracks lands in `/demo` with the correct BPM and grid already filled in: `edm-at-midnight` (130 BPM), `pantheon` (107 BPM, grid offset 11.302s), `phonk-remix` (123 BPM). Values live in [`data-default/song-info/<slug>.json`](../data-default/song-info/) and seed every fresh visit — demo requests resolve `GET /api/song-info/:slug` exclusively under `data-default/`, never under the team corpus. Demo visitors can still nudge or override these — overrides go to `localStorage` under `tc:demo:songInfo:<slug>` exactly like any other demo edit.
 - **Pre-stemmed audio** — Demucs output is baked into the image at [`data-default/stems/<slug>/`](../data-default/stems/) (192 kbps MP3, ~16 MB per song). Clicking **Vocals / Drums / Bass / Other** in the Source picker switches stems instantly without running Demucs (which is admin-gated anyway). Demo `GET /stems/<slug>/<file>` requests resolve exclusively under `data-default/stems/` — the team's `web-app/public/stems/` tree is never consulted, even if an admin has re-run Demucs on a same-named slug locally.
-- **BPM and grid offset are editable** — the **Dataprep** tab's *Song info* card is fully editable in demo (BPM input, time signature, grid offset, **Set bar 1 here** button, Alt+drag on the waveform, and the `G` shortcut all work). Demo edits never touch the canonical `data/song-info/*.json` — they go to `localStorage` under `tc:demo:songInfo:<slug>` and override the server copy for that browser only. **Re-running BPM detection** stays admin-only; demo users still see the cached detector chips from the shipped corpus and can click one to apply.
+- **BPM and grid offset are editable** — the **Prepare** tab's *Song info* card is fully editable in demo (BPM input, time signature, grid offset, **Set bar 1 here** button, Alt+drag on the waveform, and the `G` shortcut all work). Demo edits never touch the canonical `data/song-info/*.json` — they go to `localStorage` under `tc:demo:songInfo:<slug>` and override the server copy for that browser only. **Re-running BPM detection** stays admin-only; demo users still see the cached detector chips from the shipped corpus and can click one to apply.
 - **Upload / download disabled** — the public tier already hides admin-gated buttons (upload, delete, export); demo inherits that automatically.
-- **Playground and Team hidden** — the **Playground** (`/custom`) and **Team** (`/team`) tabs are removed from the workspace tab strip while in demo, and the routes themselves redirect back to `/` when accessed directly. Playground would let an anonymous visitor upload and execute arbitrary Python on the host; both the Vite proxy and `tools/python/custom_server.py` independently refuse `POST /api/custom-scripts/{upload,run/*,reload,*/flags}` and `DELETE /api/custom-scripts/*` when the request carries the `demo-anonymous` identity, so a hand-crafted client that skips the UI still hits a 403. Read-only Playground endpoints (registry list, cached results, source view) stay open so Algorithm Inspect keeps showing the shipped detectors' output in demo.
+- **Playground and Team hidden** — the **Playground** (`/custom`) and **Team** (`/team`) tabs are removed from the workspace tab strip while in demo, and the routes themselves redirect back to `/` when accessed directly. Playground would let an anonymous visitor upload and execute arbitrary Python on the host; both the Vite proxy and `tools/python/custom_server.py` independently refuse `POST /api/custom-scripts/{upload,run/*,reload,*/flags}` and `DELETE /api/custom-scripts/*` when the request carries the `demo-anonymous` identity, so a hand-crafted client that skips the UI still hits a 403. Read-only Playground endpoints (registry list, cached results, source view) stay open so Inspect keeps showing the shipped detectors' output in demo.
 - **Tab strip + Back** — the workspace tab header shows a violet **DEMO** chip while in demo, the corpus-name chip is hidden, and the back button reads "← Exit demo" instead of "← Back".
   - **Three exit triggers**: "← Exit demo" in the tab header, clicking the *TimeCues / Studio* wordmark in the tab header, and the "Exit demo" item in the identity badge dropdown. All three behave the same.
+  - **Signing in also leaves the demo.** From a demo tab, the home page's corpus card (*Enter <corpus>*) opens the sign-in page, and signing in there — Google or username — ends the demo for that tab. Anything you did in the demo stays in this browser, as with *Exit demo*.
   - **Exit dialog with three choices.** When you have any saved demo edits (manual/song-info entries on one or more songs), the trigger opens a modal asking what to do:
     - **Keep my work & exit** — leaves the `tc:demo:*` localStorage in place. Re-entering demo on this device picks up where you left off; signing in as a real user ignores it. Clearing site data still wipes it.
     - **Discard my work & exit** — deletes every `tc:demo:*` key. **No undo.**
@@ -312,32 +316,32 @@ Implementation entry points:
 <!-- /tc-videos:the-five-workspaces -->
 ![Workspace tab strip — Dataprep, Annotator Tool, Algorithm Inspect, Playground, Team, with the corpus-name chip beside the wordmark](images/workspace-tabs.png)
 
-Once you're inside any workspace the top bar shows a **tab strip** — one click to switch between them. The same audio canvas is reused across the first three with mode-specific chrome (emerald = Dataprep, cyan = Annotator Tool, violet = Algorithm Inspect, amber = Playground, rose = Team).
+Once you're inside any workspace the top bar shows a **tab strip** — one click to switch between them. The same audio canvas is reused across the first three with mode-specific chrome (emerald = Prepare, cyan = Annotate, violet = Inspect, amber = Playground, rose = Team).
 
 | # | Route | Tab label | Purpose |
 |---|-------|-----------|---------|
-| 1 | `/prep` | **Dataprep** | BPM, batch algorithm runs, storage management, song upload/delete |
-| 2 | `/annotate` | **Annotator Tool** | Manual / Auto-guess editing on a single song |
-| 3 | `/inspect` | **Algorithm Inspect** | Algorithm comparison and per-song / all-songs evaluation |
+| 1 | `/prep` | **Prepare** | BPM, batch algorithm runs, storage management, song upload/delete |
+| 2 | `/annotate` | **Annotate** | Manual / Auto-guess editing on a single song |
+| 3 | `/inspect` | **Inspect** | Algorithm comparison and per-song / all-songs evaluation |
 | 4 | `/custom` | **Playground** | Write, save, run, and inspect custom Python detectors |
 | 5 | `/team` | **Team** | Admin / researcher cross-annotator dashboard (hidden for other tiers) |
-| ⚗ | `/setlist` | **Setlist** | Experimental — algorithmic DJ-style ordering of the corpus. Hidden until you flip on **Enable Setlist workspace** in Settings → Experimental. |
 | — | `/settings` | — | Every preference and default; reachable from the main page header |
 
 Each workspace shows a **one-line info banner** at the top — a quick reminder of what the page is for and where the relevant controls live:
 
-- **Dataset Prep** — set BPM and align the grid in the **Song setup** sidebar on the right edge of the workspace; switch to [Mapped](#grid-segments--the-mapped-modes-tempo-map) and lay down a tempo map if the song changes meter or restarts its count partway through; once every song has a BPM, move on to the **Annotator Tool** tab above.
-- **Annotator Tool** — annotate the song with **boundaries** (non-overlapping sections), **cues** (single events at a point in time), **spans** (ranged regions that may overlap), **loops** (repeating segments with a cycle length), and **riff patterns** (motifs composed from reusable nodes) — switch types by clicking a type chip in the Annotate sidebar (the tabs in the horizontal row above the *All annotations* list); the edit list sits *below the visualization*. Press **?** for the full shortcut drawer. Toggle **signal rows** (e.g. spectrogram, chroma) from the **SIGNALS** menu in the audio visualization panel to surface different audio features. BPM and grid must be set in Dataset Prep first, since boundaries snap to the grid.
-- **Algorithm Inspect — per song** — the *right sidebar* lists every detector grouped by family, each with a **cached / missing / failed** status. The sidebar splits viewing from computing: a row's **checkbox toggles that result's visibility** on the waveform (cached rows only — a missing row is greyed until you compute it), and each family has **Show all / Hide all** for its cached results. The same visibility is also reachable from the toolbar over the canvas, which in this workspace carries an **ALGOS** and a **DETECTORS** dropdown next to SIGNALS / ANNOTATIONS — useful once you collapse the sidebars to widen the canvas. To compute, click **▶ Run…** at the top: the picker opens **mirroring the sidebar** — the same detectors you have ticked for viewing, and the same stem as the **Stem filter** when that stem can be a run target — so what you were just looking at is what you are about to compute, and nothing arrives pre-ticked on your behalf. **Select missing** at the top of the picker seeds it with every not-yet-cached detector in the expanded families whenever you want that instead. Adjust the ticks, then confirm (anything you tick that is already cached is **re-run and overwritten**). Once you edit the selection inside the picker it is yours: re-opening it, or switching the **Run on** stem target, shows it back unchanged rather than re-seeding. The picker always shows a **Run on** section. Before a song has been separated it explains that detectors run on the full mix and offers a **✂ Separate stems (Demucs)** button that kicks off separation right there (in Dataset Prep, for your own uploads) — while it runs the button shows **⏳ Separating stems…** with a percentage, and once it finishes the per-stem options appear. When stems have been separated for the song (via that button or ▶ Stem this song in Dataset Prep), the **Run on** selector offers **Full mix** (default), any single separated stem (**Vocals / Drums / Bass / Other / Guitar / Piano**), or **All stems**. Choosing a single stem runs the ticked CUE / SPAN / LOOP / Pattern / lyrics detectors against that isolated stem instead of the mix; **All stems** fans each ticked stem-capable detector out to *every* separated stem at once (one job per stem). Either way boundary detectors always use the full mix; results cache separately as **per-stem rows** labelled **"detector · stem"** (e.g. *librosa onsets · drums*, *Whisper-base · vocals*). A single **Stem filter** sits above the family chips and *composes* with them: the chips choose **which** algorithms are shown, then the Stem filter narrows those to one stem. It is **single-select** — **All** (every selected row, full-mix and per-stem), **Full mix** (only the full-mix rows), or one of **Vocals / Drums / Bass / Other / Guitar / Piano** (each selected algorithm's row for that stem — open the algorithm's family chip first so its base row is selected). A per-stem row you tick **by name** — in the toolbar's **ALGOS** dropdown, or as a per-stem row inside a family chip — is exempt: ticking *Whisper-base lyrics · vocals* draws it whatever the Stem filter says, because naming the row is the only way to ask for it and the filter is there to narrow the rows that arrived implicitly (a family chip selects base rows, and their stem variants ride along). Untick it to put it away. A **full-mix** row is the one exception that stays vetoed — the Stem filter has to mean something for the mix — so the app says so rather than leaving you with a ticked box and no lane: while a single stem is selected, the toolbar's **ALGOS** badge reads **drawn / ticked** (e.g. `1/2`) instead of a plain count, the popover opens on an amber note naming the stem and how many ticked rows are full-mix, with a **show all stems** link that resets the filter to **All**, and each affected row is struck through and marked **hidden**. Only stems that already have a per-stem result are pickable; a stem no algorithm has run on yet shows **greyed-out and disabled**, and the whole strip is hidden until at least one per-stem result exists. The Stem filter is **locked to the player's stem** by default: pick *Vocals* in the filter and the player switches to the vocals stem (when the song has one), and pick *Drums* in the player's stem selector and the filter narrows to drums (when some algorithm has drum rows) — so what you hear is what the sidebar shows. **All** is not a stem, so choosing it leaves the audio as it is; **Full mix** in either place plays and shows the mix. To hear one stem while reading another's rows, untick **Lock player stem to stem filter** in the toolbar's **Misc** dropdown; ticking it again brings the filter over to whatever is playing. Each pickable stem button carries a small **count** of how many of your **currently-selected** algorithms have a result on that stem (and **All** shows the running total), so you can tell at a glance which stems your ticked chips cover without clicking each one — tick or untick a family chip and the counts update. (Boundary detectors run on the full mix only, so the Stem filter narrows nothing for them — it's the CUE / SPAN / LOOP / Pattern / lyrics families that produce per-stem rows.) When a single stem is selected, the sidebar makes per-stem availability explicit so a checked family no longer reads as if it applies to that stem: each **family chip's count** flips to *how many of its detectors have a result for that stem* (zero for the full-mix-only MSAF / Ruptures / All-In-One families), and inside an open family every detector row that can't target that stem shows a grey **"mix only"** status and is disabled, while stem-capable rows show **cached / missing** for their *per-stem* variant rather than the full mix. Algorithm Inspect's timeline shows **algorithm overlays** plus any **boundary curators** you tick — the latter are no longer an algorithm family but live in their own [Detectors sidebar](#annotation-workspace) (a **Boundaries** list, empty unless a curator that emits boundaries is installed), shown here to the left of the Algorithms sidebar; the curated detector-sourced *layers* ("*… (stem)*") are listed there too, filtered per stem — everything a detector proposed is in this workspace, and nothing a detector proposed is in the Annotator Tool until you copy it. Click an algorithm lane's label to select it and a small **ⓘ icon** appears just under the lane name (e.g. *Silero-VAD · vocals*); clicking the ⓘ opens a popover with the **Model** (what algorithm/network produced the lane), what it **Extracts**, and its **Input** and **Output** — the same provenance affordance as the curated lanes' ⓘ, so you can confirm what a row is without leaving the canvas. Click the ⓘ again, click elsewhere, or press **Esc** to dismiss it. Visible predictions stack as colored timelines, each drawn to match its output type: boundary detectors as contiguous section blocks, onset / cue detectors as individual tick marks, and span / loop / note / lyric detectors as translucent colored bands. Metrics vs. your manual annotation appear in the panel below. A **Merge** row sits with those lanes: drag boundary lanes onto it (or press the **⊕** on a selected lane) to blend several detectors into one set of boundaries for this song, then commit the result to an editable boundary layer — see [Merge](#merge--blending-several-boundary-lanes-into-one). Detectors that produce a single value for the whole track — the **Key** (librosa key) and the lyrics **Language** (Whisper) — are not timelines; they show as always-visible read-only pills in the toolbar's **Detected** group instead. Use the **All songs** sub-tab for dataset-wide totals.
-- **Algorithm Inspect — all songs** — pick algorithms via the **⚙ options** button at the top, then **Batch run** to evaluate every song at once; the aggregate F1 / precision / recall table appears below with expandable per-song rows.
+- **Prepare** — set BPM and align the grid in the **Song setup** sidebar on the right edge of the workspace; switch to [Mapped](#grid-segments--the-mapped-modes-tempo-map) and lay down a tempo map if the song changes meter or restarts its count partway through; once every song has a BPM, move on to the **Annotate** tab above.
+- **Annotate** — annotate the song with **boundaries** (non-overlapping sections), **cues** (single events at a point in time), **spans** (ranged regions that may overlap), **loops** (repeating segments with a cycle length), and **riff patterns** (motifs composed from reusable nodes) — switch types by clicking a type chip in the Annotate sidebar (the tabs in the horizontal row above the *All annotations* list); the edit list sits *below the visualization*. Press **?** for the full shortcut drawer. Toggle **signal rows** (e.g. spectrogram, chroma) from the **SIGNALS** menu in the audio visualization panel to surface different audio features. BPM and grid must be set in Prepare first, since boundaries snap to the grid.
+- **Inspect — per song** — the *right sidebar* lists every detector grouped by family, each with a **cached / missing / failed** status. The sidebar splits viewing from computing: a row's **checkbox toggles that result's visibility** on the waveform (cached rows only — a missing row is greyed until you compute it), and each family has **Show all / Hide all** for its cached results. The same visibility is also reachable from the toolbar over the canvas, which in this workspace carries an **ALGOS** and a **DETECTORS** dropdown next to SIGNALS / ANNOTATIONS — useful once you collapse the sidebars to widen the canvas. To compute, click **▶ Run…** at the top: the picker opens **mirroring the sidebar** — the same detectors you have ticked for viewing, and the same stem as the **Stem filter** when that stem can be a run target — so what you were just looking at is what you are about to compute, and nothing arrives pre-ticked on your behalf. **Select missing** at the top of the picker seeds it with every not-yet-cached detector in the expanded families whenever you want that instead. Adjust the ticks, then confirm (anything you tick that is already cached is **re-run and overwritten**). Once you edit the selection inside the picker it is yours: re-opening it, or switching the **Run on** stem target, shows it back unchanged rather than re-seeding. Once a run starts the picker stops dimming the page, and it stays undimmed after the run finishes, so the run log panel behind it — the summary, warnings and failures you were waiting for — can be read without closing anything; opening **▶ Run…** again brings the dimming back. The picker always shows a **Run on** section. Before a song has been separated it explains that detectors run on the full mix and offers a **✂ Separate stems (Demucs)** button that kicks off separation right there (in Prepare, for your own uploads) — while it runs the button shows **⏳ Separating stems…** with a percentage, and once it finishes the per-stem options appear. When stems have been separated for the song (via that button or ▶ Stem this song in Prepare), the **Run on** selector offers **Full mix** (default), any single separated stem (**Vocals / Drums / Bass / Other / Guitar / Piano**), or **All stems**. Choosing a single stem runs the ticked CUE / SPAN / LOOP / Pattern / lyrics detectors against that isolated stem instead of the mix; **All stems** fans each ticked stem-capable detector out to *every* separated stem at once (one job per stem). Either way boundary detectors always use the full mix; results cache separately as **per-stem rows** labelled **"detector · stem"** (e.g. *librosa onsets · drums*, *Whisper-base · vocals*). A single **Stem filter** sits above the family chips and *composes* with them: the chips choose **which** algorithms are shown, then the Stem filter narrows those to one stem. It is **single-select** — **All** (every selected row, full-mix and per-stem), **Full mix** (only the full-mix rows), or one of **Vocals / Drums / Bass / Other / Guitar / Piano** (each selected algorithm's row for that stem — open the algorithm's family chip first so its base row is selected). A per-stem row you tick **by name** — in the toolbar's **ALGOS** dropdown, or as a per-stem row inside a family chip — is exempt: ticking *Whisper-base lyrics · vocals* draws it whatever the Stem filter says, because naming the row is the only way to ask for it and the filter is there to narrow the rows that arrived implicitly (a family chip selects base rows, and their stem variants ride along). Untick it to put it away. A **full-mix** row is the one exception that stays vetoed — the Stem filter has to mean something for the mix — so the app says so rather than leaving you with a ticked box and no lane: while a single stem is selected, the toolbar's **ALGOS** badge reads **drawn / ticked** (e.g. `1/2`) instead of a plain count, the popover opens on an amber note naming the stem and how many ticked rows are full-mix, with a **show all stems** link that resets the filter to **All**, and each affected row is struck through and marked **hidden**. Only stems that already have a per-stem result are pickable; a stem no algorithm has run on yet shows **greyed-out and disabled**, and the whole strip is hidden until at least one per-stem result exists. The Stem filter is **locked to the player's stem** by default: pick *Vocals* in the filter and the player switches to the vocals stem (when the song has one), and pick *Drums* in the player's stem selector and the filter narrows to drums (when some algorithm has drum rows) — so what you hear is what the sidebar shows. **All** is not a stem, so choosing it leaves the audio as it is; **Full mix** in either place plays and shows the mix. To hear one stem while reading another's rows, untick **Lock player stem to stem filter** in the toolbar's **Misc** dropdown; ticking it again brings the filter over to whatever is playing. Each pickable stem button carries a small **count** of how many of your **currently-selected** algorithms have a result on that stem (and **All** shows the running total), so you can tell at a glance which stems your ticked chips cover without clicking each one — tick or untick a family chip and the counts update. (Boundary detectors run on the full mix only, so the Stem filter narrows nothing for them — it's the CUE / SPAN / LOOP / Pattern / lyrics families that produce per-stem rows.) When a single stem is selected, the sidebar makes per-stem availability explicit so a checked family no longer reads as if it applies to that stem: each **family chip's count** flips to *how many of its detectors have a result for that stem* (zero for the full-mix-only MSAF / Ruptures / All-In-One families), and inside an open family every detector row that can't target that stem shows a grey **"mix only"** status and is disabled, while stem-capable rows show **cached / missing** for their *per-stem* variant rather than the full mix. Inspect's timeline shows **algorithm overlays** plus any **boundary curators** you tick — the latter are no longer an algorithm family but live in their own [Detectors sidebar](#annotation-workspace) (a **Boundaries** list, empty unless a curator that emits boundaries is installed), shown here to the left of the Algorithms sidebar; the curated detector-sourced *layers* ("*… (stem)*") are listed there too, filtered per stem — everything a detector proposed is in this workspace, and nothing a detector proposed is in the Annotate tab until you copy it. Highlight a region and the Detectors sidebar can also run one detector on that section alone, then merge what it found into the lane or replace the section with it — see [Run a detector on just the highlighted section](#annotation-workspace). Click an algorithm lane's label to select it and a small **ⓘ icon** appears just under the lane name (e.g. *Silero-VAD · vocals*); clicking the ⓘ opens a popover with the **Model** (what algorithm/network produced the lane), what it **Extracts**, and its **Input** and **Output** — the same provenance affordance as the curated lanes' ⓘ, so you can confirm what a row is without leaving the canvas. Click the ⓘ again, click elsewhere, or press **Esc** to dismiss it. Any lane can be deleted from its **⋮** menu — an algorithm's lane deletes its saved result for the song, and its row reads **missing** until you run it again (see [Delete or hide a lane](#delete-or-hide-a-lane)). Visible predictions stack as colored timelines, each drawn to match its output type: boundary detectors as contiguous section blocks, onset / cue detectors as individual tick marks, and span / loop / note / lyric detectors as translucent colored bands. Metrics vs. your manual annotation appear in the panel below. A **Merge** row sits with those lanes: drag boundary lanes onto it (or pick **⊕ Add to merge** from a lane's **⋮** menu) to blend several detectors into one set of boundaries for this song, then save the result as an editable boundary layer — see [Merge](#merge--blending-several-boundary-lanes-into-one). Detectors that produce a single value for the whole track — the **Key** (librosa key) and the lyrics **Language** (Whisper) — are not timelines; they show in the toolbar's **Info** box instead: a grey, read-only frame (not a button) with one line per value, each tagged with a short name — e.g. **Lang** `en` above **Key** `C maj`. Use the **All songs** sub-tab for dataset-wide totals.
+- **Beat grid — My grid / Automatic.** **MSAF**, **Ruptures** and **LoCoMotif** average their features over each beat, so the **▶ Run…** picker has a **Beat grid** section (under **Run on**) asking whose beats: **My grid** (the default) uses this song's grid exactly as you set it in Dataset Prep → Song Setup, tempo splits and hand-placed beats included; **Automatic** lets the algorithm track its own beats, which may drift from your bars. Whenever any of those three is ticked, the line above the Run button says which it will be — green *Runs on your grid*, amber *Runs on their own beats (automatic)* — and the run log's headings say it too (*MSAF · on my grid*). Every saved result shows its grid: in the picker a cached row reads **✓ my grid** or **✓ auto grid** (amber when it was made on the other grid — **Run missing** then counts it and re-runs it on the grid you picked), and on the timeline each of their lanes carries a **my grid** / **auto grid** tag beside its name, selected or not. Results from before this choice existed read **auto grid**. With **My grid** on a song that has no BPM yet, the picker says so and links to Dataset Prep, and those runs fail with the same message rather than guessing. **All-In-One** has no choice: its model finds beats and sections together and always uses its own. **Detectors** have no choice at all — they always cut on your grid, and refuse to run on a song with no BPM (*"This song has no beat grid yet…"*); set the grid first.
+- **Inspect — all songs** — pick algorithms via the **⚙ options** button at the top, then **Batch run** to evaluate every song at once; the aggregate F1 / precision / recall table appears below with expandable per-song rows.
 
 Click the **×** on the right of any banner to dismiss it; the choice is remembered per browser, so dismissed banners stay hidden on future visits.
 
-**The address bar remembers what you are looking at.** Dataprep, the Annotator Tool and Algorithm Inspect keep the current view in the page URL: the open song, the annotation type you are editing, what Algorithm Inspect is examining and which of its tabs is open, the algorithm lanes drawn on the timeline (per-stem lanes included), the curated detectors shown, which signal rows are on, the Manual / Auto-guess / Prominence / Consensus switches, the algorithm families opened in the sidebar, the stem the player is playing, the **Stem filter**, whether the stem lock is off, the playback speed, the grid unit, and — once you zoom in — the stretch of the song on screen. Refreshing the page brings you back to exactly that view, and copying the URL is how you show someone else what you are looking at. They open the same song, with the same lanes drawn over the same seconds of music, even when their screen is a different width (they need access to the song and its algorithm results). A link to a song that is not in the recipient's dataset opens their first song instead. A link that turns the stem lock off does so only for that visit; it does not change the recipient's own **Misc** setting. Opening a workspace without a song in the URL (from the main page, say) reopens the last song you had open in that browser.
+**The address bar remembers what you are looking at.** Prepare, Annotate and Inspect keep the current view in the page URL: the open song, the annotation type you are editing, what Inspect is examining and which of its tabs is open, the algorithm lanes drawn on the timeline (per-stem lanes included), the curated detectors shown, which signal rows are on, the Manual / Auto-guess / Prominence / Consensus switches, the algorithm families opened in the sidebar, the stem the player is playing, the **Stem filter**, whether the stem lock is off, the playback speed, the grid unit, and — once you zoom in — the stretch of the song on screen. Refreshing the page brings you back to exactly that view, and copying the URL is how you show someone else what you are looking at. They open the same song, with the same lanes drawn over the same seconds of music, even when their screen is a different width (they need access to the song and its algorithm results). A link to a song that is not in the recipient's dataset opens their first song instead. A link that turns the stem lock off does so only for that visit; it does not change the recipient's own **Misc** setting. Opening a workspace without a song in the URL (from the main page, say) reopens the last song you had open in that browser.
 
-When the sidebar list is empty, the workspace body shows a context-aware empty state instead of "Select a song above to begin": Dataset Prep prompts you to **Upload songs to begin** (with an inline `+ Upload songs` shortcut for admins); the other workspaces tell you to open **Dataset Prep** to upload first. Once songs exist but none is selected, the prompt shifts per workspace — Dataset Prep nudges you to **set BPM and align the grid**, Annotator Tool says **begin annotating**, Algorithm Inspect says **compare algorithms**.
+When the sidebar list is empty, the workspace body shows a context-aware empty state instead of "Select a song above to begin": Prepare prompts you to **Upload songs to begin** (with an inline `+ Upload songs` shortcut for admins); the other workspaces tell you to open **Prepare** to upload first. Once songs exist but none is selected, the prompt shifts per workspace — Prepare nudges you to **set BPM and align the grid**, Annotate says **begin annotating**, Inspect says **compare algorithms**.
 
-A **"BPM not set"** confirmation dialog guards the Annotator Tool, since annotations snap to the grid and a missing BPM means every section lands off-beat. It appears two ways: **clicking a song that has no BPM yet** while in Annotator Tool (instead of jumping straight into the editor), and **switching into the Annotator Tool tab** while the already-selected song has no BPM — the case you hit right after uploading, where the song is already loaded in Dataprep. The dialog offers **Set BPM in Dataset Prep** (recommended; switches the workspace, selecting the same song), **Annotate anyway** (proceeds without a grid), or **Cancel**. Songs that already have a BPM open straight into the editor as before; re-selecting the currently-loaded song never re-prompts, and once you've chosen **Annotate anyway** for a song the tab-switch warning stays quiet for it for the rest of the session.
+A **"BPM not set"** confirmation dialog guards the Annotate tab, since annotations snap to the grid and a missing BPM means every section lands off-beat. It appears two ways: **clicking a song that has no BPM yet** while in Annotate (instead of jumping straight into the editor), and **switching into the Annotate tab** while the already-selected song has no BPM — the case you hit right after uploading, where the song is already loaded in Prepare. The dialog offers **Set BPM in Prepare** (recommended; switches the workspace, selecting the same song), **Annotate anyway** (proceeds without a grid), or **Cancel**. Songs that already have a BPM open straight into the editor as before; re-selecting the currently-loaded song never re-prompts, and once you've chosen **Annotate anyway** for a song the tab-switch warning stays quiet for it for the rest of the session.
 
 ### On a phone
 
@@ -345,25 +349,27 @@ TimeCues Studio has a phone layout. It is the same app, the same songs and the s
 
 - **`m.timecues-studio.lol`**, the phone address. The rule is the address: `m.<host>` is the phone shell and the host without it is the desktop one, so the two never fight over the same URL. That holds while developing too — `http://m.localhost:5174/` is the phone shell of your dev server, `http://localhost:5174/` the desktop one.
 - **Any phone-sized touch screen** on the main address. A phone that opens the desktop address is not left with a squeezed desktop.
-- **`?mobile=1`** on any address, for a quick look on a computer without changing the address (in Chrome, turn on the device toolbar with Cmd+Shift+M so touch works too). `?mobile=0` does the reverse on the phone address. Both last for that visit only and are not remembered.
+- **`?mobile=1`** on any address, for a quick look on a computer without changing the address (in Chrome, turn on the device toolbar with Cmd+Shift+M so touch works too). `?mobile=0` does the reverse on the phone address. Both last for that browser tab — reloads keep them, closing the tab forgets them — and nothing is remembered browser-wide.
+
+> **Google sign-in needs an address Google will accept.** It allows `http://` only for `localhost` and `127.0.0.1`; everything else must be `https://`, and the exact origin must be listed in the OAuth client's *Authorized JavaScript origins*. `https://m.<your domain>` qualifies once it is listed. The dev phone address `http://m.localhost:5174` never can, so the sign-in screen says so there and you use **Username or email** instead — or sign in at `http://localhost:5174/?mobile=1`, which is the phone shell on an address Google accepts.
 
 Only one thing is remembered: **Desktop site**, in the avatar menu, which is how a phone leaves the phone layout for good. It takes you to the desktop address and keeps you there on later visits, until you open the phone address again.
 
 #### The frame: top bar, bottom tabs, panels
 
-<img src="images/mobile-dataprep.png" width="260" alt="Dataprep on a phone: song name and avatar on top, the Song setup button under them, the toolbar, the player, and the workspace tabs along the bottom"> <img src="images/mobile-songs.png" width="260" alt="The song list, opened from the song name in the top bar"> <img src="images/mobile-account.png" width="260" alt="The account menu, opened from the avatar">
+<img src="images/mobile-dataprep.png" width="260" alt="Prepare on a phone: song name and avatar on top, the Song setup button under them, the toolbar, the player, and the workspace tabs along the bottom"> <img src="images/mobile-songs.png" width="260" alt="The song list, opened from the song name in the top bar"> <img src="images/mobile-account.png" width="260" alt="The account menu, opened from the avatar">
 
-- **The workspace tabs are a bar along the bottom:** **Dataprep · Annotate · Inspect · Playground · Team**. They are the desktop tabs, in the same order, with the same colours and the same rules about who sees which one (Team only for researchers and admins, Playground not in demo). **Setlist** is not in the bar; when it is turned on in Settings it is in the avatar menu.
+- **The workspace tabs are a bar along the bottom:** **Prepare · Annotate · Inspect · Playground · Team**. They are the desktop tabs, in the same order, with the same colours and the same rules about who sees which one (Team only for researchers and admins, Playground not in demo).
 - **The top bar names the song you are on.** Tap the song name (**▾**) to open the song list, which on desktop is the left sidebar. Picking a song closes it again.
-- **The avatar**, top right, opens the account menu: who you are signed in as, the corpus, **Settings**, **Setlist**, **Home**, **Desktop site**, and **Sign out** (or **Exit demo**).
-- **Each workspace's sidebars are buttons in a second row of the top bar:** **Song setup** in Dataprep, **Edit list** and **Annotation tools** in the Annotator Tool, **Algorithms** and **Detector layers** in Algorithm Inspect. A button opens its sidebar over the timeline, with the same contents as on desktop. Tap it again (it shows **✕** while open) or tap the sidebar's own **›** to go back to the timeline.
+- **The avatar**, top right, opens the account menu: who you are signed in as, the corpus, **Settings**, **Home**, **Desktop site**, and **Sign out** (or **Exit demo**).
+- **Each workspace's sidebars are buttons in a second row of the top bar:** **Song setup** in Prepare, **Edit list** and **Annotation tools** in the Annotate tab, **Algorithms** and **Detector layers** in Inspect. A button opens its sidebar over the timeline, with the same contents as on desktop. Tap it again (it shows **✕** while open) or tap the sidebar's own **›** to go back to the timeline.
 - **Annotation tools dock to the bottom half**, not over the whole screen: you annotate by looking at the timeline, so the lanes stay visible and draggable above them, the transport stays on screen, and opening the tools brings the lanes up into that space (the viz toolbar stands down while they are open, since the sheet carries what you are using). Drag or tap the grip at the top of the sheet — **Expand** — to take it full height for the long lists, and **Shrink** to put the timeline back.
 
-<img src="images/mobile-song-setup.png" width="260" alt="Song setup open full-screen in Dataprep"> <img src="images/mobile-annotation-tools.png" width="260" alt="Annotation tools open full-screen in the Annotator Tool"> <img src="images/mobile-algorithms.png" width="260" alt="The Algorithms sidebar open full-screen in Algorithm Inspect">
+<img src="images/mobile-song-setup.png" width="260" alt="Song setup open full-screen in Prepare"> <img src="images/mobile-annotation-tools.png" width="260" alt="Annotation tools open full-screen in the Annotate tab"> <img src="images/mobile-algorithms.png" width="260" alt="The Algorithms sidebar open full-screen in Inspect">
 
 #### The timeline
 
-<img src="images/mobile-timeline.png" width="260" alt="The Annotator Tool timeline: the narrow vertical row names on the left, the 3-Band waveform and the annotation lanes"> <img src="images/mobile-signals-sheet.png" width="260" alt="The Signals menu opened as a sheet from the bottom of the screen"> <img src="images/mobile-select.png" width="260" alt="A stretch of the song selected by dragging a finger across the 3-Band row">
+<img src="images/mobile-timeline.png" width="260" alt="The Annotate tab timeline: the narrow vertical row names on the left, the 3-Band waveform and the annotation lanes"> <img src="images/mobile-signals-sheet.png" width="260" alt="The Signals menu opened as a sheet from the bottom of the screen"> <img src="images/mobile-select.png" width="260" alt="A stretch of the song selected by dragging a finger across the 3-Band row">
 
 - **The toolbar wraps onto short rows** of smaller buttons, so every control stays in view. Its menus say their names (**Signals**, **Annotations**, **Algorithms**, **Detectors**, **More**), and each opens as a sheet from the bottom of the screen. Tap **Done** or the dimmed timeline to close it.
 - **Touch works everywhere the mouse does.** Drag a finger sideways across a row to select a stretch of the song, and drag a boundary, cue, loop or span edge to move it. A vertical swipe over the timeline still scrolls the page, so a selection is a *sideways* drag. On touch screens the small handles have a larger grab area than they show, without ever covering the middle of a short loop or span, which still moves the whole band. A tap on the timeline closes any open menu or card.
@@ -375,7 +381,7 @@ Only one thing is remembered: **Desktop site**, in the avatar menu, which is how
 
 <img src="images/mobile-row-sheet.png" width="260" alt="The row sheet for the Spectrogram row: Show in this row, Row height, Draw on this row, Move up, Move down, Hide row"> <img src="images/mobile-marks.png" width="260" alt="A boundary layer drawn over a taller Spectrogram row as a thin line">
 
-Tapping a row's name opens its **row sheet**, with the full name and the row's controls:
+Tapping a row's name opens its **row sheet**, with the full name and the row's controls. On a signal row it starts with two short lines, what the signal shows and how it is computed, and then the controls:
 
 - **Show in this row** (signal rows): pick any of the 12 signals to replace this one in the same place. A signal that is already another row (marked **on**) moves here instead of appearing twice. The row keeps its height and its marks.
 - **Row height** (signal rows): **S**, **M** (the row's normal height), **L** or **XL**. XL gives a tall spectrogram without leaving the stack of rows it lines up with. Remembered in this browser.
@@ -384,12 +390,12 @@ Tapping a row's name opens its **row sheet**, with the full name and the row's c
 
 Tapping an annotation lane's name also makes it the active layer, as clicking it does on desktop.
 
-#### Edit list and Algorithm Inspect
+#### Edit list and Inspect
 
-<img src="images/mobile-edit-list.png" width="260" alt="The Edit list: the annotation list on its own, with the timeline hidden"> <img src="images/mobile-inspect.png" width="260" alt="Algorithm Inspect on a phone"> <img src="images/mobile-detector-layers.png" width="260" alt="The Detector layers sidebar open full-screen">
+<img src="images/mobile-edit-list.png" width="260" alt="The Edit list: the annotation list on its own, with the timeline hidden"> <img src="images/mobile-inspect.png" width="260" alt="Inspect on a phone"> <img src="images/mobile-detector-layers.png" width="260" alt="The Detector layers sidebar open full-screen">
 
-- **Edit list** (Annotator Tool) shows the edit list on its own, without the timeline above it, three cards to a row. Tap it again (**✕**) to bring the timeline back.
-- In **Algorithm Inspect**, **Algorithms** opens the algorithm list (tick, run, show/hide) and **Detector layers** the curated detector layers, each full-screen.
+- **Edit list** (Annotate) shows the edit list on its own, without the timeline above it, three cards to a row. Tap it again (**✕**) to bring the timeline back.
+- In **Inspect**, **Algorithms** opens the algorithm list (tick, run, show/hide) and **Detector layers** the curated detector layers, each full-screen.
 
 #### Signing in
 
@@ -428,9 +434,11 @@ The accepted character set is **letters, digits, underscore, dot, hyphen, and `@
 | Sign-in path | Verification | Annotator ID format | Example | Eligible for admin? |
 |---|---|---|---|---|
 | **Google** | Email verified by Google OAuth | `<email>` (no prefix) | `you@example.com` | Yes |
-| **Username or email** | Self-attested, **not verified** | `local-<sanitized>` | `local-jane` or `local-jane@example.com` | Yes (any tier admin assigns) |
+| **Username or email** | Self-attested, **not verified** — works only on the machine running TimeCues | `local-<sanitized>` | `local-jane` or `local-jane@example.com` | Yes (any tier admin assigns) |
 
 The self-attested identity is namespaced under `local-…` so it cannot collide with a Google-verified id — typing a Google user's email in the identity field does **not** impersonate them.
+
+**The server checks who you are.** A Google sign-in sends Google's signed token to the server, which verifies it before it opens your session. The session is a cookie your browser cannot read or alter. Every request is judged by that session, so you can't become somebody else by editing what the page sends. Because *Username or email* has no password, the server accepts it only from the machine TimeCues runs on: your own dev server, or an SSH tunnel to it. On a public site the field says so, and you sign in with Google. An operator can allow username sign-in for a private Docker install by setting `TC_LOCAL_LOGIN=1`. Sessions last 30 days; **Sign out** ends yours.
 
 When you type a valid identity, the form checks in real time:
 
@@ -481,30 +489,32 @@ A song is normally **solo**: every annotator keeps their own layers document, an
 
 Collaboration is **per song**, not per corpus. Making one song collaborative leaves every other song alone, and the Compare sub-tab keeps working normally everywhere else.
 
-**Turning it on** (admin only): open the song in the **Annotator Tool**. Just above the editor, a line reads *Per-annotator song — everyone keeps their own annotation*; click **Make collaborative…**, pick whose existing work seeds the shared annotation — or start from an empty one — and confirm. Only admins see that line; for everyone else a solo song looks exactly as it always has. The seed is copied; the annotator's own document is left untouched as history. A song that is already collaborative is never re-seeded, so a second click can't wipe the team's work.
+**Turning it on** (admin only): open the song in any workspace that shows its title — **Prepare**, **Annotate**, **Inspect**. On the right of the song title, click **Collaborative…**, pick whose existing work seeds the shared annotation — an annotator's own document, a team annotation archived when collaboration was stopped earlier (listed with its date, revision and item count), or an empty one — and confirm. Picking an archived team annotation brings back its whole version history too. Only admins see that button; for everyone else a solo song looks exactly as it always has. The seed is copied; the annotator's own document is left untouched as history. A song that is already collaborative is never re-seeded, so a second click can't wipe the team's work.
 
-**Editing one.** A collaborative song opens **read-only** for everyone. To change anything you press **Lock to edit**; when you are done you press **Unlock**, which hands it back and makes you read-only again. Until you unlock, nobody else can take it — that is the point.
+**Editing one.** A collaborative song opens **read-only** for everyone. To change anything you press **Grab**; when you are done you press **Let go**, which hands it back and makes you read-only again. Until you let go, nobody else can grab it — that is the point.
 
 A bar directly under the song title — above the waveform, so it is on screen the moment you open the song — names who has it:
 
 | State | What you see | What you can do |
 |---|---|---|
-| Free | *No one is editing* | **Lock to edit** |
-| Yours | *You're editing · 12 min* | edit; **Unlock** when done |
+| Free | *No one is editing* | **Grab** |
+| Yours | *You're editing · 12 min* | edit; **Let go** when done |
 | Someone else's | *Alice Cohen is editing* | read, play, export — **Take over** (asks first) |
 | Theirs, gone quiet | *Alice Cohen · no heartbeat for 8 min (tab likely closed)* | **Take over** |
 
 Two clocks feed that line. A **heartbeat** every minute from the holder's open tab, and the time since their last actual **save**. So "is editing", "holds this · no changes for 26 min" and "no heartbeat for 8 min" mean three different things, and the wording stays honest about which one was observed — a silent heartbeat is evidence a tab closed, not proof.
 
-While the lock is someone else's, the annotation panel is dimmed and marked **🔒 Read-only**, and edits are refused rather than accepted-then-dropped: a marker won't move, a layer won't appear. You can still play, scrub, inspect and export.
+The lock is yours, not your tab's. Open a song you hold in a new tab (or after closing the one you grabbed it in) and, once the old tab has gone quiet for a few minutes, the open tab takes the lock over by itself. Only while the other tab is still open and showing the song does this one say *you have this song open in another tab*.
 
-> A lock is **never** taken away automatically. Going quiet only changes how the take-over button asks. If you take a song from someone, their work up to that moment is already saved as a version, and their screen switches to read-only with an offer to keep their own copy as a separate layer.
+While someone else has the song, the annotation panel is dimmed and marked **🔒 Read-only**, and edits are refused rather than accepted-then-dropped: a marker won't move, a layer won't appear. You can still play, scrub, inspect and export.
 
-**Every hand-off is a saved version.** Each collaborative song keeps its own history — who held it, how long, what changed — and the **History** panel can show any earlier version and restore it. Restoring writes the old content forward as a *new* version, so nothing is ever overwritten and a restore you regret is itself undoable. Locking and unlocking without editing records nothing; the history is a list of real changes, not of clicks.
+> A grabbed song is **never** taken away automatically. Going quiet only changes how the take-over button asks. If you take a song from someone, their work up to that moment is already saved as a version, and their screen switches to read-only with an offer to keep their own copy as a separate layer.
+
+**Every hand-off is a saved version.** Each collaborative song keeps its own history — who held it, how long, what changed — and the **History** panel can show any earlier version and restore it. Restoring writes the old content forward as a *new* version, so nothing is ever overwritten and a restore you regret is itself undoable. Grabbing and letting go without editing records nothing; the history is a list of real changes, not of clicks.
 
 > ⚠ **Deleting a collaborative song deletes its history too.** "Delete everything" removes the shared annotation and every saved version along with the audio. Export them first if they matter — the confirmation will tell you how many versions are about to go.
 
-**Turning it off** (admin only): **Stop collaborating**, at the right-hand end of the shared-song bar, returns the song to per-annotator editing. The shared annotation and its whole history are archived rather than deleted, but new edits go back to each annotator's own document.
+**Turning it off** (admin only): **Stop collaborating**, at the right-hand end of the shared-song bar, returns the song to per-annotator editing. The shared annotation and its whole history are archived rather than deleted, and the next time each annotator opens the song they get **whichever is newer** — the team's last version or their own document from before the song was shared. In practice that is almost always the team's version, since nobody's own document changes while the song is shared. A blue bar above the toolbar says which one they got and offers the other: **Use my own instead** (or **Start empty instead** if they had no document of their own), or **Use the team's instead**. Switching keeps whatever it replaces, edits included, so switching back gets them back. **Keep this** hides the bar.
 
 > ⚠ **Corpus-wide shared mode** (`sharedCorpus` in `data/dataset-config.json`, admin-only, experimental) is the older, blunter version of this and applies to auto-guess data only. Prefer per-song collaboration above.
 
@@ -530,14 +540,16 @@ While the lock is someone else's, the annotation panel is dimmed and marked **�
 <!-- /tc-videos:the-song-sidebar-everywhere -->
 ![The Song Sidebar fixed to the left edge — header actions, the "your songs" list, and the storage footer](images/song-sidebar.png)
 
-The Song Sidebar is the narrow panel fixed to the left edge of the window. It stays put as you move between the four main screens (Annotator Tool, Algorithm Inspect, Dataprep, and Playground), giving you one consistent place to see the list of songs and choose the one you're working on.
+The Song Sidebar is the narrow panel fixed to the left edge of the window. It stays put as you move between the four main screens (Annotate, Inspect, Prepare, and Playground), giving you one consistent place to see the list of songs and choose the one you're working on.
 
 Three of its settings are remembered in your browser between visits (so the sidebar looks the same next time you open the app):
 - Whether you've collapsed it out of the way is saved under the key `tc:song-sidebar-collapsed`.
 - How wide you've dragged it is saved under `tc:song-sidebar-width`. You can resize it anywhere from **180 px** (narrow) to **560 px** (wide); it opens at **256 px** the first time.
 - What you've set **Group by** to is saved under `tc:song-sidebar-group-by`, and which groups you've folded under `tc:song-sidebar-collapsed-groups`.
 
-Collapsing a side panel hands its width to the workspace instead of leaving empty margin: the centre column — toolbar, waveform, and every timeline lane under it — widens by exactly what the panel gave up, so you see more of the song at the same zoom. Collapse both the Song Sidebar and the right-hand panel (Song setup / Annotate / Algorithms) and the canvas stretches nearly edge to edge. Re-opening a panel shrinks the column back.
+**Every side panel resizes the same way.** The Song Sidebar, the right-hand panels (**Song setup** in Prepare, **Annotate**, **Algorithms**, **Detectors**), the Playground's rails and the **?** keyboard-shortcuts drawer each carry a small grip on their inner edge — the short vertical bar halfway down the seam. Drag it to make the panel wider or narrower, or double-click it to put the panel back to its default width. Until you drag one, every side panel opens at the same share of the window (**18 %**), so **Song setup** is as wide as the song list and a smaller screen gets narrower panels, leaving the timeline its room. Inspect is the exception: its **Detectors** and **Algorithms** panels sit side by side, so each opens at **12 %**. A panel you have dragged keeps that width in this browser; double-click its grip to make it follow the window again. **Song setup** goes down to **280 px**; its BPM / Meter / Bar 1 readout shrinks its digits to fit rather than cutting them off.
+
+Collapsing a side panel hands its width to the workspace instead of leaving empty margin: the centre column — toolbar, waveform, and every timeline lane under it — widens by exactly what the panel gave up, so you see more of the song at the same zoom. Collapse both the Song Sidebar and the right-hand panel (Song setup / Annotate / Algorithms) and the canvas stretches nearly edge to edge. Re-opening a panel shrinks the column back. In the **Annotate** tab, **Inspect** and **Prepare** with a song open, the column always fills the whole width between the panels, however wide the window — they are timelines, and every pixel is more of the song. The toolbar's controls stay together at their normal spacing, left-aligned, so related ones like Grid and Snap never drift apart on a wide screen. **Prepare** with no song open and the **All songs** table keep a reading-width cap on a very wide screen, and only grow past it when you collapse a panel.
 
 ### Header actions
 
@@ -567,7 +579,7 @@ What appears in the song list depends on whether you're a signed-in team member 
 | **Collection** | One heading per **collection you named yourself** — see [Collection](#collection-your-own-grouping). Sorted alphabetically, with the unfiled songs last under an italic **No collection**. This is the only grouping the app can't work out on its own, and the only one you have to fill in. |
 | **Tempo readiness** | **No BPM yet** (first — those are the songs blocking work) and **Ready to annotate**, the same split the row's ♩ glyph shows. |
 | **Annotation status** | **In progress**, **All reviewed**, **Not started** — the same verdict the row's annotation dot shows, so a heading and a dot can never disagree. |
-| **Shared / per-annotator** | The song's own collaborative setting — the one its header offers as *Make collaborative…*: **Shared with the team** (one team document behind an edit lock) or **Per-annotator** (everyone keeps their own copy). See [Collaborative songs](#collaborative-songs-one-shared-annotation-one-editor-at-a-time). |
+| **Shared / per-annotator** | The song's own collaborative setting — the one its header offers as *Collaborative…*: **Shared with the team** (one team document that one person grabs at a time) or **Per-annotator** (everyone keeps their own copy). See [Collaborative songs](#collaborative-songs-one-shared-annotation-one-editor-at-a-time). |
 | **Who else annotated** | **Shared with the team** first (a collaborative song is the team's document, so it is never filed by a head count), then how many annotators have work on each of the rest: **More than one annotator**, **Only mine**, **Someone else's** (one annotator, and it isn't you — work waiting for you to look at), **Not annotated yet**. Head count and shared setting are *different questions* — two people annotating a song separately, each in their own copy, does not make it a shared song. |
 
 
@@ -587,27 +599,32 @@ What appears in the song list depends on whether you're a signed-in team member 
 
 Each entry shows:
 - **Song name** — the **title first**. Songs with no curated Title fall back to the file name, split on the same `Artist — Title` convention. Set or change either half in [Display name](#display-name-title--artist). The **artist** trails the title in a dimmer grey after an em dash (*Chediak — 5AM*) — except when **Group by** is set to *Artist*, where the heading above the row already carries it and the title gets the full width instead.
-- **Grid-readiness ♩** — a quarter-note glyph color-coded for tempo/grid status: **emerald ♩** = BPM set and grid locked (ready to annotate), **amber ♩** = BPM set but grid not locked yet (open Dataset Prep to lock it), **red ♩** = no BPM yet (open Dataset Prep to detect or enter one). The musical glyph keeps it visually distinct from the right-side annotation indicator below.
+- **Grid-readiness ♩** — a quarter-note glyph color-coded for tempo/grid status: **emerald ♩** = BPM set and grid locked (ready to annotate), **amber ♩** = BPM set but grid not locked yet (open Prepare to lock it), **red ♩** = no BPM yet (open Prepare to detect or enter one). The musical glyph keeps it visually distinct from the right-side annotation indicator below.
 - **Overall annotation indicator** — one dot per song, scanning the workflow status of every **manual** annotation track you've started for that song (Boundaries, Cues, Spans, Loops, Patterns, Riff Patterns, Lyrics). Three states:
   - **Hollow gray ring** — no manual annotations yet
   - **Amber pulse** — at least one manual track in progress / awaiting review
   - **Emerald ✓** — every manual track you've started is marked *reviewed*
 
-  **Auto-guess and custom-detector outputs don't gate the green ✓** — they're produced by algorithms, not authored by you, so requiring them to be "reviewed" would block the indicator on machine output. They are still listed in the popover (below a divider, under a small *auto-guess · detectors* label) for reference, but only manual tracks count toward the dot color. With the **Loops and Patterns** experimental flag off, Loops, Patterns and Riff Patterns are excluded from the count and the popover (matching the editor, which only shows them when the flag is on) even if a layer exists on disk.
+  **Auto-guess and custom-detector outputs don't gate the green ✓** — they're produced by algorithms, not authored by you, so requiring them to be "reviewed" would block the indicator on machine output. They are still listed in the popover (below a divider, under a small *auto-guess · detectors* label) for reference, but only manual tracks count toward the dot color.
 
-  Click the indicator to open a popover that lists each annotation track for this song, its item count, and its current state (*in progress* / *reviewed*). Tracks with zero markers are omitted — the popover only lists what actually exists on disk. Every kind shares the same workflow pill and the same `derivePillDisplay` rule as the editor (`!hasItems` ⇒ *not started* regardless of stored stage), so the popover and the in-editor pill always agree. *Shown in every workspace, Dataset Prep included* — in Dataset Prep it sits beside the disk-usage chip rather than replacing it, so the screen you prepare a corpus on can still answer "what have I already annotated?".
+  Click the indicator to open a popover that lists each annotation track for this song, its item count, and its current state (*in progress* / *reviewed*). Tracks with zero markers are omitted — the popover only lists what actually exists on disk. Every kind shares the same workflow pill and the same `derivePillDisplay` rule as the editor (`!hasItems` ⇒ *not started* regardless of stored stage), so the popover and the in-editor pill always agree. *Shown in every workspace, Prepare included*, so the screen you prepare a corpus on can still answer "what have I already annotated?".
+
+  **Song facts at the foot of the popover.** Below the tracks, a **Song** section holds the details that used to crowd the row, so the list itself stays down to the ♩, the name and this dot:
+  - **Stems** — whether the song has been separated yet: **6 stems** (the 6-stem model: vocals, drums, bass, other, guitar, piano), **4 stems** (vocals, drums, bass, other — guitar and piano stay folded into *other*), or an amber **none — needs stemming** (open it in Prepare and use **▶ Stem this song**). While a job is on the song it reads **stemming 38%**, or **queued** while it waits behind another song. Hover the line for the list of stems. A run cancelled part-way counts as not stemmed, and clearing a song's stems (⌫ Clear scope → STEM or ALGOS) turns it back to *none* straight away.
+  - **Disk** — the song's total bytes on disk (*Prepare and Inspect*, admins only, since only admins receive storage figures). Hover it for the breakdown. It keeps the colour tiers described under [Disk usage](#disk-usage) below.
 
   **One row per annotation *type*, not per layer.** Review status is stored per type, so all your Cues layers share one *Cues* row (its count is their items added together), all your Span layers share one *Spans* row, and so on. A song with a dozen lanes on the canvas can legitimately show four or five rows here — the extra lanes are either more layers of a type already listed, or detector/algorithm output, which is not an annotation track at all and appears below the divider only when it comes from auto-guess.
 
-  **✓ Mark all** — the button in the popover's header flips **every type still outstanding** to *reviewed* in one click, instead of walking the editor panel-by-panel to change each pill. It touches only the types listed below it (a type with no markers has no status to set), and reads **✓ all**, greyed out, once nothing is left to mark. On a [shared song](#collaborative-songs-one-shared-annotation-one-editor-at-a-time) you need the edit lock first; without it the popover says so and changes nothing.
-- **SHARED badge** — an emerald `SHARED` chip on any song that has been made [collaborative](#collaborative-songs-one-shared-annotation-one-editor-at-a-time): one team annotation, edited by one person at a time. It replaces the head count below, because on a shared song the per-annotator files left over from before it was shared describe the wrong thing. Shown in every workspace, so which songs are the team's is answerable without changing the grouping.
+  **✓ Mark all** — the button in the popover's header flips **every type still outstanding** to *reviewed* in one click, instead of walking the editor panel-by-panel to change each pill. It touches only the types listed below it (a type with no markers has no status to set), and reads **✓ all**, greyed out, once nothing is left to mark. On a [shared song](#collaborative-songs-one-shared-annotation-one-editor-at-a-time) you need to grab the song first; without that the popover says so and changes nothing.
+- **SHARED badge** — an emerald `SHARED` chip on any song that has been made [collaborative](#collaborative-songs-one-shared-annotation-one-editor-at-a-time): one team annotation, edited by one person at a time. It replaces the head count below, because on a shared song the per-annotator files left over from before it was shared describe the wrong thing. Shown in every workspace, so which songs are the team's is answerable without changing the grouping. The one place it is left off is under a **Shared with the team** heading (Group by *Shared / per-annotator* or *Who else annotated*), where every song is shared and the heading already says so once.
 - **Annotator head count** — a small sky-blue badge (a person glyph and a number) showing **how many annotators have work on this song**. It is drawn **only when somebody other than you has work here** — a `1` on every song you annotated yourself would be noise, and the status dot beside it already reports your own progress. So a bare number means: *someone else is in this song too*. Hover it for the plain-English version ("2 annotators have work on this song: you and 1 other" / "One annotator has work on this song, and it is not you"), and **click it for the names**.
   - The popover lists each annotator with how many markers they have on the song, **you first**. Names, never ids: they are resolved on the server from each annotator's profile, because a non-admin never receives the member roster and a raw id is an email for anyone who signed in with Google. Someone who hasn't filled in a profile yet shows as their id, the same fallback the editing-lock bar uses.
   - The names are fetched **when you open the popover**, one song at a time — the list view only ever needs a number, so the sidebar's routine request stays anonymous.
   - Counted the same way as the [Who else annotated](#list-structure) grouping: an annotator counts only once they have **at least one marker on a layer, or auto-guess points**. Opening a song writes an empty document, which is not work and does not count.
   - It is a **head count, not a status**: it says nothing about whether the song is [collaborative](#collaborative-songs-one-shared-annotation-one-editor-at-a-time). Two annotators each keeping their own copy is the ordinary case, and that song still shows **2**.
   - Not shown on a shared song (the `SHARED` chip takes its place), never shown to demo visitors (there is no team), and never a name — who those annotators are stays on the [Team Dashboard](#team-dashboard).
-- **Disk usage chip** — total bytes occupied. *Shown in Dataset Prep and Algorithm Inspect*, in both cases next to the annotation indicator, so you can decide what to re-run vs. evict at a glance. **Color tiers**:
+<a id="disk-usage"></a>
+- **Disk usage** — total bytes occupied. No longer on the row: it is the **Disk** line in the annotation indicator's popover (above), shown in Prepare and Inspect, and the sidebar's **Disk · N songs** footer still totals the whole dataset. **Color tiers**:
 
 | Total size | Color | Meaning |
 |------------|-------|---------|
@@ -617,8 +634,8 @@ Each entry shows:
 | `≥ 5 GB`   | Red   | Almost certainly cruft |
 
 - **Hover tooltip** — per-category breakdown: Stems / Analysis / MSAF raw / BPM / Algo clusters / MIR features / Custom-script results / Annotations / Audio.
-- **⌫ Clear scope button** — opens the **"Clear storage" dialog** (described below) for freeing up this song's disk space at one of three levels. *Shown in Dataset Prep only.*
-- **✕ Delete song button** — confirm-word `DELETE_SONG`; permanently removes the song from the dataset (audio file is wiped from disk; annotations stored elsewhere are not touched). *Shown in Dataset Prep only* — the Annotator and Algorithm Inspect sidebars no longer expose any per-song delete affordance, so accidental deletion from those workspaces is impossible.
+- **⌫ Clear scope button** — opens the **"Clear storage" dialog** (described below) for freeing up this song's disk space at one of three levels. *Shown in Prepare only.*
+- **Delete song** — a red-outlined **🗑 Delete song** button on the song's title row, at the top right of the main panel (admins only). *Shown in Prepare only*, next to where songs are uploaded — the Annotator and Inspect have no per-song delete, so a song can't be lost from there. Confirm-word `DELETE_SONG`; permanently removes the song from the dataset (audio file is wiped from disk; annotations stored elsewhere are not touched). There is no undo — the typed word is the only guard. The same delete is also on the sidebar row's **✕** (click the row to reveal it).
 
 ### The "Clear storage" dialog — three levels of cleanup
 
@@ -636,9 +653,8 @@ The three levels, safest first:
 
 > ⚠ **EVERYTHING deletes other people's work too, not only yours.** Back up first with the Full Dataset export.
 
-> 🔒 **Demo Mode cannot delete songs.** While in Demo Mode the per-song ✕
-> delete button is hidden (it is already restricted to Dataset Prep, but
-> Demo also strips it there), the **Delete All Songs** footer button is
+> 🔒 **Demo Mode cannot delete songs.** While in Demo Mode the **Delete song**
+> button and the per-song ✕ are hidden, the **Delete All Songs** footer button is
 > hidden, and the EVERYTHING level of the "Clear storage" dialog is greyed
 > out (STEM and ALGOS still work — they only touch the demo session's
 > caches). Signed-in admins and researchers see all controls as normal
@@ -649,22 +665,23 @@ The three levels, safest first:
 ![Sidebar footer — per-bucket storage sizes plus Clear all caches and Delete all songs](images/sidebar-footer.png)
 
 The whole **Disk · N songs** footer block (per-category byte breakdown +
-**Clear all caches** button) is now scoped to Dataset Prep and Algorithm
+**Clear all caches** button) is now scoped to Prepare and Algorithm
 Inspect only — the Annotator sidebar drops it entirely so the workspace
 stays focused on authoring annotations, not storage hygiene.
 
-**Collapsing it.** The **Disk · N songs** header is itself a toggle: click it
-to fold the block down to that single line, which keeps showing the dataset
+**Collapsing it.** The footer starts folded. The **Disk · N songs** header is
+itself a toggle: click it to unfold the breakdown, or again to fold the block
+down to that single line, which keeps showing the dataset
 total while the per-category breakdown and **Clear all caches** button move
-out of the way. Click again to unfold. The ▶ / ▼ caret on the left shows the
-current state, and the choice is remembered per browser — fold it once and it
-stays folded the next time you open the workspace.
+out of the way. The ▶ / ▼ caret on the left shows the current state, and the
+choice is remembered per browser — unfold it once and it stays unfolded the
+next time you open the workspace.
 
 ![The same footer collapsed — one line with the dataset total, and the song list reclaims the space](images/sidebar-footer-collapsed.png)
 
-- **Clear all caches** — confirm with `CLEAR_ALL_CACHES`; equivalent to ALGOS for every song. *Visible in Dataset Prep and Algorithm Inspect* (inside the disk-usage footer).
-- **⤓ Full annotation export** — opens the Export Manager so you can grab annotations (Manual / Auto-guess / Cues / Spans / Loops / Riff Patterns) plus optional buckets: audio, algorithm caches, and stems. **Visible only in Dataset Prep, at the top of the sidebar next to `+ Upload songs`.**
-- **✕ Delete all songs** — destructive; admin-only; hidden in Demo Mode. **Visible only in Dataset Prep.**
+- **Clear all caches** — confirm with `CLEAR_ALL_CACHES`; equivalent to ALGOS for every song. *Visible in Prepare and Inspect* (inside the disk-usage footer).
+- **⤓ Full annotation export** — opens the Export Manager so you can grab annotations (Manual / Auto-guess / Cues / Spans / Loops / Riff Patterns) plus optional buckets: audio, algorithm caches, and stems. **Visible only in Prepare, at the top of the sidebar next to `+ Upload songs`.**
+- **✕ Delete all songs** — destructive; admin-only; hidden in Demo Mode. **Visible only in Prepare.**
 
 ---
 
@@ -777,7 +794,7 @@ A step that is closed shows its current value on the right (`140 · 4/4`, `0:51.
 
 There is **no Advanced drawer**. The destructive grid **reset** — the last thing that lived in it — now sits at the foot of step **① Tempo**, directly under the mode picker it undoes, which is the only control it has ever been about. It renders only when there is something to undo: a Steady grid with no pinned beats has nothing to throw away, and read-only viewers never see it.
 
-In **Dataprep** the panel lives in the **Song setup** sidebar docked to the right edge of the workspace (collapsible to a hover tab, and drag-the-left-edge to resize). Which step is open and which nudge step size is selected are remembered in your browser (keys `tc:prep:setup:step`, `tc:prep:setup:nudgestep`). See [Grid Mode](#grid-mode-steady--mapped--hand-placed) for how the steps change shape per mode.
+In **Prepare** the panel lives in the **Song setup** sidebar docked to the right edge of the workspace (collapsible to a hover tab, and drag-the-left-edge to resize). Which step is open and which nudge step size is selected are remembered in your browser (keys `tc:prep:setup:step`, `tc:prep:setup:nudgestep`). See [Grid Mode](#grid-mode-steady--mapped--hand-placed) for how the steps change shape per mode.
 
 ### Display name (Title + Artist)
 
@@ -957,7 +974,7 @@ beats that wandered) is the honest tool.
 | Mapped | `Mapped GRID` / `(N grids) · 4/4` | violet |
 | Hand-placed | `Hand-placed GRID` / `N BPM · N pinned · 4/4` | emerald |
 
-The badge appears in every workspace (Dataset Prep, Annotate, and Algorithm Inspect) — outside Dataset Prep it's read-only, so you can still see the active mode + BPM + time signature at a glance without flipping back to switch them.
+The badge appears in every workspace (Prepare, Annotate, and Inspect) — outside Prepare it's read-only, so you can still see the active mode + BPM + time signature at a glance without flipping back to switch them.
 
 **Beats are always rendered inside each bar of a split song.** When a tempo map is active (Mapped, or Hand-placed on a Mapped base), the beat-grid unit dropdown's bar-level choices (Bar, 2bar, 4bar, …) are automatically augmented to also draw the beats inside each bar — otherwise a 100-BPM segment next to a 130-BPM segment would be visually indistinguishable. The finer-than-bar choices (8th, 16th, 32nd, etc.) already show beats and are left as-is. The augmentation applies across every visualization row (waveform, spectrogram, MFCC, sparklines, section bars), so the per-segment tempo reads off consistently everywhere.
 
@@ -973,7 +990,7 @@ whatever the previous grid was halfway through simply stops.
 
 Grid segments are **not boundaries**. They carry no type, no label and no
 vocabulary; they are the ruler itself, not an annotation on it. They live in
-Dataset Prep only, and every other workspace reads the grid they produce
+Prepare only, and every other workspace reads the grid they produce
 without being able to reshape it.
 
 **Segments are the Mapped mode.** Picking **Mapped** in step ① is what turns
@@ -988,7 +1005,7 @@ Logic's *Signature track*, Pro Tools' *Bar|Beat markers*, Ableton's *Set 1.1.1
 Here*. In notation, the moment itself is a **double barline** — which is exactly
 how the marker is drawn.
 
-**The segment lane.** A strip under the waveform in Dataset Prep shows one
+**The segment lane.** A strip under the waveform in Prepare shows one
 block per segment, laid end to end, each stamped with its tempo and meter
 (`92.00 · 6/8` — the BPM first, since the tempo is what usually differs
 between segments, and it is the part that survives when a short block can
@@ -1227,7 +1244,7 @@ The pinned-beat count appears in amber in the line under the mode picker — e.g
 
 ---
 
-## Metronome Panel (Dataset Prep)
+## Metronome Panel (Prepare)
 
 
 <!-- tc-videos:metronome-panel-dataset-prep -->
@@ -1253,7 +1270,7 @@ The pinned-beat count appears in amber in the line under the mode picker — e.g
 
 The Metronome plays a click on every beat as the song runs, so you can *hear* whether the beat grid lines up with the music instead of judging it by eye. It's the tool you reach for while aligning the grid: if the click drifts away from the kick drum, the grid is off and needs nudging.
 
-It is step **③ Check by ear** of the **Song setup** sidebar in the Dataprep (`/prep`) workspace — not a separate panel, because verifying the grid is the job it exists for. Open the step to reveal the controls; the collapsed header tells you whether the click is on. Each control shows a tooltip on hover.
+It is step **③ Check by ear** of the **Song setup** sidebar in the Prepare (`/prep`) workspace — not a separate panel, because verifying the grid is the job it exists for. Open the step to reveal the controls; the collapsed header tells you whether the click is on. Each control shows a tooltip on hover.
 
 The step holds **two separate features**:
 
@@ -1295,17 +1312,19 @@ A Rekordbox-style tap-along BPM finder, at the bottom of step ④ under the head
 > ℹ️ Tapping on its own sets the **click's tempo only** — it does not write back to the song's grid. It's a local, non-destructive control, so it works for every viewer (no admin permission needed). Adopting it into the grid is the separate, explicit button described below, and that one *is* admin-only.
 
 1. Press play (or just listen along in your head).
-2. Click **TAP · T** on every beat — or press **T**. The readout beside it shows the live BPM and, once you've tapped, what the song's own BPM is for comparison; the tap count sits in the header.
-3. From the **second tap onward**, every accepted tap updates the click's tempo — there is no separate Apply step.
-4. **Use *N* as the song BPM** writes the tapped value into the grid. It appears only once the taps have settled on a value at least 0.05 BPM away from what the song already has, and it's hidden for read-only viewers.
-5. **Discard** resets the tapped tempo and empties the tap buffer; the click falls back to following the song's BPM.
+2. Press **T** (or click **TAP · T**) to start **tapping mode**: the button turns green and reads **TAP · SPACE**. This starting press is **not counted** — it rarely lands on the beat — so the sequence begins with your next press.
+3. Tap on every beat with **Space** (or T, or a click). While tapping, Space taps instead of playing/pausing, so you can tap on the biggest key without the mouse. The readout beside the button shows the live BPM and the song's own BPM for comparison; the tap count sits in the header. Press **Esc** (or **Stop · Esc**) to stop — the tapped tempo stays, and Space goes back to play/pause.
+4. From the **second tap onward**, every accepted tap updates the click's tempo — there is no separate Apply step.
+5. **Use *N* as the song BPM** writes the tapped value into the grid. It appears only once the taps have settled on a value at least 0.05 BPM away from what the song already has, and it's hidden for read-only viewers.
+6. **Discard** resets the tapped tempo and empties the tap buffer; the click falls back to following the song's BPM.
 
 How the estimate is computed:
 
-- BPM = `round(60 000 / avg(inter-tap interval in ms))` over the last **up to 5 taps**, so newer taps refine the reading and a single mistap is rolled out of the window within a bar or two.
+- Every tap of the current sequence counts — there is no sliding window. Each tap gets a beat number (1, 2, 3 …) and the BPM is `round(60 000 / slope)` of the straight line fitted through all of them (least squares). Every tap pulls on the line, so the reading gets steadier the longer you tap: with typical ±20 ms human timing it is within about ±0.7 BPM after 8 taps, ±0.2 after 20 and ±0.07 after 40, so the rounded number stops moving.
 - Taps closer together than **240 ms** (≈ >250 BPM) are ignored as accidental double-clicks — the BPM readout doesn't jump.
-- No idle timeout: the buffer is preserved across breaks. Instead, if your next tap is **more than 30% off the running average interval**, the reducer treats it as the first tap of a new tempo and the buffer restarts on that tap (so switching tracks doesn't need an explicit reset).
-- BPM values are constrained to the **60–240** DJ range. A tap that would push the rounded value outside that band is recorded into the rolling window but does not overwrite the metronome tempo, so a single mis-counted beat won't throw the click off.
+- A pause of **more than 1 second** (slower than the 60 BPM floor, so it can't be a beat) ends the sequence: every earlier tap is dropped and the tap after the pause is the first of a new one. The BPM shown stays until the new sequence has two taps.
+- Each tap is judged against **where the line says the next beat falls**, not against the previous tap. While the sequence is short (under 4 taps), a tap more than **30% of a beat** off the line starts a new sequence. Once it has 4 taps the tolerance tightens to **15%**, and a single off tap is held back as a slip: if the next tap is back on the line — after a late tap, an early one, or a stray extra tap — the slip is dropped and the tempo doesn't move. Two off-line taps in a row mean a new tempo, and the sequence restarts on those two. A skipped beat is fine: the next tap counts as two beats on.
+- BPM values are constrained to the **60–240** DJ range. A tap that would push the rounded value outside that band is recorded into the sequence but does not overwrite the metronome tempo, so a single mis-counted beat won't throw the click off.
 
 ---
 
@@ -1440,6 +1459,8 @@ The visualization canvas is the big stack of synchronized timelines in the centr
 
 ![Shared visualization canvas — player + 3-Band, EQ, spectrogram, MFCC, chroma, tempogram, SSM, and sparkline rows stacked top-to-bottom](images/viz-canvas-full.jpg)
 
+**Song overview.** A **Song** box sits below every lane, pinned to the bottom edge of the window so it stays in reach however far down the lanes you scroll. In **Annotate** it is always there; in Prepare and Inspect it appears once you zoom in past fit. It shows the whole song as one 3-Band strip, with each section's start flagged and numbered (from the selected Boundaries layer, else the first visible one), and a bright box marking the stretch the rows above are showing (the whole strip at fit). Drag the box to pan the rows; press anywhere else on the strip to jump there and centre the rows on it (keep the button down to scrub). It is not shown on the phone layout.
+
 ### Player — transport controls
 
 ![The transport — play/seek controls, time readout, source picker, and playback-rate slider](images/player-transport.png)
@@ -1460,23 +1481,27 @@ The player is the transport bar above the canvas: the play button, the skip and 
 | Stem source picker (`StemSourcePicker.tsx`) | When Demucs stems are cached: Mix (default) / Vocals / Drums / Bass / Other |
 | Preview button | Same as `L` (when no loop is focused): opens the 6-second preview window |
 
-**Scrolling away from the player keeps one transport, never two.** Scroll far enough down a song and the title header above the canvas folds into a **slim bar** — one line with play / stop, the clock and the bar · beat readout, the song title, and the compact viz controls — so playback stays in reach with the lanes on screen. The slim bar takes over only once the player's own transport row has gone under the header, and hands back the moment it comes out again, so exactly one set of play controls is on screen at a time. On a short song page, where there is not enough to scroll for the player to clear the header, the slim bar appears at the bottom of the page anyway rather than leaving you with no transport at all.
+**Scrolling away from the player keeps one transport, never two.** Scroll far enough down a song and the title header above the canvas folds into a **slim bar** — one line with the same transport as the player (jump to start · skip back 2 s · play/pause · skip forward 2 s · jump to end) plus stop, the clock and the bar · beat readout, the song title, a **Stem** dropdown (once the song has stems), and the compact viz controls — so playback stays in reach with the lanes on screen. The Stem dropdown is the player's **Source** row in one control: pick Drums there and the player switches to the drums stem just as if you had clicked its pill, and the stem that is not the full mix shows highlighted so you can tell at a glance you are not hearing the whole song. The slim bar takes over once the player's own transport row is halfway under the header, as a quick crossfade: the slim bar fades in while the player's transport row fades out, so exactly one set of play controls is on screen at a time and there is never a moment with none. Scroll fast and the two simply swap, with no fade. Nothing on the page moves when the header changes size — the slim bar simply uncovers what was already scrolled under the full header. Scrolling back up plays the same thing in reverse.
 
-**Curated layers name the stem they were built from.** (They draw in **Algorithm Inspect**; the Annotator Tool shows only your own layers.) Each curated / detector layer reads from one source — a Demucs stem or the full Mix — and its lane label says which, rather than a generic *(curated)* tag. A curator that reads the full mix gets a lane reading **(mix)**; one built from a separated stem names that stem instead. When you switch the **Stem source picker** to a specific instrument and listen to it, every curated layer built from that stem **lights up** in the gutter — a tinted lane, a soft left ring, and a bolder label — so you can see at a glance which layers belong to the stem you're hearing. (Auditioning the full **Mix** highlights every mix-built curated layer.) Click a curated/detector lane's label to select it and a small **ⓘ icon** appears just under the lane name; clicking the ⓘ opens a popover naming the **heuristic/algorithm** that built the layer (the detector's one-line description, e.g. *"Kick + sub-bass presence: energy gate on <150 Hz of the full mix"*), its **source stem**, and the underlying **detector id** (e.g. `example_energy`) — so you can confirm exactly what a layer is without leaving the canvas. Click the ⓘ again, click anywhere else, or press **Esc** to dismiss the popover. The ⓘ appears only on curated/detector lanes, not on your own manual layers, and only while that lane is selected — an unselected gutter cell is just its name.
+**Curated layers name the stem they were built from.** (They draw in **Inspect**; the Annotate tab shows only your own layers.) Each curated / detector layer reads from one source — a Demucs stem or the full Mix — and its lane label says which, rather than a generic *(curated)* tag. A curator that reads the full mix gets a lane reading **(mix)**; one built from a separated stem names that stem instead. A curator that reads several stems into one lane and never the full mix — *Call & response* (one part answering another) — reads **(several stems)**, and its card's grey line says *read from several stems*. Such a lane lights up for no single stem, because no single stem made it. When you switch the **Stem source picker** to a specific instrument and listen to it, every curated layer built from that stem **lights up** in the gutter — a tinted lane, a soft left ring, and a bolder label — so you can see at a glance which layers belong to the stem you're hearing. (Auditioning the full **Mix** highlights every mix-built curated layer.) **Click a curated/detector lane's name to open its lane card.** It selects the lane and opens a card with the layer's **full name** (the gutter usually shows only its first few letters), **how many markers it holds and how they split by kind** — *575 markers · 3 kinds: snare 261, hat 183, kick 131* on a drum-hits lane, the pitches on a bass-notes lane, *Rise ×3* on an energy-shifts lane (a label written as *Rise · bass · 1-bar climb* counts under its first part), words vs lines on a lyrics lane; long kind lists show the top five with a **+N more** — a three-line description of the detector (**more** reads the rest), a single **⚠ N notes from this run** line that unfolds the detector's own account of what it kept and turned away, and the lane's actions: **Copy to manual layer** (with a warning when copies already exist) and **Visualize with playback** (see [Visualize a lane with playback](#visualize-a-lane-with-playback)). Deleting the lane is in its **⋮** menu, as on every lane (see [Delete or hide a lane](#delete-or-hide-a-lane)). Click the name again, click anywhere else, or press **Esc** to close it. The small **ⓘ icon** under the selected lane's name opens the same card. Right under the lane's name the card names the underlying **detector id** and its **source stem** on one grey line (e.g. `example_energy · mix stem`), and the description says what **heuristic/algorithm** built the layer (e.g. *"Kick + sub-bass presence: energy gate on <150 Hz of the full mix"*) — so you can confirm exactly what a layer is without leaving the canvas. Everything folded open closes again with the card. The card and the ⓘ are curated/detector lanes only: clicking one of your own manual layers' names just selects it, as before.
 
 ### Stacked rows (top-down, draggable order)
 
 | Row | Source | Notes |
 |-----|--------|-------|
-| **Time ruler** (`TimeRuler.tsx`) | — | 16 px ruler rendered inline above the signals |
+| **Time ruler** (`TimeRuler.tsx`) | — | 16 px ruler above every row; it stays pinned under the song header while you scroll down through the rows, and pans with them |
 | **3-Band waveform** (`FrequencyWaveform.tsx`) | Low (<150 Hz) / Mid / High (>2.5 kHz) | Palette selectable in Settings |
-| **EQ visualizer** (`EQVisualizer.tsx`) | 3-band gain trace | Off by default |
+| **EQ visualizer** (`EQVisualizer.tsx`) | 3-band trace: Low (< 250 Hz), Mid (250 Hz – 4 kHz), High (> 4 kHz). Measured on the song at full quality (44.1 kHz), so High shows hi-hats and cymbals. The bands appear a moment after the other lanes, which use a lighter 8 kHz copy of the audio. | Off by default |
 | **Mel spectrogram** (`SpectrogramAnnotated.tsx`) | librosa STFT + mel filterbank | Roseus colormap |
 | **Cepstrogram** (`CepstrogramAnnotated.tsx`) | MFCC heatmap | Off by default |
-| **Energy** | RMS | Amber |
+| **Volume (RMS)** | RMS level per frame — loudness alone | White |
+| **Beat strength** | The kick and bass landing, beat by beat: the strongest attack below 120 Hz inside each beat of the song's grid (anywhere in the beat, so a grid a little off or drifting still hears the kick), times how *steady* those hits are over the 8 beats around it, held across that beat. Bass notes and swelling pads hit as hard as a kick but unevenly, so a song with no beat reads near zero throughout | Amber — on, or not: a drop reads high, a breakdown or build reads near zero however loud its pads. Without a BPM it reads the bass hits alone |
 | **Brightness** | Spectral centroid | Cyan |
 | **Novelty** | Self-similarity novelty | Purple |
 | **Onsets** | Half-wave rectified spectral flux | Pink — only attacks |
+| **Onset density** | Hits per beat: peaks of the onset curve counted over the 4 beats around each moment | Red — a snare roll going from quarters to eighths to sixteenths doubles it twice at the same volume. Off by default; per second without a BPM |
+| **Busyness** | Notes per beat across 8 frequency bands (40 Hz–16 kHz): a note is a quick rise of 6 dB in one band, counted by how loud that band is against its own loud passages, and all bands' notes are summed over the 4 beats around each moment | Yellow — many instruments each playing many notes reads high; long held sounds read low however loud or wide they are, and so does a shaker or hat ticking alone once the kick, bass and chords drop out. A drop sits high, a build thinning to a riser falls. Off by default; per second without a BPM |
+| **Bandwidth** | Spectral bandwidth — how widely the sound spreads around its average frequency | Blue — a lone bass line or thin lead is narrow, a full mix wide. It barely moves at a drop (a riser is wide too), so read build-versus-drop off Busyness and Beat strength. Off by default |
 | **Spectral Flux** | Full L2 flux | Green — attacks + releases |
 | **Algorithm rows** | One row per loaded detector | Inspect mode |
 | **Annotation rows** | Manual / Auto-guess / Cue / Span / Loop | Editable in Annotate mode |
@@ -1490,11 +1515,12 @@ The beat grid is the set of evenly spaced vertical lines drawn across every row 
 
 The Preview Window lets you grab a short stretch of the song and listen to just that part, on its own or on repeat — handy for checking exactly where a transition happens before you mark it.
 
-- Open it by pressing **L** (when no loop is focused), clicking the player preview button, **Shift-dragging** on the waveform, **or dragging on any row in the stack** — 3-Band, Spectrogram, EQ, MFCC, Chroma, Tempogram, SSM, and the Energy / Brightness / Novelty / Onsets / Flux sparklines, **plus every annotation / detector ("curator") layer row** (Cues / Spans / Loops / Riff Patterns / Lyrics, user-created or read-only detector output) all accept drag-to-region so you can highlight a segment to listen to from whichever row your eye is on. On the annotation lane rows the gesture lands on **empty space between the ticks / bands** — clicking or dragging directly on an item still edits that item (open its card, move it, drag its edge); the empty gaps seek (click) or highlight (drag). **L is loop-aware** — if you've clicked a loop band on the canvas or selected one in the Loops editor, pressing **L** instead toggles seamless playback of that focused loop (same effect as the **P** hotkey while the Loops tab is active). Once you defocus the loop, **L** reverts to opening the 6-second preview.
+- Open it by pressing **L** (when no loop is focused), clicking the player preview button, **Shift-dragging** on the waveform, **or dragging on any row in the stack** — 3-Band, Spectrogram, EQ, MFCC, Chroma, Tempogram, SSM, and the Energy / Brightness / Novelty / Onsets / Flux sparklines, **plus the read-only detector ("curator") lanes, the Cues lanes and the Riff Patterns lanes** all accept drag-to-region so you can highlight a segment to listen to from whichever row your eye is on. Your own **Spans, Loops and Lyrics** lanes are the exception: there a drag on empty space **makes the item** instead of highlighting (see [Draw on a lane to add](#draw-on-a-lane-to-add)). On the annotation lane rows the gesture lands on **empty space between the ticks / bands** — clicking or dragging directly on an item still edits that item (open its card, move it, drag its edge). **L is loop-aware** — if you've clicked a loop band on the canvas or selected one in the Loops editor, pressing **L** instead toggles seamless playback of that focused loop (same effect as the **P** hotkey while the Loops tab is active). Once you defocus the loop, **L** reverts to opening the 6-second preview.
 - Single tall translucent cyan band that spans **every** viz row — one selection, one visible highlight across the whole stack, so the band stays aligned with whichever signal you're inspecting. Resize from either edge; control bar above the band offers play / loop-toggle / dismiss.
 - Plays in one-shot or loop mode. In the **Loops** annotation tab a new drag-selection opens the preview already in loop mode (highlighted region plays infinitely until you toggle loop off or dismiss).
 - **Loop mode repeats seamlessly** — the same engine the Loops editor's own playback uses. The repeat is sample-accurate and pulled to the nearest zero crossing (within 20 ms) at both ends, so a bar-long highlight comes back round on the beat instead of leaking a sliver of the next bar and clicking at the seam. It follows the **SPEED** setting, keeps the playback cursor and the elapsed-time readout sweeping through every repetition, and never drifts however long you leave it running. Resizing the band while it loops moves the seam under the audio rather than restarting the phrase from its head. Toggling loop off hands playback straight back to the player.
 - Dismiss with **Esc** or by clicking empty space on any visualization — a click on any viz row uniformly clears the band and seeks the playhead to the click.
+- **A riff card and the band never show together.** Opening a riff instance or riff node for editing dismisses the band — the card plays its own stretch — and dragging a new band closes the card.
 
 ### Annotation overlays — how your marks are drawn
 
@@ -1502,6 +1528,48 @@ Whenever you have an annotation layer turned on, its marks are drawn onto the ca
 - A color-coded **cap** + section index on the row's lane.
 - A floating popover when you click a section bar — quick in-context edit of type, label, start time. The popover (shared by every kind: cues, spans, boundaries, loops, riff patterns) **opens fully on-screen** — it re-clamps to its real height so a tall card never hangs off the bottom of the page — and is **draggable by its header**: grab the title bar (cursor turns to `move`) to reposition it anywhere, e.g. to uncover the marker underneath.
 - The **playback cursor** — a thin white hairline at the playhead, drawn on *every* annotation lane (Cues, Spans, Loops, Lyrics, Riff Patterns, Lead) at the same position as on the waveform above. So whichever row your eye is on, you can see which mark — which riff instance, which repeat of it — you are hearing right now, without looking back up at the player.
+
+### Draw on a lane to add
+
+In the Annotate tab you edit **on the timeline itself**. A gesture on the
+empty part of one of your own lanes makes that lane's item, **in that lane** —
+whichever annotation tab happens to be open, and without a trip to the
+sidebar's **+ Add**:
+
+| Lane | Gesture | What you get |
+|------|---------|--------------|
+| **Cues** | **Click** empty space | A cue at that spot (snapped when **Snap** / Grid Lock is on). A drag here still highlights the stretch, since a cue is a single point. |
+| **Spans** | **Drag** across empty space | A span over the dragged stretch, both edges on the nearest beat (or finer grid line). |
+| **Loops** | **Drag** across empty space | A loop over the dragged stretch, snapped the same way. |
+| **Lyrics** | **Drag** across empty space | An empty lyric **line** over the stretch (never snapped). |
+| **Riff Patterns** | **Drag** across empty space | A new **instance** starting there, playing one new, empty node as long as the drag (whole beats), open in the lane's riff editor — see [Building a riff on its lane](#building-a-riff-on-its-lane). Needs the song's BPM. |
+
+While you drag, the stretch is painted in the **lane's own colour** rather than
+the cyan highlight, so you can see it will become an item, and its edges jump
+from grid line to grid line exactly as the item will be stored — Spans and
+Loops on the beat (or the finer grid unit you're showing), Lyrics free.
+
+**The new item is an offer until you press Done.** Its card opens under it
+straight away so you can give it a label, colour, description and so on, and
+you can see it on the lane while you do. Nothing is saved yet:
+
+- **Done** keeps it — it is saved, selected, and its lane becomes the add
+  target. Adding it is one **undo** step.
+- **Esc**, the card's **×** (*Discard this new item*), or a click anywhere
+  else throws it away. It leaves nothing behind — not on disk, and not in
+  the undo history either, so ⌘Z never brings it back.
+
+On Spans / Loops / Lyrics lanes a plain **click** on empty space still moves
+the playhead. A drag shorter than 50 ms adds nothing, and an item exactly on
+top of an existing one is not added — the one already there is selected
+instead.
+
+The **cyan highlight** lives on the player and the signal rows (3-Band,
+Spectrogram, the sparklines, …), where there is nothing to create and
+listening to a stretch is the point — highlight there, then **+ Add** still
+works as before. Read-only detector lanes keep the highlight too, as does
+**⇧-drag**, which selects the items inside the stretch (see *Copying items to
+another lane* below). Boundaries lanes don't create items from a gesture yet.
 
 ### Drag-to-retime markers (every layer)
 
@@ -1519,26 +1587,98 @@ a vertical swipe over a row scrolls the page instead of moving anything (see
 |-------|------------|
 | **Manual** | The colored right edge of any section band, **or** the colored cap of the Manual ghost line that appears on any signal row (waveform / spectrogram / chroma / …). Clamped between its neighbours. |
 | **Auto-guess** | *Not draggable.* Auto-guess points are review-only — each point shows ✓/✗ buttons on the timeline; use them to accept/reject without changing the time. To refine timing, copy the points into a manual annotation (see below) and drag from there. |
-| **Cues** | The vertical tick. A clean click opens the edit popover; a real drag suppresses the click. The label is no longer drawn on the timeline — it shows in the tick's hover tooltip and on the cue's card in the editor panel. *Detector-sourced cue layers are review-only:* their ticks render with inline ✓/✗ buttons and cannot be dragged or edited (use the Detector Review card, then the **Copy → Manual** button, to make them editable). |
-| **Loops** | Either edge of a loop band (left = start, right = end) **resizes** that edge. Grabbing the **middle of the band** instead **moves the whole loop** without changing its width (start and end shift by the same delta, clamped so the loop stays inside the song). Edge cursor is `↔`, body cursor is `✋`. Each edge is clamped to the opposite edge with a 50 ms minimum interval width. A small (≤ 3 px) movement is treated as a click and opens the edit popover instead of starting a drag. *Detector-sourced loop layers are review-only with inline ✓/✗ — clicking one opens its read-only info card.* |
-| **Spans** | Either edge resizes; the body moves the whole span. Same clamp rules as loops. A clean click opens the edit popover. *Detector-sourced span layers are review-only with inline ✓/✗ — clicking one opens its read-only info card.* |
+| **Cues** | The vertical tick. A clean click opens the edit popover; a real drag suppresses the click. The label is no longer drawn on the timeline — it shows in the tick's hover tooltip and on the cue's card in the editor panel. *Detector-sourced cue layers are read-only:* their ticks cannot be dragged or edited (copy the lane with its ⬇ to make them editable). A detector that sets `review = True` also puts inline ✓/✗ buttons on each tick. |
+| **Loops** | Either edge of a loop band (left = start, right = end) **resizes** that edge. Grabbing the **middle of the band** instead **moves the whole loop** without changing its width (start and end shift by the same delta, clamped so the loop stays inside the song). Edge cursor is `↔`, body cursor is `✋`. Each edge is clamped to the opposite edge with a 50 ms minimum interval width. A small (≤ 3 px) movement is treated as a click and opens the edit popover instead of starting a drag. *Detector-sourced loop layers are read-only — clicking one opens its read-only info card; inline ✓/✗ appears only for a detector with `review = True`.* |
+| **Spans** | Either edge resizes; the body moves the whole span. Same clamp rules as loops. A clean click opens the edit popover. *Detector-sourced span layers are read-only — clicking one opens its read-only info card; inline ✓/✗ appears only for a detector with `review = True`.* |
 
 Dragging in any of these places goes through the standard per-type undo
 stack — one drag = one undo entry, not one per pixel.
 
+**Copying items to another lane.** In the Annotate tab, cues, spans, loops
+and lyric words can be carried into **another lane of the same type**. Lyrics
+go only to another Lyrics lane, and boundaries and riff patterns don't move
+between lanes: a boundary tiles its lane, and a riff placement belongs to its
+own lane's pattern library.
+
+1. **Pick what to carry.** **⇧-click** (or ⌘/Ctrl-click) items to add them to
+   the selection, or **⇧-drag across a lane's empty space** to pick every item
+   in that lane that starts inside the stretch. Selected items get a **white
+   outline**. Picking in another lane starts a new selection there, and **Esc**
+   clears it. A plain drag across empty space makes a new item on your own
+   Spans / Loops / Lyrics lanes, and highlights the stretch everywhere else.
+2. **Drag any selected item** up or down, to any lane of the same type however
+   far away. A label beside the pointer counts what you are carrying, and the
+   lane that will take it gets a **blue ring**. For a lane that is out of view,
+   hold the pointer near the top or bottom edge of the window and the timeline
+   scrolls to it.
+3. **Let go** on that lane. The items are **copied** there at **exactly their
+   original times**, with their labels, colours, prominence and everything
+   else. Hold **⌥ / Alt** while letting go to **move** them instead. Anywhere
+   else, letting go does nothing.
+
+**Deleting a selection.** With items picked, **Delete / Backspace** deletes
+every selected item at once (cues, spans, loops or lyric words), and one
+⌘Z / Ctrl+Z brings them all back. A locked lane refuses it like any other edit.
+
+Nothing moves along time while you carry a selection. A Loops lane refuses
+loops that would overlap one it already has, and the label says so. One
+⌘Z / Ctrl+Z undoes the whole drop.
+
+A single item can also be carried without selecting it first: drag it onto
+the other lane. It still lands at the time it started from, even if the drag
+nudged it sideways on the way. For a lyric word, grab the word itself; a press
+on the end of a word's band trims it instead.
+
 ### Row reordering
 
-Don't like the default top-to-bottom order of the rows? Drag any row by its left-edge label to move it up or down the stack. The new order applies for the rest of your session but is **not** saved between page reloads — reopening the app brings the rows back in their default order.
+Don't like the default top-to-bottom order of the rows? Drag any row by its left-edge label to move it up or down the stack: drop it on another row and it takes that row's place — below it when you dragged down, above it when you dragged up. Drag a band by its name strip to move the whole band, lanes and all; a row that can't join a band (a signal, a detector lane, anything in a detector band) lands just above or below the whole band when dropped on it, never between its lanes. The **Merge** row can be grabbed by its name or by the empty gutter beside its lane pills. The new order applies for the rest of your session but is **not** saved between page reloads — reopening the app brings the rows back in their default order.
 
-The same drag also moves lanes **into and out of a [band](#group-lanes-into-a-band)**: drop a lane on a band's header or on one of its members to add it, or drag a member out to somewhere else in the stack to take it back out. Unlike the row order itself, that part *is* saved with the song.
+The same drag also moves lanes **into and out of a [band](#group-lanes-into-a-band)**: drop a lane on a band's header or on one of its members to add it, or drag a member out to somewhere else in the stack to take it back out — it lands on the side of the row you dropped it on that you dragged towards, like any other row. Unlike the row order itself, that part *is* saved with the song.
 
 By default the **curated / detector lanes are grouped by the stem they were built from**, in the same order as the **Source** picker reads: **Mix → Vocals → Drums → Bass → Other → Guitar → Piano** (whole-track layers like the EDM bands sort with the Mix). So the lanes line up with the stem buttons above the waveform instead of appearing in detector-registry order. The moment you hand-drag any row, this auto-grouping switches off for the rest of the session — your manual order is never reshuffled underneath you.
 
 ### Click a row label to make that layer active
 
-In the Annotator workspace, the left-edge labels of the **Cues / Spans / Loops / Riff Patterns** layer rows are **clickable**: a single click makes that type active (Cues / Spans / Loops / Riff Patterns), switches the Marker config panel's **Source** picker to that layer's origin, and aims the drag-region **+ Add** pill at the chosen layer — so the next add writes into it (a playhead add is pressed on the card itself). The active layer's row gets a **neon glow** (layer-color ring + soft shadow on the row) and a brighter, glowing label, so you can see at a glance which row is the current ADD+ target. The *All annotations* sidebar lists your **manual** layers only — read-only detector ("curated") layers are managed from the separate **Detectors** sidebar, not here. Exactly one row across the whole canvas is highlighted at a time — it matches the active card in the *All annotations* sidebar.
+In the Annotator workspace, the left-edge labels of the **Boundaries / Cues / Spans / Loops / Riff Patterns** layer rows are **clickable**: a single click makes that type active, switches the Marker config panel's **Source** picker to that layer's origin, and aims the drag-region **+ Add** pill at the chosen layer — so the next add writes into it. Keyboard adds follow the click too: with two boundary layers, clicking one's label and pressing `M` marks a section in *that* layer, the same one its card's **+ Add** writes to. The active layer's row gets a **neon glow** (layer-color ring + soft shadow on the row) and a brighter, glowing label, so you can see at a glance which row is the current ADD+ target. The *All annotations* sidebar lists your **manual** layers only — read-only detector ("curated") layers are managed from the separate **Detectors** sidebar, not here. Exactly one row across the whole canvas is highlighted at a time — it matches the active card in the *All annotations* sidebar.
 
 **Rename a layer inline.** A small **✎ pencil** sits just after the name on each of your own **Cues / Spans / Loops / Riff Patterns** lane labels; click it to turn the name into an input, type a new name, and press **Enter** (or click away) to save — **Esc** cancels. The same pencil affordance appears in the *All annotations* sidebar next to each **layer name** and next to each **item label** (including **Boundary** points, so you can rename a section's label — *intro*, *drop*, … — without opening its card), and on each **Boundary** card in the Manual editor. Curated / detector-sourced lanes regenerate from their source, so they carry no pencil.
+
+**Make new lanes from a lane, or lock it.** The **⋮** menu on one of your own layers has more than Rename and Delete. Each of these is one edit, so **⌘Z** undoes it whole, and every lane it makes opens right below the one you started from, in the same group:
+
+- **Duplicate** — a copy named *… copy*, with every item, its riff library and vocal runs, so you can try a different take without touching the original.
+- **Copy 0:30–0:45 to a new lane** — shown while a region is highlighted and some of the lane's items sound inside it, with how many. The new lane holds just those items, named after the region. An item that crosses the region's edge comes **whole**, never cut: its contents are pinned to the audio.
+- **Split by kind** — on a Cues, Spans or Loops lane holding two or more kinds, replaces it with one lane per kind (*Drums · kick*, *Drums · snare*, …). The kind is the label up to its first ` · `, the same kinds the lane card counts; items with no label go to *… · unlabelled*. The biggest kind keeps the lane's colour.
+- **Snap to beats** / **Snap to bars** — on a Boundaries, Cues, Spans or Loops lane, moves every item that sits off the grid onto the **nearest beat**, or the **nearest bar line**, of the song's grid (tempo splits and hand-placed beats included), whatever the **GRID** unit on screen. The number beside each is how many items it will move; it reads **on beat** / **on bar**, greyed out, when none would, and **no BPM** when the song has no tempo yet. A span or loop whose two edges would land on the same beat (or bar) is left as it was rather than squeezed to nothing. ⌘Z undoes either. Lyrics and Riff Patterns have no Snap: a sung word and a riff's notes are timed to the audio. Detector and algorithm results always keep the times their algorithm gave them — copy a lane with **⬇** first, then snap the copy.
+- **Lock / Unlock** — a locked lane shows a small padlock by its name, and nothing can change what it says: dragging, adding, deleting, the item card's fields, moving an item in from or out to another lane, merging into it. The edit is refused whole and a notice says the lane is locked. Its name, colour, visibility and group can still change, and **Delete this lane…** still works. Locked lanes offer no Split and no Merge into, and a Duplicate or region copy of one comes out unlocked.
+- **Merge into** — lists every other lane of yours of the same type (Riff Patterns excepted). Picking one moves this lane's items into it and removes this lane — the same merge as the sidebar card's **MERGE**.
+
+Detector lanes have none of these; their copy is **⬇ Copy to manual layer**.
+
+### Delete or hide a lane
+
+Every lane on the canvas has the same **⋮** menu, wherever the lane comes from, and its last item takes the lane away. The ⋮ is always showing — no need to select the lane first. On every lane — your layers, detector and algorithm lanes, the signal rows, **Auto-guess**, **Consensus** and **Merge** — it sits in the top-right corner of the lane's label, and the name keeps clear of it (in the narrow sideways gutter it stands above the name). A group band has one too, under its chevron. **Right-click** anywhere on a lane — its label or the lane itself — opens the same menu at the pointer; a lane that already uses the right button for something of its own (removing a prominence point) keeps it. The gutter's controls — **⋮**, **⬇**, **◇**, **✎** and the band's chevron — are drawn at 16–20 px, big enough to see and to hit. The menu is laid out the same way on every lane, and a lane that can't do something simply has no row for it:
+
+1. **The same three on every lane that can do them**, always at the top and in this order: **◇ Visualize with playback** (**◈ Stop visualizing** while it is on — see [Visualize a lane with playback](#visualize-a-lane-with-playback)), **ⓘ About this lane** (the lane's card: what built it, or what a signal measures), and **⬇ Copy to a layer of yours** on a read-only lane (detector, algorithm, **Consensus**; with a count when copies already exist). They do what the lane's small ◇ / ⓘ / ⬇ buttons do.
+2. **The lane's own actions**: Rename, Duplicate, Copy region, Split by kind, Snap to beats, Snap to bars, Lock, Merge into, **Add to merge**.
+3. **Groups**: New group from this lane, Move to, Remove from group.
+4. **The item that takes the lane away**:
+
+- **✕ Delete this lane…** on a lane that shows something saved. The first click says what will go, and **Delete** does it (**Cancel** backs out). What goes depends on where the lane comes from:
+
+  | Lane | Delete removes | Comes back by |
+  |------|----------------|---------------|
+  | A layer of yours | the layer | **⌘Z** |
+  | A detector's lane | the detector's output for this song, for every annotator, with your ✓/✗ review of it (layers you copied with ⬇ stay) — the same as the Detectors sidebar's × | running the detector again |
+  | One lane of a detector that draws several (*Voice* of *Sounds*) | that lane only; its other lanes stay | running the detector on the whole song again |
+  | One part of a lane cut by part (*Kick* of *Pulse*) | that part's items only; the other parts stay, and your ✓/✗ follow the items they belong to | running the detector again |
+  | An algorithm's lane | its saved result for this song; its sidebar row reads **missing** | running the algorithm again |
+  | **Auto-guess** | your Auto-guess annotation for this song, ✓/✗ included | nothing — it can't be undone |
+
+  A result that ships with the demo songs can't be deleted (the shipped copy would come straight back), and deleting what a detector or algorithm saved needs a team account. If a delete fails, the reason stays in the menu.
+
+- **✕ Hide this lane** on a row that stores nothing — a signal (3-Band, Spectrogram, the curves…), **Prominence**, **Consensus** — since there is nothing to delete. Its tooltip says where it comes back: **SIGNALS**, **Annotations ▾ → Prominence lane**, or **Algos ▾ → Consensus**.
+
+The **Merge** row's ⋮ has **Visualize with playback** (once it holds a boundary) and **✕ Delete this lane…**, which empties the merge and takes the row away, with the boundaries you dropped or edited in it. The lanes you merged stay on the canvas, and layers you saved from it are kept. The row comes back the next time a lane joins it (**⊕ Add to merge** on a boundary lane's ⋮). An empty Merge row offers **Hide this lane** instead. To take out one lane and keep the rest, use that lane's pill on the Merge row.
 
 ### Group lanes into a band
 
@@ -1548,11 +1688,11 @@ Related lanes can be tied together into a **group**: a named, coloured band that
 
 Grouping is **independent of layer type**. A Cues layer, two Spans layers and a Loops layer can share one band, and nothing about a layer changes by joining one: it keeps its own name, colour, snap mode, items and editor. A lane belongs to at most one group, and groups don't nest.
 
-**To make one:** click a lane's label to select it, then click the **⋮** button in its affordance strip and choose **New group from this lane**. The same menu on any other lane lists every band you've made under **Move to**, so that's how the rest join — the band it is already in is marked with a dot. **Remove from group** takes a lane back out; the lane itself is untouched either way.
+**To make one:** click the **⋮** in the top-right corner of a lane's label and choose **New group from this lane**. The same menu on any other lane lists every band you've made under **Move to**, so that's how the rest join — the band it is already in is marked with a dot. **Remove from group** takes a lane back out; the lane itself is untouched either way.
 
 **Or drag lanes in and out.** The same label you [drag to reorder rows](#row-reordering) also drops into a band:
 
-- **Drop on the band's header** → the lane joins at the **top** of the band. The header lights up in the band's colour and reads *drop to add to the top of …* while you're over it, and the band stays where it was drawn instead of jumping to wherever the lane came from.
+- **Drop on the band's header** — or, while the band is open, on its **strip** down the left of the gutter → the lane joins at the **top** of the band. The header (or strip) lights up in the band's colour and says *drop to add to the top of …* while you're over it, and the band stays where it was drawn instead of jumping to wherever the lane came from.
 - **Drop on a lane that's already in the band** → the dragged lane joins **above** that lane, so you place it and order it in one gesture.
 - **Drop a member lane anywhere outside its band** → it **leaves** the band and stays where you dropped it. Dragging a lane out is the drag equivalent of *Remove from group*; nothing about the lane itself changes.
 - Dropping into a **collapsed** band **expands it**, so you can see what it just took rather than watching the lane disappear behind the header.
@@ -1561,17 +1701,18 @@ Only lanes that can hold a membership are accepted — the same ones that get th
 
 ![The ⋮ menu on a lane inside the "Chorus study" band, offering New group from this lane, Move to, and Remove from group](images/lane-group-menu.png)
 
-**The header row** carries everything the band does:
+**An open band takes no row of its own.** Its lanes sit directly one after another, and the band itself is a narrow **strip down the left edge of their labels**, in the band's colour, spanning all of them: the **⌄ chevron** at the top, the band's **⋮** under it, and the band's name running up beside the lanes. The **⋮** (or a click on the name) opens the band's menu: Rename, Collapse, Ungroup, Delete. Only a **collapsed** band gets a row — the **header row** below — because then nothing else would show it.
+
+**A band of one lane is just that lane.** Until a band has a second lane there is nothing to fold, so it draws no strip, no chevron and no header — the lane looks exactly as it did before. It is still in the band (its **⋮** menu says so), and the strip appears as soon as another lane joins.
 
 | Control | What it does |
 | --- | --- |
-| **▾ / ▸** | Collapse the band — the member lanes fold away behind the header, and the chevron flips. Expand brings them back in the same order. |
-| **checkbox** | Show or hide every lane in the band at once. It's a three-state box: filled when they're all shown, a **dash** when only some are, empty when none are. Each lane still has its own visibility, so hiding one member turns the box into the dash rather than lying to you. |
+| **⌄ chevron** | The band's only control. Click it to collapse the band — the member lanes fold away into one header row, and the chevron turns to point sideways. The header's timeline doesn't go blank: it draws **every member lane on top of the others**, each mark in its own colour, so you still see where the band's cues and spans fall. That combined strip is read-only — expand to work a lane. Expand brings the lanes back in the same order, with the band back in the strip beside them. |
 | **✎ pencil** | Rename the band inline, exactly like a lane name. |
 | **N lanes** | How many lanes are in it. |
-| **⋯** | Collapse, and the two ways to end a band — below. |
+| **⋮** | Beside the chevron, the same glyph a lane's menu uses: Rename, Collapse, and the two ways to end a band — below. |
 
-Member lanes are marked with a short rule in the band's colour down the left edge of their label, so you can see where the band starts and stops when it's expanded.
+When the band is expanded, its member lanes' labels sit **indented** to make room for that strip, so you can see which lanes are the band's and where it starts and stops.
 
 **Ending a band comes in two flavours, and they are deliberately not the same word.** **Ungroup** dissolves the band and leaves every lane exactly where it was. **Delete group and its N lanes…** removes the lanes too.
 
@@ -1581,17 +1722,94 @@ Unlike [row reordering](#row-reordering), which lasts only for the session, **gr
 
 Two lanes can't join a band: **curated / detector lanes** (they're rebuilt from their detector on every render, so a membership couldn't survive a reload — the **⋮** doesn't appear on them) and, for now, **Boundary lanes**.
 
-**Bands are an Annotator Tool thing.** Dataprep draws no annotation lanes at all, and Algorithm Inspect draws none of *your* layers either — it shows what the detectors said (see [the Annotations dropdown](#1-annotations-dropdown)) — so in both of those workspaces the band's header row is left out along with its lanes, rather than hanging over nothing. The group is still there; it comes back with the lanes when you return to the Annotator Tool.
+**Your bands are an Annotate thing.** Prepare draws no annotation lanes at all, and Inspect draws none of *your* layers either — it shows what the detectors said (see [the Annotations dropdown](#1-annotations-dropdown)) — so in both of those workspaces the band's header row is left out along with its lanes, rather than hanging over nothing. The group is still there; it comes back with the lanes when you return to the Annotate tab.
+
+#### Detector groups
+
+Some detectors belong together: they read one thing between them and are only
+useful side by side. A detector says so with its `group` (see
+[Writing a custom detector](#custom-detectors)); in **Inspect** the
+lanes of the detectors that share a group sit under one band with that name,
+drawn like one of your own bands: open, it is a strip beside its lanes whose
+tooltip says **detector group**; collapsed, it draws its lanes stacked in one
+header row like any band.
+
+**One detector, a lane per part.** A detector whose one result holds several
+parts (its `stem_parts` — **Pulse** reads Kick, Snare, Hat and, from the
+separated kit, Toms, Ride and Crash, all from the drums) is drawn as a band of its own too, with one
+lane per part, named just for the part (**Kick**, **Snare**, **Hat**), instead
+of every part stacked in one lane. A part with fewer than **3** spans on the
+song doesn't get a lane of its own: the sparse parts share one, named for all of
+them (**Kick · Hat**). When that would leave a single lane, the detector keeps
+its single lane. The Detectors sidebar still lists the detector once, and
+showing or hiding it shows or hides all of its lanes. **⬇** on a part's lane
+copies only that part, as a layer named for both (**Pulse · Kick**), into a
+group named after the detector's group.
+
+A cue that says how long it rings (`decay_ms`) draws that as a faint tail after
+its tick.
+
+A detector band is **read-only**. Its chevron collapses it (remembered in this
+browser); showing or hiding its lanes stays with the Detectors sidebar. There is
+no rename, no **⋮** menu and no ungrouping,
+because detector lanes are rebuilt from their detectors every time and there is
+nothing saved to change. Your own lanes can't be dropped into one.
+
+**Copying keeps them together.** Press **⬇** on a detector lane (or on its row
+in the Detectors sidebar), and the new layer joins a group of *yours* with the
+same name, which the first copy creates and the next ones find. Copy both lanes
+of a two-detector group and your Annotate gets a band of that name holding
+both layers, ready to edit, rename or ungroup like any other. If you have renamed that group since, the next copy starts a new one
+under the detectors' name rather than guessing which of yours it belongs in.
+
+**Copy the whole band at once.** The band has its own **⬇**, under its chevron
+(beside its name when the band is collapsed). It copies every lane the band
+shows, top to bottom, each exactly as that lane's own **⬇** would, so they all
+land in the one group of that name. A lane you hid in the Detectors sidebar
+isn't copied. As on a lane, the **⬇** is amber when some of those lanes already
+have copies, and the banner's **Undo copy** takes back every layer that click made.
 
 ### Resize the label gutter
 
-The left-edge label column is **resizable**: hover the right edge of any row label, grab the cyan handle, and drag to widen it (up to 240 px) or narrow it. The width applies to every row at once, survives switching songs or tabs, and resets to the narrowest setting when you reload the page.
+The left-edge label column is **resizable**: hover the right edge of any row label, grab the cyan handle, and drag to widen it (up to 240 px) or narrow it. The width applies to every row at once, and is remembered in this browser — switching songs or tabs, reloading the page, or coming back another day reopens it at the width you left it (the phone layout keeps its own width). While a **group band** is open, the gutter is wider by the width of the band's strip, so lane names never sit under the group's name. However narrow you drag the gutter, each name keeps its full room beside the strip.
 
 **The width decides how names are written.** At its narrowest, which is how the page opens, the column is a single 36 px strip. Every row's name there (signal rows, annotation lanes and group headers alike) runs up the row in the row's colour, as on the phone. Drag the handle a little to the right and the column snaps open, with names reading across. Drag it back in past that point and it snaps shut to the strip. It never stops at a width in between.
 
-**A long lane name is elided, never stretched.** A name gets at most **two lines** in the gutter; past that it ends in an **…** instead of wrapping down the row and dragging the lane's height with it — so *Percussive onset density (drums)* reads as *Percussive on…* at the narrowest width, and its lane stays as short as the annotations in it. **In the narrow strip**, each row is kept tall enough for its first six letters (**Bounda…**, **Riff P…**), so thin lanes grow a little. A shorter name such as *EQ* costs only its own length. A group header stacks its **▾** and visibility box above the name. The **✎** pencil moves into the menu. Click a lane to select it, then pick **⋮ ▸ Rename…**, or pick **⋯ ▸ Rename…** on a group header's band. Open the column and the two-line rule above applies, with the pencil back inline. Nothing is lost: the full name is one **hover** away in the lane's tooltip, and widening the gutter fits more of every name per line without making a single row taller.
+**A long lane name is elided, never stretched.** A name gets at most **two lines** in the gutter; past that it ends in an **…** instead of wrapping down the row and dragging the lane's height with it — so *Percussive onset density (drums)* reads as *Percussive on…* at the narrowest width, and its lane stays as short as the annotations in it. **In the narrow strip**, each row is kept tall enough for its first six letters (**Riff P…**, **Lyrics…**), so thin lanes grow a little, and a boundary layer is shortened to **Bnd** (**Bnd 1**, **Bnd 2**) so its lane stays short and each one is told apart by its number, and the annotations in the lane grow with it to fill the row rather than leaving an empty strip underneath. A shorter name such as *EQ* costs only its own length. A group header puts its **▾** and visibility box in a column beside the name, so the header is only as tall as its name. The **✎** pencil moves into the menu. Pick **⋮ ▸ Rename…** on the lane, or pick **⋮ ▸ Rename…** on a group header's band. Open the column and the two-line rule above applies, with the pencil back inline. Nothing is lost: the full name is one **hover** away in the lane's tooltip, and widening the gutter fits more of every name per line without making a single row taller.
 
-**The lane's own affordances follow the selection.** The **ⓘ / ⬇ / ◇ / ⋮** buttons take a line of their own under the name, which is rent an idle lane shouldn't pay — so they appear on the **selected lane only** (click the lane label to select it), and every other cell in the gutter is just its name. The **✎ pencil** is the exception: it sits inline right after the name on your own layers and is always there.
+**The lane's own affordances follow the selection.** The **ⓘ / ⬇ / ◇** buttons sit on the name's line when the whole name fits beside them, and drop to a line of their own under it when it doesn't — room an idle lane shouldn't spend — so they appear on the **selected lane only** (click the lane label to select it), and every other cell in the gutter is just its name. Two things are always there: the **⋮** menu, in the top-right corner of every lane's label (it costs no line), and the **✎ pencil**, inline right after the name on your own layers. A lane you are **visualizing** keeps its lit **◈** up too, selected or not, so you can see which lanes are playing along and stop one with a click.
+
+#### Visualize a lane with playback
+
+Any annotation lane — and the signal curves, **Merge** and **Consensus** — can play along with the playhead. It is **off** by default and chosen per lane, so nothing on the timeline moves while you play except the playhead line — twenty lanes blinking at once would be noise.
+
+**Pick the lanes with the ◇ Visualize button** at the top left of the timeline, just under the player:
+
+1. Click **◇ Visualize**. Every lane that can play along gets a switch over its name in the gutter.
+2. **Click the names of the lanes you want.** The whole name is the switch: it fills with the lane's colour and shows **◈** when that lane is in. The bar above the timeline counts them and offers **All** and **None**. While you pick, clicking a name only switches it; it does not select, rename or drag the lane.
+3. Click **Done**. The button now reads **◈ Visualizing N lanes**. Click it to change the picks, or click **Stop** to turn them all off at once.
+
+**To visualize every lane at once**, click **All** next to the Visualize button. It turns on every lane that can play along, in one click and without opening the picker.
+
+**On Prepare, Visualize plays the beat grid.** The picker there has a **◇ Beat grid** switch in its bar (the grid has no lane name to click), and the first **◇ Visualize** on a song starts with it already on. While it plays, the bar under the playhead sits in a soft cyan band on the waveform, and each beat lights as it sounds and fades before the next one. The downbeat lights brighter, in amber. Watch the light count the bar against what you hear: if beat 1 lights before or after the kick, the grid is off.
+
+Your picks are **remembered per song** in this browser, and **Stop** keeps them, so the next **◇ Visualize** comes back with the same lanes already lit. **Done** forgets picks whose lane no longer exists.
+
+You can still switch one lane at a time: **Visualize with playback** at the top of any lane's **⋮** menu, **◇** beside (or under) the selected lane's name, or the same button on a detector lane's card. Each visualized lane keeps its lit **◈** next to its name, so one click there leaves that lane out.
+
+A lane that is playing along lights what is sounding now, in the way that suits what it holds:
+
+| Lane | What lights while it plays |
+|---|---|
+| **Boundaries** (yours, a detector's, an algorithm's) | the section under the playhead |
+| **Spans**, **Loops**, **Lyrics** | the span, loop or word under the playhead |
+| **Cues**, and algorithm tick lanes (onsets, beats) | the last cue or tick the playhead crossed |
+| **Spans with a pulse** | the band **blinks** on every tick of its rate (see [Pulse](#pulse-how-fast-its-hitting)) |
+| **Riff patterns** | the repeat under the playhead |
+| **Grooves** (a detector's riff lane per drum) | the bar under the playhead, and the drum's hit **flashes** as it is struck |
+| **Signal curves** (Onsets, Volume, Beat strength, Flux, Novelty…) | a dot rides the curve at the playhead, growing and glowing with the value there — so **Onsets** flashes on each attack |
+| **Merge**, **Consensus** | the block under the playhead |
+
 
 ---
 
@@ -1599,10 +1817,6 @@ The left-edge label column is **resizable**: hover the right edge of any row lab
 
 
 <!-- tc-videos:the-viz-control-bar -->
-
-**▶ Annotations menu**
-
-<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/1N2zT39j0Vw" title="Annotations menu" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
 
 **▶ Signals dropdown**
 
@@ -1637,7 +1851,7 @@ The left-edge label column is **resizable**: hover the right edge of any row lab
 
 The Viz Control Bar is the strip of buttons that sits over the canvas and decides what the canvas shows: which annotation layers and audio signals are drawn, how far you're zoomed in, whether the beat grid is on, and so on. Think of it as the canvas's "view" menu. Every button is a big icon with its name spelled out underneath in capitals, so they all line up as one neat row. From left to right: **Signals** and **Annotations** (each opens a checklist popover), **Zoom** (− / ×N / +), **Speed** (a playback-rate selector), **Grid** (an on/off toggle plus a grid-spacing selector), **Snap**, and **Misc** (a popover for a couple of less-used options). Click anywhere outside an open popover to close it.
 
-**In Algorithm Inspect the bar grows two more popovers**, **Algos** and **Detectors**, extending that first cluster to **Signals · Annotations · Algos · Detectors** — the overlays are what you came to that workspace to look at, so they are reachable from the bar and not only from the sidebars (which you may well have collapsed to widen the canvas). Both drive exactly the same visibility as the sidebar checkboxes: tick a row in either place and the other follows.
+**In Inspect the bar grows two more popovers**, **Algos** and **Detectors**, extending that first cluster to **Signals · Annotations · Algos · Detectors** — the overlays are what you came to that workspace to look at, so they are reachable from the bar and not only from the sidebars (which you may well have collapsed to widen the canvas). Both drive exactly the same visibility as the sidebar checkboxes: tick a row in either place and the other follows.
 
 ![The Algorithm Inspect viz control bar — Signals, Annotations, Algos, and Detectors popovers ahead of Zoom, Speed, Grid, and Misc](images/inspect-viz-bar.png)
 
@@ -1653,23 +1867,23 @@ toggleable even when there are zero annotations yet; the others appear
 when a user layer of that kind exists). Every script-defined **detector**
 overlay is pulled out of its type group and collected at the **bottom**
 under a single **Detectors** section (see below) — except in
-**Algorithm Inspect**, where that whole section is promoted to its own
+**Inspect**, where that whole section is promoted to its own
 **Detectors** popover on the bar (its badge and its All / None follow it).
 
 **Each workspace shows its own kind of output, and the split is *approved* vs
 *proposed*.** Approved isn't a kind of annotation, it's a place: your own folder,
 `data/annotations/layers/<you>/<song>.json`. Anything in it — boundaries, cues,
 spans, loops, patterns, lyrics, riff patterns, no type more special than
-another — is work you decided to keep, and the Annotator Tool is where you see
+another — is work you decided to keep, and the Annotate tab is where you see
 it. Everything else is a *proposal*: detector output, algorithm overlays, the
 live Auto-guess consensus, a merge you haven't committed. Those live in
-Algorithm Inspect until you copy one, and copying is what moves it across.
+Inspect until you copy one, and copying is what moves it across.
 
-So in Algorithm Inspect this dropdown lists **none of your layers** and draws
+So in Inspect this dropdown lists **none of your layers** and draws
 none of them — the **Boundaries** group there holds **Auto-guess** and nothing
 else, the one row that is still a proposal. The **Prominence lane** toggle is
 gone from that workspace too: it reads your own durational items, which are no
-longer drawn there. Go to the Annotator Tool to see your own work.
+longer drawn there. Go to the Annotate tab to see your own work.
 
 That folder is also exactly what a downstream consumer reads — the light-show
 agent takes your boundaries and layers and ignores every uncommitted proposal —
@@ -1687,7 +1901,7 @@ checkbox and no All / None of its own):
 
 | Row | Color swatch | What it controls |
 |-----|--------------|------------------|
-| **Prominence lane** | `#34d399` (emerald) | Visibility of the Prominence lane — *who is in front*, read across every layer at once (see [Prominence (front ↔ back)](#prominence-front--back)). **Annotator Tool only**, and **off by default** — the lane is a derived, cross-layer read, so you turn it on when you go looking for it rather than paying four tiers of canvas height before you ask. Front/back placement is your own annotation work rather than a detector output you went there to read, so Algorithm Inspect neither draws the lane nor offers the toggle — it reads the durational items that workspace no longer shows. The lane also hides itself on songs with nothing for it to read — no durational annotations and no lyrics — so ticking it there shows nothing. It is not a saved setting, so it goes back to off with the next song. |
+| **Prominence lane** | `#34d399` (emerald) | Visibility of the Prominence lane — *who is in front*, read across every layer at once (see [Prominence (front ↔ back)](#prominence-front--back)). **Annotate only**, and **off by default** — the lane is a derived, cross-layer read, so you turn it on when you go looking for it rather than paying four tiers of canvas height before you ask. Front/back placement is your own annotation work rather than a detector output you went there to read, so Inspect neither draws the lane nor offers the toggle — it reads the durational items that workspace no longer shows. The lane also hides itself on songs with nothing for it to read — no durational annotations and no lyrics — so ticking it there shows nothing. It is not a saved setting, so it goes back to off with the next song. |
 
 **Boundaries** group:
 
@@ -1697,8 +1911,7 @@ checkbox and no All / None of its own):
 | **Auto-guess** + chips ≥2 / ≥3 / ≥4 | `#a78bfa` (violet) | Visibility + inline min-consensus filter — how many *distinct algorithms* must agree (clicking the same chip twice steps back) |
 
 **Cues**, **Spans**, **Loops**, **Riff Patterns** groups (each only rendered
-when at least one **user-created** layer of that kind exists; Loops +
-Riff Patterns also gated by the `experimentalLoopsAndPatterns` flag):
+when at least one **user-created** layer of that kind exists):
 
 | Row | What it controls |
 |-----|------------------|
@@ -1706,7 +1919,7 @@ Riff Patterns also gated by the `experimentalLoopsAndPatterns` flag):
 
 **Detectors** group (at the very bottom of the popover; only
 rendered when at least one detector overlay exists for this song — in
-**Algorithm Inspect** this is its own **Detectors** popover instead, with
+**Inspect** this is its own **Detectors** popover instead, with
 the same contents and a badge counting the overlays currently on):
 
 ![The Detectors dropdown — the Detectors section as its own popover in Algorithm Inspect, with All / None and one sub-heading per annotation type](images/detectors-dropdown.png)
@@ -1739,7 +1952,7 @@ each group once the feature ships.
 
 ![Signals dropdown — an All / None heading over twelve checkboxes (3-Band, EQ, Spectrogram, MFCC, Chroma, Tempogram, SSM, Energy, Brightness, Novelty, Onsets, Spectral Flux); the button shows the count of enabled rows](images/signals-dropdown.png)
 
-There's one checkbox per signal row, under a **SIGNALS** heading with the same **All** / **None** pair the Annotations popover uses — **All** draws every analysis at once (heavy on a long song), **None** clears the canvas back to the waveform. The color swatch in each row is the color that signal is drawn in, and the "Settings key" is the stored preference that controls whether it's on when a song first opens:
+There's one checkbox per signal row, under a **SIGNALS** heading with the same **All** / **None** pair the Annotations popover uses — **All** draws every analysis at once (heavy on a long song), **None** clears the canvas back to the waveform. The color swatch in each row is the color that signal is drawn in, and the "Settings key" is the stored preference that controls whether it's on when the page first opens. After that, **your picks carry over when you switch songs** — tick Energy and Flux on one song, open another, and the same rows are still ticked, so you can compare the same signals across songs:
 
 | Label | Color | Settings key | Default |
 |-------|-------|-------------|---------|
@@ -1750,13 +1963,18 @@ There's one checkbox per signal row, under a **SIGNALS** heading with the same *
 | Chroma | `#84cc16` | `defaultShowChroma` | ☐ |
 | Tempogram | `#d946ef` | `defaultShowTempogram` | ☐ |
 | SSM | `#f97316` | `defaultShowSsm` | ☐ |
+| Volume | `#f1f5f9` | `defaultShowVolume` | ☐ |
 | Energy | `#f59e0b` | `defaultShowEnergy` | ☐ |
 | Brightness | `#22d3ee` | `defaultShowBrightness` | ☐ |
 | Novelty | `#a78bfa` | `defaultShowNovelty` | ☐ |
 | Onsets | `#f472b6` | `defaultShowOnsets` | ☐ |
 | Spectral Flux | `#10b981` | `defaultShowFlux` | ☐ |
 
-> **A ticked signal always keeps its lane.** The Energy, Brightness, Novelty, Onsets and Spectral Flux curves are computed in your browser from the decoded audio, which takes a second or two after a song opens. Until they arrive the lane is still drawn, saying **Computing Energy…** (and so on) with a spinner, and **No Energy analysis** if the curve genuinely isn't there — the same empty states the EQ lane has always shown. A checked box never leaves you with a blank gap where a lane should be.
+**Click a signal row's name to see what it is.** Clicking the name in the gutter (**Bright**, **Spectro**, **Tempo**, …) opens a small card with the signal's full name, what to read off it (for Brightness: rises as hats and open filters come in, falls on a filter sweep down), and, in a line, how it is computed (spectral centroid, the magnitude-weighted average frequency of each frame). Click the name again, press Esc or click anywhere else to close it. Dragging the name still reorders the row.
+
+> **A ticked signal always keeps its lane.** The Volume, Energy, Brightness, Novelty, Onsets and Spectral Flux curves are computed in your browser from the decoded audio, which takes a second or two after a song opens. Until they arrive the lane is still drawn, saying **Computing Energy…** (and so on) with a spinner, and **No Energy analysis** if the curve genuinely isn't there — the same empty states the EQ lane has always shown. A checked box never leaves you with a blank gap where a lane should be.
+
+> **Volume, Beat strength and Onset density.** Volume is loudness alone — the RMS level of each frame, scaled to the song's loudest moment — so it shows how loud the music is and for how long. The row that used to be **Energy** is now **Beat strength**: Energy blended loudness with attacks and moved with Volume almost exactly (they correlated at 0.99 bar by bar), so it said nothing Volume didn't. Beat strength asks what Volume can't — *is the beat playing?* — and reads the strongest kick or bass hit in each beat of the song's grid, counted only where those hits repeat steadily from beat to beat — so bass lines and pads without a beat under them stay low. Where the drums thin out at the start of a build, Volume only halves; Beat strength drops to the floor. **Onset density** counts hits per beat, whatever they are, so a snare roll speeding up rises while the level stays flat. **Busyness** asks how much is going on: in each of 8 bands it counts the notes that start, so a full arrangement playing fast reads high and a wide, loud pad held for bars reads low. Onset density counts a snare roll as busy; Busyness counts it too, but a build that has lost its kick, bass and chords has fewer bands playing — on Alor the drops sit near 0.9 and the end of the third build near 0.4, where Onset density is at its highest. Each note counts by how loud its band is, so percussion that keeps ticking through a stripped-down passage doesn't keep the lane up: in El Jaguar the shakers run all song, and the passages without kick and bass read about half of the full groove. Beat strength needs the song's BPM to mean *on the beat*; without one it shows the bass hits alone.
 
 > **Onsets vs Spectral Flux.** Onsets is half-wave-rectified flux — peaks only on magnitude *increases* (attacks). Spectral Flux is the full L2 distance — peaks on both increases and decreases, so it also catches note releases and filter closings.
 
@@ -1771,7 +1989,7 @@ There's one checkbox per signal row, under a **SIGNALS** heading with the same *
 Every always-visible control is a 40-pixel square icon button with an
 uppercase label below it (**ZOOM**, **SPEED**, **GRID**, **SNAP**, **MISC** — and the
 dropdowns above use the same shape: **SIGNALS**, **ANNOTATIONS**, and, in
-Algorithm Inspect, **ALGOS** and **DETECTORS**).
+Inspect, **ALGOS** and **DETECTORS**).
 All heights line up so the bar reads as one row of equal columns.
 
 ![Zoom cluster — `−` / `×N` (or `fit`) / `+`, with the current multiplier on the middle button](images/zoom-controls.png)
@@ -1782,11 +2000,11 @@ All heights line up so the bar reads as one row of equal columns.
 |---------|----------|
 | **Zoom** cluster (`−` · `×N` / `fit` · `+`) | Same player zoom that used to sit on the player header — moved into the toolbar so it sits next to the grid controls it interacts with. The middle button shows the current multiplier (`fit`, `×1.5`, `×2`, …) and resets to fit on click. `−` is disabled at `fit`. **Every zoom step re-centers on whatever you're working on**, in this order: (1) a **range with its picker open** — the Prominence lane's *Lead over bars…* panel, or the energy-span export panel; (2) the **highlighted region** — the pending selection pill or the drag preview band, centred on its midpoint — or the **selected annotation item** — the focused cue, span, loop, pattern, riff pattern, lyric or boundary, from **any** layer type, not just the tab you're on, with intervals centred on their midpoint. Both of those outlive the gesture that made them (a preview band sits there until you click it away; clicking the waveform moves the cursor without deselecting a card), so when both are live at once the **more recent** of the two wins — the one you last reached for is the one you are looking at; (3) the **playback cursor** — wherever it is, on screen or not, the view scrolls so the cursor sits in the middle. Near the two ends of the track — a cursor parked at `0:00` or in the tail, where there isn't half a screen of track on one side of it to centre against — the scroll clamps at the edge and the cursor sits off-centre, but it is always in frame. That start/end zone shrinks as you zoom deeper, so a cursor a little way into the song takes the centre back after a step or two. So zooming in on a span you just clicked keeps that span in the middle of the panel instead of jumping back to the playhead, and dragging a fresh highlight somewhere else frames that highlight on the next step, even with an older item still selected. The mouse position is never used. The same rule applies to trackpad pinch / Ctrl+wheel zoom. Note that a selection outranks the cursor until you actually clear it — clicking elsewhere on the waveform moves the playhead but does not deselect the item. The `+` cap escalates in three tiers: (1) **standard** — typically `×32`, depending on display density and panel width; (2) **extended** — clicking `+` past the standard cap opens an **Allow extended zoom?** prompt that roughly doubles it; (3) **ultra** — clicking `+` past that opens an **Allow ultra zoom?** prompt that lifts the cap to `×1024`, which is about where one screen pixel covers one audio sample and there is nothing left to resolve. **Every row stays pixel-sharp at every zoom level.** Each full-width visualization — waveform, 3-Band, spectrogram, MFCC, chroma, tempogram, SSM and the signal sparklines — is drawn as a strip of tiles, and only the tiles near the viewport are rendered, so no row is ever a stretched low-resolution bitmap and none of them costs more memory at `×1024` than at `×1`. Zooming in buys real detail rather than magnification: the player waveform re-reads the decoded audio once a screen pixel covers less than ~1.5 ms, and the spectrogram re-runs its FFT centred on each column at the finer time resolution. What you eventually hit is the resolution of the analysis itself — the 3-Band envelope is kept at 0.5 ms, and the MFCC / chroma / tempogram / SSM rows at their analysis hop — so past roughly `×300` those rows stay sharp but stop revealing anything new. The trade-off at extreme zoom is **speed, not sharpness**: rows repaint section by section as you pan, which with every signal row enabled is roughly a tenth of a second of work per section — turn off rows you aren't using from the **SIGNALS** menu and panning gets noticeably lighter. Memory stays bounded and is released on zoom-out: only the sections near the viewport are held, so a fully zoomed timeline with all rows on costs about 45 MB of canvas versus 12 MB at fit, and returns to 12 MB the moment you zoom back out. Tick **Don't ask me again** + **Keep current limit** in either dialog to silence that prompt permanently and stay at the previous cap. Once approved, each tier persists across sessions. Keyboard shortcuts `+` / `−` / `0` are unchanged. |
 | **Speed** (inline selector) | Playback speed for the whole song: **1×** (normal), **0.75×**, **0.5×**, or **0.25×**. Slowing it down lets you study a fast passage at half- or quarter-speed, and because the slow-down is applied once at the audio source, **everything that tracks playback slows with it in lockstep** — the playhead, the karaoke sweep on the riff node's sub-beat grid, and the beat-grid cursor all move at the new rate. **Pitch is preserved**, so the song stays musically recognizable when slowed (no chipmunk / record-drag effect). The selector tints green whenever it's set to anything other than 1×, so a non-normal speed is obvious at a glance. The starting value comes from **Settings → Display & playback → Default playback rate**. |
-| **Grid** (big icon) | Toggle for the beat-grid overlay (`defaultShowBeatGrid`, **on by default**). If the grid is on for a song with no BPM saved, the icon turns amber and a **⚠ Grid can't render — set a BPM for this song** chip appears next to it — the overlay can only render once a BPM is set, so fill in the Song Info Bar's BPM field (or use the Dataset Prep BPM picker) to make the grid lines appear. |
+| **Grid** (big icon) | Toggle for the beat-grid overlay (`defaultShowBeatGrid`, **on by default**). If the grid is on for a song with no BPM saved, the icon turns amber and a **⚠ Grid can't render — set a BPM for this song** chip appears next to it — the overlay can only render once a BPM is set, so fill in the Song Info Bar's BPM field (or use the Prepare BPM picker) to make the grid lines appear. |
 | **Unit selector** (big inline element, right of the Grid icon) | Grid line spacing, **default `Beat`**, listed coarsest to finest: `16 Bars`, `8 Bars (Block)`, `4 Bars (Phrase)`, `2 Bars`, `Bar`, `Compound (×3 beats)`, `Beat`, `1/2 beat`, `1/3 beat · triplet`, `1/4 beat`, `1/6 beat · triplet`, `1/8 beat`. The selector grows or shrinks to fit the current selection (so `Bar` looks compact and `1/3 beat · triplet` is wider) — no ellipsis. Disabled (greyed out) when the grid is off or the song has no BPM. Labels are intentionally **beat-relative** — in 4/4 they line up with the familiar music-notation values (1/2 beat = 8th, 1/4 beat = 16th, 1/8 beat = 32nd, triplets divide the beat into 3 / 6); in compound meters where the BPM counts 8ths (6/8, 9/8, 12/8) the same fractions stay accurate. `Compound (×3 beats)` is the perceived dotted-quarter pulse for compound meters and is hidden in simple meters (4/4, 3/4, 5/4, 7/8) where it would drift against bar lines. |
-| **Grid-mode badge** (inline, right of the Snap icon) | A colored two-line pill always tells you the active grid mode plus the song's BPM, time signature, and bar numbering. Line 1 names the mode (`Steady GRID`, `Mapped GRID`, or `Hand-placed GRID`); line 2 shows `N BPM · T/S · bars from 0`, with `(N grids)` in Mapped and an amber `N pinned` in Hand-placed. The `bars from 0` / `bars from 1` tag is the always-visible reminder of which numbering convention is active (**Settings → Annotations — display → First bar / first beat numbered**); hover the badge for the full explanation. Visible in every workspace — outside Dataset Prep it's read-only so you can confirm tempo + meter without leaving the page. |
-| **Snap** (big icon, next to Grid — **Annotator Tool only**) | Single source of truth for snap behavior. When on (and a song BPM is set), every annotation entry rounds to the grid — to whichever unit **GRID** is set to, triplets included (a whole beat by default, or 1/2, 1/3, 1/4, 1/6, 1/8 of one, or a bar): live drag-selection highlight on the 3-Band waveform / Spectrogram, the Manual-boundary drag, the **+ Add cue @ playhead** button in the Cues editor, the snap-to-playhead buttons in the Spans / Loops editors, and a section marked at the playhead with **M** while the song plays. Independent of Beat-grid visibility — you can snap without drawing the grid, and the on-canvas snap indicator (see below) tells you which boundaries actually landed on the grid. **Hidden in Dataset Prep and Algorithm Inspect**, where the user isn't placing annotations. |
-| **Misc** (dropdown) | Catch-all for less-frequent controls. Entries: **Block browser swipe-back**, **Lock player stem to stem filter** (Algorithm Inspect only), and **Grid line thickness** (with its **Adapt to zoom** checkbox). *Block browser swipe-back* — **On (default):** the browser's swipe-back/forward gesture is suppressed everywhere on the page, and every horizontal trackpad/wheel gesture scrolls the timeline instead — so you never accidentally bounce back through history while scrubbing. **Off:** only gestures *over* the waveform or signal-viz panels are intercepted and routed to scroll the timeline; horizontal swipes elsewhere on the page (e.g. the workspace tab strip) still navigate history. Persisted across sessions in `tc.captureGlobalHScroll`. Vertical scrolling is never touched. *Lock player stem to stem filter* — **on by default**, shown in Algorithm Inspect: the player's stem and the sidebar's **Stem filter** move together, so choosing a stem on either picks it on the other (as far as the other side has that stem — the player only has the stems Demucs separated, the filter only the stems some algorithm has rows for). Untick it to set them independently. Persisted in `tc.stemLock`. *Grid line thickness* — a slider (**0.25×–10×, default 1×**, in 0.25 steps) that scales the width of every beat-grid line uniformly across all rows (waveform, spectrogram, chroma, MFCC, tempogram, SSM, and the section / cue / span / loop / riff lanes), preserving the bar > beat > sub-beat hierarchy. Use a higher value to make the grid pop on dense signal panels, or a lower value to thin it out. Persisted in `tc.gridLineThickness`. *Adapt to zoom* — a checkbox under the slider, **on by default**. When on, the slider's value rides the player's zoom: the grid stays hairline-thin when the whole song is fitted on screen (where lines crowd together and smear the waveform) and thickens as you zoom into a handful of bars. The readout beside the slider shows both numbers — your multiplier and the width actually in use right now (e.g. `1× → 1.6×`). Turn it off to have the slider's value taken literally at every zoom. Persisted in `tc.gridThicknessAdaptive`. |
+| **Grid-mode badge** (inline, right of the Snap icon) | A colored two-line pill always tells you the active grid mode plus the song's BPM, time signature, and bar numbering. Line 1 names the mode (`Steady GRID`, `Mapped GRID`, or `Hand-placed GRID`); line 2 shows `N BPM · T/S · bars from 0`, with `(N grids)` in Mapped and an amber `N pinned` in Hand-placed. The `bars from 0` / `bars from 1` tag is the always-visible reminder of which numbering convention is active (**Settings → Annotations — display → First bar / first beat numbered**); hover the badge for the full explanation. Visible in every workspace — outside Prepare it's read-only so you can confirm tempo + meter without leaving the page. |
+| **Snap** (big icon, next to Grid — **Annotate only**) | Snaps **cues** to the grid. When on (and a song BPM is set), a cue placed or dragged rounds to whichever unit **GRID** is set to, triplets included (a whole beat by default, or 1/2, 1/3, 1/4, 1/6, 1/8 of one, or a bar) — **+ Add cue @ playhead**, **M** while the song plays, a cue dragged on the canvas, and the click that moves the playhead while the Cues tab is open. It also governs Prominence breakpoints. It does **not** govern the other types: **boundaries, spans, loops and riff patterns always land on the nearest beat** — or the nearest GRID line when GRID divides the beat — Snap on or off (see [Boundaries, spans, loops and riff patterns always land on a beat](#boundaries-spans-loops-and-riff-patterns-always-land-on-a-beat)), and **lyrics never snap**. Independent of Beat-grid visibility — you can snap without drawing the grid, and the on-canvas snap indicator (see below) tells you which marks actually landed on the grid. **Hidden in Prepare and Inspect**, where the user isn't placing annotations. |
+| **Misc** (dropdown) | Catch-all for less-frequent controls. Entries: **Block browser swipe-back**, **Lock player stem to stem filter** (Inspect only), **Grid line thickness** (with its **Adapt to zoom** checkbox), and **Show beat numbers**. *Block browser swipe-back* — **On (default):** the browser's swipe-back/forward gesture is suppressed everywhere on the page, and every horizontal trackpad/wheel gesture scrolls the timeline instead — so you never accidentally bounce back through history while scrubbing. **Off:** only gestures *over* the waveform or signal-viz panels are intercepted and routed to scroll the timeline; horizontal swipes elsewhere on the page (e.g. the workspace tab strip) still navigate history. Persisted across sessions in `tc.captureGlobalHScroll`. Vertical scrolling is never touched: a swipe counts as horizontal only when it is mostly sideways, so a vertical swipe that drifts a little to one side still scrolls the page. *Lock player stem to stem filter* — **on by default**, shown in Inspect: the player's stem and the sidebar's **Stem filter** move together, so choosing a stem on either picks it on the other (as far as the other side has that stem — the player only has the stems Demucs separated, the filter only the stems some algorithm has rows for). Untick it to set them independently. Persisted in `tc.stemLock`. *Grid line thickness* — a slider (**0.25×–10×, default 1×**, in 0.25 steps) that scales the width of every beat-grid line uniformly across all rows (waveform, spectrogram, chroma, MFCC, tempogram, SSM, and the section / cue / span / loop / riff lanes), preserving the bar > beat > sub-beat hierarchy. Use a higher value to make the grid pop on dense signal panels, or a lower value to thin it out. Persisted in `tc.gridLineThickness`. *Adapt to zoom* — a checkbox under the slider, **on by default**. When on, the slider's value rides the player's zoom: the grid stays hairline-thin when the whole song is fitted on screen (where lines crowd together and smear the waveform) and thickens as you zoom into a handful of bars. The readout beside the slider shows both numbers — your multiplier and the width actually in use right now (e.g. `1× → 1.6×`). Turn it off to have the slider's value taken literally at every zoom. Persisted in `tc.gridThicknessAdaptive`. *Show beat numbers* — a checkbox, **on by default**. On, every beat is numbered with its count from the start of the song: the first beat of the grid is `0`, then `1`, `2`, `3`… straight through to the end, **never restarting at a bar** — so bar 70 in 4/4 starts on beat 280 (bars numbered from 0). Beat numbers sit on a second row, in a quieter grey, under the bar numbers, so a bar line shows both; a split (Mapped) song keeps counting across its segments. Sub-beat lines on a 1/2, 1/4… grid are not numbered, and beats before the grid's first beat (a pickup) aren't either. Off, the beat grid numbers bars only. Every beat is numbered as long as the numbers fit side by side without touching; zoomed out past that, they thin out so they don't run together: every 2nd beat, then every 4th, then bar numbers only (and then every 2nd, 4th… bar, as before). Persisted in `tc.numberEveryGridLine.v2`. |
 
 > **Snap indicator.** Any boundary that lies on a beat-grid line renders a small violet dot (matching the BeatGrid checkbox color) at its cap on the canvas. Span / Loop bands show one dot per end-cap, so you can tell at a glance whether *both* boundaries are snapped or only one. The pending **+Add** selection pill also shows a violet **snapped** chip when both endpoints lie on the grid. The indicator only depends on the boundary's value — it shows up whether the boundary was snapped on entry, dragged onto a grid line later, or typed in by hand. **Cue-row flash:** when **M** (or any add) places a new cue and snap-to-grid pulls the value onto a grid line, the cue's tick flashes a brief violet halo so it's obvious the click was snapped — the persistent dot stays for as long as the cue remains on the grid.
 
@@ -1802,81 +2020,182 @@ when [the grid moves](#when-the-grid-moves-under-grid-lock), which is a
 statement that this song's marks are not to be held to the grid. That, too, is
 remembered per song.
 
-Turning it on **aligns every existing annotation to the grid** — that is the
-point of the lock, so it is not optional. Everything lands on **the unit the
-GRID selector is showing**, the same one live snapping uses: one unit for the
-whole song, named in the confirm dialog so you can see what you are agreeing
-to. Marks placed against a `1/3 beat · triplet` grid therefore come back on
-thirds, instead of each type being rounded a different way. Lyrics are left
-alone. A riff-pattern instance moves as a whole: its start snaps and its
-length rides along, because that length is the pattern's own content (its node
-sequence × repeat count) rather than two independent edges. The confirm
-dialog lists how many items will move, per type, and the whole re-snap is undoable from the toast that follows — that
+Turning it on opens a dialog that asks **what to align to the grid**:
+**Boundaries**, **Loops**, **Spans** and **Riff patterns**, each with a tick
+box and its item count. Boundaries and loops start ticked; spans and riff
+patterns are opt-in, because they often sit off the grid on purpose. The count
+is the items that will actually **move** — one already on the grid is not
+counted — and a type with nothing to move is greyed out. Click the ▸ triangle
+beside a type to open its list: every item that moves, by name (and lane, when
+the type has more than one), with its time now → where it lands and the
+shift in milliseconds; spans, loops and riff patterns show their start and end
+separately, and an edge already on the grid reads *stays*. Whatever is ticked lands **exactly where live snapping would put it** — the
+GRID unit when it divides the beat (`1/2`, `1/3`, `1/4`, `1/6`, `1/8`), the
+beat otherwise, so a `Bar` grid still lands on beats — and is stored to the
+millisecond, like every add, drag and lane snap — it is the same snap. The dialog names that unit. A time that is
+already on a grid line therefore never shows up as a sub-millisecond move. Unticked types, cues and lyrics
+keep the times they were placed at — untick everything and the lock only
+governs what you place from now on. A riff-pattern instance moves as a whole:
+its start snaps and its length rides along, because that length is the
+pattern's own content (its node sequence × repeat count). The re-snap is
+undoable from the toast that follows — that
 toast clears itself after about 5 seconds, so take the undo while it is up.
 
-##### Dragging a band snaps at the zoom you are working at
+##### Boundaries, spans, loops and riff patterns always land on a beat
 
-Placing a time and *dragging* one are different gestures, and the grid treats
-them differently. Anything you place by its time — **+ Add @ playhead**, a
-typed value, the snap-to-playhead buttons — lands on exactly the unit the grid
-is set to. But when you **drag a Span / Loop / Pattern / Riff-pattern band**
-across the canvas, or drag one of its end handles, the snap widens to the
-finest unit still worth aiming at *on screen*.
+These four types always snap — whatever **Snap**, **Grid Lock** or the zoom
+say — to **the finest grid line on offer**: the **GRID** unit when it divides
+the beat (`1/2 beat`, `1/3 beat · triplet`, `1/4 beat`, `1/6 beat · triplet`,
+`1/8 beat`), and the **beat** otherwise — a coarser GRID such as `Bar` still
+lands on beats. They are claims about the song's structure (a section starts
+on a beat, a loop is a whole number of beats), so a time between grid lines is
+never what you meant; set GRID finer when the beat is too coarse for a passage.
+That covers every way one gets a time:
 
-The reason is arithmetic. A five-minute song fitted on screen is drawn at about
-4 px per second, so at 100 BPM a beat is **under 3 px wide**. Snapping in 3 px
-steps is a snap you can neither see nor steer: the band just slides under the
-pointer, which is exactly what "Grid Lock is on but nothing snaps" feels like.
-So at that zoom a dragged band clicks onto **bars** instead — a 10 px step you
-can aim at, and every bar line is a beat line, so nothing lands off the finer
-grid. Zoom in and the beat comes straight back the moment it is wide enough to
-hit; zoom in further and the sub-beat units follow. On a very long track the
-widening carries on past the bar, to 2, 4 and 8 bars.
+- dragging a boundary, or dragging a span / loop / riff-pattern band or one of
+  its end handles on the canvas. A moved **span or loop snaps each end on its
+  own**, so its length can change: a band a bar and a bit long lands on the
+  bar line at one end and on the grid line nearest "a bar and a bit" at the
+  other. (If both ends would round onto the same line, the band keeps its
+  length instead of collapsing.) A moved **riff-pattern instance** keeps its
+  length — that length is however long its sequence plays — and only its
+  start snaps;
+- **+ Add @ playhead**, **M** while the song plays, **Mark In / Mark Out**, and
+  the cards' snap-to-playhead buttons;
+- a range highlighted on the waveform, and the click that moves the playhead
+  while one of these tabs is open.
 
-Nothing else changes behaviour: cues, boundaries, prominence breakpoints and
-every placement-by-time keep the grid's own unit, and **Snap** off still means
-free dragging.
+A song with no BPM has no beat to land on, so times stay where you put them
+until one is set. A time typed into a card is kept as typed. **Cues** follow the
+**Snap** toggle instead (a hit can sit between beats), and **lyrics** never snap.
 
-##### Lyrics opt out of the global switches
+##### Lyrics never snap
 
-Lyrics are the one family that ignores both the **Snap** toggle and **Grid
-Lock**. Everything else you place is a claim about the song's structure — a
-section starts on a downbeat, a loop is a whole number of bars — but a lyric
-records when a singer actually opened their mouth, and a vocalist lands ahead
-of or behind the beat on purpose. At 120 BPM, rounding to the nearest beat can
-move a word by up to 250 ms, which is far past the point where the karaoke
-highlight visibly drifts off the voice, and the original onset is gone once it
-has been rounded.
+Lyrics are the one family the grid never touches — not the **Snap** toggle, not
+**Grid Lock**, not a re-snap. Everything else you place is a claim about the
+song's structure — a section starts on a downbeat, a loop is a whole number of
+bars — but a lyric records when a singer actually opened their mouth, and a
+vocalist lands ahead of or behind the beat on purpose. At 120 BPM, rounding to
+the nearest beat can move a word by up to 250 ms, which is far past the point
+where the karaoke highlight visibly drifts off the voice, and the original onset
+is gone once it has been rounded.
 
-So a lyrics layer obeys only its own **snap picker**, in the layer's toolbar
-row in the Lyrics editor, and it ships set to **Off**. That one setting governs
-every way a lyric time can be set — dragging a word or its end on the canvas,
-the editor's snap-to-playhead buttons, **+ Add @ playhead**, and a dragged
-region committed as a line. While the Lyrics editor is the active type the
-**playhead itself** follows it too, since a cursor rounded to the beat would
-hand every add-at-playhead a beat-aligned time however fine the layer was set.
-See [Lyrics](#cue-span-loop-and-riff-pattern-layers) for the granularities on offer.
+So every way a lyric time can be set keeps the exact time — dragging a word or
+its end on the canvas, the editor's snap-to-playhead buttons, **+ Add @
+playhead**, and a dragged region committed as a line. While the Lyrics editor
+is the active type the **playhead itself** is left where you click too, since a
+cursor rounded to the beat would hand every add-at-playhead a beat-aligned time.
 
-##### Both coordinates are saved — and Grid Lock decides which one is the truth
+##### Reading a Lyrics lane: where a word starts, ends, and overlaps
 
-Every annotation is stored **twice**: the absolute time in seconds and the
+A timed word or line is drawn as an outlined **box**. Its **start** is the
+bright bar with the word's label beside it — drag it to move the word. Its
+**end** is a **]** bracket on the box's right side — drag it to change how long
+the word lasts. Neighbouring words alternate between a lighter and a darker
+fill, so two words sung back to back read as two boxes, not one long one.
+
+Words that **overlap** in time never lie on top of each other: the later one
+drops into a **second row** of the lane, and the stretch where they overlap is **hatched amber** across the
+lane. A **line** over its own words is not an overlap: the line (the phrase)
+always takes the top row and its words the row under it, so dragging a word
+never swaps the two, and only words overlapping words (or lines overlapping
+lines) are hatched. Each row is its own target — a press in the lower row only ever grabs the
+lower word — and hovering either word names the one it overlaps
+(*⚠ overlaps "na"*). Trim one of them and the hatch, and the extra row, go away.
+The split is local: only the words tangled in that overlap share the lane's
+height, and every other word keeps the full lane. A pile of a dozen words on one
+instant thins that pile, not the rest of the song.
+
+When the stacked rows are too thin to read, **drag the lane's bottom edge down**:
+the lane grows and every row of overlapping words grows with it, so each word
+sits clear in its own row. The height is remembered for that lane in this
+browser; **double-click** the bottom edge to put it back to the normal height.
+
+##### Extract ADSR: a sound's envelope on a span or a lyric
+
+Any span or lyric of yours can be given its **envelope** — how the sound under
+it rises to its peak (**attack**), falls away from it (**decay**), holds
+(**sustain**) and dies out (**release**) — read off the audio you choose:
+
+- **One item** — open its card (click the band or the word). Its **ADSR**
+  section has one button per source the song has: **Mix**, and each separated
+  stem (**Vocals**, **Drums**, **Bass**, **Other**, …). Press the one the sound
+  is on. Once the item has an envelope, the section shows the four times
+  (*A 80ms · D 200ms · S 1200ms · R 300ms*), the source it was read off is the
+  pressed button, and the row reads **Re-extract from**.
+- **A whole lane** — the lane's **⋮** menu → **Extract ADSR from**, the same
+  source buttons. A lyrics lane sends each timed word, and each line with no
+  word inside it; a span lane sends every span except ⚡ Energy spans, which
+  carry their own envelope already.
+
+The envelope is drawn as a dashed light-grey contour behind the word, or inside
+the span's band, filled with a haze that fades toward the floor — never in the
+layer's colour and never boxed, so it can't be mistaken for a second word or
+span — up to the peak, down to the sustain, held, released — louder sounds
+taller, and hovering the item spells the numbers out.
+
+**Pick the stem the sound is on.** The full mix often has several things in
+one item (a roar over a kick); the stem the sound sits on reads it cleanly.
+
+**Several pulses get one outer shape.** A/D/S/R describes one sound, but a
+gobble, a trill or a stutter is a run of quick pulses. Such an item still gets
+an envelope: the shape over the tops of its pulses taken together, the dips
+between them filled — from where the first pulse rises to where the last one
+dies away. The card marks it **outer shape of N peaks**, the tooltip and the
+message say so too, and the export carries `peaks: N`, so it is never mistaken
+for a single hit. Only an item with nothing audible in the chosen source gets
+no envelope; trying such a source never wipes one read off another source.
+
+**Dragging or trimming an item reads it again.** The envelope measured the
+item's old span, so a retime clears it, and once the item stops moving it is
+read again — off the same source as before (a lyric with no recorded source:
+the vocals stem, a span: the mix). ⌘Z steps back through the new reading and
+then the drag. Each extraction is one edit, and a locked lane offers none. The
+envelope is exported with the item, in the same `envelope` shape for spans and
+lyrics (`start`, `peak`, `decay_end`, `release`, `end` in seconds, `peak_db`,
+`sustain_db` when it holds, `source`, and `peaks` on an outer shape).
+
+##### Grid Lock stores beats — and decides which coordinate is the truth
+
+Every annotation has two coordinates: the absolute time in seconds and the
 musical position it falls on, in fractional beats from the grid origin (`beat`
-on points, `startBeat` / `endBeat` on ranges). Lyrics are the exception — a
-sung word is not a grid event, so it carries times only.
+on points, `startBeat` / `endBeat` on ranges; bar 1, beat 1 is `0`). Lyrics are
+the exception — a sung word is not a grid event, so it carries times only.
+
+The beat is a **fraction of a beat, kept exactly**. Mark on the finest grid —
+**1/8 beat**, or the triplet steps **1/3** and **1/6** — and the file says
+`12.375` (bar 4, beat 1, the fourth 32nd) rather than a float near it: a
+position within 1 ms of a 1/24-beat step (every snap the Grid selector offers
+is one) is saved as that step. A mark placed off the grid, a tapped hit or a
+detector's onset, keeps exactly where it is.
+
+Every save also records the song's **grid** in the file — BPM, grid offset,
+time signature and the tempo map (one entry per tempo segment) — because a beat
+number means nothing without the grid it was counted on.
 
 Which of the two is authoritative depends on Grid Lock:
 
 - **Grid Lock off** — seconds are canonical. The beat rides along as a stamp,
   refreshed from the times on every save. The grid can move underneath and
   annotations stay where they are.
-- **Grid Lock on** — the **beat** is canonical. The song is annotated
-  musically, so a marker belongs to its bar.beat, and its seconds are simply
-  that beat's position on the current grid. Change the grid and the times are
+- **Grid Lock on** — the **beat** is canonical, and it is **all the file
+  stores**. The song is annotated musically, so a marker belongs to its
+  bar.beat, and its seconds are simply that beat's position on the current
+  grid. The layers file is written with `"timebase": "beats"`: every marker
+  keeps only `beat` / `startBeat` / `endBeat` (its alternative candidates in
+  beats too), and no milliseconds. Change the grid and the times are
   recomputed from the beats.
 
-Seconds are always written either way, so exports, scoring, detector
-comparison, and every other consumer keep reading plain seconds and never have
-to know about beats.
+  What still holds seconds under Grid Lock: **lyrics**, and what describes the
+  *sound* rather than its place — a cue's ring-out (`decay`), an extracted
+  envelope, a prominence arc's offsets. Those are pinned to the audio, and a
+  grid edit must not move them.
+
+Everything that reads the file — the editor, exports, scoring, detectors,
+downstream tools — turns the beats back into seconds with the stored grid, so it keeps
+working in seconds and nothing has to be changed by hand. A file saved with
+Grid Lock off keeps both coordinates, as before. Switching Grid Lock does not
+rewrite the file on its own: the next save writes it the new way.
 
 An annotation can also carry **no** beat at all: items written before the grid
 existed have none, and answering *"keep their milliseconds"* to the prompt
@@ -1885,7 +2204,7 @@ that moves times onto beats — there is nothing to say where it belongs
 musically, and the app does not guess.
 
 That last point is what makes the beat worth storing. If the grid is edited
-**somewhere else** — in Dataset Prep, in another browser session, by another
+**somewhere else** — in Prepare, in another browser session, by another
 annotator, by a script — a locked song reopens with its times recomputed from
 the saved beats, and a toast tells you how many moved:
 
@@ -1973,9 +2292,9 @@ Which grid units appear in the dropdown is remembered between visits, saved in y
 
 ![The Run picker (▶ Run…) — opens mirroring the Algorithms sidebar's ticks; Select missing seeds the not-yet-cached ones](images/inspect-run-picker.png)
 
-In Algorithm Inspect, which detector results are drawn on the canvas can be set from either of two places, both writing the same visibility set:
+In Inspect, which detector results are drawn on the canvas can be set from either of two places, both writing the same visibility set:
 
-- The workspace's right **Algorithms** sidebar: each detector row, grouped by family (Ruptures, MSAF, All-In-One, the experimental SPAN / LOOP / CUE-extras / LYRICS / PATTERN families, and your `is_algorithm=True` custom detectors), carries a checkbox that toggles **that result's overlay** on the waveform. The checkbox is only enabled once the result is **cached** — a missing row stays greyed until you compute it. Each family header also offers **Show all / Hide all** over its cached results. This is the surface that also *computes*: **▶ Run…**, the stem filter, and the cached / missing / failed status all live here.
+- The workspace's right **Algorithms** sidebar: each detector row, grouped by family (Ruptures, MSAF, All-In-One, and the experimental SPAN / LOOP / CUE-extras / LYRICS / PATTERN families — custom detectors are in the **Detectors** sidebar instead), carries a checkbox that toggles **that result's overlay** on the waveform. The checkbox is only enabled once the result is **cached** — a missing row stays greyed until you compute it. Each family header also offers **Show all / Hide all** over its cached results. This is the surface that also *computes*: **▶ Run…**, the stem filter, and the cached / missing / failed status all live here.
 - The bar's **Algos** popover, for when the sidebar is collapsed. It lists every row that has a result, grouped **Ruptures / MSAF / All-In-One / Custom / Other**, with an **All** / **None** on each group heading and on the popover as a whole, and a badge on the button counting how many overlays are on — which becomes **drawn / ticked** (`1/2`) whenever the sidebar's **Stem filter** is hiding a ticked full-mix row, with an amber note and a **show all stems** link at the top of the popover and a **hidden** marker on the row itself. The list is deliberately *not* narrowed by the Stem filter: dropping the filtered rows out of it would only move the mystery. It is a pure visibility picker — a song with nothing cached yet shows a short note pointing you at the sidebar to run something.
 
 A **Consensus** group sits in that list directly under the boundary families (Ruptures / MSAF / All-In-One) and above the cue / span detectors — one checkbox, `#8b5cf6` (violet), for the Consensus lane: the blend the [Consensus Inspect](#sub-tabs) stage built out of the checked detectors. It lives here rather than under **Annotations ▸ Boundaries**, where it used to sit, because that is what it is — an algorithm result with no items to edit and nothing to save, not something you annotated. It is offered only while that stage has a consensus to draw, starts **off**, and stays out of the **Algorithms** All / None above (which speaks for the overlay rows). Its settings stay in the stage below the timeline; see [Where the consensus is drawn](#sub-tabs) for the lane's own **⬇** and **✕**.
@@ -2003,10 +2322,6 @@ Color swatches for each section type. Click a swatch to change the active palett
 
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/nw6lkLg06Dc" title="Annotation type tabs" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
 
-**▶ Add at playhead chip**
-
-<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/aO5A2KgeEeA" title="Add at playhead chip" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
-
 **▶ Workflow status pill**
 
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/ojc8zd7fJlw" title="Workflow status pill" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
@@ -2024,37 +2339,56 @@ Color swatches for each section type. Click a swatch to change the active palett
 
 ![The Annotate sidebar — layer-type chips, edit toolbar, and the All annotations list, with the layer card's own + Add button in its header](images/annotate-sidebar.png)
 
-The Annotation Workspace (the **Annotator Tool** tab) is where you mark up one song by hand — labelling where its sections begin and end, and dropping the various kinds of markers (cues, spans, loops, riff patterns) onto the timeline. The song's tools are arranged in three areas you use together: the song list on the left, the audio canvas in the centre with the editor cards directly beneath it, and the annotation controls on the right. This section walks through that right-hand panel, which is where all the marking-up actually happens.
+The Annotation Workspace (the **Annotate** tab) is where you mark up one song by hand — labelling where its sections begin and end, and dropping the various kinds of markers (cues, spans, loops, riff patterns) onto the timeline. The song's tools are arranged in three areas you use together: the song list on the left, the audio canvas in the centre with the editor cards directly beneath it, and the annotation controls on the right. This section walks through that right-hand panel, which is where all the marking-up actually happens.
 
-The annotation tools live in a dedicated **right-edge sidebar** (the **Annotate** rail), mirroring the song sidebar on the left. The sidebar holds a slim title bar (**ANNOTATE** label · **⋯** overflow menu · **›** collapse), the **Marker info** panel (one row: the active type's title · Status pill · **⋯** toggle — with the Source picker, Save status and detector Re-run, the Record controls and running-time readout, and Import / Export all sharing a single second row behind the **⋯** toggle), and the **All annotations** list below — which carries a horizontal row of annotation-type chips (Boundaries / Cues / Spans / Loops / Riff Patterns) that select the active type. The **Marker actions** panel — every edit button (Undo / Redo, Split, Mark In / Out, the pending pill, `+ Add layer`, Fill defaults / Choose structure, Delete) shown inline — renders *inside* the list, at the top of the content column for whichever type is currently focused, so the edit controls sit with the markers they act on. The editor cards (Manual sections list, Cues / Spans / Loops / Riff Patterns layer cards, Auto-guess clusters, Detector review list) stay in the centre column directly below the waveform — so the canvas above, the cards below, and the controls on the right are all visible at once. Collapse the sidebar with the **›** chevron in its title bar; reopen it via the **‹ Annotate** tab that pops out on the right edge. Width persists per browser under `tc:annotate-sidebar-width` (min **180 px**, max **640 px**, default **256 px**); collapsed state under `tc:annotate-sidebar-collapsed`. Drag the left edge of the sidebar to resize, or double-click the handle to reset. The keyboard shortcuts panel (press **?**) is also right-anchored and overlays the annotation sidebar while open.
+The annotation tools live in a dedicated **right-edge sidebar** (the **Annotate** rail), mirroring the song sidebar on the left. The sidebar holds a slim title bar (**ANNOTATE** label · **⋯** overflow menu · **›** collapse), the **Marker info** panel (one row: the active type's title · Status pill · **⋯** toggle — with the Source picker, Save status and detector Re-run, the Record controls and running-time readout, and Import / Export all sharing a single second row behind the **⋯** toggle), and the **All annotations** list below — which carries a horizontal row of annotation-type chips (Boundaries / Cues / Spans / Loops / Riff Patterns) that select the active type. The **Marker actions** panel — every edit button (Undo / Redo, Split, Mark In / Out, the pending pill, `+ Add layer`, Fill defaults / Choose structure, Delete) shown inline — renders *inside* the list, at the top of the content column for whichever type is currently focused, so the edit controls sit with the markers they act on. The editor cards (Manual sections list, Cues / Spans / Loops / Riff Patterns layer cards, Auto-guess clusters, Detector review list) stay in the centre column directly below the waveform — so the canvas above, the cards below, and the controls on the right are all visible at once. Collapse the sidebar with the **›** chevron in its title bar; reopen it via the **‹ Annotate** tab that pops out on the right edge. Width persists per browser under `tc:annotate-sidebar-width` (min **180 px**, max **640 px**, default **18 %** of the window); collapsed state under `tc:annotate-sidebar-collapsed`. Drag the left edge of the sidebar to resize, or double-click the handle to reset. The keyboard shortcuts panel (press **?**) is also right-anchored and overlays the annotation sidebar while open; drag its left edge to widen it (saved under `tc:shortcuts-panel-width`).
 
-Every custom detector is a **curator**, and none of them appear among the algorithm families any more — their output lives in this **Detectors** sidebar instead, which lists a detector only once it has a result for the song. To compute one, open the Algorithms sidebar's **▶ Run…** picker, open its **Custom** chip, tick the detector and run it. Inside that chip, and in this sidebar, the shipped detectors and your own are listed under separate **Custom** and **Default** titles (yours first), each with its stem headings inside, whenever both kinds are present (see [Default and Custom](#default-and-custom)). When the run finishes the detector appears here, shown on the timeline. **Which curators you see depends on your deployment.** A fresh clone ships only the `example_*` scaffolding detectors and `template.py` (in `tools/python/custom-default/`), kept as reference for writing your own (the contract is `tools/python/custom/CLAUDE.md`), so this sidebar starts nearly empty and fills as you add detectors; a curated deployment such as the hosted demo adds start/stop layers of its own on top. A curator that emits boundaries shows under the **Boundaries** heading in Algorithm Inspect's Detectors sidebar — with none installed, that heading stays empty.
+Every custom detector is a **curator**, and none of them appear among the algorithm families any more — they live in this **Detectors** sidebar, which is where they are shown, run and tuned. It lists **every registered detector**, whether or not it has run on the song, yours first and the shipped examples after them under a **Default** title whenever both kinds are present (see [Default and Custom](#default-and-custom)), each listed **once** — a detector that reads several stems (say *Repeated sections (per stem)*) is one row, not one per stem; the stem filter at the top says which of its stems are in play. Each row ends in one small run button: **▶** runs a detector that has not run on this song, **↻** re-runs one that has, or one that failed. Every row is **one line** — checkbox, colour dot, name, a short status, run button — so the names and the buttons each line up in one column. The status, in small type after the name, is one of **failed** (hover for the error), **none found**, **needs vocals** (or bass, drums…), **running…**, or, on a detector read on several stems, how many (**5 stems**; hover for which). While it runs, the run button turns into a spinner; a first run's lane appears on the timeline, shown, as soon as it finishes. A detector that reads a stem the song has not had separated has no run button, and says which stem it needs. A re-run asks before overwriting output you have edited (✓/✗). The line at the top counts how many have run on the song — *6 of 15 run on this song*, a detector read on several stems counting once — and **▶ Run the N not run yet** runs the rest, one after another. (The **▶ Run…** picker in the Algorithms sidebar no longer has a **Custom** chip; it computes the published algorithms only.) **Which curators you see depends on your deployment.** A fresh clone ships only the `example_*` scaffolding detectors and `template.py` (in `tools/python/custom-default/`), kept as reference for writing your own (the contract is `tools/python/custom/CLAUDE.md`), so this sidebar starts nearly empty and fills as you add detectors; a curated deployment such as the hosted demo adds start/stop layers of its own on top. A curator that emits boundaries shows under the **Boundaries** heading in Inspect's Detectors sidebar — with none installed, that heading stays empty.
 
-A curator that emits **patterns** — a figure that repeats, like a drum groove — surfaces as a **Riff Patterns** layer, because that is what the riff model already says: the figure is a reusable **node** and each run of it an **instance**. A groove made of several instruments arrives as one node *per instrument* (*Groove A · Kick*, *Groove A · Snare*, *Groove A · Hat*), all placed over the same bars, so the lane stacks them into the three lines a drummer actually plays and you can edit each line on its own. A groove that comes back later in the song reuses the same nodes rather than making new ones, so the document records that the drop plays the verse's groove. Each instance's card carries how its repeats differed — how many were exact, and which step each variation added or dropped. Where the detector measured **how hard** each step was struck, the chip grid draws it as **brightness** — a ghost note faint, an accent full — in the lane and in the node editor alike. It is a hint, not a second switch: a step the detector said nothing about draws at full strength, so hand-drawn nodes look exactly as they always have, and painting or re-tapping a step never writes a loudness. One thing a pattern curator does need: the song must have a **tempo grid**, since a node's length is measured in beats.
+A curator that emits **riffs** — a figure that repeats — surfaces as a **Riff Patterns** lane, in exactly the shape of a Riff Patterns layer of your own: the figure is a reusable **node** and each run of it an **instance**, and a bar that played its node differently is an **occurrence** on that instance. A figure that comes back later in the song reuses the same node rather than making a new one, so the document records that the drop plays the verse's figure. A note that carries how hard it is struck — its **accent**, 1–127 (a copied drum groove's notes do) — draws it as **brightness** — a ghost note faint, an accent full — in the lane and on its groove card. It is a hint, not a second switch: a note with no accent draws at full strength, so hand-drawn nodes look exactly as they always have, and drawing or re-tapping a note never writes an accent. Zoomed out far enough that a node's steps would be under about 3 px each — a one-bar figure on a whole-song view — the lane draws each node as a single block, brighter the more of its steps sound, instead of notes too fine to read; zoom in and the notes come back. One thing a riff curator does need: the song must have a **tempo grid**, since a node's length is measured in beats. There is no separate kind of lane for drum grooves: a detector's riff lane is drawn by the same renderer as your own riff layers, bar by bar, and is read-only until you copy it. Drums are read one to a lane — **Drum hits & grooves** draws its **Grooves** as one riff lane per drum (*Kick grooves*, *Snare grooves*, *Hat grooves*…), not one lane with a row for each drum, and Percussion layers' *<drum> pattern* and Pitched layers' *<part> pattern* lanes are riff lanes too. Each run is lettered with its node's letter (**B**) written across the run rather than inside its first bar, so a run of bars only a few pixels wide each still shows its letter; where there is room the letter is followed by how many times the run plays (**C ×8**). The lane names only the runs: what a bar inside a run plays is in its tooltip and its card. The lanes of one detector share one alphabet — the kick's grooves might be **A** and **B**, the snare's **C** to **F** — so a letter always names one groove on one drum, never two unrelated grooves that happen to be each lane's first, and each letter keeps its own colour on every lane. Every bar that plays it again exactly is drawn in the same colour and at the same strength as the first, with a dark line at the start of each bar, so you can see where every play begins. A groove is not always one bar long: a hi-hat that plays one figure on the odd bars and answers it on the even ones is a **2-bar loop**, and a figure whose fourth bar turns around can be a 4-bar one. When the bars clearly repeat at 2 or 4 bars — better than the same bars shuffled into a random order would — each cell covers the whole cycle (**B ×8** is then eight 2-bar repeats), the card says **2-bar loop** beside the letter, and the cell is named by both its bars (*Bars 29–30*). A run that ends halfway through a cycle ends on a shorter cell, compared only over the bars it reached. Where the evidence is thin — under two whole cycles, or a difference a shuffle matches as often as not — the groove stays one bar. A loop the song has already established is still recognised when it comes back for **a single pass**, too short to be found on its own: two bars that play a 2-bar loop's cycle in order, each pass at least 75% alike to it, are drawn as that loop (**B**, one cell) rather than left grey — the pickup before a section often plays its groove once like this. It needs a whole cycle; half of one is just a bar. Between two grooves, a bar that plays at least **half of a neighbouring groove's hits** is that groove — a producer loops, so a bar that drops one of the snare's two hits, or adds a fill on top, is the loop played again and not a bar of its own; it joins the run as an occurrence — a variation or fill — with what it changed on its card. Up to two silent or stray bars ride along when the groove comes back after them. A bar farther away is matched too: one that plays at least half of any groove of the lane, and whose own hits are at least half that groove's, is that groove wherever it falls in the song — the snare's figure with a hit dropped, back in a breakdown after another groove. Only a bar that is mostly none of the lane's grooves stays grey. Runs also follow the music's phrases, which come in fours: on a song whose bar 1 is set, a groove that stops one or two bars short of a 4-bar line, where the bars before the line are a fill, a drop-out or the groove itself, carries on to the line — seven bars and a fill read as an eight-bar phrase (**×8**), with the fill as its last bar. A bar that already plays the next groove as written stays with the next groove. A variation is drawn a little lighter, the more it strays from its groove. Click a bar to open its **groove card**: the bar you clicked as it was played, drawn over the groove as written — the groove's hits are the **grey** blocks behind, so a hit on grey is the groove played, grey with only an outline on it is a hit this bar dropped, and a ringed hit with no grey behind it is one this bar added — and **the run** — every bar of the run that bar belongs to, laid out four bars to a line, so you can see where in the cycle the variations, fills (yellow top edge) and drop-outs (hatched) fall. The clicked bar is outlined, the bar playing now is lit, and clicking any bar in the run opens its card. The **▶** beside the bar number plays every repeat of the run, its first bar to its last; while it plays, the same button stops it. Each groove letter is one node, and bars are not given names of their own: a bar that differs from its letter is an occurrence of that node, never a new version of it. **Copy to manual layer** (the ⬇ on the lane's name, or on its row in the Detectors sidebar) copies the detector's riff lane as it is — the same nodes, instances and occurrences, with new ids — into one **Riff Patterns** layer of your own, drawn exactly as the lane is (see *Riff Pattern layers* below) — every bar as it was played, not the groove tiled — and editable. Each groove **letter** is one **node** (**A**, **B**, **C**…), written as the detector's bar with its measured accents on its notes. A bar that played its groove differently — a hit dropped, a fill — is not a node of its own: it is an **occurrence** on its instance, which says for that one play which notes it added and which it left out, and whether it was a fill, a drop or a variation. That is what draws it over its node in grey. Neighbouring runs of one node are one **instance**, repeated: a run of **A ×28** with a fill at bars 8, 16 and 24 copies as one instance, A ×28, with those three bars as its occurrences. A **phrase** — two or more nodes in order, such as *I F I F K G*, that the song plays again somewhere else — is one instance too, playing its nodes in order, at every place the song plays it; played twice in a row, it is one instance repeated (*A B A B A B* is **A B ×3**). A bar inside a phrase that played its node differently is still an occurrence of that play. One node over and over is never a phrase, only a repeat, and a phrase never spans a gap in the lane. Phrases are found greedily, the one covering the most bars first, so a phrase heard only once stays as its runs. A run of another length than its letter's loop — cut short, or a 4-bar loop of a 1-bar groove — is a node of its own, one per length, named like *A · 8 beats*: the letter's notes played round to that length. Each hit is a one-16th note with no pitch, on the 16th pulse, drawn in its drum's colour. A detector that sends a riff lane per drum (Grooves' **Kick grooves**, **Snare grooves**…; Percussion layers' **Kick pattern**, **Snare pattern**, **Hi-hat pattern**) copies each drum as its own layer, named for the lane (*Hi-hat pattern*) and filed in that drum's group (*Percussion layers · Hi-hat*). Copying the whole group with its band's ⬇ copies **only the riff lane**: the drum's notes lane beside it holds the hits the groove was read from, and is left out. Copy it with its own ⬇ if you want it. The copy also carries the lane's one-line **summary**, the groove's big picture: its main loops ranked by how many bars they play, each with where it plays and its rhythm, and the rest folded into one clause (*2 main loops over 94 bars, most played first. A — 49 bars (21–24, 27–28, 50–60, 85–116); rhythm: hat 1–16. B — 41 bars …*). A light show reading the export sees it above every row. Each node also carries what a musician would call it (`names`, e.g. *four on the floor*), and each of its notes how hard it is struck, so a reader of the export gets the figure in the shape the app stores it (see *What the manifest carries* under the export). The bar card draws one row for the drum, one cell per step, each hit as bright as its accent, and a stronger line where each bar of a 2- or 4-bar loop starts. A song needs a tempo for the instances to be timed to it. **Undo copy** removes every layer the copy made. While the card is open it **plays along** — no toggle needed: when the song reaches the card's bar, the note sounding now turns white, the notes already played stay lit and the ones still to come are faint, like karaoke lyrics. If another bar is sounding, it is the one lit in the card's **Run**. As the song plays on into the next bar, the card moves on to it — the bar it shows (and outlines in the run) is the one you are hearing; paused, it stays on whichever bar you clicked, until playback reaches another.
 
-The **Detectors** sidebar lives in **Algorithm Inspect**, to the *left* of the Algorithms sidebar. A curated layer is a **proposal**: it is rebuilt from the detector's cache on every render, exists nowhere in your annotation folder, and nothing downstream reads it — so it belongs with the other machine output, not among your own work. (It used to be listed in the Annotator Tool as well, where a guess sat beside a decision with only a colour between them. Copy a curated lane with its **⬇** and the copy — a real, editable layer — turns up in the Annotator Tool; that copy is the whole point of the gesture.) It lists the curated layers **grouped by the Demucs stem they were built from** — currently always **mix**, since all three EDM curators read the full track — and at the top carries a **Show per stem** chip strip — an **All** chip, a **None** chip, and one chip per stem present. **All** shows every curated layer; **None** hides every curated layer in one click (the symmetric clear, lit while nothing is shown). Hiding a stem removes those detector layers from the **timeline canvas** — it drives the same per-layer visibility as the individual checkboxes below each stem heading (so a single checkbox and the stem chip stay in sync). The Annotate rail's **All annotations** list is **your work only** — the hand-authored Boundaries / Cues / Spans / Loops / Riff Patterns (plus the Auto-guess boundary track), never the curated/detector layers, which are not in that workspace at all. The Detectors sidebar collapses to a **‹ Detectors** tab on the right edge and is independently resizable; width persists under `tc:curated-sidebar-width` (max **400 px**, default **340 px**) and collapsed state under `tc:curated-sidebar-collapsed`.
+The **Detectors** sidebar lives in **Inspect**, to the *left* of the Algorithms sidebar. A curated layer is a **proposal**: it is rebuilt from the detector's cache on every render, exists nowhere in your annotation folder, and nothing downstream reads it — so it belongs with the other machine output, not among your own work. (It used to be listed in the Annotate tab as well, where a guess sat beside a decision with only a colour between them. Copy a curated lane with its **⬇** and the copy — a real, editable layer — turns up in the Annotate tab; that copy is the whole point of the gesture.) It lists every detector in one list, each once, clustered under a small subtitle per detector **group** (the family a detector declares with `group = "…"` — *Energy*, *Notes & grooves*, *Phrase edges* …), alphabetical, with any ungrouped ones last under **Other**; each subtitle carries a checkbox that shows or hides (or ticks) every detector under it, like the **Default** title's. A list where no detector declares a group stays flat. At the top it carries a **stem filter**: **All**, then one chip per stem a detector reads (**Mix**, **Several stems**, **Vocals**, **Drums**, **Bass**, …). **Several stems** holds the detectors that read several stems into one lane and never the full mix, such as *Call & response*. Under **Mix** they would claim to read the mix, and under **Drums** that the bass parts of their lane came from the drums. From **All**, clicking a stem shows only that stem; after that each chip adds or drops its stem, and dropping the last one (or lighting every one) is **All** again. The filter narrows both the list and the **timeline canvas** to those stems' detectors, and for a detector read on several stems it narrows the row to those stems — with only **Drums** lit, *Repeated sections* is its drums lane, and its checkbox, run button and strictness act on the drums alone. The filter sits **on top of** the checkboxes rather than changing them: narrow to Drums and back to All and every row is checked as it was. There is one column of checkboxes and nothing else to toggle: the box on the top line (beside *N of M run on this song*) checks or clears every row listed, the box on the **Default** title every shipped example, and each row's box its own detector. Checking shows the lanes, and ticks the lane-less detectors for **▶ Run N ticked** — so to run every drums detector that has not run yet, pick **Drums**, check the top box, and click **▶ Run N ticked**. A box shows a dash when only some of the rows under it are checked; clicking it then checks them all. While any row under a heading is checked, a small **none** sits beside its box: click it to clear every row under that heading in one go, without checking them all first. Hover a detector row and an **×** appears at its right edge (researchers and admins only, never in demo mode): it **deletes that detector's output for this song** — the cached result for the stem the detector ran on, plus your ✓/✗ review of it — after a confirm. The lane leaves the timeline and the row leaves the sidebar; other songs, other detectors and any copies you already made with **⬇** are untouched. Run the detector again to get it back. To clear several detectors' output for this song at once, click **× Clear N** beside **▶ Run N ticked** at the top of the sidebar (same permission as the ×): it clears only the **checked** rows that have output — uncheck a row to keep it, or use a heading's **none** and then check just the ones to clear. One confirm lists them all, and it also respects the stem filter, so with **Drums** lit it clears the checked drums detectors alone. It leaves out **Drum kit, separated**: that is the slow model run, and Drum hits and Pulse read their hits from it, so clear it with its own × when you mean to. Like the ×, it deletes the saved results from disk, so the lanes go for every annotator, not just you; layers you already copied to the Annotate tab with **⬇** are your own and are never touched. A detector that ran and found nothing on this song draws **no lane** — an empty lane only takes room from the ones with something in them. Its row stays in the sidebar, dimmed, marked **none found**; hover that for the detector's own notes on the run, when it left any. Every row has a checkbox, so the names stay in one column. On a row with a lane it shows or hides the lane. On a row without one (not run yet, failed, or nothing found) it ticks the detector for a run. **▶ Run N ticked** at the top of the sidebar runs every checked row, one after another: the ticked ones for the first time, and every detector whose lane is shown **again**. That's the button to use after you change a detector's code (its tooltip lists which will run again and which run for the first time). When **Drum kit, separated** is among them it always runs first, whatever its place in the list: every detector that reads drums notes which kit it read, so one that ran before the kit was split would read the bands and say **out of date** as soon as the batch finished. Each runs at its **Strictness** slider (where the lane was read, unless you moved it), and a re-run still asks before overwriting output you have edited. Hide a lane first to leave it out of the run. A row waiting on a stem can't be ticked. **Your checks carry over to the next song, and survive a reload.** A checked box means you want that detector, whatever the song. Open another song and it is checked there too: its lane is shown if it has run on that song, and if not it is ticked, so **▶ Run N ticked** runs it with one click. Unchecking works the same way, and a detector you hid stays hidden on every song until you check it again. The stem filter is remembered as well. All of this is kept in this browser only. Running a detector checks it too. Each row also keeps one small icon at its right edge: **▶** runs that detector alone, **↻** runs it again. Every run started from this sidebar writes to the same **run log panel** as an algorithm run, under the song title: one pill per detector (✓ or ✗), and a log entry saying how long it took, how many items it kept (or *nothing found*), at which strictness, its notes, any items it rejected and why — and, when it failed, the Python error, a *to fix* line when a module is missing, and the full traceback. **⎘ Copy** copies the lot. The page scrolls to the panel only when something failed. To read an earlier failure, click **failed** (or **none found**) after its name: its stored run opens in the same panel. A sidebar run can't be stopped half-way, so the panel has no **■ Stop** for it, and algorithm runs wait until it finishes. Unticking the checkbox only hides the layer; the **×** throws it away. To read one detector on its own, hover its row and click **only**: its lane stays and every other detector lane is hidden (for a detector read on several stems, all of its stems' lanes stay). While it is the only lane shown, the button stays up as **all** — click it to bring every detector lane back. The checkboxes follow along, so you can also tick other lanes back in one by one. The Annotate rail's **All annotations** list is **your work only** — the hand-authored Boundaries / Cues / Spans / Loops / Riff Patterns (plus the Auto-guess boundary track), never the curated/detector layers, which are not in that workspace at all. The Detectors sidebar collapses to a **‹ Detectors** tab on the right edge and is independently resizable; width persists under `tc:curated-sidebar-width` (max **400 px**, default **340 px**) and collapsed state under `tc:curated-sidebar-collapsed`.
+
+**Strictness — from Strict (0) to Loose (100).** A detector that offers it shows its setting as a small outlined chip with a ▸ triangle at the right of its row — **Normal ▸**, **89 ▸**, **Loose ▸** — so the list stays one line per detector. Click the chip to open the **Strictness** slider under the row (the triangle turns down), from **0** (Strict) at the left, through **50** (Normal, marked in the middle), to **100** (Loose) at the right; click the chip again to put it away. It starts at the setting the lane was read at. On a detector read on several stems it sets all of the stems the filter shows. Drag it (or focus it and use the arrow keys, one step at a time) to the threshold you want — **moving it runs nothing**. While it is away from the setting the lane on screen was read at, the chip turns amber, the slider stays open, and a **▶ Run** appears beside it; click that (or the row's **↻**) to run the detector at the slider's setting. So you can try 70, look, try 85, look, without a run for every notch you drag through. **▶ Run N ticked** also runs each ticked detector at its slider. While it runs the slider is held. **Normal** (50) is what the detector has always reported; lower asks for more evidence and reports less, higher asks for less and reports more, including readings you may disagree with — every item read at anything but Normal says so in its label. What the settings mean for Pulse is under [Pulse](#pulse-how-fast-its-hitting). The song keeps one result per detector, so a run at another setting replaces the lane (asking first if you have edited it); a section run can use a different setting for just one region.
+
+**Sections from — Auto, Annotated or All-In-One.** A detector that scores the song section by section (**Energy levels**) offers where those sections come from, as a second chip of the same kind: **Annotated** is your first boundaries layer with marks on this song, **All-In-One** the automatic sections (intro, verse, chorus …), and **Auto** — the default — yours where you have them, All-In-One otherwise. On Auto the chip also says which it read (**Auto · Annotated**). Click it to open the three choices under the row; choosing runs nothing, and while the choice differs from the lane on screen the chip turns amber and a **▶ Run** sits beside it. The run's notes name the layer or file it read.
+
+**Energy levels — three readings of high and low, side by side.** The *Energy* group's **Energy levels** detector draws seven lanes in three bands. **Temperature** holds two section lanes, each section labelled 1–5: *loudness (paper)* is each section's median loudness sorted into five levels by K-means, as in *Glow with the Flow* (Robinson et al., Dolby, 2026); *fullness + volume* sorts the sections the same way by how much is playing and how loud it is, half each, so a loud section never comes out calm just because little is playing in it. **Fullness** holds *fullness* — the mean of how many stems play, attacks per second, how much of the spectrum is filled and how many pitches sound at once — and *Instruments playing* (needs the song split into stems). **Bands (lol)** holds low (< 250 Hz), mid and high (> 2 kHz), each against its own loudest moment: what the lol light-show agent reads. These five lanes read four bars at a time, and neighbouring stretches at the same level merge into one block, so a new block starts only where the level changes. Every block on all seven lanes is coloured by its level, blue (1, coolest) through teal, yellow and orange to red (5, hottest); its description gives the numbers. Loudness and fullness often disagree — a drop can be the busiest stretch without being the loudest — which is what the lanes are side by side for.
+
+**Run a detector on just the highlighted section.** A whole-song run reads every section against the whole song: the loudest hit in the chorus sets the scale a soft verse is measured on, so a quiet ghost note there never clears the threshold. Highlight a region on the canvas and a **Run a detector on this section** panel appears at the top of the Detectors sidebar, showing the region as a clock-time range and its length (at least **1 s**). Pick a detector and click **Run on this section**: the detector hears *only* that region, so its thresholds, loudness scale and beat tracking are the section's own. It also hears **1 s before** the region, so the cut is not mistaken for a hit, and nothing found in that second is kept. Nothing is written yet. The panel lists what the run found, with a time you can click to seek, says how many items the detector's lane already has in the region, and repeats the run's notes. For a detector that offers **Strictness**, the panel shows the same **Strictness** slider above **Run on this section**, starting at the setting the lane was read at (and saying *the lane is Normal* when you move it elsewhere). As in the row, moving it only sets it — the run waits for **Run on this section**. That is how to take a looser reading of one drop without loosening the whole song: slide it right, run the drop, and **Replace**. Changing the setting drops a run you have not applied, like moving the highlight does. Then you choose how it lands:
+
+- **Merge (+N new)** keeps everything the lane already has in the region and adds only what is new. A found item with the **same label within 20 ms** of one already there counts as the same event, so a hit the whole-song run already found is not doubled. With nothing new, the button reads **Merge — nothing new** and is disabled.
+- **Replace (A → B)** removes the lane's A items in the region and puts the run's B in their place.
+
+Either way, **nothing outside the region changes**. A span that starts before the region and runs into it is left as it was. Your ✓/✗ decisions follow their items, and on Replace a decision carries over to the new item when it is the same event, heard again. The result is written to the detector's cached output for the song (and to your edited copy, if you have one), the lane redraws, and it is shown if it was hidden. Moving or resizing the highlight, or picking another detector, drops a run you have not applied. A later whole-song run of the detector overwrites merged sections like any other cached output.
+
+![The Run a detector on this section panel in the Detectors sidebar — a 1:00.3 – 1:15.2 region run through a detector, what it found listed with times, and the Merge (+8 new) and Replace (0 → 8) buttons](images/detector-section-run.png)
+
+The **Detector** list holds every detector, titled **Custom** (your own) and **Default** (the shipped examples) like the other detector lists. Only detectors that can honour a region can be picked: those whose code sets `windowable = True` (see the [manifest table](#2-manifest-validation-rules)). A detector that runs once per stem (one lane per stem) is listed once per stem, its stem after its name (*· vocals*, *· other*). The rest stay in the list, greyed and marked **— whole song only**, and are named again on the panel's last line, **Whole song only: …**. A detector whose code failed to load is listed too, greyed and marked **— failed to load**, with its error in amber under the button. The usual cause is a detector file that changed while the custom-detector server was running; restart that server. When the sidebar's **stem filter** narrows it to some stems (say only **Bass** is lit), the list narrows with them to the detectors that read those stems, and the panel says which stems it is following; with **All** lit it lists every stem. A detector whose one lane holds a part per stem (say Kick, Snare and Hat from the drums, and Bass from the bass; its `stem_parts`) is listed under each stem it reads, and with a stem filter on it reads **only the lit stems' parts**: with only **Bass** lit, it re-reads the bass in the section and nothing else. The panel says so before you run (*Reads only Bass*), the count of what the lane already has counts only those parts, and **Replace removes only those parts' items**, so the section's Kick and Snare spans stay where they are. The whole-song-only ones work from the whole song, usually by reading its stems, beat grid or other detectors' output from disk, so a section run of them would not stay inside the section. Algorithm families are not offered here: boundary and pattern algorithms compare one part of a song with another, and cutting the song down removes what they compare against. The tempo, beat and lyrics families that can read one stretch already have their own range runs.
 
 The title bar's **⋯** overflow menu (next to the collapse chevron) groups the two whole-song actions that used to live in a dedicated header row: **↓ Export annotations…** opens the full multi-scope Export Manager (Manual / Auto-guess / every layer type, with optional audio / algo caches / stems buckets), and **✕ Delete all annotations** wipes *every* annotation for the current song — Manual, Auto-guess, plus all user-created Cues / Spans / Loops / Riff Patterns layers — in one shot after a typed `DELETE_ALL` confirmation; only this song's annotations are affected (other songs and other annotators are untouched). The per-marker **↓ Export** (single-click JSON dump of just the active marker) and the per-marker **✕ Delete** (only the active marker type) live inside the **Marker actions** panel (under the active type's chip); see *Marker info & actions panels*.
 
 > ⚠️ **⋯ menu → Delete all annotations is destructive and has no undo.** It removes every annotation kind for the current song in a single operation. Other songs are unaffected. Export first if you want a backup.
 
-The sidebar swaps between editors based on the **type tab row** plus the Source dropdown inside the Marker config panel. The tabs select the annotation kind — **Boundaries**, **Cues**, **Spans**, **Loops**, **Riff Patterns** (Loops + Riff Patterns sit behind the *Experimental annotation types → Loops and Patterns* flag). Inside the Marker config panel the **Source** dropdown lets you switch what's being authored or reviewed for the active kind:
+The sidebar swaps between editors based on the **type tab row** plus the Source dropdown inside the Marker config panel. The tabs select the annotation kind — **Boundaries**, **Cues**, **Spans**, **Loops**, **Riff Patterns**, **Lyrics** — all always available. Inside the Marker config panel the **Source** dropdown lets you switch what's being authored or reviewed for the active kind:
 
 - **Manual** — the canonical user-authored editor (default).
 - **Auto-guess** — for **Boundaries** this opens the full AutoGuess clustering + per-point ✓/✗/@ review (unchanged). For Cues, Spans, and Loops it currently shows a *Coming soon* banner — no clustering algorithm has been wired up for those types yet.
-- **One entry per matching Custom Detector** — every detector whose `output_kind` matches the active kind appears here (cue detectors under **Cues**, span detectors under **Spans**, loop detectors under **Loops** when the experimental flag is on). Detector entries are prefixed with a small amber `{}` glyph so they're distinguishable from built-in sources at a glance. Selecting one renders the detector's items read-only with **✓ Accept** / **✗ Reject** chips next to each item.
+- **One entry per matching Custom Detector that asks for review** — every detector with `review = True` whose `output_kind` matches the active kind appears here (cue detectors under **Cues**, span detectors under **Spans**, loop detectors under **Loops**). Detector entries are prefixed with a small amber `{}` glyph so they're distinguishable from built-in sources at a glance. Selecting one renders the detector's items read-only with **✓ Accept** / **✗ Reject** chips next to each item.
 
 > ⚠ **Detector outputs are a separate file per annotator.** Your first ✓/✗ on a detector's output writes a *copy-on-write* file at `data/annotations/detector-outputs/<detector>/<annotator>/<slug>.json`. Subsequent edits patch that file; the detector's algorithm cache is never mutated. A small amber dot next to the detector entry in the Source dropdown signals "edited copy on disk".
 
 > ⚠ **Re-running a detector that has edited output triggers a confirmation.** If you re-run a detector whose editable file already exists, the run is blocked with a 409 and the UI surfaces a warning suggesting you rename the detector (e.g. `<name>_v01`, `<name>_v02`) or delete the edited file first.
 
-**Copy to manual layer — one prominent button.** Copying a detector's output into something editable is a single, hard-to-miss control: a full-width **Copy → Manual** button sits at the top of the panel (in the *Current edited layer* header) whenever a custom-detector source is selected, for **every** annotation type — Boundaries, Cues, Spans, Loops, and Lyrics alike. The detector-review card below it no longer carries its own copy buttons; the big button is the one place to copy. It **adapts to your review**: with nothing accepted yet it reads **Copy "detector" → …** and copies the whole output in one click (no ✓/✗ review required first, so it works for algorithms with no per-item review state); once you've ✓-accepted at least one item it reads **Copy N accepted → …** and copies only those, with a subtle *"or copy all N items instead"* link beneath it that grabs every item except the ones you ✗-rejected. Copied Cues / Spans / Loops / Lyrics behave identically to a hand-authored layer — fully editable, persist in `data/annotations/layers/<you>/<slug>.json`, and group under **Manual** in the annotations sidebar — but the layer's name keeps the detector label (e.g. *spectral-flux (✓ accepted)* when you copied the accepted subset) and an `importedFrom` field on disk remembers the origin. The original detector-output review file is untouched, so you can keep ✓-ing further items and copy again later.
+**Copy to manual layer — one prominent button.** Copying a detector's output into something editable is a single, hard-to-miss control: a full-width **Copy → Manual** button sits at the top of the panel (in the *Current edited layer* header) whenever a custom-detector source is selected, for **every** annotation type — Boundaries, Cues, Spans, Loops, and Lyrics alike. The detector-review card below it no longer carries its own copy buttons; the big button is the one place to copy. It **adapts to your review**: with nothing accepted yet it reads **Copy "detector" → …** and copies the whole output in one click (no ✓/✗ review required first, so it works for algorithms with no per-item review state); once you've ✓-accepted at least one item it reads **Copy N accepted → …** and copies only those, with a subtle *"or copy all N items instead"* link beneath it that grabs every item except the ones you ✗-rejected. Copying a **Boundaries** detector lane — the *energy jumps* example detector, or any custom detector whose `output_kind` is `boundary` — now produces a Boundaries layer like any other; it used to do nothing at all when the copy was started from the detector's own lane. Each copied boundary takes its **section type** from the label the detector wrote: a detector that says *chorus* lands on the Chorus type, and a label that is not a section name in your vocabulary lands on **—** (unset) while keeping the written label, so nothing is asserted that the detector never claimed. Retype it from the dropdown as usual. Copied Boundaries / Cues / Spans / Loops / Lyrics behave identically to a hand-authored layer — fully editable, persist in `data/annotations/layers/<you>/<slug>.json`, and group under **Manual** in the annotations sidebar — but the layer's name keeps the detector label (e.g. *spectral-flux (✓ accepted)* when you copied the accepted subset) and an `importedFrom` field on disk remembers the origin. The original detector-output review file is untouched, so you can keep ✓-ing further items and copy again later.
 
-**Where the output lands.** Type determines the destination: **Boundaries** copy in as **Manual boundary sections** (merged into your existing manual annotation, sorted by time, or a new annotation if none exists yet); **Cues / Spans / Loops / Lyrics** copy in as a brand-new **Manual layer**. **LoCoMotif is the one exception** — see [Copying LoCoMotif into a riff layer](#copying-locomotif-into-a-riff-layer). Either way the Source picker flips back to **Manual** so the freshly-copied, fully-editable result is selected. The button is disabled (with a tooltip) until the detector has produced output for the song — run it from the Detectors panel first. This is the recommended path for promoting a boundary detector's output: selecting a boundary detector source shows its predictions read-only with ✓/✗ chips, and the big button transfers them into Manual.
+**Where the output lands.** Type determines the destination: every type, **Boundaries** included, copies in as a brand-new **Manual layer** beside the ones you already have. **LoCoMotif is the one exception** — see [Copying LoCoMotif into a riff layer](#copying-locomotif-into-a-riff-layer). Either way the Source picker flips back to **Manual** so the freshly-copied, fully-editable result is selected. The button is disabled (with a tooltip) until the detector has produced output for the song — run it from the Detectors panel first. This is the recommended path for promoting a boundary detector's output: selecting a boundary detector source shows its predictions read-only with ✓/✗ chips, and the big button transfers them into Manual.
+
+**You see when a lane's ⬇ worked.** The copy lands in the Annotate tab, not on the canvas you clicked on. So when a lane's **⬇** (or **Copy to manual layer** on its card) makes the new layer, the lane's name flashes green, the ⬇ turns into a filled **✓** for about two seconds, and a **✓ Copied to a new layer** tag shows beside it. While the ✓ is up the button doesn't respond, so a second click doesn't make a second copy. After that the ⬇ comes back amber (*N existing copies*). A copy that is refused (LoCoMotif on a song with no tempo, say) shows no ✓; it tells you why instead.
 
 #### Copying LoCoMotif into a riff layer
 
-Every other interval detector copies into a **Spans** layer, which flattens
+A structure algorithm — **MSAF** (SF, Foote, C-NMF, OLDA), **All-In-One**, the **Ruptures** change-point methods, band-gradient — copies its **⬇** into a **Boundaries** layer, never Spans: what it found is where each section begins, and each block's start becomes a boundary that keeps the block's section type and label. Every other interval detector copies into a **Spans** layer, which flattens
 what a motif detector actually found. LoCoMotif's answer is *"this figure
 recurs — here, and here, and here"*, and a span layer has no way to say that
 three bands are the same figure; you would get five unrelated regions and lose
@@ -2062,9 +2396,9 @@ the grouping the model worked to find.
 
 So copying a **LoCoMotif** lane builds a **Riff Patterns** layer instead:
 
-- each `motif_id` becomes one **node** — a boundary node, because LoCoMotif
-  reports *where* a motif sits and never how it is subdivided, so the block
-  stays honest instead of inventing an empty sub-beat grid;
+- each `motif_id` becomes one **node** holding a single note across its whole
+  length, because LoCoMotif reports *where* a motif sits and never what plays
+  inside it;
 - each occurrence becomes one **instance** of that node on the timeline.
 
 Occurrences of the same motif therefore share a node and a colour, and the node
@@ -2075,12 +2409,27 @@ its end is snapped to the sub-beat grid the riff model derives ends from.
 
 The result is an ordinary layer you own: rename the nodes to what the motifs
 actually are, retime the instances, or chain them into combos. It needs a
-**BPM** (a riff node's length is measured in beats) — without a beat grid the
-copy falls back to the normal Spans behaviour.
+**BPM** (a riff node's length is measured in beats) — without a beat grid
+nothing is copied and a note says to set the song's tempo first, rather than
+handing you a Spans layer that says something else. A custom detector whose
+`output_kind` is `riff` copies from its row's **⬇** in the Detectors sidebar
+too: the riff lane as it is, as a layer of your own.
+
+**A copy keeps the kind of mark it came from.** Boundaries copy as Boundaries
+(a structure algorithm's row, a boundary detector's lane or row), cues as Cues,
+spans as Spans, loops as Loops, lyrics as Lyrics, and motifs as Riff Patterns.
+A **drum groove** copies as Riff Patterns too — its bars are figures that
+repeat — one layer per drum lane (see the riff lanes above).
+
+**Copying twice makes one copy.** If a layer of yours already holds exactly
+what the ⬇ would make, from the same lane, the click makes nothing and the
+button says *Already copied — nothing changed*. "Exactly" ignores ids and
+anything derived (beat stamps, a riff's node ids). Once you edit your copy, or
+the detector's output changes, the next ⬇ makes a new layer beside it.
 
 **Undo a copy.** Right after any copy-to-manual (the big *Copy → Manual* button, in either its *accepted* or *copy all* mode), an amber **Undo copy** banner appears in the *Current edited layer* header. Clicking it removes the layer that was just added (or, for boundaries, restores your manual annotation to its pre-copy state) and flips the Source picker back to the detector you copied from — handy when you click *Copy* by accident. The banner is dismissable with ✕, and clears automatically when you switch songs. (You can also reach the same undo with `Ctrl/Cmd + Z`, which steps back the shared Cues / Spans / Loops / Riff Patterns edit stack.)
 
-**Review without leaving the canvas.** Detector-sourced cue / span / loop layers render on the timeline in *review mode*: a small ✓/✗ button pair sits on each item. Clicking ✓ or ✗ writes the same `data/annotations/detector-outputs/<detector>/<annotator>/<slug>.json` file the side panel writes — the two surfaces are interchangeable. Accepted items turn teal; rejected items dim to 40% opacity. Editing the item (label, time, range) is disabled in review mode; copy to a manual layer first if you want to refine.
+**Review without leaving the canvas.** A detector that sets `review = True` renders its cue / span / loop layers on the timeline in *review mode*: a small ✓/✗ button pair sits on each item. Detectors are **not** reviewed by default — without the flag the lane shows its items plainly, with their labels and colours, and the lane's ⬇ copy is the approval. Clicking ✓ or ✗ writes the same `data/annotations/detector-outputs/<detector>/<annotator>/<slug>.json` file the side panel writes — the two surfaces are interchangeable. Accepted items turn teal; rejected items dim to 40% opacity. Editing the item (label, time, range) is disabled in review mode; copy to a manual layer first if you want to refine.
 
 **Auto-guess gets the same copy affordance.** The auto-guess editor header now exposes a **Copy to manual** pair (**✓ accepted** / **all**) parallel to the detector buttons. Because auto-guess produces section boundaries (not layer items), the copied points become **manual section boundaries** in your existing manual annotation (or create one if absent) — the boundaries land sorted by time with `label: "Auto-guess"` and `type: "drop"`, ready to retype or rename. Auto-guess points themselves are also no longer draggable on the timeline: review them with ✓/✗ and copy what you want into the manual annotation when you're ready to refine.
 
@@ -2088,7 +2437,7 @@ Switching out of Boundaries and back restores whichever Source you last used in 
 
 Switching tabs while the song is playing **auto-pauses** the player before the tab change takes effect, so you don't lose your place in the audio while re-orienting in a new editor. Resume with **Space** once you're ready.
 
-**All annotations list** (bottom of the Annotate sidebar). Below the per-type controls, the sidebar carries a single scrollable list that groups every annotation on the current song by type — **BOUNDARIES**, **CUES**, **SPANS**, and (when the experimental flag is on) **LOOPS** + **PATTERNS**. The annotation-type chips (BOUNDARIES / CUES / SPANS / LOOPS / PATTERNS) live in a **horizontal tab row** across the top of the list — all types share one row and split the width evenly; each tab shows its type label plus a compact `layers · items` count. Clicking a tab makes that type active (the tab highlights cyan, or fuchsia for the experimental Loops / Patterns) and points the Marker config + ADD+ controls below at that type. Only the **active** type's controls and layer cards render in the content area beneath the tabs — switching tabs swaps the content. The active type's edit controls sit inside an **accent-tinted frame** that matches the active tab's color (cyan, or fuchsia for Loops / Patterns), so the highlighted tab and its controls read as one panel for the selected type; the layer cards render below that frame. Inside the content column, every layer is rendered as a compact card with the same visualization across types (color stripe, layer name, item count). **Clicking a layer card makes it the active target**: the top tab strip flips to that type, the Source picker in the Marker config panel above swaps to that layer's source (Manual / Auto-guess / a specific detector / a specific user layer), and the ADD+ panel's layer picker aims at the chosen layer. Each editable card also carries its own **+ Add** button in the card header, right of the layer name — press it to insert at the playhead into *that* layer (which also makes the card active); it sits in the header rather than under the item list so it stays in reach on layers with hundreds of items. The active card gets a cyan **active** badge + a brighter accent ring; the layer is also auto-expanded on click so you can see the items you're about to add to. **Exactly one card across the whole sidebar is highlighted as active at a time** — the one that matches the currently-active tab. The other sections still *remember* their last clicked layer (so flipping tabs lands ADD+ on the right target), but they don't render an active badge until you switch to their tab. The little **▾ / ▸ caret** on the left of the card header is a dedicated **collapse toggle** — click it to fold the item list away (the header stays visible with its count) without changing the selection. Collapse state is per-card and resets when you reload the page. The card header also carries a small **× delete** button on its far right that removes the **whole layer** in one click (⌘Z to undo) — for boundaries this clears every Manual section; for the multi-layer types it drops the entire layer from the document. There is **no confirmation** — the action is immediately undoable from the editor's undo stack. On user-created **Cues / Spans / Loops / Patterns** layers the **layer name in the card header is editable inline** — click the **✎ pencil** directly beside the name and type to rename (⌘Z to undo); the whole rename coalesces into a single undo step. Boundary cards keep their fixed source name (Manual / Auto-guess / detector) and read-only layers stay non-editable. Each item row shows `#N`, the timestamp (or start → end for intervals), the label, a **critical/optional ★ toggle**, a ▶ glyph, and a small **× delete** button on the far right; clicking the row body **seeks the playhead** to that time (and plays the item's whole extent — a **boundary** runs to the next boundary, since that stretch is the section it opens (the last one plays to the end of the track), spans and loops run to their own end, a **pattern** or **riff pattern** runs through *every* repeat — the row shows one cycle, but playing it audits the whole tiled region (`start + ×N cycles`), which is what you see on the canvas; a repeating row is marked with its ×N count beside the label — and a lone **cue** has no extent so it gets a short audition blip), while the **★** toggles between critical (amber) and optional (muted) and the **×** removes that single item (⌘Z to undo — deletes go through the same undo stack as the rich editor below the waveform). On those same editable user layers the **label is an inline text field** — click it in the row and type to edit (⌘Z to undo); on boundaries and read-only sources the label stays static and is edited from the panel in the centre column. Boundary "layers" are synthesised one-per-source (Manual / Auto-guess / each cached boundary detector) so the section reads the same way as the multi-layer types — only sources that actually have data show up; clicking one of them switches the Boundaries source picker to that origin. The ★, the per-item ×, and the per-layer × all render only on editable layers: **Manual boundaries** and user-created **Cues / Spans / Loops / Patterns** layers. Read-only sources (**Auto-guess**, custom-detector outputs, detector-derived layers) still show the row's label + ▶ but the edit buttons are hidden — edit those from their own panel in the centre column. Switching the active type — by clicking a rail tab, a layer card here, or **an annotation on the canvas** (see [Shared edit popover](#shared-edit-popover-annotationpointcardtsx)) — updates the highlighted tab and aims the per-type controls above at that type.
+**All annotations list** (bottom of the Annotate sidebar). Below the per-type controls, the sidebar carries a single scrollable list that groups every annotation on the current song by type — **BOUNDARIES**, **CUES**, **SPANS**, **LOOPS** + **PATTERNS**. The annotation-type chips (BOUNDARIES / CUES / SPANS / LOOPS / PATTERNS) live in a **horizontal tab row** across the top of the list — all types share one row and split the width evenly; each tab shows its type label plus a compact `layers · items` count. Clicking a tab makes that type active (the tab highlights cyan) and points the Marker config + ADD+ controls below at that type. Only the **active** type's controls and layer cards render in the content area beneath the tabs — switching tabs swaps the content. The active type's edit controls sit inside an **accent-tinted frame** that matches the active tab's color (cyan), so the highlighted tab and its controls read as one panel for the selected type; the layer cards render below that frame. Inside the content column, every layer is rendered as a compact card with the same visualization across types (color stripe, layer name, item count). **Clicking a layer card makes it the active target**: the top tab strip flips to that type, the Source picker in the Marker config panel above swaps to that layer's source (Manual / Auto-guess / a specific detector / a specific user layer), and the ADD+ panel's layer picker aims at the chosen layer. Each editable **Boundaries** card also carries its own **+ Add** button in the card header, right of the layer name — press it to insert at the playhead into *that* layer (which also makes the card active); Cues, Spans, Loops and Lyrics cards have none, because those are drawn on the lane itself; it sits in the header rather than under the item list so it stays in reach on layers with hundreds of items. The active card gets a cyan **active** badge + a brighter accent ring; the layer is also auto-expanded on click so you can see the items you're about to add to. **Exactly one card across the whole sidebar is highlighted as active at a time** — the one that matches the currently-active tab. The other sections still *remember* their last clicked layer (so flipping tabs lands ADD+ on the right target), but they don't render an active badge until you switch to their tab. The **▶ / ▼ triangle** at the start of the card's title row, just left of the layer name, is a dedicated **collapse toggle** — click it to fold the item list away (the header stays visible with its count) so the layers below come into view without scrolling past a long one, and the selection doesn't change. Collapse state is per-card and resets when you reload the page. The card header also carries a small **× delete** button on its far right that removes the **whole layer** in one click (⌘Z to undo) — for boundaries this clears every Manual section; for the multi-layer types it drops the entire layer from the document. There is **no confirmation** — the action is immediately undoable from the editor's undo stack. Next to the × sits **MERGE**, shown whenever the layer has another editable layer of the same type to go into: it opens a short list of those layers, and picking one moves **all of this layer's items into it** and removes this layer — handy after copying two detector lanes to manual layers and wanting one lane. The target keeps its name, colour and place; the items are sorted by time; an item that is an exact copy of one already there is kept once; on Lyrics layers any vocal-run prominence you already levelled on either layer comes along. One ⌘Z restores both layers. Riff Patterns layers don't offer it — their instances point into each layer's own node and combo library, so two layers can't simply be poured together. On user-created **Cues / Spans / Loops / Patterns** layers the **layer name in the card header is editable inline** — click the **✎ pencil** directly beside the name and type to rename (⌘Z to undo); the whole rename coalesces into a single undo step. Boundary cards keep their fixed source name (Manual / Auto-guess / detector) and read-only layers stay non-editable. Each item row shows `#N`, the timestamp (or start → end for intervals), the label, a **critical/optional ★ toggle**, a ▶ glyph, and a small **× delete** button on the far right; clicking the row body **seeks the playhead** to that time (and plays the item's whole extent — a **boundary** runs to the next boundary, since that stretch is the section it opens (the last one plays to the end of the track), spans and loops run to their own end, a **pattern** or **riff pattern** runs through *every* repeat — the row shows one cycle, but playing it audits the whole tiled region (`start + ×N cycles`), which is what you see on the canvas; a repeating row is marked with its ×N count beside the label — and a lone **cue** has no extent so it gets a short audition blip), while the **★** toggles between critical (amber) and optional (muted) and the **×** removes that single item (⌘Z to undo — deletes go through the same undo stack as the rich editor below the waveform). On those same editable user layers the **label is an inline text field** — click it in the row and type to edit (⌘Z to undo); on boundaries and read-only sources the label stays static and is edited from the panel in the centre column. Boundary "layers" are synthesised one-per-source (Manual / Auto-guess / each cached boundary detector) so the section reads the same way as the multi-layer types — only sources that actually have data show up; clicking one of them switches the Boundaries source picker to that origin. The ★, the per-item ×, and the per-layer × all render only on editable layers: **Manual boundaries** and user-created **Cues / Spans / Loops / Patterns** layers. Read-only sources (**Auto-guess**, custom-detector outputs, detector-derived layers) still show the row's label + ▶ but the edit buttons are hidden — edit those from their own panel in the centre column. Switching the active type — by clicking a rail tab, a layer card here, or **an annotation on the canvas** (see [Shared edit popover](#shared-edit-popover-annotationpointcardtsx)) — updates the highlighted tab and aims the per-type controls above at that type.
 
 A per-tab **stopwatch** runs whenever that tab is focused; the cumulative duration is saved to `data/annotations/timing/<annotator>/<slug>.json` on tab switch, song change, or page unload. The running time shows under the Marker info panel's **⋯** toggle, on the same row as its Start/Stop/Reset controls, and applies to **every** annotation type — the boundary sources (Manual / Auto-guess) key the timer on the active source, while the layer types (Cues / Spans / Loops / Riff Patterns) key it on the type itself.
 
@@ -2118,13 +2467,13 @@ The row behaviors below are unchanged; only their location moved — every butto
 
 Directly below the panel, the **add-panel** shows one of two mutually-exclusive controls (never both, to avoid two competing "Add" buttons side-by-side):
 
-- **Pending viz selection pill** — appears whenever you click or drag the visualization above. It reads as two lines: a **caption line** with the selected timestamp (or `t1 → t2` range), the **name of the layer the add will land in** when the type has more than one, and the **✕** that clears the selection; and an **action row** below it whose buttons (**+ Add**, its layer **▾**, and the extras *that type* offers — **→ Riff Node** on Cues, **⚡ Energy** on Spans) share equal columns. Each extra appears only under the type that owns what it makes, so a button in this row never quietly files its result under a type you aren't looking at. The target layer is named on the caption line rather than inside the **+ Add** label, so a long layer name can't push the other actions off the row. While this pill's **+ Add** is actionable, the playhead chip below is hidden. **Boundaries (Manual)** accept both: a single click anchors a t1-only pill (on confirm the click is where the section *ends* — it runs from the previous boundary, or `0:00`, up to t1, and an `unset` cap is left at t1), and a drag opens a `t1 → t2` range pill that drops **two** boundaries on confirm — a `Drop` at t1 and an `unset` placeholder at t2 to cap the new section. Spans / Loops / Patterns are range-only and always require a drag.
-  > **Any highlighted region counts as the selection.** If a preview highlight is on the canvas — a fresh drag, a band you moved or resized afterwards, or the 6-second window **L** opens — **+ Add** adopts *that* range, on every type. Adding never falls back to the playhead while something is highlighted, so what you see selected is what gets created. This applies to Spans, Loops, Patterns, Lyrics, Riff Patterns (its **+ Add** menu offers *New Node / New Boundary Node / New Instance (from selection)*), Manual boundaries, and Cues. It applies to the Riff Patterns sidebar's own section adds too: the **Instances** header's button reads **+ Add 1:14.7–1:59.5** while a region is highlighted and creates exactly that span, and falls back to **+ Add @ 0:00.0** — a 4-second instance at the playhead — only when nothing is.
+- **Pending viz selection pill** — appears whenever you click or drag the visualization above. It reads as two lines: a **caption line** with the selected timestamp (or `t1 → t2` range), the **name of the layer the add will land in** when the type has more than one, and the **✕** that clears the selection; and an **action row** below it whose buttons (**+ Add**, its layer **▾**, and the extras *that type* offers — **→ Riff Node** on Cues, **⚡ Energy** on Spans) share equal columns. Each extra appears only under the type that owns what it makes, so a button in this row never quietly files its result under a type you aren't looking at. The target layer is named on the caption line rather than inside the **+ Add** label, so a long layer name can't push the other actions off the row. While this pill's **+ Add** is actionable, the playhead chip below is hidden. **Boundaries (Manual)** accept both: a single click anchors a t1-only pill (on confirm the click is where the section *ends* — it runs from the previous boundary, or `0:00`, up to t1, and an `unset` cap is left at t1), and a drag opens a `t1 → t2` range pill that drops **two** boundaries on confirm — an `Other` section at t1 and an `unset` placeholder at t2 to cap the new section. Spans / Loops / Patterns are range-only and always require a drag.
+  > **Any highlighted region counts as the selection.** If a preview highlight is on the canvas — a fresh drag, a band you moved or resized afterwards, or the 6-second window **L** opens — **+ Add** adopts *that* range, on every type. Adding never falls back to the playhead while something is highlighted, so what you see selected is what gets created. This applies to Spans, Loops, Patterns, Lyrics, Riff Patterns (its **+ Add** menu offers *New Node / New Instance (from selection)*), Manual boundaries, and Cues. It applies to the Riff Patterns sidebar's own section adds too: the **Instances** header's button reads **+ Add 1:14.7–1:59.5** while a region is highlighted and creates exactly that span, and falls back to **+ Add @ 0:00.0** — a 4-second instance at the playhead — only when nothing is.
   >
-  > **Every add surface follows the rule, not just the pill.** The layer toolbar above the editor cards, the trailing **+ Add** card at the end of the item row, the **+ Add** button on each layer card in the sidebar, and the keyboard **M** all adopt the highlighted region too. Each of those buttons **relabels itself** to what it is about to create — `+ Add 0:32.9→0:34.2` while a region is highlighted, `+ Add @ 0:30.8` when nothing is — so the button never advertises the playhead and then lands something else. On **Loops** the two bar quick-adds (`+ 4-bar loop` / `+ 8-bar loop`) collapse into that single range button while a region is highlighted, since the region already carries its own length. The one carve-out is the **Cues** layer toolbar's `+ Add cue @ <time>`, which stays a playhead drop — cues are points, and the pill above is the surface that turns a region into one.
+  > **Every add surface follows the rule, not just the pill.** The layer toolbar above the editor cards, the trailing **+ Add** card at the end of the item row, the **+ Add** button on each Boundaries card in the sidebar, and the keyboard **M** all adopt the highlighted region too. Each of those buttons **relabels itself** to what it is about to create — `+ Add 0:32.9→0:34.2` while a region is highlighted, `+ Add @ 0:30.8` when nothing is — so the button never advertises the playhead and then lands something else. On **Loops** the two bar quick-adds (`+ 4-bar loop` / `+ 8-bar loop`) collapse into that single range button while a region is highlighted, since the region already carries its own length. The one carve-out is the **Cues** layer toolbar's `+ Add cue @ <time>`, which stays a playhead drop — cues are points, and the pill above is the surface that turns a region into one.
   > **The drag doesn't have to stay on the row.** Once a drag starts, it keeps painting wherever the pointer goes — off the top or bottom of the row, or left past the start of the song, which is how you select a region that begins at `0:00`: press inside the canvas and pull left past the label column. The times simply clamp to the song. Press **Esc** mid-drag to abandon the selection.
   > **Cues are the exception on shape, not on position:** a cue is a single point, so a highlighted region adds **one cue at the region's start** and the region's end is discarded. The pill flags this up front with a small *start only* note, and a toast confirms it after the add — if you meant to mark a region, use Spans or Loops instead.
-- **+ Add @ `<time>`** — with nothing highlighted (see the rule above), inserting a new item at the current playhead happens **on the layer card itself**: every editable layer card in the *All annotations* list below carries a **+ Add** button in its header, so the card you press is the layer the item lands in. The add-panel only falls back to a single big **+** when the active type has **no layer card yet** — that press bootstraps the first layer/section along with the first item. (For region-only types like Spans/Loops/Patterns, a single click on the canvas leaves the pill in a "Drag for a region" hint state — the per-layer add rows stay available in that case.) **Riff Patterns** keeps the big **+** regardless: it has to ask *what kind* of thing to create (Node / Boundary Node / Combo / Instance) before it can pick a target.
+- **+ Add @ `<time>`** — **Boundaries only** in the sidebar: Cues, Spans, Loops and Lyrics are made on their lane, and a type with no lane yet starts from **New layer**, never from a **+**. For boundaries, with nothing highlighted (see the rule above), inserting a new item at the current playhead happens **on the layer card itself**: every editable layer card in the *All annotations* list below carries a **+ Add** button in its header, so the card you press is the layer the item lands in. The add-panel only falls back to a single big **+** when the active type has **no layer card yet** — that press bootstraps the first layer/section along with the first item. (For region-only types like Spans/Loops/Patterns, a single click on the canvas leaves the pill in a "Drag for a region" hint state — the per-layer add rows stay available in that case.) **Riff Patterns** keeps the big **+** regardless: it has to ask *what kind* of thing to create (Node / Combo / Instance) before it can pick a target.
 
 The accent color tracks the active type (violet for Manual, etc.).
 
@@ -2154,14 +2503,14 @@ Marking along with the music therefore lays sections down back-to-back, each one
 
 **The mark lands where the cursor is when you press ADD**, not where it was when you clicked. Every add path — the pill's **+ Add**, a layer card's **+Add**, the **M** shortcut — reads the playhead at the instant of the press, straight off the audio clock. So you can click once to set up, hit play, listen, and tap ADD on the beat the section ends: the boundary goes *there*. While the song is playing the pending pill stops showing a timestamp and reads **@ playhead** to say so. Paused, the cursor is still sitting on your click, so the pill's own (snapped) time is what gets written.
 
-> **This is how every annotation type places a mark**, not just boundaries — Cues, Spans, Loops, Lyrics and Riff Patterns all read the same audio clock at the moment of the press, and **M** additionally dates the mark to the instant the key went *down* rather than the instant the app got round to handling it. The times shown on screen (the `+ Add @ 0:30.8` labels, the transport readout) can only refresh once per frame, so on a busy timeline they run a few tens of milliseconds behind what you are hearing; what gets written does not. If a mark still lands somewhere you did not expect, check **Snap to grid** — with snap on, the mark is rounded onto the grid by design, to the unit **GRID** is set to. Two marks placed inside the same grid step therefore round to the same instant, and the second is refused as a duplicate rather than stacked invisibly on the first; pick a finer unit if you need them apart.
+> **This is how every annotation type places a mark**, not just boundaries — Cues, Spans, Loops, Lyrics and Riff Patterns all read the same audio clock at the moment of the press, and **M** additionally dates the mark to the instant the key went *down* rather than the instant the app got round to handling it. The times shown on screen (the `+ Add @ 0:30.8` labels, the transport readout) can only refresh once per frame, so on a busy timeline they run a few tens of milliseconds behind what you are hearing; what gets written does not. If a mark still lands somewhere you did not expect, that is the grid by design: a boundary, span, loop or riff-pattern mark always rounds to the nearest beat (or the finer GRID line), and a cue rounds to the unit **GRID** is set to while **Snap to grid** is on. Two marks placed inside the same grid step therefore round to the same instant, and the second is refused as a duplicate rather than stacked invisibly on the first; for cues, pick a finer unit if you need them apart.
 
 > **A second mark on the exact same spot is refused.** Adding twice at one
 > instant is easy to do by accident — paused, the clock isn't moving, so a
 > double-press of **M** (or a second click of **+ Add** when you weren't sure
-> the first registered) resolves to the identical time; with **Snap to grid**
-> or **Grid Lock** on it happens during playback too, because every time
-> inside a beat rounds to the same beat. The duplicate would land exactly
+> the first registered) resolves to the identical time; for a boundary, span,
+> loop or riff pattern — or a cue with **Snap to grid** on — it happens during
+> playback too, because every time inside a beat rounds to the same beat. The duplicate would land exactly
 > underneath the first one and you'd have no way to see it on the canvas — it
 > would only turn up later in an export or as a phantom disagreement in an
 > evaluation score. So the add doesn't happen: the item already there is
@@ -2183,13 +2532,13 @@ Marking along with the music therefore lays sections down back-to-back, each one
 Plus the **pending viz-selection +Add** (described in the *Annotations toolbar* above):
 
 - **Single click** anchors a t1-only pending pill at the cursor; **+ Add** applies the end-mark rule above. A t1-only pending mark shows only in the pill — nothing is drawn on the canvas, so the playhead stays the one cursor on the timeline.
-- **Drag** opens a `t1 → t2` range pill *and* starts preview-play of the highlighted range. **+ Add** drops **two** boundaries in one gesture: a `Drop` at t1 (the labeled section you just highlighted) and an `unset` placeholder at t2 (a `—` end-cap so the new section actually stops at t2 instead of swallowing whatever follows). Convert the placeholder to a real type from the dropdown when you're ready. If a drag-end coincides (≤50 ms) with an existing boundary, only the novel endpoint is inserted; a zero-width drag collapses to the single-click behavior.
+- **Drag** opens a `t1 → t2` range pill *and* starts preview-play of the highlighted range. **+ Add** drops **two** boundaries in one gesture: an `Other` section at t1 (the labeled section you just highlighted) and an `unset` placeholder at t2 (a `—` end-cap so the new section actually stops at t2 instead of swallowing whatever follows). Convert the placeholder to a real type from the dropdown when you're ready. If a drag-end coincides (≤50 ms) with an existing boundary, only the novel endpoint is inserted; a zero-width drag collapses to the single-click behavior.
 
 **Per-section card** (`SectionCard.tsx`)
 
 | Control | Behavior |
 |---------|----------|
-| **Type** | Dropdown driven by `sectionTypeVocabulary` setting. Default: `intro`, `buildup`, `drop`, `breakdown`, `bridge`, `outro`, `silence`. The sentinel type **`unset`** (an invisible placeholder for boundaries whose type you haven't decided yet) is always appended — it can never be removed from the dropdown. Auto-generated labels are kept in sync with the type; manual labels are preserved. |
+| **Type** | Dropdown driven by `sectionTypeVocabulary` setting. Default: `intro`, `buildup`, `drop`, `breakdown`, `bridge`, `outro`, `silence`. The sentinel type **`unset`** (an invisible placeholder for boundaries whose type you haven't decided yet) is always appended — it can never be removed from the dropdown. **`Other`** (drawn in its own sand colour) is always appended too: a visible boundary that claims nothing about musical form — an instruction for another tool, a marker, anything none of the section types fit. New boundaries start as `Other` (they used to start as `Drop`); rename the label to say what it is, or pick a section type. Auto-generated labels are kept in sync with the type; manual labels are preserved. |
 | **Label** | Free text (e.g. *Drop 1*), edited inline directly on the card — click the field under the type dropdown and type. The floating edit popover edits the same field. |
 | **Notes** | Longer free-form description. Stored on the boundary as `description`. Visible only in the floating edit popover, not on the inline card. |
 | **Start time / End time** | MM:SS.mmm. Toggleable to beats/bars when BPM is set (Settings → Time unit). Each has a `@` snap-to-playhead button. |
@@ -2238,18 +2587,20 @@ panel that keeps it:
 - **Tune in Consensus Inspect →** (Auto-guess panel, beside **Generate**) —
   opens Consensus Inspect with the Auto-guess panel's current settings. A line
   under that panel's header says they arrived from Auto-guess.
-- **⬇ Use for Auto-guess** (beside the Consensus Inspect verdict) — opens the Annotator Tool's
-  Auto-guess panel with the settings you just tuned. A line under the header
-  spells out what landed — `±4s · ≥3 · NearRaw · 45 detectors` — and reminds you
-  to press **Generate**, which is the only action that rebuilds the points.
-  Until then nothing in the saved annotation has changed; dismiss the line with
-  **✕** to go back to the settings the stored points were built with.
+- **⬇ Copy to Annotator as Auto-guess** (beside the Consensus Inspect verdict) —
+  opens the Annotate's Auto-guess panel and **replaces** its points with
+  the boundaries on Consensus Inspect's **Final** lane — the same set, the same
+  times, every one back to pending. Nothing is merged: the old points and their
+  ✓/✗ verdicts are discarded, so what you review is exactly what you scored. The
+  panel's settings follow too, and a line under its header spells out what
+  landed — `±4s · ≥3 · NearRaw · 45 detectors — replaced Auto-guess with its 19
+  boundaries`.
 
 > ⚠️ **The circularity guard.** Consensus Inspect can score its blend against
 > *Auto-guess* (see [Reference toggle](#reference-toggle--what-youre-scoring-against)) — and building
 > Auto-guess from a consensus that was graded against Auto-guess is the
 > consensus grading itself, which reads as a perfect F1 and means nothing. So
-> with the reference set to Auto-guess, **⬇ Use for Auto-guess** stops and says
+> with the reference set to Auto-guess, **⬇ Copy to Annotator as Auto-guess** stops and says
 > so: **Use Boundaries** switches the reference to your manual boundaries so
 > the numbers mean something (and cancels the trip), **Send anyway** goes
 > through unchanged.
@@ -2263,7 +2614,7 @@ Each cluster has:
 - **Per-source chips** — each contributing algorithm + its original prediction time. In "partial" mode each chip carries an independent ✓/✗ toggle ("accept individual sources").
 - **Top-level review buttons**: ✓ correct, ✗ incorrect, ⋮ expand, ☒ delete.
 - Inside expand: ▶ audition (~4 s from the source's original time), numeric override, **Use player**, **Reset to mean**, **Adopt from `<algo>`**.
-- **No drag on the canvas.** Auto-guess and `is_annotation=True` custom-detector boundary points are review-only on the timeline — ✓/✗ and play, but not drag-to-retime. If you want to refine timing, copy the points into a manual annotation via the **Copy to manual** buttons in the side panel and drag from there.
+- **No drag on the canvas.** Auto-guess points, and the boundary points of a custom detector that sets `review = True`, are review-only on the timeline — ✓/✗ and play, but not drag-to-retime. If you want to refine timing, copy the points into a manual annotation via the **Copy to manual** buttons in the side panel and drag from there.
 
 **Macro-zoom collapse**
 
@@ -2284,10 +2635,6 @@ Debounced 1 s to `data/annotations/auto-guess/<annotator>/<slug>.json`.
 
 <!-- tc-videos:cue-span-loop-and-riff-pattern-layers -->
 
-**▶ Cue layer**
-
-<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/-9GAFn4ve_E" title="Cue layer" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
-
 **▶ Span layer**
 
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/HEZ-inM2tes" title="Span layer" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
@@ -2306,29 +2653,14 @@ Boundaries divide a song into sections, but a lot of what you might want to mark
 - a **loop** is a bar-aligned region meant for seamless repeat playback;
 - a **lyric** is a word (a point) or a line (a start–end stretch) of the sung text, shown on the timeline as a tick with the word next to it.
 
-**Cues and Spans are always available.** Loops and Riff Patterns are off until you switch on **Experimental annotation types → Loops and Riff Patterns** in Settings; **Lyrics** is off until you switch on **Experimental annotation types → Lyrics** (`experimentalLyricsFamily`). There is no curated Lyrics detector — get a lyrics layer by running the **Whisper** or **CTC forced-aligner** algorithm (Algorithm Inspect) on the vocals stem and using **Copy to manual layer** on its overlay, then correct it in the Lyrics editor: each row carries the time, the text, a **word ⇄ line** toggle, and — for lines — an end time. When a stretch of the song came back wrong or empty, you don't have to retype it or re-run the whole song: [Re-transcribe this section](#re-transcribe-this-section-lyrics) in Algorithm Inspect re-reads just that window — on a cleaner stem if you like — and writes the words into this layer. Toggle a row to *line* to give it a duration band; *word* rows are points.
+**Cues, Spans, Loops, Riff Patterns and Lyrics are always available.** There is no curated Lyrics detector — get a lyrics layer by running the **Whisper** or **CTC forced-aligner** algorithm (Inspect) on the vocals stem and using **Copy to manual layer** on its overlay, then correct it in the Lyrics editor: each row carries the time, the text, a **word ⇄ line** toggle, and an end time. When a stretch of the song came back wrong or empty, you don't have to retype it or re-run the whole song: [Re-transcribe this section](#re-transcribe-this-section-lyrics) in Inspect re-reads just that window — on a cleaner stem if you like — and writes the words into this layer. **Every lyric is a span**, word or line: it draws as a band, dragging its word (the tick at its start) moves both ends, its right edge trims it, and its card and its editor row (**⇥end**) both set its **End**. Clicking **anywhere along the band** opens the lyric's card, not just the word at its start, so a long line is easy to hit — the band's body only opens the card and never drags, and a move needs a few pixels of travel and slides the lyric from where you grabbed it, so a click with a slight wobble can't shift it; a lyric with no text yet shows *(word)* or *(line)* on the lane. The ✎ pencil beside a lyric's row in the *All annotations* list edits its text too: type, then press **Enter**. **Hebrew (and other right-to-left) lyrics read right to left** everywhere they are typed or shown: the karaoke card lays a Hebrew line out with its first word on the right, and the text boxes, list labels and lane words follow the language of what you type. The timeline itself still runs left to right, because it is time. A word added by hand starts 0.3 s long; a word stored without a length — from an older layer, or a detector that left one open — gets one when the song loads, stopping short of the next word. Where two words touch, a press goes to whichever grip is nearest the pointer: on the right word's tick it moves that word, right on the seam it trims the left one — so both stay reachable a few pixels apart, without zooming all the way in.
 
-**Lyrics have their own snap picker, and it starts Off.** The layer toolbar row
-in the Lyrics editor carries a granularity selector that only this layer obeys —
-the global **Snap** toggle and **Grid Lock** never move lyric times (see
-[Lyrics opt out of the global switches](#lyrics-opt-out-of-the-global-switches)).
+**Lyrics never snap to the grid** — not to the beat, not to a fraction of one,
+whatever **Snap** and **Grid Lock** are set to (see
+[Lyrics never snap](#lyrics-never-snap)). A word stays exactly where it was
+sung, where an aligner put it, or where you dragged it.
 
-![The Lyrics layer toolbar — layer name, item count, and the snap-granularity picker sitting at its Off default, above a lyric line row](images/lyrics-snap-picker.png)
-
-The choices, loosest to tightest:
-
-| Setting | What it does |
-| --- | --- |
-| **Off** (default) | Nothing is ever moved. The times stay exactly as sung — what an aligner produced, or where you tapped. |
-| **Magnetic** | Pulls a time onto the nearest 1/16 line **only when it is already within about 30–40 ms** of it (the window tightens at fast tempi so it stays an assist rather than a hard snap). A hand-tapped word gets tidied; a deliberately laid-back or pushed line keeps the offset that makes it sound human. |
-| **¼ Beat / ½ Beat / 1 Beat** | Hard snap to 1/16, 1/8, or the beat. Worth it on genuinely quantised material — rap on 16ths, a chanted hook — where the vocal really is locked to the grid. |
-
-There is deliberately no **1 Bar** option: a sung word landing exactly on a
-downbeat happens, but forcing every word there would turn a vocal into a
-metronome. The setting is per layer, so a tight rap layer and a free-sung
-chorus layer on the same song can differ.
-
-#### The Karaoke panel — and which layer it follows
+#### The Karaoke panel — and which layers it reads
 
 While the **Lyrics** type is active, a **Karaoke** card sits under the canvas and
 renders the lyrics as flowing text rather than the thin timeline row that is built
@@ -2336,38 +2668,83 @@ for alignment work: the current line large and centered with the word under the
 playhead lit, the previous and next lines dimmed for context, and a `line n/total`
 counter on the right. Click any word to seek to it.
 
-![The Karaoke card with two lyrics layers on the song — the header's layer name is a picker choosing which one the view follows](images/karaoke-layer-picker.png)
+**Every lyrics layer shown on the canvas is read at once.** A transcription is
+often split across stems — the sung words on `vocals`, a roar or a shout on
+`other` — and that is still one performance, so the card merges them into a single
+flow in time order. Each line is drawn in **its own layer's color**, and color is
+the only thing that tells the layers apart — there are no text tags, so every line
+stays centered. Two layers that share a color on the canvas get different ones in
+the karaoke (the focused layer keeps its own); the chips in the header show which
+color is which, and hovering a word names its layer. When lines from two layers
+sound at the same moment, both are lit, one above the other.
 
-With **one** lyrics layer the header simply names it. With **two or more** — a
-Whisper transcript next to the hand-corrected copy you made from it, say — the name
-becomes a **picker**, tinted in the chosen layer's color, so you can read either
-version against the same playback.
+The header names the **focused** layer — the one you picked last, by clicking its
+lane label or one of its words, else the one selected in the editor, else the first
+visible layer with words. A detector that draws several lyrics lanes (Voice,
+Animals, Things…) counts each lane as its own layer, so clicking its **Voice** lane
+reads Voice. That layer is always in. Every other lyrics layer with words gets a **chip** next to it:
+**✓ name** means it is in the flow, **+ name** means it is not. A layer starts in
+when it is visible on the canvas and out when you hid it; clicking a chip flips it
+either way, without touching the canvas — so you can read one stem on its own, or
+pull in a hidden layer just to compare. Nothing is copied or merged on disk: each
+word stays on its own layer, and editing still happens there.
 
-Picking a layer here **selects it everywhere else too**: its timeline row becomes the
-selected one and the editor below switches to it, so the karaoke text, the row you
-are looking at, and the rows you would edit are never three different layers. If the
-layer you pick was **toggled off the canvas**, picking it turns it back on — the
-picker deliberately lists hidden layers for exactly that reason, since choosing to
-sing along with a layer you cannot see would be no use.
-
-The pick holds until you click a lyric word somewhere else (on the canvas or in the
-editor list); clicking a word has always steered this panel and still wins, so the
-two controls never fight over it. With nothing picked and nothing clicked, the card
-falls back to the layer selected in the editor, then to the first **visible** layer
-that has words — a layer you hid never becomes the karaoke source on its own.
-
-The same card is what **Algorithm Inspect** shows when you click a lyrics lane
+The same card is what **Inspect** shows when you click a lyrics lane
 there — a lyrics layer or a lyrics **detector** lane — except that it lives in a
 **Karaoke** sub-tab of its own rather than under the canvas, and a detector lane
-brings no picker with it. See [Sub-tabs](#sub-tabs).
+is read on its own, with no chips. See [Sub-tabs](#sub-tabs).
+
+#### Hit karaoke — watching hits and notes against the audio
+
+A cue layer whose cues are **drum hits** or **notes with a pitch** gets a
+karaoke of its own. It appears under the canvas while the **Cues** type is
+active and such a layer is selected. That can be a detector's read-only layer, a
+copy you made of one, or a layer you tapped in by hand. It is there to answer one
+question: *do these land where I hear them?*
+
+The next few seconds scroll towards a white *now* line, one row per voice:
+
+- **Hit rows** — one each for **Kick** (a circle), **Snare** (a square) and
+  **Hat** (a triangle). Ticks run into the row's shape on the now line, and the
+  shape lights the moment a hit plays, **as bright as it was struck** (its
+  velocity, 1–127), then fades. The kick fades slowest and the hat fastest, so a
+  busy hat line still reads as separate hits. Taller ticks are harder hits.
+- **Note rows** — for cues that carry a pitch, such as a bass line. The row is a
+  small piano roll: **height is pitch**, **length is how long the note rang**,
+  with a faint guide line at every C. The note sounding under the now line glows
+  and its name (`E2`, `C3`…) is written beside it.
+
+**Stacking layers.** The header names the layer you focused and shows a chip for
+every other layer that has hits or notes. Click a chip (the bass line's, say) to
+stack its rows under the focused layer's, so a drum groove and the bass line can
+be watched together. Click it again (**✓**) to take it back out. The focused
+layer is always shown.
+
+**Offset** (±150 ms) shifts the whole karaoke against the audio. If every hit
+feels early or late by the same amount, the value that fixes it is the
+detector's timing error. It changes nothing in the layer or on disk. Click the
+number to go back to 0 ms. The value is remembered in this browser. Click
+anywhere on the lane to jump that far ahead or back.
+
+What goes where is read from the cues themselves. A cue with a **pitch** is a
+note. Otherwise its **label** decides: `kick`, `snare` and `hat`, which is what a
+drum-hit detector writes, and the common hand-typed spellings (`BD` / `bass
+drum` is a kick, `clap` / `rim` a snare, `hi-hat` / `HH` / `ride` / `crash` a
+hat). Cues with neither, such as a `drop` marker, are left out. A cue with no
+velocity lights at a medium level, and a note with no length of its own rings
+until the next note, for at most 1.5 s.
+
+In **Inspect** the same card lives in the **Karaoke** sub-tab.
+Clicking the label of a lane that has hits or notes adds the tab and opens it.
+See [Sub-tabs](#sub-tabs).
 
 ### Shared edit popover (`AnnotationPointCard.tsx`)
 
 ![A riff-instance edit card — Repeats and Label always visible, then the Sequence, Prominence, Timing and Description sections, each with a fold toggle and a folded summary](images/annotation-card-sections.png)
 
-Every annotation kind — Cues, Spans, **Boundaries**, Loops, Riff Patterns, **Lyrics**, and the custom-detector preview — uses a single floating edit card. Clicking any tick, band, tile, lyric, or section marker on the canvas anchors the card near the click; outside-click or **Esc** closes it.
+Every annotation kind — Cues, Spans, **Boundaries**, Loops, Riff Patterns, **Lyrics**, and the custom-detector preview — uses a single floating edit card. Clicking any tick, band, tile, lyric, or section marker on the canvas anchors the card near the click; outside-click or **Esc** closes it. A **new lyric** opens its card by itself: a word or line arrives with no text, so **+ Add** (or a highlighted region, or the keyboard add) drops it on the lane and opens the card under it with the text box already focused. Type the word and press **Done**.
 
-The card opens **everywhere the annotation layer is drawn** — both the Annotator Tool and Algorithm Inspect — because the visualization (and its popovers) are shared across the two workspaces. Clicking a **user-created** item opens the card editable — which in practice means the Annotator Tool, the only workspace that draws your own layers; clicking a **detector- or algo-sourced** item (all Algorithm Inspect draws) opens the **same card read-only** — every field is shown but inputs are disabled, Delete is hidden, and a riff node's sub-beat chips and Repeats are locked. The read-only card's header **names the generator / algorithm the item came from** (a badge with the detector's name). Playback (▶) still works so you can audition a read-only item. This makes click-to-card behavior identical across Cues, Spans, Loops, Riff Patterns, and Lyrics; it previously worked only for Cues. Lyrics show **word** items as a single point and **line** items as a start → end range (a small badge marks which).
+The card opens **everywhere the annotation layer is drawn** — both Annotate and Inspect — because the visualization (and its popovers) are shared across the two workspaces. Clicking a **user-created** item opens the card editable — which in practice means the Annotate tab, the only workspace that draws your own layers; clicking a **detector- or algo-sourced** item (all Inspect draws) opens the **same card read-only** — every field is shown but inputs are disabled, Delete is hidden, and a riff node's sub-beat chips and Repeats are locked. The read-only card's header **names the generator / algorithm the item came from** (a badge with the detector's name). Playback (▶) still works so you can audition a read-only item. This makes click-to-card behavior identical across Cues, Spans, Loops, Riff Patterns, and Lyrics; it previously worked only for Cues. Lyrics show **word** items as a single point and **line** items as a start → end range (a small badge marks which).
 
 **Selecting on the canvas aims the Annotate sidebar.** Opening an item's card
 also **makes that item's layer the active one** — exactly as if you had clicked
@@ -2394,7 +2771,7 @@ number of sequence entries — so you can tell whether it's worth opening.
 
 Sections **do not all open at once**: *Prominence*, *Description* and *Raw
 model output* start folded, *Timing* and the kind-specific content (a riff's
-*Sequence* and *Sub-beats*) start open. **Your choice is remembered**
+*Sequence*) start open. **Your choice is remembered**
 per section, across cards and across reloads — fold *Prominence* away once and
 it stays folded on every span, loop and riff instance until you open
 it again. *Prominence* is the one section that doesn't open in
@@ -2402,34 +2779,41 @@ the card at all when it can help it: expanding it opens the breakpoint editor
 on the timeline lane and the card steps off the screen until you close that
 again (see [Prominence (front ↔ back)](#prominence-front--back)). Nothing
 you'd folded is forgotten while it's away. Above the sections, the **Label** and the one-line headline field for
-the kind (a boundary's **Type** dropdown, a pattern's or riff's **Repeats**
+the kind (a boundary's **Type** dropdown, a riff's **Repeats**
 count) stay always visible.
 
 Common controls on the card:
 
-- **Header** — layer color chip + name (or *Boundary #n* for sections) and ×. The time is *not* repeated here — it lives in the Start / End rows and the Length row below, so it shows once. Read-only items carry a badge naming the **generator / algorithm origin** — the detector the annotation came from (e.g. *whisper-base*, *librosa-onsets*), with a hover tooltip spelling out it's read-only detector / algorithm output. Lyrics also prefix the badge with the item kind (e.g. *word · whisper-base*).
+- **Header** — layer color chip + name (or *Boundary #n* for sections) and ×. **On your own Cues, Spans, Loops and Lyrics the name is a lane picker** (outlined, with a ▾): open it and pick another lane of the same kind to **move the item there** without closing the card. That's the fix when **Enter** or **+ Add** put a new item on whichever lane was selected rather than the one you meant: the card stays open on the item in its new lane, and the cursor goes back to Label so you can keep typing. It is the same move as ⌥-dragging the item onto the other lane: one step of ⌘Z puts it back. Locked lanes, and Loops lanes the loop would overlap, aren't listed; with no other lane to go to, the name is plain text. The time is *not* repeated here — it lives in the Start / End rows and the Length row below, so it shows once. Read-only items carry a badge naming the **generator / algorithm origin** — the detector the annotation came from (e.g. *whisper-base*, *librosa-onsets*), with a hover tooltip spelling out it's read-only detector / algorithm output. Lyrics also prefix the badge with the item kind (e.g. *word · whisper-base*).
 - **Timing** *(section, open by default)* — holds the Start / End / Length rows below. Folded summary: the time range.
 - **Start / End rows** — each editable timestamp is a three-column row: **seconds** (3 dp), **bar.beat** (e.g. `11.2.833` — bar 11, beat 2, plus 0.833 of a beat), and a ⊕ **crosshair** button that snaps that field to the current playhead. The two columns are wired to the same source; editing either propagates to the other. The bar.beat input is disabled when no BPM is set on Song Info, and the crosshair is disabled when playback hasn't started. End is hidden for cues and disabled (read-only) for boundaries — boundary ends follow the next boundary.
 - **Length row** — third row for spans / loops: **bars + beats** inputs with a `=N beats` total, all derived from the current BPM. Editing either input recomputes End. Disabled when BPM isn't set (the start/end seconds still work).
 - **Label** — short text, with autocomplete when the per-type taxonomy is on (cues / spans).
-- **Description** *(section, folded by default)* — longer free-form note (now available on **boundaries** too — persisted under `sections[i].description`). Folded summary: the first ~34 characters, or *empty*.
+- **Description** *(section, folded by default)* — longer free-form note, on every kind of item: cues, spans, loops, boundaries (persisted under `sections[i].description`), riff instances and **lyrics** — a word's or line's meaning, a translation, how it is sung; its text stays the label. Exported as `description` on each item in the manifest. Folded summary: the first ~34 characters, or *empty*.
 - **Raw model output** *(section, folded by default; read-only detector / algorithm cards only)* — a block, below the description, that pretty-prints the exact object the detector emitted for *this* item (e.g. a loop's `{ start_ms, duration_ms, label, snap_zero_cross }`). It shows the model's unmapped output — including any fields the card doesn't surface — so you can inspect precisely what the generator produced for that point / span / loop / lyric. Collapsed by default; click to expand.
-- **Prominence (front ↔ back)** *(section, folded by default)* — for the durational kinds (spans / loops / patterns / riff patterns): four level buttons and, once you place one, a row of breakpoint chips. **Expanding it hands editing to the item's own lane**: the breakpoint editor opens there and the card stops drawing itself until you close it again, so the two are never on screen competing for the same attention. Folded summary: the arc (*Lead → Backing*). See [Prominence (front ↔ back)](#prominence-front--back) below.
-- **Envelope (A / D / S / R)** *(section, **open** by default; energy spans only)* — a span saved by **⚡ Energy** gets this **instead of Prominence**: the measured A/D/S/R curve drawn in the card with the cyan brightness line over it, the four times below, not four buttons. Prominence is something you *say* about an annotation; an envelope is something measured off the audio, so there is nothing here to set — and unlike Prominence it stays in the card rather than handing over to the lane. It opens expanded because on an energy span it is the card's whole point. Folded summary: the shape, the four times and the brightness reading (*sustained · A 120ms D 400ms S 1.20s R 900ms · brightening 1.1kHz → 5.6kHz*). See [Reading the envelope back on the timeline](#reading-the-envelope-back-on-the-timeline) below.
+- **Prominence (front ↔ back)** *(section, folded by default)* — for the durational kinds (spans / loops / riff patterns): four level buttons and, once you place one, a row of breakpoint chips. **Expanding it hands editing to the item's own lane**: the breakpoint editor opens there and the card stops drawing itself until you close it again, so the two are never on screen competing for the same attention. Folded summary: the arc (*Lead → Backing*). See [Prominence (front ↔ back)](#prominence-front--back) below.
+- **Envelope (A / D / S / R)** *(section, **open** by default; energy spans only)* — a span saved by **⚡ Energy** gets this **instead of Prominence**: the measured A/D/S/R curve drawn in the card with the span's **Beat strength** and **Flux** signals over it, the four times below, not four buttons. In the card each reading has its own colour, keyed in a legend under the box: **volume** is the near-white line — plain loudness, with the same reading shaded grey underneath it — **beat strength** the amber line and **flux** the green line (the colours of the **Beat strength** and **Spectral Flux** signal rows, and the same signals, each scaled to its own peak within the span — a span drawn with ⚡ Energy reads the bass hits alone), and on a span holding several gestures the **peaks** are solid white lines and the suggested **split** points dashed ones. **Brightness** (the **Bright** row's cyan) is off by default — click **+ brightness** in the legend to draw it; the choice is remembered in this browser. A span measured before Energy and Flux were recorded shows volume only; re-measure it to get them. The band on the timeline keeps its layer's colour. Prominence is something you *say* about an annotation; an envelope is something measured off the audio, so there is nothing here to set — and unlike Prominence it stays in the card rather than handing over to the lane. It opens expanded because on an energy span it is the card's whole point. Folded summary: the shape and the four times (*sustained · A 120ms D 400ms S 1.20s R 900ms*). See [Reading the envelope back on the timeline](#reading-the-envelope-back-on-the-timeline) below.
 - **Pulse** *(section, folded by default; authored spans — not ⚡ Energy spans)* — seven chips naming how fast this stretch is hitting: *1/8*, *1/6T*, *1/4*, *1/3T*, *1/2*, *Beat*, *Bar*, read as fractions of a beat, and — past a short divider — an eighth chip, *Silent*, for a stretch where nothing hits at all. Picking a rate draws that pulse as ticks inside the band on the timeline; picking *Silent* draws a dashed line straight through the band instead; clicking the chosen chip again clears it, which leaves the span unannotated rather than silent. Under the chips is the same rate spelled out in time — *1/2 beat · every 250 ms · 8 per bar* — which is the quickest way to confirm it by ear, and the quickest way to notice a wrong BPM; *Silent* reads *Silent · nothing hits here*. Folded summary: the rate (*1/2 beat*, or *Silent*). See [Pulse (how fast it's hitting)](#pulse-how-fast-its-hitting) below.
-- **Hit** *(section, folded by default; cues only; every field optional)* — **Velocity** (1–127: how hard the hit was struck, compared with the hardest hit of the same instrument), **Level dB** (0 or below: its level compared with the loudest hit in the track), **Note** (0–127 MIDI note number, with its name beside it: 60 is *C4*), **Decay ms** (how long the hit rings) and **Colour** (paints this one tick instead of the layer colour; **reset** goes back to the layer colour). A cue with a velocity draws as tall as it was struck, so a ghost note is a short stub. A cue with a decay trails a faint tail as long as it rings. Hovering the tick shows its velocity, level, note and decay. Empty means *not set*: a value outside the range is refused and the field goes back to what it was. These are the same three fields a detector can fill in (a custom detector's `Cue` or the built-in **drum transients**), so a copied drum hit keeps them. **Copy → Manual** carries them over from both, and you can then change them here. Folded summary: what is set, or *not set*. All of them are exported with the cue.
-- **Importance ★ / ☆** — critical (default) vs optional. Available on every editable kind that carries the flag — cues, spans, boundaries, loops, patterns and **riff instances** — and mirrored by the same star in the sidebar's annotation list, so the two always agree. Persisted on the item as `importance: "optional"` (omitted ⇒ critical). Hidden for read-only detector cards, and for Lyrics (which have no importance).
+- **Colour** *(section, folded by default; spans, loops and boundaries; optional)* — paints this one item in its own colour instead of its layer's (for a boundary, instead of its section type's): its band or block on the lane, its card in the editor strip and the card's header all follow it. With no colour the item looks exactly as before; **reset** goes back. A detector can set it too (`color` on its `Span`, `Loop` or `Boundary`), and **Copy → Manual** keeps it. Exported as `color`. On a boundary it wins over **alternating** colouring as well, since it is a choice you made for that one section. Cues have the same control inside their **Hit** section.
+- **Hit** *(section, folded by default; cues only; every field optional)* — **Decay ms** (how long the hit rings; first, because it is also set on the lane — see below), **Velocity** (1–127: how hard the hit was struck, compared with the hardest hit of the same instrument), **Level dB** (0 or below: its level compared with the loudest hit in the track), **Note** (0–127 MIDI note number, with its name beside it: 60 is *C4*) and **Colour** (paints this one tick instead of the layer colour; **reset** goes back to the layer colour). A cue with a velocity draws as tall as it was struck, so a ghost note is a short stub. When several hits land on the same moment (a kick and a snare struck together), the shorter one draws in front so the taller one still shows above it. Every hit is drawn exactly on its time — hits of equal height are never nudged apart, so they overlap — and hovering any of them lists every hit at that moment (*2 hits at once: kick, snare*). A cue with a decay trails a faint tail as long as it rings. Hovering the tick shows its velocity, level, note and decay. Empty means *not set*: a value outside the range is refused and the field goes back to what it was. These are the same three fields a detector can fill in (a custom detector's `Cue`), so a copied drum hit keeps them. **Copy → Manual** carries them over from both, and you can then change them here. Folded summary: what is set, the decay first (*rings 420 ms · velocity 90*), or *not set*. All of them are exported with the cue.
+
+  **Setting the decay on the lane.** On a cue lane you can edit, every cue has a small pill beside it that you drag sideways. On a cue that rings, the pill sits at the end of its tail, or a few pixels right of the tick when the tail is shorter than that, so the tick stays clickable. On a cue that doesn't ring yet, it is a fainter outline just right of the tick. Drag it right to make the hit ring longer and left to shorten it. While you drag, a label shows the value (*decay 420 ms*); near the right edge of the lane or of the view it moves to the left of the pill so it stays readable. Drag it back onto the tick and the label reads *no decay*: let go there and the decay is cleared. The tail stops at the end of the song. Moving the pill never moves the cue, and clicking it doesn't open the card. Dragging the tick still moves the cue, and the tail moves with it. One drag is one undo step (⌘Z), whether it creates, changes or clears the decay. The decay isn't snapped to the grid, since a ring rarely ends on a beat. Detector lanes and review mode have no pill, because those cues are read-only.
+
+  In a tight cluster the neighbouring ticks sit on top of a pill, so a click there still picks the tick. To reach a covered pill, hover its own tick (the pill rises above the others while you do) or click the cue to select it: the selected cue's pill stays on top until you select another.
+
+  **From the keyboard.** The pill is focusable: **Tab** to it, then **→** / **←** make the hit ring 10 ms longer / shorter, **Shift + → / ←** 100 ms, and **Delete** or **Backspace** clears the decay. The label shows the value while it has focus. Stepping back onto the tick clears the decay too. With a cue selected (click its tick or pick it in the list), the same steps work anywhere on the page with **.** / **,** (10 ms) and **Shift + .** / **Shift + ,** (100 ms), and **Shift + Delete** on the Cues tab clears it (it never deletes the cue). Arrows are taken by seeking, hence these keys; on the Loops tab **.** / **,** keep halving and doubling the loop. Each keypress is one undo step; holding a key down makes one step of the whole run.
+- **Importance ★ / ☆** — critical (default) vs optional. Available on every editable kind that carries the flag — cues, spans, boundaries, loops and **riff instances** — and mirrored by the same star in the sidebar's annotation list, so the two always agree. Persisted on the item as `importance: "optional"` (omitted ⇒ critical). Hidden for read-only detector cards, and for Lyrics (which have no importance).
 - **▶ / ⏹ Play** — auditions the item. Cues and boundaries play a **0.5-second preview** starting at the point; spans play through the interval; loops loop seamlessly via `useLoopPlayback`.
 - **Delete** — removes the item on a single click and closes the card (⌘Z to undo); hidden for read-only detector cards.
 - **Done** — closes the card. The card autosaves changes through the same per-panel debounce as the inline editor list.
 
 The detector preview card adds **✓ Accept / ✗ Reject** buttons in the footer next to Done; their state stays in sync with the row chips in the panel below.
 
-**Pattern and riff-instance cards** keep the **Repeats** spinner always visible
+**Riff-instance cards** keep the **Repeats** spinner always visible
 at the top — it's the field that decides where the whole repeated region ends,
-so it reads as the card's headline alongside the Label. Their other
-kind-specific content is sectioned: a pattern's **Sub-beats** chip grid, a riff
-instance's **Sequence** tree. On both, Repeats accepts a cleared field while
+so it reads as the card's headline alongside the Label. The other
+kind-specific content, the instance's **Sequence** tree, is sectioned. (The
+retired Patterns type's **Sub-beats** chip grid went with that type.) Repeats accepts a cleared field while
 you retype it — an in-progress value that isn't a whole number 1–256 shows red
 and blocks **Done**, and is never written to the annotation.
 
@@ -2483,7 +2867,7 @@ at the breakpoint, a crossfade **slopes** into it.
 
 **Breakpoints obey Snap.** Placing one or dragging one lands it on the beat
 grid whenever **Snap to grid** (or **Grid Lock**) is on, at the grid's own
-granularity — the same switch that governs dragging the band itself. A
+granularity — the same switch that governs cues. A
 handover is a musical instant (*the vocal takes the lead on the downbeat*), and
 one that lands three-hundredths of a beat off is noise in every export. Snap
 never overrides the rule that handles can't cross: a grid line on the far side
@@ -2522,7 +2906,7 @@ just not drawn, so nothing is lost and there are two ways back:
 
 Clicking the annotation again reopens its card as normal; prominence editing
 doesn't carry over to the next item you click. Where the lane editor **can't**
-open — a read-only detector card, review mode, the Dataset Prep workspace —
+open — a read-only detector card, review mode, the Prepare workspace —
 expanding *Prominence* simply expands it in the card, with the level buttons
 and a row of breakpoint chips, and nothing on the lane changes.
 
@@ -2612,18 +2996,36 @@ mode, and the marks follow the beats instead of remembering where the beats
 used to be. A stored list would quietly go on claiming hits at times the audio
 no longer has.
 
-Two consequences worth knowing:
+**It blinks while it plays — when you ask it to.** With the lane's
+**Visualize** switch on (see [Visualize a lane with playback](#visualize-a-lane-with-playback)),
+when the playhead is inside a span that has a pulse, the whole band flashes in
+its colour on every tick of the rate and fades before the next — so you can check the rate by eye against what you hear,
+without reading the ticks. A fast rate (1/4 beat) blinks fast, still with a dark
+gap between flashes. *Silent* spans don't blink.
 
-- **No grid, no ticks.** Without a BPM there is nothing to derive a pulse
-  against, so nothing is drawn. The chips still work — the annotation is about
-  the music, not about whether you've set the grid yet — and the readout says
-  so until you do.
-- **Very dense pulses draw nothing.** Past ~500 ticks in one span (a 1/8-beat
+Three consequences worth knowing:
+
+- **Zoomed out, the ticks step aside for the label.** When the timeline is
+  zoomed out far enough that neighbouring ticks would sit closer than about
+  12 pixels, they would merge into stripes over the band's label. So the ticks
+  are dropped and the label is what you read: its parts wrap onto their own
+  lines instead of being cut off, instrument first in bold. On a narrow band
+  the text also shrinks and the counts shorten — *b* for beats, *br* for bars —
+  so a one-bar detector span reads *Kick* over *1b* rather than *K…*, and a
+  longer one *Kick · 1/2b · 24br*; hover the band for the full label. If the label doesn't
+  already name the rate, a small chip in the band's bottom-right corner does,
+  e.g. *1/4 beat*. Zoom in and the individual ticks come back as soon as there
+  is room to tell them apart.
+- **A pulse is never drawn as nothing.** The ticks use the song's BPM even
+  while the grid overlay is switched off. A span that no grid line of its rate
+  falls inside — a short *Bar* span with no downbeat in it, or a detector span
+  that sits off the grid — is ticked at its rate from its own start. Without a
+  BPM at all, the band shows the rate chip instead of ticks.
+- **Very dense pulses show the chip.** Past ~500 ticks in one span (a 1/8-beat
   pulse over several minutes) the marks would be closer together than the
-  screen can separate them, so the band leaves them out rather than drawing a
-  thinned-out set — half the marks would show a pulse half as fast as the one
-  you annotated. The rate is still on the card, in the list below the timeline,
-  and in the band's tooltip.
+  screen can separate them, so the band names the rate in its chip rather than
+  drawing a thinned-out set — half the marks would show a pulse half as fast as
+  the one you annotated.
 
 **Not on ⚡ Energy spans.** A span saved by the Energy tool shows *Envelope*
 where an authored span shows *Prominence*, and it is offered no *Pulse* section
@@ -2888,7 +3290,14 @@ saved setting — the next song starts with the lane hidden again.
 
 ### Picking which layer **+ Add** targets
 
-Adding at the playhead is done **per layer**: every editable layer card in the
+**Cues, Spans, Loops and Lyrics have no + Add in the sidebar** — you make them
+on the lane itself: click a cue lane, drag across a span, loop or lyrics lane.
+For a type with no lane yet, press **New layer** for an empty lane, then draw on
+it. (There used to be a **+** that made a layer *and* dropped an item at the
+playhead in one press; it is gone.) The rest of this section is about
+**Boundaries**, which have no lane gesture yet.
+
+Adding a boundary at the playhead is done **per layer**: every editable layer card in the
 *All annotations* sidebar carries its own **+ Add** button in the card header,
 on the same line as the layer name and to its right — so it stays reachable
 even when the layer holds hundreds of items and the list runs long. There is
@@ -2944,22 +3353,16 @@ happened to be first. The first time you export energy for a song that lane
 doesn't exist yet — the dropdown offers it regardless, and the layer is
 created (named `energies`) when you press **Save**, so cancelling the popover
 leaves nothing behind. Every later export on that song defaults to the same
-lane and appends to it. The song's other Span layers are still listed
+lane. Measuring a passage again on the same stem **replaces** the reading
+already there: Save removes every earlier measurement of that stem in that
+lane that overlaps the new one, so a lane holds one current reading per
+passage and stem rather than a stack of re-runs. A reading of a different stem
+over the same bars is kept — drums and bass side by side is a comparison worth
+having — and so are measurements of other passages and spans you wrote by
+hand. The song's other Span layers are still listed
 underneath, along with **+ New Span Layer**, if you'd rather file a particular
 reading elsewhere — an energy export is an ordinary span item and any Span
 layer will take it.
-
-Once a song has an **energies** lane, that lane's own **+ ADD** button (in
-its card header in the annotation list) opens this same popover instead of
-dropping a blank span. The lane holds energy readings and nothing else, so a
-plain span filed in it would be an item the downstream consumer reads as an
-energy export and finds no measurement inside. The range it measures follows
-the same rule **+ Add span** does: the highlighted region when you have one
-dragged, and otherwise a default-length window at the playhead (one bar when
-the song has a grid, two seconds when it doesn't). The button's tooltip reads
-**⚡ Measure energy** on that lane so the difference is visible before you
-click, and **Save into** opens on the lane you pressed. Every other Span
-layer's **+ ADD** is unchanged.
 
 Clicking Save adds a new span over the selected range:
 the **Label** is a short tag naming both readings and the source —
@@ -3140,36 +3543,34 @@ swell and a long hold are told apart at a glance, without opening anything.
 It is drawn to scale against the audio, so the peak in the band sits under the
 peak in the waveform.
 
-Over it runs the **brightness line**, in the same cyan the **Bright** signal
-row uses. It has its own vertical scale rather than sharing the contour's:
-a centroid never approaches zero, so drawn on the energy axis every brightness
-line would be pinned to the top of the band with its gesture flattened out of
-it. That scale is taken from the whole measurement, never from the part you
-can currently see, so trimming a band cuts the line without reshaping it.
+The band draws the volume contour only. The **Beat strength**, **Flux** and
+**brightness** lines are on the card, where there is room to tell them apart.
 
-> **The band shows no label text.** Every energy span is named *"Energy:
+> **The band shows no full label.** Every energy span is named *"Energy:
 > \<trends\> (\<stem\>)"*, so on a 15px band that text covered the one thing that
-> differs between them — their shape. What's left is a small **↗ / ↘ / →**
-> arrow for the energy trend, joined by a second, cyan arrow **only when the
-> two trends disagree** — *↘↗* is a build, and a band that rises in both is
-> just a loud one. The label is still on the card, in the item list below
-> the timeline, and in the band's tooltip, which also gives the shape, the
-> four times and the brightness reading ahead of the export's one-sentence
-> summary.
+> differs between them — their shape. What's left at the band's start is a
+> small **↗ / ↘ / →** arrow for the volume trend and the **stem** it was
+> measured on (*↘ drums*, *→ mix*), so two readings of the same bars on
+> different stems are told apart at a glance. The label is still on the card, in the item
+> list below the timeline, and in the band's tooltip, which also gives the
+> shape and the four times ahead of the export's one-sentence summary.
 
 **In the card — the readable copy, with the numbers.** Clicking the span opens
 its card with an **Envelope** section where an ordinary span offers
 *Prominence*, and it opens **already expanded**: the curve is drawn large with
 the **peak** marked ▲, a dashed line at the sustain level, a divider where each
-stage ends and the stage letters along the bottom, then the brightness
-frequencies (*brightness 1.1kHz → 5.6kHz · peak 5.6kHz*), and **A / D / S / R**
+stage ends and the stage letters along the bottom, the amber **Beat strength** and
+green **Flux** lines over it, then the legend, and **A / D / S / R**
 with their times, the one-word shape, the sustain level and where the peak
 falls in the song. A stage too short to hold its letter keeps its divider.
 
-The line above the curve names both readings — *measured on the other stem ·
-energy decreasing · brightness increasing · read-only* — and when they
-disagree the way a build does, the card says so in words:
-*level falling while the timbre opens up — the shape of a build*.
+The line above the curve names the stem and the volume trend — *measured on
+the other stem · volume decreasing · read-only*. With **+ brightness** on it
+adds the brightness trend and its frequencies (*brightness 1.1kHz → 5.6kHz*),
+the cyan line appears on its own vertical scale (taken from the whole
+measurement, so trimming a band cuts the line without reshaping it), and when
+volume falls while brightness climbs the card says so in words: *level falling
+while the timbre opens up — the shape of a build*.
 
 Unlike Prominence, this section stays in the card — it doesn't hand the job to
 the lane. The prominence editor moves out there because its handles have to
@@ -3239,6 +3640,7 @@ A span marks a labelled stretch of the song with a start and an end — for exam
 - **Importance ★ / ☆** — per-span critical/optional toggle (same star icon used for Manual boundaries). Available on every card and in the canvas popover footer; default is critical (★).
 - **Marker config** — Status pill, Import (JSON only — `spans-all_layers-<song>-<timestamp>.json` from Export), single-click **↓ Export** (downloads every span layer for this song in one file), **↶ Undo** / **↷ Redo** (shared layers-doc stack), **Split**, Delete. The section header's **⤓ Export** opens the multi-scope Export Manager. The pending-selection pill above is shared with Cues/Loops (it requires a drag — a single click can't define a span's duration).
 - **Prominence (front ↔ back)** — per-span arc from Lead through Counter / Backing to Silent, so one span can lead and then recede without being split. See [Prominence (front ↔ back)](#prominence-front--back).
+- **Extract ADSR** — the span's attack, decay, sustain and release, read off the mix or the stem you pick, from its card's **ADSR** section or for the whole lane from its **⋮** menu. See [Extract ADSR](#extract-adsr-a-sounds-envelope-on-a-span-or-a-lyric).
 - **Split at playhead** — focus a span (click it on the canvas) whose body contains the playhead and press Split in the toolbar. The span splits in two; the halves inherit color/description and get `<label> A` / `<label> B` suffixes. The Split button is disabled with an explanatory tooltip when no focused span contains the playhead.
 
 > ⚠️ **Delete is destructive and has no undo.** The toolbar's Delete on the Spans tab removes every span layer for the current song; other layer types are unaffected.
@@ -3260,79 +3662,174 @@ A loop is a region you can play on a seamless repeat — useful for studying or 
 
 ### Riff Pattern layers
 
-*(Experimental — gated behind the same **Loops and Riff Patterns** flag as Loops above.)*
+A Riff Pattern layer is a small library of reusable rhythmic figures rather than a flat list of timed marks, with three levels: a **node** is a short, timeless motif (its own length in beats, and its own rhythmic content — it has no position in the song by itself); a **combo** chains nodes (and other combos) into a longer reusable sequence; an **instance** places a node, combo, or sequence at a specific point on the timeline, optionally repeated. Switch to the **Riff Patterns** tab in the Annotate sidebar to build and place them; **+ Add** there asks whether you're creating a Node, a Combo, or an Instance.
 
-A Riff Pattern layer is a small library of reusable rhythmic figures rather than a flat list of timed marks, with three levels: a **node** is a short, timeless motif (its own length in beats, and its own rhythmic content — it has no position in the song by itself); a **combo** chains nodes (and other combos) into a longer reusable sequence; an **instance** places a node, combo, or sequence at a specific point on the timeline, optionally repeated. Switch to the **Riff Patterns** tab in the Annotate sidebar to build and place them; **+ Add** there asks whether you're creating a Node, a Boundary Node, a Combo, or an Instance.
+**The lane draws like a detector's riff lane.** A Riff Patterns lane is drawn by the same component as a detector's riff lane in Inspect, so a figure you own and a figure a detector found look alike. Every repeat of every instance is a **cell**, one per node it plays, coloured by its node. A bar that played its node differently — a hit dropped, a fill — is not another node: it is an **occurrence** on the instance, which records for that one play which notes it added and which it left out, and an event (*exact*, *fill*, *drop* or *variation*). Plays are counted from 0 across every repeat of the instance's sequence, so *A A B A* ×2 is one instance with eight plays. Such a cell draws over its node in **grey**: a hit on grey is the node played, grey with only an outline is a hit this play dropped, and a ringed hit with no grey behind it is one it added. Neighbouring cells of one node are one **run**, lettered once across the run with its count (**A ×28**). An exact repeat is drawn in the same colour and at the same strength as the cell before it, with a dark line at the start of every cell, so each play of a node is its own block. A cell's top edge is yellow when the play only adds hits (a fill), and a rest is hatched. A riff that is not a drum's (a bass line, a figure drawn by hand) draws its notes on one plain line, each held note as long as it is held; hover a note for its pitch. An instance that plays several nodes in order — a phrase, *I F I F K G* — is **bracketed** along the foot of its lane, from its first bar to the end of its last repeat, and named there (*I F I F K G*, *B×3 A×6*, with **×N** when it repeats; a node of another length than its letter's loop keeps its length, *D D(12 beats)*, so two nodes never read as one); the cells under the bracket still letter what each bar plays. When an earlier instance plays exactly the same sequence the bracket adds where (*· as at 1:27*), and its tooltip says so in full. Instances that overlap in time stack one under another.
 
-**Which editor a click on the lane opens — the title bar is the instance, the blocks are the nodes.** An instance draws on the canvas as a slim **title bar** (its label, a `⠿` grip, and `×N` when it repeats) sitting on top of a **body** of sequence blocks, and the split tells you which of the two editors a click will open, without guessing:
+- **Click a cell** → its **groove card**, the same card as in Inspect: the bar as played over its groove in grey, and the whole run laid out bar by bar. On a lane of your own the card adds:
+  - **This bar · click to edit**: click a hit to remove it, or an empty step to add one.
+  - **Apply edits to**: **All D** — every bar that plays the node (the default; a node means "these bars are the same"; hover it for which bars those are), or **Bar N only**, which records the change as that bar's **occurrence** — it stays D, played differently this once — so every other bar keeps what it played and the instance is not cut. Toggle a hit back and the occurrence disappears. **Bar N only** is greyed out for a bar inside a combo, which every placement of the combo shares; edit the combo instead.
+  - **Edit node** opens the node's popup (its pitch, pulse and length) and **Edit instance** opens the instance on the lane, in the riff editor below.
+- **On a lane of your own**, every instance wears a thin **title bar** over all
+  of its passes — its name, what it plays (*A B A ×2*) and, when the same riff
+  was heard earlier, *as at 0:12*. **Click the title bar** to edit the instance
+  on the lane (see below); **click a cell** under it to open that node's editor
+  (its notes, pitch, pulse and length). Instances that overlap in time stack in
+  that stretch only — a riff nothing overlaps keeps the lane's full height.
+- **Deleting a node** takes it out of every instance that played it; an
+  instance left with nothing to play is deleted with it (⌘Z brings both back).
+- **Edit instance** (on the card) opens the instance in the lane's riff editor — see below.
+- **Drag a cell** to move its whole run along the timeline: every instance the lane letters as one (*A ×3, A ×8* reads as **A ×11**) and all of their repeats move together, keeping their spacing, so the run never comes apart. The run snaps by its first bar, and stops where its last bar meets the end of the song.
+- While an instance's popup is open, its cells are outlined, and its **prominence** editor sits under the lane.
+- A **detector's** riff lane (e.g. a pattern curator's in Inspect) opens the same card **read-only**, and its node and instance popups are read-only too: the instance popup shows its repeats, span and sequence tree, **▼** reveals each node's beats, **↗** opens that node's popup, and the node popup shows its name, length and beats, each with **▶** to hear it. Nothing there can be edited, tapped or deleted; copy the lane into a layer to make it yours.
 
-- **Click the title bar** → the **instance** popup — its sequence, its repeat count, its prominence, its ★. **Drag the title bar** to move the instance and all of its repeats along the timeline. The bar spans every repeat, so it also reads as the bracket that groups them into one placement.
-- **Click a block in the body** → that **node's** popup, the one whose beats the block is drawing. A block belonging to a **combo** (or a silence block) has no node of its own, so it opens the instance popup instead, expanded to that entry.
-- Blocks light up on hover, so the target under the cursor is always the thing that will open.
+#### Building a riff on its lane
 
-**An instance is exactly as long as what it plays.** You place an instance by its **start**; its **end** is not yours to set — it is derived, and always equals the start plus however long the sequence actually plays for. Add a node to the sequence and the instance grows; remove one, or drag a block's right edge to shorten it, and the instance shrinks to match. The sidebar's **End** row says *↳ follows the sequence* instead of offering a snap button, and the **Start** row's `⊙ snap` therefore *moves* the instance to the playhead without changing its length. Every repeat is that same tight cycle, so `×4` of a two-second riff covers exactly eight seconds with no gap between the repeats.
+A riff is annotated **on its lane**, without the sidebar. **Drag across an
+empty stretch** of a Riff Patterns lane of your own: the stretch is the first
+node. A new instance starts where the drag began, playing a new, empty node
+(named with the next free letter — A, B, C…) as long as the drag in whole
+beats. Two things open (while the riff is open, its cells and title bar step
+aside so it is drawn once, by the editor; they come back on Done / Close):
 
-> The one exception is a song with **no BPM set**. Steps only convert to seconds through a tempo, so with no grid there is nothing to fit against: the sequence is laid out from the start of the cycle and whatever is left over draws as a dashed empty tail with a `·` in it, at the end of every repeat. Set the song's BPM in Dataset Prep and the cycle trims itself the next time the song is opened.
+- **On the lane**, under its cells and on the same timeline, only what happens
+  in time: the riff's name and sequence in a slim header, one **slot** per node
+  in the sequence (click a slot's tag to select it), the notes, and the later
+  passes of the whole riff marked with a dashed line and **plays 2/3**. A node
+  played several times in a row shows every copy as its own block, numbered
+  **1/2, 2/2**, the repeats hatched. **Drag a slot by its tag** to move it, or
+  onto another slot to swap the two; **×** on a tag removes the slot; **+** at
+  the end adds a new node. Zoom in until the steps are wide enough to hit; a
+  slot too narrow says *zoom in to draw notes*.
+- **A settings window** floats beside the riff — on its left, or on its right
+  when the riff starts too close to the beginning of the song — over the lanes
+  around it, with an arrow pointing at the riff. It follows the riff as you
+  scroll. From top to bottom:
+  - **Riff** — its **name**, what it plays (*A ×2  B  A*), **whole riff −/+**
+    (how many times the whole sequence repeats), where it ends and how many
+    plays differ.
+  - **Node** — the selected slot's node: its **name** (every play of it shares
+    it) and which slot it is, then **Pulse** — the divider: one step is **1/N** of a beat, N from 1 to
+    16, typed or stepped with **−/+**, with the note it makes beside it (the
+    beat is a quarter, so **1/4** is a *1/16 note*, **1/8** a *1/32 note*,
+    **1/16** a *1/64 note*, **1/6** a *1/16 triplet*); −/+ skip a divider the
+    node's length has no whole number of steps on; **In a row −/+** (*A ×2* is A twice in the sequence);
+    **Edits change: Every A · N / This play**, dimmed while the node plays only
+    once; and **This play** — how this play differs, with **Play as written**.
+  - **Nodes** — **+ New** and a chip for every node on the lane. **Click a
+    chip** to add it at the end, **drag it onto a slot** on the lane to make
+    that slot play it instead, or **between two slots** to insert it there.
+  - **Discard (Esc)** / **Done**. On an existing instance the buttons read
+    **Delete** / **Close (Esc)** / **Done**: **Delete** takes the instance off
+    the lane and closes the editor (⌘Z brings it back); its nodes stay on the
+    lane's chips.
+
+**Notes.** On the selected slot every step of its pulse is a target: **click
+a step** for a short note (click it again to remove it), or **press and drag
+across steps** for one note **held until you let go** — while you drag, the
+note it will become is drawn outlined in white with its length (*3 steps*).
+A held note is one plain block across its steps; separate hits each start
+with a thin dark line, so a row of hits never reads as one held note. Writing
+over notes cuts them.
+
+**Every A, or only this play?** A node is the same figure wherever it plays,
+so an edit to it changes every play. When the node plays more than once on the
+lane, the editor asks first: *Change every A*, *Only this play*, or **Cancel
+(Esc)** — or pick **Edit: This play** before editing. *Only this play* records
+the change as that play's **occurrence**: the slot still plays A, its tag
+says how it differs (*variation*, *fill* or *drop*), a note it leaves out of A
+is drawn **hollow**, and one it adds is **ringed**. **Play as written** removes
+the occurrence again.
+
+**Done or Discard.** A riff you just drew is an **offer** until **Done**:
+neither the instance nor the nodes made for it are saved while the editor is
+open. **Discard (Esc)** throws it away and leaves nothing behind — not on disk,
+not in the undo history. An existing instance opened with the card's **Edit
+instance** is edited live (each change is one ⌘Z step); there the button
+reads **Close (Esc)**. Edits to a node that other instances also play
+(**Change every A**, its name or pulse) are saved as you make them, even in a
+draft — they belong to the node, not the draft.
+
+**An instance is exactly as long as what it plays.** You place an instance by its **start**; its **end** is not yours to set — it is derived, and always equals the start plus however long the sequence actually plays for. Add a node to the sequence and the instance grows; remove one, or shorten a node with **Length** in its popup, and the instance shrinks to match. The sidebar's **End** row says *↳ follows the sequence* instead of offering a snap button, and the **Start** row's `⊙ snap` therefore *moves* the instance to the playhead without changing its length. Every repeat is that same tight cycle, so `×4` of a two-second riff covers exactly eight seconds with no gap between the repeats.
+
+**A node is written the way a loop is written.** Following Butler's sound-palette tables (*Unlocking the Groove*, p. 180), a node is the *shortest pattern that repeats* — a loop, not a bar — and the editor marks it that way. In the node popup and in the instance popup's inline node view, the node's notes sit between a pair of **repeat signs** (a thick and a thin bar with two dots facing in), and beside **Length** the node's length is said in plain words: **½ bar**, **1 bar**, **2 bars**, **1½ beats**. Bars follow the song's time signature; a length that isn't a whole or half number of bars is given in beats. On the canvas, an instance that repeats draws the same repeat signs around its **first** turn, so the first turn reads as the loop and the ones after it as the loop coming around again; hovering the instance's title bar says how many turns and how long each is (*×4, 1 bar each*). The signs are left off when one turn is too narrow on screen to fit them.
+
+#### The sound palette
+
+Butler opens each of his track analyses with a **sound palette** (*Unlocking the Groove*, p. 179): every repeating sound in the track written down once, as the shortest pattern that repeats, with how long one turn of it lasts. TimeCues draws the same table, in two places, and each shows only its own data:
+
+- **Annotate** — the Riff Patterns panel's **Nodes** list *is* the palette of the layer you are editing: one row per node, with **✎** to edit it and **✕** to delete it, and **+ Add** in the header. Here a node is only the **pattern** — ▶, its one turn and its length; *where* it plays is the **Instances** list's job, so the node rows have no timeline and no ×N. **Combos** and **Instances** sit below it folded to one line each (Combos opens by itself once the layer has one); open **Instances** to change a placement's repeats or sequence. Each instance row is laid out on the same columns as the node list, under its own header (**Placed at · Plays · Repeats** and the song's minutes): what it plays, **×N**, and the song's timeline with the instance drawn on it — the first turn bright, the repeats faint with a notch between each — so every instance's timeline reads against one ruler. **▼** opens its label, repeats and sequence; **✕** deletes it.
+- **Inspect** — the **Sound palette** tab lists what the detectors found, in three titled sections: **Whole drum kit** (all the drums read together, bar by bar — Drum hits & grooves' **Grooves** lanes, one per drum), **Single drums** (each drum read on its own — Percussion layers' kick, snare, hi-hat…), and **Pitched parts** (bass, riff and synth loops — Pitched layers). The first two are two readings of the same drums, so a kit groove and the kick's own loop can both say *four on the floor* without being a duplicate. A letter's other lengths (*A · 8 beats*) are folded under it; **▸ N variants** opens them.
+
+Each row has, left to right:
+
+- **▶** — plays **one turn** of the loop, where it first sounds in the song, then stops; it turns into **■** while it plays. A node used inside a longer sequence plays its own slot in it. The button is greyed out on a node that is not placed in the song.
+- **One turn** — the loop between repeat signs: a riff node's notes. Its width follows its length, so a 4-bar loop is drawn four times as wide as a 1-bar one. A pitched loop says what notes it plays underneath (*C1–D#2 · 6 notes*).
+- **Length** — in words (see above), and **×N**, how many turns it plays in the whole song.
+- **Where it plays** — the song's timeline, one block per run: the first turn bright, the rest faint. **Click a block** to hear the whole run. A figure with variants shows **every** run of its family on its own row — the variants' runs lighter and outlined (hover one for its length) — and its **×N** counts them all, *×43 (33 varied)*.
+
+Rows are in Butler's order, shortest loop first. On the detector side the drum and pitched-loop detectors are private, so the tab is empty for a visitor who cannot see them.
+
+> The one exception is a song with **no BPM set**. Steps only convert to seconds through a tempo, so with no grid there is nothing to fit against: the sequence is laid out from the start of the cycle and whatever is left over draws as a dashed empty tail with a `·` in it, at the end of every repeat. Set the song's BPM in Prepare and the cycle trims itself the next time the song is opened.
 
 To have both editors on screen at once, open the instance popup first and click a node chip *inside* it — that opens the node popup alongside it rather than replacing it. An instance can also be edited from the sidebar's **Instances** list, via the **▼** on its row.
 
-#### Two kinds of node: grid and boundary
+#### A node is a line of notes
 
-Nodes come in two flavours, and they differ only in how they describe rhythm. Both have a length in beats, both are placed and repeated identically, and both can sit side by side in the same layer, combo, or instance.
+Every node is written the same way: as a line of **notes on a pulse**, the way Butler writes a part down (*Unlocking the Groove*, Appendix A and p. 82). A note is an attack and how long it is held. It may say its **pitch** (a bass line, a riff) or not. A note with no pitch is a **hit**: a drum figure, or a line whose notes you haven't named yet. Hits and pitched notes are the same thing to the node, and one line can mix them.
 
-- **Node** (the sub-beat grid) — you pick a subdivision (**Divide beat into**: quarters, eighths, sixteenths, or eighth/sixteenth triplets) and then switch individual chips on and off. Everything lands on that grid. Good when the figure genuinely *is* on a grid.
-- **Boundary Node** (free-form blocks) — no subdivision at all. The node is a gapless list of **blocks**, each one a `start – end` range in beats measured from the node's own start, marked either **Tick** (something sounds) or **Empty** (a rest). Edges stay exactly where they are put — an onset 0.37 beats in stays at 0.37, it is never rounded to the nearest sixteenth. Two **Tick** blocks in a row are two separate hits, not one held note.
+> Until 2026-10-09 there were two kinds of node: the chip-grid **Node** and the free-timing **Boundary Node** ("Blocks"). Both were retired in favour of this one, and saved files were converted once (the app no longer converts on load):
+> - **Chip-grid nodes** keep their own subdivision (a triplet grid stays triplets). Each lit chip becomes a one-step hit, each held run a held note. Per-step accents have no place in a line of notes and are dropped.
+> - **Block nodes** are snapped onto the sixteenth pulse. Each tick lands on its nearest sixteenth, a ±10 ms marker becomes one sixteenth long, and two ticks that land on the same sixteenth become one hit.
+>
+> ⚠️ The snap is saved, so a block node's exact off-grid positions are not kept after conversion.
 
-  ```
-  [0   – 2  ]  Empty
-  [2   – 2.5]  Tick
-  [2.5 – 3  ]  Tick
-  [3   – 4  ]  Empty
-  ```
+The node card shows:
 
-  Create one with **+ Blocks** in the sidebar's Nodes header, or **New Boundary Node** in the **+ Add** menu. It's listed with a small `blocks` tag so the two kinds are distinguishable at a glance, and its popup is titled **Boundary Node**.
+- **Length** in beats, also said in words (*2 bars*), and **Pulse**: the grid the notes are written on, as the fraction of a beat one step is — any **1/N beat** from **1 beat** to **1/16 beat** (a 1/64 note), each listed with the note it makes — **1/4 beat** (a 1/16 note) is the default; 1/3, 1/6 and 1/12 are for a figure that swings in threes. Riffs are written in beats and their fractions only — never in free time. Changing the pulse moves every note to the nearest step of the new one. Triplet pulses need a whole number of beats, and a triplet node's length changes a beat at a time.
+- **The roll**, between repeat signs. The beats run along the top — each beat's number in bold, then its fractions (**1 ¼ ½ ¾ 2 ¼ ½ ¾** on a ¼-beat pulse, **1 ⅓ ⅔** on ⅓). Every step is a cell, beats are marked by stronger lines and alternate beats are shaded, so a note covers whole cells and nothing sits between them. When the columns are too narrow to label every step, only the beats are labelled. The attack list under the roll says where each note starts the same way (*bar 1 · 1 · 1¾ · 2½*).
+  - A node with no pitched notes shows one tall **hit** row.
+  - **♪ Add pitches** opens the piano roll above it: pitch rows up the side, C rows brighter, black-key rows darker.
+  - A node that already has pitched notes opens with the roll showing, and its hits sit on the **hit** row under the pitches.
+  - **▲ higher / ▼ lower** show more pitch rows.
+- **The attack positions**, bar by bar in Butler's numbering, e.g. *bar 1 · 1 C1 · 3 C1 · 11 C2 · 15 A#1*, or just *1 · 5 · 9 · 13* for hits.
 
-  > Reach for a boundary node whenever the grid one fights you — a rubato or swung figure, a live take that drifts, a rhythm whose real subdivision is somewhere between the offered ones. A grid node has to guess a subdivision; when that guess is wrong every hit sits on the wrong chip and the karaoke highlight visibly drifts from the audio. A boundary node has no guess to get wrong, so its highlight always tracks what you hear.
+Editing always lands on the pulse:
+- **drag along a row** to draw a note (on the hit row, a hit)
+- **drag a note** to move it in time, or up and down to another pitch (drag a hit up onto a pitch to name it, or a note down to the hit row to un-name it)
+- **drag its right end** to hold it longer or shorter
+- **click it** to delete it
 
-**Editing the blocks.** The block strip across the top of the popup is the node's whole length; whole beats are marked with faint guide lines (informational only — they are a ruler, not clickable cells, and blocks don't snap to them unless you ask). A **brand-new node** — one full-length **Empty** block, nothing marked yet — is drawn as a plain filled block in the node's colour, on the strip and on the canvas both, so it reads as a node waiting for content; the diagonal **rest hatch** appears only once the node has a tick to rest between, where it marks deliberate silence. On the strip you can:
+The line is single-voiced, so a new note cuts the note under it. **Hold to next note** makes every note last until the next attack (the last one until the loop comes round). That is how Butler notates a line: rests appear only where it really stops. **Clear all** removes every note so you can start the node again from an empty grid; Ctrl+Z brings them back.
 
-- **Drag across the strip** to declare a span outright — press where the event starts, release where it ends, and that whole range becomes **one** block: a **Tick** when the drag began on a rest, an **Empty** when it began on a tick. This is the gesture the node kind exists for (*"between 2 and 3.5 beats, this happens"*); the exact range is shown live next to **BLOCKS** while you drag, and whatever blocks the span sweeps over are trimmed or swallowed by it. A painted span always comes back as a single block, never several — two blocks in a row would read as two hits.
-- **Click** anywhere on a rest to drop a **short Tick** (half a beat, the same length **+ Block** uses) starting exactly where you clicked — a click is an instant, so it makes a small event rather than rewriting the block it landed in; near the end of a rest it shifts back just far enough to fit, and a rest shorter than half a beat simply becomes the tick. **Click a Tick** to clear that block, so the same gesture takes the hit away again. Nothing on the strip ever flips a block *whole* — on a fresh node that would turn the entire length into one tick; the whole-block flip lives on the **Tick / Empty** button in the list below.
-- **Alt-click** anywhere to split that block in two at exactly that point.
-- **Drag the edge** between two blocks to move that boundary. Outer edges are fixed — change the node's overall span with the **Length** field instead, which re-tiles the blocks to fit.
-- **snap** (top right) is **free** by default, which is the point of this node kind. Set it to `1`, `1/2`, `1/4` or `1/3` of a beat only when you're hand-building a figure and want the help.
+On the canvas, hits fill the instance's height, and pitched notes sit at their own height, so the line's shape (up to C2, down to A1) reads without opening it. While the placement plays, the note under the playhead lights up and a white line sweeps across the roll.
 
-Underneath, the same blocks appear as a numbered list with editable `start`/`end` beat values, a **Tick / Empty** toggle (the one place a block is flipped whole), an optional per-block label (e.g. *snare*, *ghost*), and a **✕** whose meaning follows the block: on a **Tick** it removes the *hit* — the span becomes a rest and merges into the silence around it, which is how you delete a stray tap — and on an **Empty** it removes the *rest*, handing its span to the block before it. (⌘Z undoes either.) **+ Block** carves a new tick out of the end.
+Create a node with **+ Add** in the sidebar's Nodes header, or **New Node** in the **+ Add** menu.
 
-While the node's placement is playing, the block under the playhead lights up and a white line sweeps across the strip — the karaoke view, driven purely by elapsed time inside the node.
+**Taking hits from the audio.** Under the roll, **onsets** picks a reference:
+- **audio** (the default) is the track's own onset-strength curve, picked for peaks. A peak counts when it stands above **8%** of the loudest hit within half a second either side. There is an absolute gate at **3%** of the node's loudest onset, so ripples in near-silence are not promoted to hits.
+- next come the song's **separated stems** (**audio · drums**, **audio · bass**, …), one per stem [Demucs has separated](#per-song-stem-separation). A stem is fetched and analysed only when you pick it (**reading…** while it loads, **couldn't read audio · drums** if it fails), and stays loaded while the card is open.
+- then every **onsets/cues** layer with marks inside the node.
+- **off** hides the reference.
 
-**⌨ Tap Along** works here exactly as it does on a grid node — press it, the real audio at this node's placement loops after a 3-2-1 count-in, and you tap the rhythm with **Space** — but nothing is quantised on the way in, and **the press and the release are the block**: pressing Space opens a **Tick** where the hit starts, letting Space up closes it where the hit ends. One press, one block, with the exact length you held it for. Nothing is padded out to a default length or stretched to reach the next hit — a long note comes out long, a clipped one comes out short. (Clicking the block strip during a pass still lands a hit by eye, for one your hand missed; a click has no duration to report, so it gets the same half-beat the editor's own click uses.) The blocks appear live while you tap; **Stop** ends the loop, then **Save** commits them, **Retry** starts a fresh count-in, and **Cancel** throws the take away. Tap for as many passes as you like: repeated attempts at the same hit are folded into one block at their *median* position, so extra passes sharpen the result instead of multiplying it.
+**Take N hits** puts a hit on each onset, on its nearest step. Once the node has notes, the same button reads **Add N unmarked** and adds only the onsets no note covers yet, leaving the rest as they are. ⌘Z undoes either.
 
-Two dials appear beside the Retry / Save / Cancel row once a take has taps in it, and both re-render the preview as you change them, so a messy take can be cleaned up *before* Save:
+**Pitches come along when the source knows them.** A detector's notes lane (e.g. **Bass notes**) records the pitch it heard on every mark. Pick it under **onsets** and:
+- **Take N notes** / **Add N unmarked** bring each mark in as that note, on its pitch row, not as a bare hit.
+- **♪ Pitch N hits** appears when the node already has hits that sit on one of the source's marks (within half a step). It gives each of those hits the pitch heard there. Hits with no mark under them stay hits, and a note you named yourself is never renamed.
 
-- **fold** — how far apart two taps can land and still count as the same hit. Default `1/4` of a beat (a 16th at 4/4). Widen it when the same hit split into two blocks because your passes drifted; tighten it (or set it to `off`) when genuinely fast hits are being merged into one.
-- **keep from** — how many passes have to agree before a hit is kept. Default **any pass**, which keeps everything, including a hit you tapped only once in a dozen passes — that's usually a slip rather than part of the rhythm, so raise this to **2 passes** or more to drop the strays. Passes are counted, not taps: tapping the same hit twice within one pass is still one vote. The choice never offers more passes than the take actually has, and it's disabled when **fold** is `off`, since with nothing folded there are no groups to count.
+An onset curve (**audio**, a stem) says only *when* something sounded, so it brings hits and you name them by dragging.
 
-The **snap** picker applies to a tap session too, and can be changed *during* the review step: leave it **free** and every tap keeps the exact spot it landed on, or set it to `1`, `1/2`, `1/4` or `1/3` of a beat and watch the blocks re-quantise on screen before you save.
+**from layer** takes the hits from another layer's marks inside this node's placement: pick the layer in its menu (every onsets/cues layer and every lyrics layer with something inside it, with how many marks it has there), then press **Replace** to rebuild the node from that layer, or **Add** to keep what's there and add only what isn't marked yet. Each mark becomes a hit on its nearest step, as its note when the layer knows its pitch, and a lyric keeps its words as the note's label.
 
-**⟳ From layer** builds blocks from another layer's marks that fall inside this node's placement, at their exact fractional beat positions. It opens a menu of every **onsets/cues** layer and every **lyrics** layer with something inside this node, each showing how many blocks it would actually produce, and each offering two buttons: **Replace** throws away the node's blocks and rebuilds them from that layer, while **Merge** keeps every block you already have and only adds the marks the node isn't marking yet (anything inside an existing Tick, or within an eighth of a beat of one, counts as already marked). Reach for Merge once the hand-built rhythm is worth keeping and you only want the hits you missed. Each mark opens a Tick that lasts as long as the audio under this placement says that hit rings for (capped by the next mark, so a long rest stays visibly a rest), everything else comes back as Empty, and the mark's own text is kept as the block's label — so lyrics arrive with their words on them, and a lyric line that carries its own end becomes a held block rather than a point tick. The button only appears when there's a placement, a BPM, and at least one layer with marks inside it.
+**⌨ Tap Along** loops the real audio at this node's placement after a 3-2-1 count-in. You tap with **Space**: press opens a note, release closes it, and each lands on the node's pulse. The notes appear live; **Stop** ends the loop, then **Save** commits them, **Retry** starts a fresh count-in, and **Cancel** throws the take away. Closing the card keeps the take. Tap as many passes as you like: repeated attempts at the same hit are folded into one at their *median* position. Two dials appear once a take has taps in it:
 
-**Checking the blocks against the audio.** Under the strip is a row that answers *"do my ticks actually sit on the hits?"* — the reason this node kind is un-quantised in the first place is that the grid it should agree with is the audio, not a subdivision.
+- **fold** — how far apart two taps can land and still count as the same hit. Default `1/4` of a beat. Widen it when one hit split in two because your passes drifted; tighten it (or set it `off`) when fast hits are being merged.
+- **keep from** — how many passes have to agree before a hit is kept. Default **any pass**. Raise it to **2 passes** or more to drop a hit you tapped only once in a dozen passes.
 
-- **onsets** picks what to compare against. **audio** (the default) is the track's own onset-strength curve, picked for peaks — available on any analysed song, with no detector layer loaded. A peak counts as an onset when it stands above **8%** of the loudest hit **within half a second either side**, rather than above the loudest hit anywhere in the placement: on a ten-second node one crash would otherwise set a bar that every quieter hit in the node fails, and the detector would look like it had missed most of them. The bar is deliberately **low**, because the strip draws the very curve it picks from and a visible peak with no tick on it is the app contradicting itself in front of you — so the rule is that a bump you can **see** in the envelope is a bump that gets an onset. Ghost notes, brush strokes and the quiet hits between accents are all in. Over-marking costs you a block to delete; under-marking asks you to go and find what is missing. A quiet passage still stays quiet — there is an absolute gate underneath, at **3%** of the node's loudest onset, so ripples in near-silence are not promoted to hits just because they are the loudest thing nearby — but the margin between a rest and a ghost note is genuinely narrow, and on a very quiet node you may see an onset or two you would not have called yourself. **The two edges are handled specifically**, because they are the two hits you check first and each used to fail for its own reason: a hit landing on the node's very first moment is found (it no longer needs audio on both sides of it to count, which is what made a node placed at **0:00** lose its own downbeat), a hit played a few milliseconds ahead of the node's start is claimed and pulled onto beat 0 rather than falling outside the placement, and a hit landing hard against the node's **end** now gets a block instead of being detected, drawn, counted in the readout and then marked by nothing. The reach outside the placement is **50 ms** either side — shorter than anything anyone plays, so a neighbouring node's hit is never dragged in. It is whatever the player is loaded with, so if you have switched the player's **SOURCE** to a stem it reads **audio · drums** and is that stem's curve. Next come the song's other **separated stems** — **audio · vocals**, **audio · drums**, **audio · bass**, **audio · other**, **audio · guitar**, **audio · piano** — one entry per stem [Demucs has separated](#per-song-stem-separation), listed whether or not you have looked at them yet. Then every **onsets/cues** layer with marks inside this node, so you can check the blocks against a specific detector instead. **off** hides the whole comparison.
-- **Compare against a stem when the mix is too busy.** A full mix is a composite: the kick that defines your rhythm shares its transients with the vocal, the cymbals and the synth, so the mix's onset curve fires on all of them and a node marking the kick reads as *"3 / 3 on an onset · 14 onsets unmarked"*. Pointing the picker at **audio · drums** compares the same blocks against the drum track alone, and the count then means what you wanted it to mean — and since block lengths are read off the same source's loudness, seeding from a stem also gives them lengths that describe the instrument you meant rather than everything playing at once. The stem is fetched and analysed the first time you pick it — a moment on a long song, during which the readout says **reading audio · drums…** and neither **Snap to onsets** nor **Mark onsets** is offered — and stays loaded for as long as the card is open, so flipping between drums and bass to see which one your blocks actually follow is instant. If the stem can't be read the readout says so rather than scoring your blocks against nothing.
-- **±10 ms — the default, and the one width that isn't a ceiling.** The **width** picker beside *snap* opens on **±10 ms**, which marks each onset with a **hairline block centred on it** and claims nothing at all about how long the hit lasts. This is the reading a boundary node is usually being asked for: *where are the hits*. The measured lengths described below are the more informative answer for a sparse passage and the less useful one for a dense passage, where a dozen measured blocks tile into a solid bar and the pattern you were looking at stops being readable — ten ticks you can count against the curve above them beat ten sustains you cannot. It is **10 ms of real time**, converted through the node's own tempo, so a hairline is the same hairline at 70 bpm and at 180. Because the block is *centred* on the peak it starts 10 ms **before** it, so the readout reports **`median −10 ms`** on a node built this way — that is the half-width, not a misalignment, and it is two orders of magnitude inside the eighth-of-a-beat window the readout calls *on an onset*. Pick any other **width** value to get measured blocks instead.
-- **How long a block gets, when you ask for a length.** A detected onset says *where* a hit is, not how long it lasts — the onset-strength curve is a difference between one moment's spectrum and the next, so it spikes at the attack and is back at the floor while the note is still ringing. Block lengths are read off the **loudness** instead: each block runs from its onset until the level has fallen back a third of the way down the **rise that hit made** — back toward the bed it came out of, not down toward silence — and it is capped at whatever the **width** picker beside *snap* says — **1/2** a beat by default — whatever the level does. A staccato stab therefore comes out short and a held chord stops at the cap, instead of both being given a flat beat. Measuring the fall against the hit's rise rather than its peak is what makes this work in a **full mix**, which is never quiet: against the peak, a kick that lifts the level from 0.6 to 1.0 is only "over" once the whole mix drops to 0.33, which it will not do before the next onset — so every block ran into the next one and the node filled in solid. Against the rise the same kick is over as soon as the mix returns to 0.6, which is where the kick actually ended. The cap is the backstop: a block marks **where** a hit is, and a node is only readable if its blocks have gaps between them. **width** sets it — `1/8`, `1/4`, `1/2`, `1 beat` or `2 beats`, alongside the `±10 ms` marker above — because the right ceiling is a property of the music rather than of the app: a hi-hat pattern wants `1/8` and a sparse pad wants `2`. Each of those is a *ceiling*, not a block length: a hit that stops sooner still gets its own shorter block, so widening it never pads a stab out. (`±10 ms` is the exception — an exact width, not a ceiling, and no loudness is read at all.) It applies to the blocks **Mark N onsets** and **Add N unmarked** lay down (and to the flat fallback width when the song has no loudness curve yet); blocks already on the strip are left where they are, so changing it and clicking again is how you try another value. The stem picker still helps — **audio · drums** measures the instrument you meant rather than everything playing at once — but the mix no longer collapses into one continuous block without it. Hits that carry their own duration — a lyric line, a held Tap Along press — keep it; measurement never overrules a source that already knows. If the song's browser-side analysis hasn't produced a loudness curve yet, blocks fall back to the flat ceiling. None of this applies while **width** is on `±10 ms`, which reads no loudness and gives every hit the same hairline — including hits that carry their own duration, since a marker is a statement about position and a node of markers with one sustain in it would not read as either.
-- With a source picked, the strip draws that source's onset-strength envelope **over** the blocks as a cyan curve, its loudness as a **faint grey fill** underneath (the shape the block lengths come from — a block ending halfway up a ringing note is something you can see), and each detected onset as a dashed cyan line — so the curve itself changes when you switch stems (a cues layer has no curve of its own and keeps the audio's behind it). A tick sitting on a transient covers its line; a tick that is early or late shows the gap directly.
-- The readout beside the picker counts it: **`13 / 16 on an onset`** — how many Tick blocks start within an eighth of a beat of a detected onset — followed by the **median offset** in milliseconds (`+` means your blocks are *late* against the audio; it falls back to beats when the node isn't placed anywhere yet), and by **`N onsets unmarked`** when the audio has hits no block covers.
-- **Mark N onsets** takes the blocks *from* the audio, so a node can be filled from the detector without tapping anything and without loading a layer. On a node with no ticks yet the button reads **Mark 9 onsets** and lays a Tick on each detected onset of the chosen source — at its exact fractional position, **each a ±10 ms hairline** by default, or **as long as the hit actually sounds** if you have set **width** to a beat fraction (see below), with the rest coming back as Empty. Once the node has ticks in it the same button becomes **Add N unmarked** and only adds the onsets no block is covering yet, leaving every block you already placed exactly as it is. It honours the **snap** picker, so setting snap to `1/2` before clicking quantises the incoming onsets to half-beats. The button disappears when the chosen source has nothing left to add, and ⌘Z undoes the whole fill.
-- **Snap to onsets** moves every tick that has an onset within an eighth of a beat onto it, keeping each block's own length and its label. Ticks with no onset near them are left exactly where they are — this tightens the hits the detector agrees with, it does not rewrite the node the way **Replace** does. Two ticks landing on the same onset collapse into one hit. The button is disabled when nothing is close enough to snap to, and ⌘Z undoes the whole snap.
+While recording, clicking the roll lands a tap by eye, for a hit your hand missed.
 
-> The envelope, the blocks and the karaoke playhead all come from the same mapping through the node's placement, so what you see lined up on the strip is what you hear lined up in playback.
-
-- **Generate a node from a Cues-tab selection** — you don't have to switch to the Riff Patterns tab to start a node. On the **Cues** tab, drag-select a range on the visualization over any cues layer — a manual layer or a detector-sourced one, like a **librosa onsets** lane — and the pending-selection pill grows an orange **→ Riff Node** button next to **+ Add**. Click it to choose which Riff Patterns layer receives the new node — or pick **+ New Riff Layer** to create one on the spot. The node's length in beats is computed from the selection's exact duration and the song's BPM. The grid's own resolution (quarters / eighths / sixteenths / triplets) is inferred from the onsets' spacing — the coarsest subdivision that explains them, same fit Tap Along uses — rather than always defaulting to sixteenths, and every onset/cue inside the selection is mapped onto its nearest grid step and comes up **already ON**, so the node's beat-grid editor opens with the selection's rhythm pre-chipped in, ready to name and refine rather than starting blank. Because a node alone has no position on the timeline, this action also drops an **instance** into the target layer spanning the exact same selected timeframe, with the new node as its sole content — the pattern is placed and audible immediately instead of sitting unplaced in the layer's node library waiting for a manual Instance to reference it.
-
-  The **→ Riff Node** menu lists every destination twice: once plainly, which builds a **grid** node as described above, and once as **"… — as blocks (no grid)"**, which builds a [**boundary node**](#two-kinds-of-node-grid-and-boundary) instead. Same selection, same onsets — but nothing is quantised: no subdivision is inferred, each onset keeps its exact fractional beat position as a block edge, and each block runs for as long as its hit actually sounds rather than a flat beat. Pick the blocks variant when the onsets don't sit on any clean subdivision, or when the grid version came out visibly out of step with the audio.
+- **Generate a node from a Cues-tab selection** — on the **Cues** tab, drag-select a range over any cues layer (manual or a detector lane such as **librosa onsets**) and click the orange **→ Riff Node** button in the selection pill. Choose which Riff Patterns layer receives the node, or **+ New Riff Layer**. The node's length comes from the selection and the song's BPM. Its pulse is inferred from the onsets' spacing: the coarsest one that explains them, so a figure in threes gets a triplet pulse. Every onset inside the selection comes in as a hit on its nearest step. An **instance** spanning the same timeframe is dropped in too, so the node is placed and audible straight away.
 
 ### Layer audio — hear a layer's marks as clicks
 
@@ -3383,11 +3880,11 @@ The **Import menu** in the Marker config panel (paired with the panel's single-c
 
 ![The Algorithms sidebar — Run picker plus detector families (MSAF, All-in-one, Ruptures) with cached/missing status](images/algorithms-sidebar.png)
 
-Algorithm Inspect (the violet-themed tab) is where you run structure-detection algorithms against a song and see how good they are. Each algorithm you run gets its own timeline row stacked under the waveform — drawn so you can compare what it predicted against your own hand-made annotation — and a table of scores tells you, in numbers, how closely it matched. Use it to judge which detector works best on a given track or across your whole corpus.
+Inspect (the violet-themed tab) is where you run structure-detection algorithms against a song and see how good they are. Each algorithm you run gets its own timeline row stacked under the waveform — drawn so you can compare what it predicted against your own hand-made annotation — and a table of scores tells you, in numbers, how closely it matched. Use it to judge which detector works best on a given track or across your whole corpus.
 
 ### Merge — blending several boundary lanes into one
 
-![The Merge row under three ruptures lanes, with its member chips, kept/found tally, and Commit button](images/inspect-merge-row.png)
+![The Merge row under three ruptures lanes, with its member chips, kept/found tally, and Save as layer button](images/inspect-merge-row.png)
 
 No single change-point method gets a whole song right. Looking at a stack of
 ruptures lanes you can usually see it: *Dynp · ar* caught the drop, *Window ·
@@ -3401,25 +3898,37 @@ run in batch.
 **boundary algorithm lane** is drawn — turn a ruptures / MSAF / All-In-One
 family on in the Algorithms sidebar and the row is there, just under
 Auto-Guess. Switch every boundary lane back off and it goes away again (unless
-it still holds members), which is why you never see it in the Annotator Tool or
-Dataprep: there is nothing there to blend.
+it still holds members), which is why you never see it in the Annotate tab or
+Prepare: there is nothing there to blend.
 
 **Picking the members.** The Merge row starts empty, saying so. Add a lane
 either way:
 
 - **Drag** a boundary lane's name onto the Merge row.
-- Click a boundary lane's name to select it, then press the **⊕** on the small
-  affordance strip under the name.
+- Open the **⋮** in the top-right corner of a boundary lane's label and choose
+  **⊕ Add to merge**.
 
-A lane that's in the blend keeps that strip visible with a **⊖** — so the
-members are identifiable at a glance without opening anything — and pressing it
-takes the lane back out. Only boundary lanes can join; span, note, and onset
-lanes have nothing to reconcile. Switching a lane off in the Algorithms sidebar
-quietly drops it from the blend and puts it back when you switch it on again:
-the merge is never fed by a lane you can't see next to it.
+On a lane that's already in the blend the same **⋮** menu offers **⊖ Remove
+from merge**; the Merge row's chips show which lanes are in it. Only boundary lanes can join; span, note, and onset
+lanes have nothing to reconcile. Switching a member off in the Algorithms
+sidebar takes its lane off the canvas but **keeps it in the blend** — so
+unticking every algorithm in the sidebar leaves just the Merge row. Only the
+chip's **×** takes a lane out of the merge.
 
-**Everything the members found is in.** A merge is a **union**, and only a
-union: every boundary from every member lane lands in the result. There is no
+**Reading the merge without its members.** Once the blend is what you want to
+look at, the member lanes are clutter. Each member chip under the Merge row has
+an **eye**: click it and that lane leaves the canvas while it **stays in the
+merge** — its chip turns dashed and italic, and its boundaries keep colouring
+the blocks they found. **Merge only**, at the right of the strip, does that for
+every member at once and turns into **Show lanes** to bring them back. The
+row's name says who feeds it: under **Merge ×2** the member names are listed in
+their lane colours, a hidden one in italics (in the narrow, sideways gutter,
+hover the name instead). Taking a lane out of the merge with its **×** puts it
+back on the canvas, and the hidden set is remembered with the rest of the merge
+for the song. The eye on a member you unticked in the sidebar ticks it again.
+
+**Everything the members found is in.** A merge is a **union** (until you
+switch on **Smart merge**, below): every boundary from every member lane lands in the result. There is no
 threshold to set, no window to tune, and no vote that can be outnumbered — if
 *Dynp · ar* heard two turnarounds four seconds apart, both are in the merge,
 because keeping the boundary only one lane heard is the entire reason to blend
@@ -3434,52 +3943,133 @@ to an existing one is a no-op too). A fold keeps the **earliest** of the real
 times: every instant in a merge is one a detector actually reported, never a
 synthetic average.
 
+**Smart merge — one line per place.** A union of five lanes that all heard the
+drop leaves five lines within a bar of it, and you drop four by hand.
+**Smart merge**, at the right of the strip, does that folding for you and then
+asks the song where the one line should go. While it is on, the same button
+reads **All boundaries** — click it to go back to the union. Boundaries within **one bar** of
+each other (counted from the first of them; **2 s** on a song with no grid)
+become **one candidate**, and its badge says how many lanes voted for it
+(**×3**). The candidate is placed by the first of these that it finds within
+**half a bar** of the votes:
+
+1. **A rhythmic figure** — a drop, a hit, an arrangement change, or the edge of
+   a breakdown or build — when a figure detector has marked one there. The
+   line goes on the bar line nearest the figure: on a song with a grid, every
+   smart-merge line lands exactly on a bar line.
+2. **A big level change on a bar line** — of the bar lines in reach, the one
+   where Volume, Bass, Mids or Highs jumps or falls the most, the bar after
+   against the bar before, if that change is at least **6 dB**. A smaller
+   change is ordinary movement inside a section and moves nothing.
+3. **The nearest bar line** to the middle of the votes.
+4. With no grid either: **the middle vote**, as a lane reported it.
+
+A section runs several bars, so two candidates **less than 2 bars apart** are
+almost always one change that different lanes heard a bar apart. They are
+folded into the stronger of the two: a figure beats a level change, a level
+change beats a bare bar line, then the one more lanes voted for wins. Its
+tooltip ends *· took in 1 line under 2 bars away*. Your own hand splits are
+never folded away.
+
+Hover a block to see which rule placed it and what the lanes actually said
+(*Placed Bass +11 dB across this bar line — the lanes said 1:02.3, 1:03.1,
+1:03.9*). Boundaries you split in by hand are never moved. Dropping, editing and
+**Save as layer** work the same in both readings, and the switch is remembered
+per song with the rest of the merge. A drop or edit belongs to the line it was
+made on, so one made in the union doesn't carry over to a smart candidate that
+sits somewhere else. The level changes need the song's signals analysed, and
+the bar lines need a grid; the better the grid, the better the placement.
+
 The row draws the result as a tiling, each block coloured by **the lane that
 found it** — so you can read straight off the strip which detector contributed
-which boundary, against the member chips below. Where two lanes did land on the
+which boundary, against the member chips below. Neighbouring blocks alternate
+between that colour and a darker shade of it, so two members that share a hue
+(two green lanes, say) still tile as separate blocks rather than one solid bar.
+Where two lanes did land on the
 same instant the block carries a small **×2** badge; a block with no badge came
-from one lane, which in a union is most of them.
+from one lane, which in a union is most of them (in a smart merge the badge
+counts the lanes that voted for the candidate).
 
-**Dropping by eye.** Click a block to drop the boundary it starts. It isn't
-discarded — it stays on the row as a dim dashed red **ghost tick**, one click
-from coming back. That is the point of doing this on the canvas: a boundary that
-lands audibly wrong is one click from being out of the commit. The tally beside
-the chips reads *kept / found*, and a **"N dropped ↺"** link appears once you've
-dropped anything; click it to put every one of them back. **Clear** empties the
-blend (the member lanes themselves are untouched).
+**Which boundary is a block?** Each block is numbered **#1, #2, …** from the
+left, and the number belongs to the **line at the block's left edge** — the
+boundary where that section starts. Clicking anywhere inside a block (between
+two lines) picks that left-hand line, never the one on its right. Hovering says
+so, with the time (*Boundary #4 — the line at this block's left edge, 0:32.4*),
+and the popover it opens carries the same number as a large **#4** at the top
+left of its header, next to *Merge boundary · starts 0:32.4*. While
+the popover is open its block is lit and its left edge drawn as a bright white
+line, so you can see which boundary a Drop would take out. A block too narrow
+to fit its number still names it on hover.
 
-**Committing.** **⬇ Commit** copies the kept boundaries into a **new editable
+**Click a block to open its boundary.** A click opens the same popover a
+boundary on a layer opens — nothing changes until you choose something in it.
+From there you can:
+
+- set its **Type**, **Label**, **Description**, **Importance** and colour, move
+  its time, or play the section it starts;
+- **Split** it — move the playhead inside the block first, then press Split and
+  a new boundary lands at the playhead. The new block's tooltip reads *Split by
+  hand*, and it is saved into the layer like any other. (Split is greyed out
+  while the playhead is outside the block, or within 50 ms of either edge.)
+- **Drop** the boundary. It isn't discarded — it stays on the row as a dim
+  dashed red **ghost tick**, and a click on the tick puts it back. A boundary
+  you split in yourself has **Remove** here instead, and it simply goes away:
+  no detector reported it, so there is nothing to keep a ghost of.
+
+**⌘Z undoes it** (Ctrl+Z on Windows / Linux), and **⇧⌘Z** (Ctrl+Shift+Z) redoes
+it: a drop, a split, a Remove, a popover edit (typing a label is one step, not
+one per letter), a **Clear**, or the **"N dropped ↺"** restore — so a boundary
+dropped by mistake comes back with ⌘Z as well as by clicking its ghost tick.
+The Merge row keeps its own history, and ⌘Z walks back whichever you edited
+last, the Merge row or your annotations (a **Save as layer** is an annotation
+edit, so ⌘Z straight after one takes the saved layer back out). Each song
+starts a fresh Merge history, and adding or removing a member lane is not an
+undo step.
+
+The tally beside the chips reads *kept / found*, and a **"N dropped ↺"** link
+appears once you've dropped anything; click it to put every one of them back.
+**Clear** empties the blend — drops, edits and splits included (the member
+lanes themselves are untouched).
+
+The edits, drops and splits stay with the blend, per song; a block you labelled
+shows the label on the row, and saving the layer carries every edit into it.
+An edit belongs to the boundary rather than to a position in the list, so it
+survives adding or removing a member lane. (Before 2026-09-27 a single click
+dropped the boundary straight away and a double-click opened the popover.)
+
+**Saving it as a layer.** **⬇ Save as layer** copies the kept boundaries into a **new editable
 boundary layer** named after its members (e.g. *Merge · Dynp · ar + Window · rbf
 + BinSeg · l2*), which then behaves like any other boundary layer in the
-Annotator Tool — drag the edges, label the sections, delete what you don't want.
-Every section arrives **untyped**, drawn in neutral slate and named *Section 1*,
-*Section 2*, … : the merge knows *where* the structure turns, never what to call
-it, so naming them is your next pass in the boundary editor. The button counts how many
-layers you've already committed from this blend, so a second commit after
-changing the members is obviously a second layer rather than an edit of the first.
+Annotate — drag the edges, label the sections, delete what you don't want.
+A section you didn't edit arrives **untyped**, drawn in neutral slate and named
+*Section 1*, *Section 2*, … : the merge knows *where* the structure turns, never
+what to call it, so naming the rest is your next pass in the boundary editor.
+The button counts how many layers you've already saved from this blend, so a
+second save after changing the members is obviously a second layer rather than
+an edit of the first. (The button used to be called **Commit**.)
 
-**Committing is the approval**, and it changes what the blend *is*: a proposal
+**Saving is the approval**, and it changes what the blend *is*: a proposal
 becomes a boundary layer in your own folder. Which is why it does not appear on
-the Algorithm Inspect canvas — that workspace draws proposals, and this has
+the Inspect canvas — that workspace draws proposals, and this has
 stopped being one. The bar says so beside the button — *⤴ Saved to your
-annotations — open the Annotator Tool to see it.* Open it and there it is: it sits with the other
+annotations — open the Annotate tab to see it.* Open it and there it is: it sits with the other
 boundary layers at the top of the canvas, above the signal rows, since the
-structure is the frame you read every other lane against. (Commit from the
-Annotator Tool and the Boundaries group switches on for you.)
+structure is the frame you read every other lane against. (Save from the
+Annotate and the Boundaries group switches on for you.)
 
-**Deleting one.** A committed merge is an ordinary boundary layer, stored with
+**Deleting one.** A saved merge is an ordinary boundary layer, stored with
 your annotations for this song (`data/annotations/layers/<you>/<song>.json`) —
 *not* in the algorithm-output cache and not as a custom detector. Delete it the
 way you delete any layer: open the **Annotations** list, find it under
 **Boundaries**, and press the **×** on its row (⌘Z undoes it). To throw away the
-blend itself without committing anything, press **Clear** on the Merge row.
+blend itself without saving anything, press **Clear** on the Merge row.
 
 **The blend is remembered.** The Merge row is per-song, and each song keeps its
 own: switch away and back, or reload the tab, and you find the same lanes
 blended and the same boundaries dropped. It's a working view rather than an
 annotation, so it's remembered **in this browser** (like the canvas's other view
 settings) — it doesn't travel to another machine and it isn't part of your
-annotation data. Committing is still what turns a merge into something durable
+annotation data. Saving it as a layer is still what turns a merge into something durable
 and shareable.
 
 ### Reference toggle — what you're scoring against
@@ -3513,27 +4103,31 @@ When scoring, a predicted boundary rarely lands exactly on your annotated one. T
 
 ### Sub-tabs
 
-![The inspect header — the Examine picker above the Evaluation / Consensus Inspect / Karaoke sub-tabs, with Reference from on the row beneath them](images/inspect-subtabs.png)
+![The inspect header — the Evaluation / Consensus Inspect / Karaoke sub-tabs, with the Examine picker and Reference from beneath them](images/inspect-subtabs.png)
 
-**Examine** sits on its own row above everything. It names the annotation kind,
-and every sub-tab under it is a *view* of that kind:
+The sub-tabs come first. **Examine**, the annotation kind being scored, sits
+**under** them, and only on the two scoring tabs (**Evaluation** and **Consensus
+Inspect**). The **Karaoke** tab reads a focused lane and scores nothing, so it has
+no Examine picker:
 
 | Sub-tab | When it's offered |
 |---------|-------------------|
 | **Evaluation** | Always — every examined kind can be scored, so this tab anchors the strip. |
 | **Consensus Inspect** | While **Examine** is set to **Boundaries**. The consensus aggregates boundaries only, so there is nothing for it to build out of any other kind. |
-| **Karaoke** | While a **lyrics lane is focused** on the canvas. See [Clicking a Lyrics lane reads the words instead](#the-verdict-and-the-drawer-under-it). |
+| **Karaoke** | While a **lyrics lane**, or a lane of **drum hits or pitched notes**, is focused on the canvas. See [Clicking a Lyrics lane reads the words instead](#the-verdict-and-the-drawer-under-it) and [Hit karaoke](#hit-karaoke--watching-hits-and-notes-against-the-audio). |
+| **Sound palette** | Always. Every loop the detectors found on this song, once each — see [The sound palette](#the-sound-palette). |
 
-When you have switched on any experimental annotation family (Cues / Spans / Loops / Lyrics in Settings), the **Examine** picker appears on that top row. It chooses which annotation kind you're inspecting and drives the Evaluation table; pick anything other than Boundaries and the Consensus Inspect tab goes away, leaving the Evaluation tab for that kind. The right-edge **Algorithms sidebar stays available for every Examine kind** (it no longer disappears for non-boundary kinds), and switching Examine **auto-opens the matching detector family** in that sidebar (e.g. Patterns → the PATTERN family, Cues → CUE extras) so the detectors you'd run for the examined kind are immediately visible. With no experimental family enabled there is just one kind (Boundaries), so the picker hides itself and the tabs sit at the top alone.
+With a song selected, the **Examine** picker appears under the tabs: it always offers **Boundaries** and **Lyrics**, plus **Cues** / **Spans** / **Loops** while the matching detector family is switched on in Settings. It chooses which annotation kind you're inspecting and drives the Evaluation table; pick anything other than Boundaries and the Consensus Inspect tab goes away, leaving the Evaluation tab for that kind. The right-edge **Algorithms sidebar stays available for every Examine kind** (it no longer disappears for non-boundary kinds), and switching Examine **auto-opens the matching detector family** in that sidebar (e.g. Patterns → the PATTERN family, Cues → CUE extras) so the detectors you'd run for the examined kind are immediately visible. With no song selected there is just one kind (Boundaries), so the picker hides itself and the tabs stand alone.
 
-**Reference from** is *not* on that row. It is not a second axis of what you're examining — it is the first half of what you're **scoring against**, so it sits **below the tabs, aligned left**, paired on the same line with the stage's **Evaluate vs**: whose annotations count as the truth on the left, which of their layers on the right. On the Evaluation tab it takes the row directly above that tab's own header.
+**Reference from** is *not* on the Examine row. It is not a second axis of what you're examining — it is the first half of what you're **scoring against**, so it sits **below the tabs, aligned left**, paired on the same line with the stage's **Evaluate vs**: whose annotations count as the truth on the left, which of their layers on the right. On the Evaluation tab it takes the row directly above that tab's own header.
 
 **Consensus is where you tune; Auto-guess is where it's kept.** Nothing in the
 Auto-guess panel says whether ±3 s beats ±2 s — this stage does, against a
-reference, live. So the Consensus Inspect panel carries a **⬇ Use for Auto-guess**
-button beside the verdict: it opens the Annotator Tool's Auto-guess panel with the cluster window,
-min-agreement, centroid method and detector selection you just scored, ready for
-a **Generate**. The return leg is the Auto-guess panel's **Tune in Consensus
+reference, live. So the Consensus Inspect panel carries a **⬇ Copy to Annotator
+as Auto-guess** button beside the verdict: it opens the Annotate's
+Auto-guess panel and replaces its points with the boundaries you just scored —
+the **Final** lane below — along with the cluster window, min-agreement,
+centroid method and detector selection that produced them. The return leg is the Auto-guess panel's **Tune in Consensus
 Inspect →**. See
 [Moving the settings between the two panels](#auto-guess-panel) — which
 also covers the guard against scoring a consensus against Auto-guess and then
@@ -3545,13 +4139,13 @@ Consensus Inspect answers one question — *is this blend any good against my
 annotation?* — so it leads with the answer in a sentence and keeps the
 machinery folded away until you want to tune it.
 
-![The collapsed Consensus Inspect panel — a one-sentence verdict, the two tilings at a glance, the drawer handle and Use for Auto-guess](images/inspect-consensus-verdict.png)
+![The collapsed Consensus Inspect panel — a one-sentence verdict, the two tilings at a glance, the drawer handle and Copy to Annotator as Auto-guess](images/inspect-consensus-verdict.png)
 
 **Collapsed** there are three things: the **verdict** (`3 of 9 Boundaries edges
 are matched by the 13 consensus boundaries, within ±0.5s`, with the shortfall
 underneath), a **two-row thumbnail** of the consensus tiling over your own, and
 the **drawer handle** — which is also the one place the current parameters are
-printed: `±3s · MetaMed · ≥2 of 12 · τ 0.5s`. **⬇ Use for Auto-guess** stays
+printed: `±3s · MetaMed · ≥2 of 12 · τ 0.5s`. **⬇ Copy to Annotator as Auto-guess** stays
 beside it, so acting on a verdict you trust never needs the drawer.
 
 The sentence quotes the counts *the scorer* used. `mir_eval` runs with
@@ -3564,13 +4158,18 @@ still in flight.
 ![The expanded panel — agreement stubs with per-boundary detector counts, the consensus tiling over the Boundaries tiling, the ±τ gutters, and the Match within / Group within / Keep if sliders](images/inspect-consensus-preview.png)
 
 **Open it** and the same panel becomes the instrument the sentence summarised.
-Three lanes share one axis across the whole track:
+Four lanes share one axis across the whole track:
 
 - **Agreement** — one stub per grouped boundary, its height *and its printed
   number* being how many distinct detectors proposed it. The dashed violet line
   is the **Keep if** threshold named in the gutter; stubs below it stay on
   screen in grey, because what the threshold is discarding is the thing you are
   choosing between.
+- **Final** — only the boundaries that pass **Keep if**, one cyan mark each.
+  It is not scored: green and red mean *matched / unmatched* and appear only on
+  the rows below it. This is exactly what
+  **Copy to Annotator as Auto-guess** sends; the gutter counts them (`28 to
+  copy`).
 - **Consensus** — the blend as a tiling: each boundary runs to the next one, and
   the *edge* carries the verdict — green where it matched one of your edges,
   red where it did not.
@@ -3625,7 +4224,7 @@ canvas are a transcript, not a set of boundaries, so clicking a lyrics lane's
 label **adds a third sub-tab, Karaoke, and opens it** — the lyrics as flowing
 text, following playback. This works for **both** kinds of lyrics lane: a
 lyrics **layer** you authored or imported, and a lyrics **detector** lane
-(**Whisper-base lyrics**, **CTC forced aligner**) drawn from the Algorithms
+(**Whisper-base lyrics**, **Ivrit lyrics**, **CTC forced aligner**) drawn from the Algorithms
 sidebar. Reading a detector lane this way is the fastest check on a
 transcription — the thin per-word row is built for alignment, not for telling
 whether the model actually heard the song.
@@ -3639,11 +4238,11 @@ lane does — click the lane again to deselect it, or click any other lane — a
 you land back on whichever tab you were on before the karaoke. (The Consensus
 row on the timeline follows the stage, as it always does — see below.)
 
-The card is the same one the Annotator Tool shows, with one difference: on a
-detector lane the header names the detector and there is no layer picker, since
+The card is the same one the Annotate tab shows, with one difference: on a
+detector lane the header names the detector and there are no layer chips, since
 the lane you clicked *is* the pick. Clicking a lyrics **layer** hands the card
-back to the layer-picking behaviour described under
-[The Karaoke panel](#the-karaoke-panel--and-which-layer-it-follows). The words
+back to the merged, chip-driven reading described under
+[The Karaoke panel](#the-karaoke-panel--and-which-layers-it-reads). The words
 it reads are the detector's own output — the same ones the lane's **⬇** copies
 into a layer — so reading and copying can never disagree about what the model
 said.
@@ -3679,7 +4278,7 @@ row, since it has no items to edit:
   copied: ✓ / ✗ score the blend against whichever reference is loaded, and that
   is an opinion about your annotation, not part of it. The copy has no link
   back — retune the consensus and the layer you already took stays as it was.
-  Boundary layers are hidden by default in Algorithm Inspect, so the copy also
+  Boundary layers are hidden by default in Inspect, so the copy also
   switches them on; hover the **⬇** to see how many copies you have already
   taken, and delete one and the count drops.
 - **✕ — take the row off the timeline.** Bring it back from
@@ -3688,7 +4287,7 @@ row, since it has no items to edit:
 
 #### Algo-Inspect
 
-A stacked-MiniBlockRow view. Each row is colored by predicted section type. **Click any block** to open a read-only details card — same shape as the cue/span/loop popovers in the Annotator Tool — showing what the algorithm actually emitted: the row name, the section's `label`, `type`, `start` / `end` (seconds + bar.beat), length in bars/beats when BPM is set, and the swatch + hex if the detector colored the block itself. The card carries a **▶ Play** button that seeks to the block's start and auto-pauses at its end (⏹ while inside), and an *algo* badge to make the read-only origin explicit (no Delete / no importance star). Click outside or hit Esc to close. Rows are drawn in this default order (movable):
+A stacked-MiniBlockRow view. Each row is colored by predicted section type. **Click any block** to open a read-only details card — same shape as the cue/span/loop popovers in the Annotate tab — showing what the algorithm actually emitted: the row name, the section's `label`, `type`, `start` / `end` (seconds + bar.beat), length in bars/beats when BPM is set, and the swatch + hex if the detector colored the block itself. The card carries a **▶ Play** button that seeks to the block's start and auto-pauses at its end (⏹ while inside), and an *algo* badge to make the read-only origin explicit (no Delete / no importance star). Click outside or hit Esc to close. Rows are drawn in this default order (movable):
 
 ```
 Band-gradient · LLM-vision · CPD (Ruptures) · MSAF · All-In-One ensemble · folds 0–7 · custom detectors
@@ -3711,7 +4310,7 @@ While Auto-guess is off there is only one reference to choose, so **Evaluate vs*
 
 The header above each open family carries **Show all / Hide all**, which draw or hide every *cached* result in that family on the waveform at once (missing rows, having nothing to show, are untouched).
 
-To compute results, click **▶ Run…** at the top of the sidebar. The picker opens **mirroring the sidebar you just came from**: the detectors ticked there for viewing arrive ticked here for running (a per-stem row such as *Whisper-base · vocals* maps back to its base detector, since the stem is a separate **Run on** choice), and the **Run on** target is set to whatever the **Stem filter** was showing, when that stem can actually be a run target. The two panels share the same chips and the same checkbox rows, so a picker that opened on a *different* set of ticks read as the app changing your selection out from under you — it used to arrive pre-ticked with every not-yet-cached detector, which could be a dozen algorithms nobody chose. Detectors whose family isn't installed or enabled are dropped from the mirror, since they can't run. A **Select missing** button at the top of the picker applies the "everything missing in the expanded families" default on demand — that is the one-click way to fill in the gaps — and the row beside it reads *Your sidebar ticks* as a reminder of where the selection came from. With nothing ticked the footer button reads **▶ Nothing ticked — pick algorithms above** and stays disabled. Once you edit the selection inside the picker it is yours: closing and re-opening it, or switching the **Run on** stem target, leaves your ticks exactly as you left them (re-seeding on every open would throw away a selection you had just made — including the one Dataset Prep's batch runner shares with it). It lists the same families with checkboxes that select what to **run** — this run selection is shared with Dataset Prep's batch runner, so there's one set of ticks, not two. Inside the picker each family also offers **▶ Run missing (N)** (run only that family's not-yet-cached algorithms) and **All / None** (tick or untick the whole family), plus the **Demucs model** dropdown used by All-In-One. The footer **▶ Run N algorithms for this song** runs whatever is currently ticked. A ticked algorithm that already has a cached result is treated as a deliberate re-run: the footer run **recomputes it and overwrites its cached JSON**. An amber line under the button says how many ticked algorithms will be overwritten before you click, and unticking one keeps its cached output. That is how you re-run with changed settings — a different **Demucs model**, or a different **Whisper language** — without deleting files by hand. The per-family **▶ Run missing (N)** button is the opposite and stays conservative: it only computes what has no cached result. Experimental family rows additionally carry a **↻** button beside any cached algorithm, which re-runs just that one. Some of these detectors only make sense on one stem, so they show a small amber **best on vocals** or **best on drums** chip while **Run on** points somewhere else: **Silero-VAD**, **JDCNet**, **Whisper-base** and the **CTC forced aligner** need the vocals stem, and **drum transients** needs the drums stem. On the full mix a voice detector fires on synth pads, and the drum classifier calls the bass a kick. Clicking the chip sets **Run on** to that stem. **Run on** is one setting for the whole run, so the chip's tooltip warns that the change moves every ticked detector. The chip disappears once **Run on** is that stem or **All stems**. If the song hasn't been separated yet, the chip is greyed out. The chip is only a hint. Unlike a custom detector's stem, it never stops you from running the detector on another stem. The picker also has a **Custom** family chip, which exists **only in the picker**: it lists every installed custom detector, grouped by the stem each one reads (**Full mix**, **Drums**, …), with the same **cached / missing / failed** pill, **↻** re-run, **▶ Run missing (N)** and **All / None**. A custom detector always reads its own declared stem, so choosing a single stem under **Run on** narrows the list to that stem's detectors instead of retargeting them. A detector whose stem hasn't been separated for this song shows **needs <stem>** and can't be ticked. Custom results are never drawn from the Algorithms sidebar. When a run finishes, each detector that produced output appears in the **[Detectors sidebar](#annotation-workspace)**, already shown on the timeline, and that sidebar opens if it was collapsed. A detector with no result for the song is not listed there at all. Dataset Prep's **batch** run across the whole corpus still skips cached results, since there is no per-song ticking there. While a job is in flight the sidebar's button flips to **⏳ Running…** and the canvas + status pills auto-refresh as each algorithm completes; a freshly computed result can then be toggled on from its row.
+To compute results, click **▶ Run…** at the top of the sidebar. The picker opens **mirroring the sidebar you just came from**: the detectors ticked there for viewing arrive ticked here for running (a per-stem row such as *Whisper-base · vocals* maps back to its base detector, since the stem is a separate **Run on** choice), and the **Run on** target is set to whatever the **Stem filter** was showing, when that stem can actually be a run target. The two panels share the same chips and the same checkbox rows, so a picker that opened on a *different* set of ticks read as the app changing your selection out from under you — it used to arrive pre-ticked with every not-yet-cached detector, which could be a dozen algorithms nobody chose. Detectors whose family isn't installed or enabled are dropped from the mirror, since they can't run. A **Select missing** button at the top of the picker applies the "everything missing in the expanded families" default on demand — that is the one-click way to fill in the gaps — and the row beside it reads *Your sidebar ticks* as a reminder of where the selection came from. With nothing ticked the footer button reads **▶ Nothing ticked — pick algorithms above** and stays disabled. Once you edit the selection inside the picker it is yours: closing and re-opening it, or switching the **Run on** stem target, leaves your ticks exactly as you left them (re-seeding on every open would throw away a selection you had just made — including the one Prepare's batch runner shares with it). It lists the same families with checkboxes that select what to **run** — this run selection is shared with Prepare's batch runner, so there's one set of ticks, not two. Inside the picker each family also offers **▶ Run missing (N)** (run only that family's not-yet-cached algorithms) and **All / None** (tick or untick the whole family), plus the **Demucs model** dropdown used by All-In-One. The footer **▶ Run N algorithms for this song** runs whatever is currently ticked. A ticked algorithm that already has a cached result is treated as a deliberate re-run: the footer run **recomputes it and overwrites its cached JSON**. An amber line under the button says how many ticked algorithms will be overwritten before you click, and unticking one keeps its cached output. That is how you re-run with changed settings — a different **Demucs model**, or a different **Whisper language** — without deleting files by hand. The per-family **▶ Run missing (N)** button is the opposite and stays conservative: it only computes what has no cached result. Experimental family rows additionally carry a **↻** button beside any cached algorithm, which re-runs just that one. Some of these detectors only make sense on one stem, so they show a small amber **best on vocals** chip while **Run on** points somewhere else: **Silero-VAD**, **JDCNet**, **Whisper-base**, **Ivrit** and the **CTC forced aligner** need the vocals stem. On the full mix a voice detector fires on synth pads. Clicking the chip sets **Run on** to that stem. **Run on** is one setting for the whole run, so the chip's tooltip warns that the change moves every ticked detector. The chip disappears once **Run on** is that stem or **All stems**. If the song hasn't been separated yet, the chip is greyed out. The chip is only a hint. Unlike a custom detector's stem, it never stops you from running the detector on another stem. The picker also has a **Custom** family chip, which exists **only in the picker**: it lists every installed custom detector, grouped by the stem each one reads (**Full mix**, **Drums**, …), with the same **cached / missing / failed** pill, **↻** re-run and **▶ Run missing (N)**. When your own detectors and the shipped ones are both installed, the list splits under **Custom** and **Default** titles, and each title carries its own **All / None**, so you can tick every one of your detectors without also ticking the shipped examples; with only one kind installed the list is flat and **All / None** sits in the family header. A custom detector always reads its own declared stem, so choosing a single stem under **Run on** narrows the list to that stem's detectors instead of retargeting them. A detector whose stem hasn't been separated for this song shows **needs <stem>** and can't be ticked. Custom results are never drawn from the Algorithms sidebar. When a run finishes, each detector that produced output appears in the **[Detectors sidebar](#annotation-workspace)**, already shown on the timeline, and that sidebar opens if it was collapsed. A detector with no result for the song is not listed there at all. Prepare's **batch** run across the whole corpus still skips cached results, since there is no per-song ticking there. While a job is in flight the sidebar's button flips to **⏳ Running…** and the canvas + status pills auto-refresh as each algorithm completes; a freshly computed result can then be toggled on from its row.
 
 Drag the sidebar's left edge to resize (320–640 px, double-click to reset to 420 px); collapse with the **›** chevron and the panel becomes a hover tab on the right edge. Width + collapsed state persist per browser.
 
@@ -3723,6 +4322,8 @@ Drag the sidebar's left edge to resize (320–640 px, double-click to reset to 4
 
 The summary line on the right follows the same logic: `done in Xs — 4 ran` (clean), `partially done in Xs — 1 ran, 1 cached, 4 failed` (amber), or `failed after Xs — 4 failed` (red).
 
+When a run finishes, the page scrolls back up to the run log panel and flashes its border in the outcome colour — green for done, amber for partial or stopped, red for failed — so you see the result even if you had scrolled down to the lanes while it ran. A failed run keeps a faint red border until you close the panel with **✕** or start another run.
+
 Switch to *All songs* when you want to process the whole dataset; stay on *Per song* to iterate on just the song you're listening to.
 
 #### Re-transcribe this section (Lyrics)
@@ -3733,10 +4334,10 @@ isolated vocal — the only repair used to be running the whole song again and
 hoping, which throws away every line the first take got right.
 
 The **Re-transcribe this section** panel narrows that to one window on one stem.
-It lives in the Algorithm Inspect **Algorithms** sidebar, inside the **LYRICS**
+It lives in Inspect's **Algorithms** sidebar, inside the **LYRICS**
 family — directly under the Whisper / CTC checkboxes and the Whisper language
-picker, with the two detectors it re-runs. It needs **Experimental annotation
-types → Lyrics** switched on.
+picker, with the two detectors it re-runs. It needs the lyrics model server
+to be reachable, like the detectors themselves.
 
 ![The LYRICS family in the Algorithms sidebar, with Re-transcribe this section under the Whisper checkbox — the highlighted 1:05.5 – 1:47.8 window, read by Whisper base on the vocals stem](images/lyrics-section-rerun.png)
 
@@ -3750,9 +4351,9 @@ minimum is 0.25 s — enough to hold one sung word.
 
 Below the window:
 
-1. **Which detector, on which stem** — **Whisper base** or **CTC forced
-   aligner**, against the full mix or any stem Demucs has separated for this
-   song. The stem is the setting that usually fixes a gap: Whisper hears words on
+1. **Which detector, on which stem** — **Whisper base**, **Ivrit** or **CTC
+   forced aligner**, against the full mix or any stem
+   Demucs has separated for this song. On a Hebrew song pick **Ivrit**: it always reads Hebrew and ignores the language picker. The stem is the setting that usually fixes a gap: Whisper hears words on
    `vocals` that it sails past on the mix. The re-run uses the **Whisper
    language** chosen just above it in the family, so a window is read the same
    way the whole-song run would read it — leave that on *auto-detect* only if you
@@ -3822,7 +4423,7 @@ The best F row is starred and tinted green; the worst is tinted red. Ruptures ro
 <!-- /tc-videos:inspect-all -->
 ![Algorithm Inspect — All songs view with the dataset-wide leaderboard](images/inspect-all-songs.png)
 
-Inspect All is the corpus-wide version of Algorithm Inspect: instead of judging detectors on one song, it scores every algorithm across *all* your reviewed songs at once and ranks them on a leaderboard. This is how you answer "which detector is best overall?" rather than "which is best on this track?" It works from your Manual annotations and the algorithm results already cached for each song.
+Inspect All is the corpus-wide version of Inspect: instead of judging detectors on one song, it scores every algorithm across *all* your reviewed songs at once and ranks them on a leaderboard. This is how you answer "which detector is best overall?" rather than "which is best on this track?" It works from your Manual annotations and the algorithm results already cached for each song.
 
 ### Per-algorithm leaderboard
 
@@ -3853,17 +4454,17 @@ Live progress reporting; on completion the top-N (default 20) configurations are
 
 ---
 
-## Dataset Prep
+## Prepare
 
 ![The Dataset Prep banner — set BPM and align the grid in the Song setup sidebar](images/prep-banner.png)
 
-Dataprep (the emerald tab, at `/prep`) is where songs *enter* the corpus and get readied for everyone else's work — you upload audio here, set each song's tempo and beat grid, run batch analysis, and manage disk space. It uses the same audio canvas as the other workspaces but has no section/cue editors, because its job is curation, not annotation. As a rule of thumb: a new song should always be set up here first, before anyone tries to annotate or evaluate it.
+Prepare (the emerald tab, at `/prep`) is where songs *enter* the corpus and get readied for everyone else's work — you upload audio here, set each song's tempo and beat grid, run batch analysis, and manage disk space. It uses the same audio canvas as the other workspaces but has no section/cue editors, because its job is curation, not annotation. As a rule of thumb: a new song should always be set up here first, before anyone tries to annotate or evaluate it.
 
 ### Differences from Annotate
 
 - Annotation tabs hidden.
 - The big **Playback / Selection** numeric readout above the player is hidden — grid setup doesn't need a precise playhead clock and the numbers add visual noise. The readout returns in Annotate / Inspect.
-- Every step in the Song setup panel is collapsed by default (see [Song Info Bar](#song-info-bar) and [Metronome Panel](#metronome-panel-dataset-prep)), leaving only the status card, so the canvas dominates on first open.
+- Every step in the Song setup panel is collapsed by default (see [Song Info Bar](#song-info-bar) and [Metronome Panel](#metronome-panel-prepare)), leaving only the status card, so the canvas dominates on first open.
 - The `G` shortcut means **Align grid to playhead (set bar 1)**, not *Toggle Manual layer*. `Shift+G` also aligns the grid.
 - Storage stats are shown more prominently in the sidebar.
 - **The tempo-mode picker** (Steady · Mapped · Hand-placed) sits in step ① of the Song setup panel — see [Grid Mode](#grid-mode-steady--mapped--hand-placed) above for the contract. The grid mode is persisted per-song to `data/song-info/<slug>.json` as `gridMode` + `gridSegments` + (Hand-placed only) `beatOverrides` — the override map is keyed by the cumulative integer beat index from the song origin and stores the pinned absolute timestamp in seconds.
@@ -3874,9 +4475,11 @@ Dataprep (the emerald tab, at `/prep`) is where songs *enter* the corpus and get
 
 ### Uploading songs
 
-The **+ Upload songs** button at the top of the Songs sidebar (admins only, **Dataset Prep only** — Annotate and Algorithm Inspect deliberately have no upload affordance, so the corpus can only grow from the curation workspace) opens a multi-file picker for `.mp3` / `.wav` / `.flac` / `.ogg` / `.m4a`. A small **folder icon** to its right opens a *folder* picker instead. Either way uploads are chunked client-side (8 MB per chunk) so they sail past the 100 MB Codespaces proxy cap.
+The **+ Upload songs** button at the top of the Songs sidebar (admins only, **Prepare only** — Annotate and Inspect deliberately have no upload affordance, so the corpus can only grow from the curation workspace) opens a multi-file picker for `.mp3` / `.wav` / `.flac` / `.ogg` / `.m4a`. A small **folder icon** to its right opens a *folder* picker instead. Either way uploads are chunked client-side (8 MB per chunk) so they sail past the 100 MB Codespaces proxy cap.
 
-You can also **drag and drop** files or folders directly onto the Songs sidebar **while in Dataset Prep** — the whole sidebar is a drop target (it tints green while you're dragging). The drop handlers are inert in Annotate / Algorithm Inspect, so a stray drag onto the sidebar in those workspaces does nothing. Folders are walked **recursively**: if subfolders are present, you'll get a confirmation prompt — *"Found N audio files across subfolders. Upload them all flat (folder structure will not be preserved)?"* — so a misclick on the wrong folder can't dump hundreds of files into your dataset. Non-audio files in the drop are silently skipped.
+You can also **drag and drop** files or folders directly onto the Songs sidebar **while in Prepare** — the whole sidebar is a drop target (it tints green while you're dragging). The drop handlers are inert in Annotate / Inspect, so a stray drag onto the sidebar in those workspaces does nothing. Folders are walked **recursively**: if subfolders are present, you'll get a confirmation prompt — *"Found N audio files across subfolders. Upload them all flat (folder structure will not be preserved)?"* — so a misclick on the wrong folder can't dump hundreds of files into your dataset. Non-audio files in the drop are silently skipped.
+
+**Variable-bitrate (VBR) mp3s are converted on arrival.** A browser can't seek a VBR mp3 accurately: playback starts up to ~1.5 s away from where you clicked, by a different amount after every seek, while the waveform and the clock both say otherwise — and at high zoom the audio and the picture visibly disagree. So the server re-encodes any VBR mp3 to a constant-bitrate 256 kbps mp3 (same name, same timing) before it joins the corpus, and a popup says so: *"song.mp3": Converted from variable bitrate (VBR) to constant-bitrate 256 kbps mp3, so playback lands where you click.* Stems uploaded through **⤒ Import dataset** get the same treatment, and the **Import complete** summary lists which ones were converted. If the conversion can't run, the upload is refused with the reason; export the file as a constant-bitrate mp3 or a `.wav` and upload that instead.
 
 While an upload is in progress:
 
@@ -3888,7 +4491,7 @@ While an upload is in progress:
 
 The manifest refreshes once at the end (not per file), and the last successfully uploaded song is auto-selected. Per-file failures are summarised in an alert at the end of the run.
 
-Nothing pops up when the run finishes — you're already in **Dataprep** with the new song selected, which is exactly where its BPM gets set (boundaries snap to the grid, so the BPM has to be right before you annotate). If you leave for the **Annotator Tool** before setting one, the **BPM not set** warning catches you on the way in — see the **BPM not set** dialog under [The Five Workspaces](#the-five-workspaces).
+Nothing pops up when the run finishes — you're already in **Prepare** with the new song selected, which is exactly where its BPM gets set (boundaries snap to the grid, so the BPM has to be right before you annotate). If you leave for the **Annotate** tab before setting one, the **BPM not set** warning catches you on the way in — see the **BPM not set** dialog under [The Five Workspaces](#the-five-workspaces).
 
 **Stems are separated for you.** Every uploaded song is then queued for Demucs in the background — one job at a time, while you set BPM and carry on — so per-stem detectors and stem audition are ready without a second trip. A cyan strip under the upload controls shows what's running and what's still waiting. Turn it off (or switch between 6 and 4 stems) in **Settings → Research → Stem separation**; the full behaviour is under [Automatic stemming after upload](#automatic-stemming-after-upload).
 
@@ -3896,7 +4499,7 @@ Nothing pops up when the run finishes — you're already in **Dataprep** with th
 
 ![The Import dataset dialog — pick a folder of songs to bring into the corpus](images/import-dataset-dialog.png)
 
-The **⤒ Import dataset** button at the top of the Songs sidebar (admin-only, **Dataset Prep only**) opens the **Import Dataset** dialog — a one-shot way to bring an entire dataset folder into the corpus (audio + song-info + annotations + cached algorithm outputs + stems) without going song-by-song through `+ Upload songs`.
+The **⤒ Import dataset** button at the top of the Songs sidebar (admin-only, **Prepare only**) opens the **Import Dataset** dialog — a one-shot way to bring an entire dataset folder into the corpus (audio + song-info + annotations + cached algorithm outputs + stems) without going song-by-song through `+ Upload songs`.
 
 **How to use it.** Drop a folder onto the dialog's drop zone, or click **Pick folder** / **Pick files**. The scanner accepts three source layouts and auto-detects which one each file uses:
 
@@ -3910,6 +4513,8 @@ The **⤒ Import dataset** button at the top of the Songs sidebar (admin-only, *
      stems/<slug>/{drums,bass,other,vocals}.wav
    ```
    (The scanner walks up to find the named buckets, so you can pick the `data/` folder itself or its parent.)
+
+   **A folder with both `songs/` and `annotations/` is treated as a full server backup**, and the dialog offers **Restore full backup** instead of the per-song table — see [Restoring a full server backup](#restoring-a-full-server-backup) below. **Import song by song instead** on that screen takes you to the per-song table.
 2. **Export-bundle layout** — a ZIP produced by this app's **Export** button (see [Export & Import](#export--import)), unzipped. One folder per song slug:
    ```
    <root>/
@@ -3920,7 +4525,7 @@ The **⤒ Import dataset** button at the top of the Songs sidebar (admin-only, *
      <slug>/algos/{allin1,foote,bpm-detections,algo-clusters,…}.json
      <slug>/stems/{drums,bass,other,vocals}.<ext>
    ```
-   Multi-annotator corpus dumps insert an `<annotator>/` sub-dir inside each type dir; the importer reads through it and lands everything under **your** annotator. Only the **TimeCues JSON** files round-trip — the flat marker exports (Audacity `.txt`, Sonic Visualiser / REAPER `.csv`, JAMS `.jams`, mir_eval `.lab`, MIDI `.mid`) are lossy and skipped, as is the `grid/` cache (no import endpoint). The cached algorithm outputs under `algos/` **do** round-trip: each JSON is routed back to its on-disk home — `bpm-detections.json` and `algo-clusters.json` to their own dirs, everything else into `data/algorithm-outputs/analysis/<slug>/`. The per-type **cues / spans / loops** files are reassembled into a single Layers document before upload, so they all land under the one **Layers** chip.
+   Multi-annotator corpus dumps insert an `<annotator>/` sub-dir inside each type dir; the importer reads through it and lands everything under **your** annotator. Only the **TimeCues JSON** files round-trip — the flat marker exports (Audacity `.txt`, Sonic Visualiser / REAPER `.csv`, JAMS `.jams`, mir_eval `.lab`, MIDI `.mid`) are lossy and skipped, as is the `grid/` cache (no import endpoint). The cached algorithm outputs under `algos/` **do** round-trip: each JSON is routed back to its on-disk home — `bpm-detections.json` and `algo-clusters.json` to their own dirs, everything else into `data/algorithm-outputs/analysis/<slug>/`. The per-type **boundaries / cues / spans / lyrics / loops / riff-patterns** files are reassembled into a single Layers document before upload, so they all land under the one **Layers** chip.
 3. **Flat per-song bundle** — audio files with sibling sidecars sharing a basename:
    ```
    <root>/
@@ -3959,9 +4564,26 @@ Clicking **OK · Import** runs the plan: per-song the dialog uploads the audio (
 
 The same researcher/admin gate that protects `+ Upload songs` applies — non-admins won't see the button.
 
+#### Restoring a full server backup
+
+A full backup is a copy of the server's whole `data/` folder — every song, stem, annotation by every annotator, every detector's output, the annotator profiles and the people list. The **Full annotation export** is *not* one: it carries only some layer types and a few detector caches. To move a whole install, or bring one back, restore the backup:
+
+1. Unpack the backup's `.tar` (double-click it in Finder).
+2. Click **⤒ Import dataset** and pick the unpacked folder — the one holding `data/`, or `data/` itself. Anything outside `data/` (older tarballs, `custom-scripts/`) is listed as left out.
+3. The **Restore full backup** screen lists what's inside, by area: songs, stems, song info, each annotator's annotations, each detector family, and the people list, with file counts and sizes.
+4. Click **Restore everything**. Each file is written to the same path it had on the original server and checked against the backup afterwards; the summary says how many were *restored and verified byte-for-byte* and lists any that failed. Running it again on the same folder retries them.
+
+Unlike the song-by-song import, a restore keeps each annotator's work under their own name and brings back every detector family.
+
+**When something fails.** Failures are grouped by reason ("212 files — admin required"), and each group opens to list its files. If the first files all fail for the same reason, the restore stops and shows that reason, and leaves the people list alone. The report is kept in this browser: reopen **⤒ Import dataset** and **Last restore … Show report** brings it back, even after a reload. While a restore runs, closing or reloading the tab asks you to confirm first.
+
+**The people list.** **Also restore the people list** writes `dataset-config.json`, which decides who is admin, team or researcher. It is written last, after everything else. If you aren't an admin in the backup's list, the box starts unticked and a warning says why: restoring it would lock you out of this install's admin pages. Sign in with Google as an admin from the backup and the box is ticked for you.
+
+> ⚠ **A restore replaces any file already at the same path, with no undo.** It never deletes anything else. It needs the **admin** tier (not researcher), because it can rewrite the people list. Server-internal files such as the sign-in secret are never restored — the new install keeps its own.
+
 ### Batch algorithm runner
 
-**Moved.** The batch algorithm runner now lives in **Algorithm Inspect** (both *Per song* and *All songs* scopes) — see [Algo Inspect](#algo-inspect) below. Picking what to inspect and running it sit next to each other now. Dataset Prep no longer hosts the Run button or the ⚙ options panel.
+**Moved.** The batch algorithm runner now lives in **Inspect** (both *Per song* and *All songs* scopes) — see [Inspect](#algo-inspect) below. Picking what to inspect and running it sit next to each other now. Prepare no longer hosts the Run button or the ⚙ options panel.
 
 ### Per-song stem separation
 
@@ -3969,15 +4591,15 @@ The same researcher/admin gate that protects `+ Upload songs` applies — non-ad
 
 ![Source picker above the player — Full mix / Vocals / Drums / Bass / Other, with a cyan **▶ Stem this song** button next to the "no stems cached" hint](images/source-stems-row.png)
 
-In Dataset Prep, the **Source** picker above the player gains a **▶ Stem this song** button (cyan, next to the "no stems cached" hint). Clicking it runs **Demucs** stem separation for the currently selected song, writing `vocals.wav`, `drums.wav`, `bass.wav`, `other.wav` (plus `guitar.wav` and `piano.wav` on the 6-stem model) under `public/stems/<slug>/`. While the job is running the button is replaced by a **⏳ Stemming… N% · MM:SS** pill — the percentage is parsed from Demucs's internal progress bar and the elapsed time advances every second, so a stuck job is immediately visible. A dim subtitle under the pill mirrors the latest log line (current step, e.g. *"Separating track foo.wav"*, or the live progress-bar text), giving you a "still working" signal even when the percentage doesn't move for a while.
+In Prepare, the **Source** picker above the player gains a **▶ Stem this song** button (cyan, next to the "no stems cached" hint). Clicking it runs **Demucs** stem separation for the currently selected song, writing `vocals.wav`, `drums.wav`, `bass.wav`, `other.wav` (plus `guitar.wav` and `piano.wav` on the 6-stem model) under `public/stems/<slug>/`. While the job is running the button is replaced by a **⏳ Stemming… N% · MM:SS** pill — the percentage is parsed from Demucs's internal progress bar and the elapsed time advances every second, so a stuck job is immediately visible. A dim subtitle under the pill mirrors the latest log line (current step, e.g. *"Separating track foo.wav"*, or the live progress-bar text), giving you a "still working" signal even when the percentage doesn't move for a while.
 
 Two stop controls sit next to the running pill: **⏸ Cancel** (amber) sends `SIGINT` to the Demucs subprocess so it shuts down cleanly between chunks — typically a few seconds — and **🛑 Kill** (red) sends `SIGKILL` to the whole subprocess group so the GPU/CPU work stops immediately. Cancel is the default; Kill stays available as an escalation if Cancel doesn't land. While a stop is in flight the pill flips to **⏳ Cancelling…** or **⏳ Killing…** (amber). Stopping leaves any partial `vocals.wav` / `drums.wav` / etc. on disk, but no `manifest.json` is written, so the Source picker just sees "no stems cached" and the **▶ Stem this song** button reappears.
 
 > ⚠️ **Kill is a hard stop with no cleanup.** Partial WAV files from an interrupted job are orphaned under `public/stems/<slug>/` until the next successful re-stem overwrites them. Reach for Kill only when Cancel has been ignored for more than a few seconds.
 
-If the job fails, the pill flips to a persistent red **✗ Stems failed — view log** that stays until you dismiss it; clicking it opens a modal with the tail of the Demucs log (the full log is also streamed to the browser console under `[stems]`), and a sibling **↻ Retry** button kicks off a fresh run with the same settings. Once stems exist the button label flips to **▶ Re-stem this song**.
+If the job fails, the pill flips to a persistent red **⚠ Stems failed — view log** that stays until you dismiss it with the round **✕** beside it; clicking it opens a modal with the tail of the Demucs log (the full log is also streamed to the browser console under `[stems]`), and a sibling **↻ Retry** button kicks off a fresh run with the same settings. Once stems exist the button label flips to **▶ Re-stem this song**.
 
-> **Re-run prompts before overwriting.** If stems already exist for the song, you'll be asked "Re-running Demucs (6 stems) will overwrite them. Continue?" before the job starts. The Demucs-model dropdown inside Algorithm Inspect's **⚙ Batch algorithm options** is a different setting — it only affects All-In-One algorithm runs, not this button.
+> **Re-run prompts before overwriting.** If stems already exist for the song, you'll be asked "Re-running Demucs (6 stems) will overwrite them. Continue?" before the job starts. The Demucs-model dropdown inside Inspect's **⚙ Batch algorithm options** is a different setting — it only affects All-In-One algorithm runs, not this button.
 
 #### 6 stems or 4
 
@@ -3985,8 +4607,8 @@ A small **6 stems / 4 stems** switch sits next to the ▶ Stem / ▶ Re-stem but
 
 | Choice | Model | Stems written | Trade-off |
 |--------|-------|---------------|-----------|
-| **6 stems** (default) | `htdemucs_6s` | vocals, drums, bass, other, **guitar**, **piano** | Guitar and piano get their own tracks; slower |
-| **4 stems** | `htdemucs` | vocals, drums, bass, other | Guitar and piano stay inside *other*; finishes sooner |
+| **4 stems** (default) | `htdemucs` | vocals, drums, bass, other | Guitar and piano stay inside *other*; finishes sooner, and a sample stays whole |
+| **6 stems** | `htdemucs_6s` | vocals, drums, bass, other, **guitar**, **piano** | Guitar and piano get their own tracks; slower, and one sound can be cut across two stems |
 
 The switch starts on whatever **Settings → Research → Stem separation → Stems per song** says, and whatever you pick sticks for the rest of the session — including the automatic post-upload runs. Re-stemming a 6-stem song as 4 stems **deletes the now-unreferenced `guitar.wav` and `piano.wav`** so the folder matches the new manifest; the Source picker's Guitar / Piano buttons go grey again. Re-stem as 6 to bring them back. While a job runs the pill names the model — **⏳ Stemming (6 stems)… 38% · 1:24**.
 
@@ -3998,7 +4620,9 @@ While that queue has work in it, a cyan strip appears in the Songs sidebar under
 
 > **Not the same as Import dataset.** The **⤒ Import dataset** flow brings its own stems along, so it doesn't queue anything; use ▶ Stem this song afterwards for any imported track that arrived without them.
 
-Only one Demucs job runs at a time, whether it came from the button or the queue. The button is only shown in Dataset Prep — the Annotate / Inspect player areas keep the Source picker clutter-free. For whole-dataset stemming the CLI `python tools/run_demucs_songs.py` is still the right tool.
+Only one Demucs job runs at a time, whether it came from the button or the queue. The button is only shown in Prepare — the Annotate / Inspect player areas keep the Source picker clutter-free. For whole-dataset stemming the CLI `python tools/run_demucs_songs.py` is still the right tool.
+
+> **Hidden when no stem service is running.** The button (and the automatic stemming after an upload) appears only while the Demucs stem service actually answers. On a deployment that doesn't run it, the Source picker reads **stem tools not installed** instead; separate the song on a machine that has Demucs and bring its stems over with **⤒ Import dataset**.
 
 > **Hidden in Demo Mode.** Demo visitors never see the **▶ Stem this song** / **▶ Re-stem this song** button — the three shipped CC0 tracks already have pre-baked stems under [`data-default/stems/<slug>/`](../data-default/stems/), and `/api/run-demucs` is team-gated server-side (the demo identity gets a 403), so exposing the control would only ever surface a failure. Vocals / Drums / Bass / Other still switch instantly via the Source picker.
 
@@ -4022,7 +4646,7 @@ When more than one annotator has saved Manual annotations for the same song, the
 <!-- /tc-videos:custom-detectors -->
 ![The Playground — write, save, run, and inspect custom Python detectors against the corpus](images/playground-page.png)
 
-A "detector" is a small program that listens to a song and proposes annotations — boundaries, cues, spans, and so on. TimeCues ships with built-in detectors, but the **Playground** (the `/custom` tab) lets you write your own in Python: edit the code in the browser, run it on a song, and the moment it works it shows up everywhere the built-ins do (in Algorithm Inspect and in Auto-guess). This is how researchers prototype new structure-detection ideas without leaving the app.
+A "detector" is a small program that listens to a song and proposes annotations — boundaries, cues, spans, and so on. TimeCues ships with built-in detectors, but the **Playground** (the `/custom` tab) lets you write your own in Python: edit the code in the browser, run it on a song, and the moment it works it shows up everywhere the built-ins do (in Inspect and in Auto-guess). This is how researchers prototype new structure-detection ideas without leaving the app.
 
 The rest of this section is the technical contract your Python file must follow. The reference implementation of that contract is the public API in `tools/python/custom_api.py`.
 
@@ -4041,13 +4665,12 @@ class MyDetector(CustomDetector):
     # --- Required ---
     name        = "my_detector"      # ^[a-z][a-z0-9_-]{0,30}$, unique across registry
     label       = "My Detector"      # 1–80 chars
-    output_kind = "boundary"         # "boundary" | "cue" | "span" | "loop" | "lyrics"
-                                     # ("loop" is gated by the
-                                     # experimentalLoopsAndPatterns flag)
+    output_kind = "boundary"         # "boundary" | "cue" | "span" | "loop" | "riff" | "lyrics"
+                                     # | "lanes" (several lanes at once, below)
 
-    # --- Surfacing (at least one must be True) ---
-    is_algorithm  = True             # show as a read-only row in the Inspector
-    is_annotation = False            # also surface as an editable annotation layer
+    # --- Flags (optional; every detector shows in Inspect) ---
+    is_annotation = False            # a run also copies the output into a layer of the runner's
+    review        = False            # ✓/✗ on every item (default off)
 
     # --- Optional ---
     description = "Boundary at peaks in RMS energy."
@@ -4067,7 +4690,9 @@ one-line blurb, `stem` as the **Stem** row, and the detector's `name` as the
 `label = "Kick presence"` + `stem = "bass"` → **"Kick presence (bass)"**. All three
 are optional — omit `description` and the blurb is dropped from the popover;
 omit `stem` and the lane shows a generic *(curated)* tag and never lights up
-during stem audition. There is nothing else to wire up: set the attributes on
+during stem audition. `stem` can also be a list — `stem = ["vocals", "other"]`
+runs the detector once per stem, each with its own lane, and `ctx.stem` tells
+`detect()` which one it is on (see **Stems** under the Playground below). There is nothing else to wire up: set the attributes on
 your detector class and the popover appears automatically, the same as for any
 curated detector already installed.
 
@@ -4077,14 +4702,22 @@ curated detector already installed.
 |-------|------|-------|--------|
 | `name` | `str` | Must match `^[a-z][a-z0-9_-]{0,30}$`; unique | `custom_loader.py:306-311` |
 | `label` | `str` | Non-empty; ≤ 80 chars | `custom_loader.py:313-317` |
-| `output_kind` | `str` | One of `"boundary"`, `"cue"`, `"span"`, `"loop"`, `"lyrics"` (`"loop"` is filtered out when `experimentalLoopsAndPatterns` is off) | `custom_loader.py:323-328` |
-| `is_algorithm` / `is_annotation` | `bool` | At least one `True` | `custom_loader.py:326-333` |
+| `output_kind` | `str` | One of `"boundary"`, `"cue"`, `"span"`, `"loop"`, `"riff"`, `"lyrics"`, or `"lanes"` for several lanes from one detector (see below) | `custom_loader.py:323-328` |
+| `is_annotation` | `bool` | Optional, defaults `False`; must be a real `True`/`False`. Every detector shows in Inspect regardless; this adds that when an annotator runs the detector on the open song, its output is also copied into a new layer of **theirs** — what the lane's ⬇ does by hand. Once per annotator: if they already hold a copy, a re-run leaves it alone. Output kinds with no layer to copy into (`riff`) are not copied. The old `is_algorithm` flag is gone; a file that still sets it loads as before and the line is ignored | — |
+| `review` | `bool` | Optional, defaults `False`; must be a real `True`/`False`. Puts a ✓/✗ on every item the detector draws and offers it in the annotation **Source** dropdown for item-by-item review. Off, the lane shows its items plainly and ✗-rejections from earlier no longer thin a copy | — |
 | `description` | `str` | Optional, cast to string. Shown as the one-line blurb in the lane's ⓘ popover | — |
 | `stem` | `str` | Optional. One of `"vocals"`, `"drums"`, `"bass"`, `"other"`, `"mix"`; defaults `None`. Sets the lane's source stem — shown in the ⓘ popover, appended to the lane title (`label (stem)`), and used to light the lane up during stem audition | — |
+| `windowable` | `bool` | Optional, defaults `False`; must be a real `True`/`False`. Lets the detector run on a highlighted section alone ([Run a detector on just the highlighted section](#annotation-workspace)). Set it only when `detect()` reads nothing but its context — `ctx.audio`, `ctx.stems`, the features and grid, and stem files through `ctx.stem_file()` — because on a section run those hold only the section, while anything read off disk by `ctx.slug` is still the whole song | — |
+| `stem_parts` | `dict[str, list[str]]` | Optional, defaults `None`. For a detector whose one lane holds several parts, each read from its own stem (e.g. `{"drums": ["Kick", "Snare", "Hat"], "bass": ["Bass"]}`): each stem (not `"mix"`) maps to the label prefixes its items start with — a label is that prefix, or the prefix followed by ` · `. A section run can then read only the stems lit in the Detectors sidebar's stem filter (`ctx.window_stems`), and its **Replace** removes only those parts' items. In Inspect the lane is drawn as a band with a lane per part (see [Detector groups](#detector-groups)) | — |
+| `strictness` | `bool` | Optional, defaults `False`; must be a real `True`/`False`. Offers the annotator **Strict · Normal · Loose** on the detector's sidebar row and in the section-run panel, read as `ctx.strictness` (`"strict"`, `"normal"` or `"loose"`; always `"normal"` without the flag). Set it only when the three mean something to the detector — how much evidence it needs before it reports an item — and Normal is what it reports without the choice. The result records the setting it was read at | — |
+| `section_source` | `bool` | Optional, defaults `False`; must be a real `True`/`False`. Offers the annotator **Auto · Annotated · All-In-One** for where the song's sections come from, read as `ctx.section_source`; `ctx.annotator` says whose boundaries *Annotated* means. The detector reads the sections itself and records which in `ctx.section_read`, which the result keeps | — |
+| `switches` | `dict[str, str]` | Optional, defaults `{}`. Yes/no facts about the song the detector's reading depends on, as name → label (`{"live": "Recorded live"}`). Each shows as a tick under the detector's sidebar row, always in sight; ticking runs nothing, and while a tick differs from what the lane on screen was read with an amber **▶ Run** sits beside it. Read as `ctx.switches` (`{name: bool}`). They are kept with the detector's result for that song, so a run that does not name them keeps the last ones. Names follow the `name` rule; labels 1–80 chars | — |
 | `version` | `str` | Optional, defaults `"0.1"` | — |
 | `detect()` | method | Must override the base class | `custom_loader.py:335-342` |
 
 If any rule fails, the detector shows status `validation_error` in the UI and the concrete error is rendered inline.
+
+**Several lanes from one detector — `output_kind = "lanes"`.** A detector that reads one thing several ways (each instrument's notes *and* its loop, say) can return a list of `Lane(id, label, output_kind, items, group)` instead of one list of items: each lane holds one kind (`"cue"`, `"riff"`, …) and is checked exactly as a detector of that kind would be. It is still **one detector**: one row in the Detectors sidebar, one ▶ / ↻, one checkbox that shows or hides all its lanes. To get rid of **one** of its lanes on a song (the *Voice* lane of *Sounds* on a song whose singer sings real words, say), choose **✕ Delete this lane…** in that lane's **⋮** menu, then **Delete** (see [Delete or hide a lane](#delete-or-hide-a-lane)): the lane is removed from the detector's saved output for that song and its other lanes stay. A later whole-song run of the detector reads the song afresh and brings the lane back. Lanes that share a `group` are drawn in a band of their own on the timeline (a *Kick* band holding the kick's notes and its loop), and each lane's ⬇ copies that lane alone, into a group named after the detector and the band. A `"lanes"` detector can offer **Strictness** (one setting for all its lanes), run once per stem (each stem's lanes in a band of their own), and run on a **highlighted section**: the section-run panel counts and lists what it found lane by lane, and **Merge** / **Replace** act on each lane separately (a section run may return only the lanes it can read from the section, and the others stay as they were). With `is_annotation`, a run copies each lane that has a layer to copy into — not a riff lane — into a layer of yours named *detector · lane*. It can't set `review` or `stem_parts` — each of those acts on one list of items. A result saved before a detector had lanes is shown as its one lane until the next run. The contract and an example are in `tools/python/custom/CLAUDE.md`.
 
 ### 3. `DetectionContext` — what your detector receives
 
@@ -4100,7 +4733,13 @@ class DetectionContext:
     tension_curve: np.ndarray      # tension proxy, [0,1], 100 ms / sample
     bpm: float                     # detected tempo
     beat_times_ms: list[int]       # beat instants in ms, sorted
+    window_start_ms: int | None    # None on a whole-song run; see below
+    window_lead_ms: int            # section runs: where the section starts inside the context
+    window_stems: list[str] | None # section runs of a `stem_parts` detector: the stems to read
+    strictness: str                # "strict" / "normal" / "loose" — the annotator's pick, for a detector with `strictness = True`
 ```
+
+On a **section run** (a `windowable` detector run on a highlighted region), `window_start_ms` is where the section starts in the song, and every other field describes **only the section, counted from zero**. The audio, stems, features and curves are cut to it, `duration_ms` is its length, `beat_times_ms` are the beats tracked inside it, and `grid_offset_ms` is re-anchored to the first downbeat inside it. Answer in those local times: the runner moves your items back into song time. A detector whose analysis takes a **file** instead of `ctx.stems` should open it with `with ctx.stem_file("drums") as path:`, which gives the stem on disk on a whole-song run and a temporary file holding only the section on a section run.
 
 The context is frozen — you cannot mutate it.
 
@@ -4143,6 +4782,7 @@ class Boundary:
     label: str | None = None
     importance: Literal["critical","optional"] | None = None
     candidates: list[int] | None = None     # alternate ms times within tolerance
+    color: str | None = None                # "#rrggbb": this section in its own colour instead of its type's
 ```
 
 #### Cue
@@ -4165,7 +4805,7 @@ class Cue:
 
 **Everything after `time_ms` is optional.** A detector sets only the fields it knows, and a cue with none of them is a plain tick.
 
-`velocity`, `level_db`, `color`, `note` and `decay_ms` are for cues that are **struck**, such as drum hits. They are the same fields every cue in the app has, whoever set them. A cue with a `note` shows its name (e.g. *C2*) when you hover it. A cue with a `decay_ms` gets a faint tail after the tick, as long as it rings. `importance` shows as the cue's ★. On the detector's cue lane, a cue with a `velocity` stands as tall as it was hit: 127 fills the lane and a ghost note is a short stub. A cue with a `color` draws in that colour, so a lane of kicks, snares and hats can use one hue per drum. Hovering a tick shows its velocity and level. **Copy → Manual** keeps all three, and the cue card's **Hit** section edits them. All of them are exported with the cue (`velocity`, `level_db`, `color`, `note`, `decay` in seconds, `importance`). Leave them out and the cue draws exactly as before.
+`velocity`, `level_db`, `color`, `note` and `decay_ms` are for cues that are **struck**, such as drum hits. They are the same fields every cue in the app has, whoever set them. A cue with a `note` shows its name (e.g. *C2*) when you hover it. A cue with a `decay_ms` gets a faint tail after the tick, as long as it rings. `importance` shows as the cue's ★. On the detector's cue lane, a cue with a `velocity` stands as tall as it was hit: 127 fills the lane and a ghost note is a short stub. A cue with a `color` draws in that colour, so a lane of kicks, snares and hats can use one hue per drum. The part of a cue's `label` before the first ` · ` is its name (*drop* of `drop · bar 33`); when a lane's cues have more than one name, each tick shows its name beside it, in its colour, as far as the next tick. Hits on the same moment stack the same way as on a cue lane: the shorter one draws in front, equal heights overlap on their exact time rather than being nudged apart, and hovering lists every hit there. Hovering a tick shows its velocity and level. **Copy → Manual** keeps all three, and the cue card's **Hit** section edits them. All of them are exported with the cue (`velocity`, `level_db`, `color`, `note`, `decay` in seconds, `importance`). Leave them out and the cue draws exactly as before.
 
 #### Span
 
@@ -4176,9 +4816,10 @@ class Span:
     duration_ms: int                        # required, > 0; start + duration ≤ duration_ms
     label: str | None = None
     intensity: float | None = None          # in [0.0, 1.0]
+    color: str | None = None                # "#rrggbb": this span in its own colour instead of the lane's
 ```
 
-#### Loop  *(experimental — registry filtered when `experimentalLoopsAndPatterns` is off)*
+#### Loop
 
 ```python
 @dataclass
@@ -4187,6 +4828,7 @@ class Loop:
     duration_ms: int                        # required, > 0; start + duration ≤ duration_ms
     label: str | None = None
     snap_zero_cross: bool | None = None     # UI hint: snap edges to nearest zero-crossing
+    color: str | None = None                # "#rrggbb": this loop in its own colour instead of the lane's
 ```
 
 Validation is **per-item**: bad items are dropped with a structured error; good items survive. Returning a float for `time_ms`, an out-of-bounds value, an unknown `importance` literal, or `intensity` outside [0,1] all reject only that item.
@@ -4222,42 +4864,39 @@ The UI surfaces `fatal.message` and, when relevant, a *Missing Python module* pa
 
 ### 6. The Custom Detectors UI (`CustomScriptsPage.tsx`)
 
-![The Playground toolbar — song picker, stem status, bulk scope, Run / Clear outputs, Reload, and New detector](images/playground-toolbar.png)
+The Playground is laid out around the code. Every action appears **once**, on the detector or song it acts on — never repeated on each row.
 
-![A detector row — status, name, kind/version, and Edit / Run / Run all / Clear outputs / Delete](images/playground-row.png)
+| Area | What it holds |
+|------|---------------|
+| **Left rail — Detectors** | Every detector, grouped by [package](#detector-packages), then **Custom** and **Default**; inside each, detectors that declare a `group` sit under that group's subheading (**Energy**, **Notes & grooves**, **Phrase edges** …), alphabetical, with the rest under **Other**. A coloured dot gives each one's status (green `OK`, amber validation error, red load error), the icons after its name say what it is — a **pencil** for an *annotator* (`is_annotation = True`: a run also copies its output into your annotation), a **signal trace** for an *algorithm* (its lane shows in Inspect only), and a **ticked box** when it is *reviewed* (`review = True`: every item gets a ✓/✗) — with a key to them under the filter box, and the right edge gives its output kind. Click one to open it in the editor; **right-click** it for the file actions (below). Header: **+ New** (starter template), **↻** (re-scan `tools/python/custom/`), and **⋯** — **New package…**, **Install package…** plus the actions that sweep *every* detector at once. [Archived](#archived-detectors) detectors wait in a folded **Archived** section at the bottom. A filter box narrows the list. Under the list, in titled sections: **Input** (the **Stems** the open detector reads), **Output** (the **Kind** it returns), and **Detector** — version, **Package** (a picker: choosing another package moves the file there), its **Flags**, and its **Last run** on the selected song. Drag the rail's right edge to widen or narrow it (double-click the edge to reset); **‹** in its header folds it to a slim **Detectors** column and **›** opens it again — both remembered in this browser, the same as Inspect's sidebars. While the list loads (the server imports every detector file to check it, which takes a few seconds) a spinner shows in the list and in the editor, and **↻** spins. |
+| **Centre — the editor** | Title row: the `label` and `<name>.py` read live from the code, the status badge, **● unsaved** while the editor holds changes the file doesn't, the file's path, **Save** (also ⌘S / Ctrl+S), **?** (the guide, over the editor), **⛶ Full view** (the code alone over the whole window — title row, editor and Output only, still editable; press **Esc** or the same button to come back), and **Revert** while there are unsaved changes (**Discard** on a new detector). The detector's other actions — Clear outputs, Delete, Open in Inspect — are on its right-click menu in the rail, not here. Under the code, **Output**: validation errors, the last run's result on the selected song (fatal error and traceback, accepted/rejected counts, score against the manual boundaries, the first items), the **Run all** table, and the stems log. The one-line status message sits next to it. |
+| **Right — Songs** | **▶ Run on <song>** and **▶▶ Run all N songs**, then every song with what the open detector has on it: `128 cues` (green), **stale** amber when that run is older than your last save from this page, `failed` (red), `not run` (grey), and `running` / `queued` during a sweep. Click a song to select it. Under the list: the song's Demucs **Stems** — `✓ N (…)` or `none cached`, with **▶ Run stems** / **↻ Re-run**. Like the Detectors rail, it resizes from its left edge (double-click to reset) and folds with **›** to a slim **Songs** column; **‹** opens it again. |
+| **Bottom — the song** | The Inspect player and lanes, for the selected song: the transport above the waveform, with the viz bar (**Signals**, zoom, speed, grid) on the same row at its right end (it wraps to a second line when the column is too narrow), then the signals you picked (one — **Beat strength** — to start with; the choice is remembered in this browser), then the open detector's lane, drawn exactly as Inspect draws it and in the same colour. A [several-lanes](#custom-detectors) detector (`output_kind = "lanes"`, such as *Drum kit, separated*) gets one lane per lane it returned — Kick, Snare, Toms, Hi-hat, … — stacked under the signals. |
 
-![The detector code editor — edit the Python source, manifest, and run inline](images/playground-editor.png)
+**Resize the panes.** Every seam between panes drags. The rails' inner edges set their width; three seams with a small grip set heights — between the detector list and the details under it, between the code and **Output** (while Output is open), and between the top row and the song at the bottom. Drag a grip up to give the pane below it more room, down to give it less. Double-click a seam to put it back to its default size. Every size is remembered in this browser.
 
-**Toolbar** — one combined strip. The page controls and the bulk Run / Clear actions share a single bar (and a single **Song ▾** picker), so there's no duplicate single-song row.
+**Running.** A run executes the *file*, not the editor. So while the editor holds unsaved changes the button reads **▶ Save & run on <song>**: it saves first, and runs only if the saved detector loads. **Run all** does the same, then runs every song in turn — each song's row fills in as its run lands, and the button turns into **■ Stop · n/N**, which stops after the current song. Picking a detector reads back its cached run on every song, so the list shows where it has already run before you run anything.
 
-| Control | Action |
-|--------|--------|
-| **ⓘ** *(next to the **Playground** heading, not in the toolbar)* | Toggles the inline Markdown help panel |
-| **Song ▾** | Selects the song the *This song* actions (and each per-row **Run**) act on |
-| **Stems** | Read-out of the Demucs stems cached for the selected song — `✓ N stems (…)` in green, or `none cached` in amber — plus **▶ Run stems** / **↻ Re-run stems** to separate that song right here. While it runs the button shows **⏳ Stemming N%**. |
-| **Bulk scope ▾** | `All detectors` (default) or a single detector — narrows the Run / Clear buttons. The detectors are grouped under **Custom** and then **Default**, like the list below. *(only shown once at least one detector exists)* |
-| **Run · This song** / **Run · All songs** | Runs every runnable (`OK`) detector in scope on the selected song, or batches each over every song (reusing the per-detector *Run* / *Run all* paths). The all-songs sweep confirms first, since it can be `detectors × songs` runs. |
-| **Clear outputs · This song** / **Clear outputs · All songs** | Wipes outputs for the in-scope detector(s) on just the selected song, or on every song. Same semantics as the per-row **Clear outputs** (algorithm cache + **your** annotation files; the `.py` source and other annotators' work are kept). A `confirm()` dialog spells out the exact scope. |
-| **Reload** | `POST /api/custom-scripts/reload` — re-scans `tools/python/custom/` |
-| **New detector** | Opens the editor with the starter template |
+**Right-click a detector** in the rail (or focus it and press the context-menu key or Shift+F10) for what an editor's file list offers: **Open**, **Rename…** (F2), **Duplicate**, **Move to package…**, **Archive** (or **Restore**), **Copy name**, **Copy path** (from the repo root), **Open in Inspect** on the selected song, the two **Clear outputs** actions and **Delete…**.
 
-> ⚠️ **The bulk Clear is destructive and crosses every detector by default.** With Bulk scope = `All detectors`, **Clear outputs · All songs** removes your annotation edits for *every* detector on *every* song. Narrow the scope dropdown first if you only mean one detector. There is no undo.
+- **Rename** edits the name in place: Enter or clicking away saves, Esc keeps the old name. Names are lowercase letters, digits, `_` and `-`, starting with a letter, up to 31 characters; the field turns red on anything else. It renames the file to `<new name>.py` and rewrites the class's `name = "…"` line, and the detector's cached runs, annotation copies and reviewed outputs move to the new name with it. Save or revert unsaved edits first. Annotation layers already copied from it keep the old name as their source. A shipped example can't be renamed — duplicate it.
+- **Duplicate** copies the detector's *saved* file beside it as `<name>_copy.py` (then `_copy2`, …), with `(copy)` added to its label, opens the copy, and puts its name up for renaming. A shipped example's copy lands in `tools/python/custom/`. Runs are not copied.
+- **Move to package…** lists every package, **No package** (out of its package, to the top of `tools/python/custom/`) and **New package…** (make one and move the detector into it). You can also **drag** a detector onto another package's section — it lights up with *Move here* — or pick one from **Package** under the list. Only the file moves: the detector keeps its name, so its runs, annotation copies and reviewed outputs stay with it. A move is refused when the destination already has a file of that name, and when the detector imports a helper from its package's folder (`from mypackage import …`) that the destination doesn't have — copy the helper there first. Shipped examples can't be moved; duplicate one and move the copy.
+- <a id="archived-detectors"></a>**Archive** takes a detector out of the way without deleting it. Its file stays in its package and its outputs are kept, and the Playground still opens it — with a note above the code and a **Restore** button — but it moves to the folded **Archived** section at the bottom of the rail (you can also drag a detector onto that section). Everywhere else it is gone: the Inspect tab **Detectors** sidebar and every other detector list don't show it or its lanes, the rail's *every detector* runs and clears skip it, and **Share package** leaves it out of the zip. **Restore** (right-click, or the button above the code) brings all of that back. The list of archived detectors is `tools/python/custom/archived.json`; renaming an archived detector keeps it archived, deleting one forgets it.
 
-**Per-detector row**
+**The ⋯ next to the Detectors title** holds **New package…** and **Install package…** (see [Detector packages](#detector-packages)), then the every-detector actions — they skip archived detectors: *Run every detector on <song>*, *Run every detector on all songs…* (confirms first — that is `detectors × songs` runs), *Clear every detector's outputs on <song>…* and *…on every song…*.
 
-- **Status badge** — `OK` (emerald), `Validation error` (amber), `Load error` (rose)
-- **Run** — execute on the selected song; the result card shows the song's title at the top, followed by accepted/rejected counts and a mini timeline. Each detector remembers the last result *per song*, so switching the Song dropdown swaps the card to that song's run (if any) instead of wiping the previous one. If a *Run all* table is on screen, the song's row in that table is also refreshed in place, so a successful re-run clears a stale `failed` badge from an earlier batch.
-- **Run all** — batch over every song; live `current / total` progress; **Cancel** stops after current song. The table persists across single-song *Run* clicks so you can iterate on one song without losing the batch overview; per-song re-runs update their row.
-- **Edit** — opens the code editor with the source pre-loaded. There is no separate "Name" field — the editor reads `name = "..."` and `label = "..."` directly from the class body and renders them as the editor's filename / human-readable title. To rename a detector, change the `name` line in the code and Save: the editor refuses to rename in place (it would orphan whatever depends on the old name) and instead offers to write a brand-new `<new_name>.py`, leaving the old file in the list for you to delete manually.
-- **Clear outputs** — wipes only the detector's outputs: the algorithm cache (`data/algorithm-outputs/custom/<name>/`) and **your** annotation files for that detector (`data/annotations/custom/<name>/<your-annotator-id>/`) across every song. The `.py` source is kept and the detector keeps running normally on the next *Run*. Other annotators' annotations are untouched. `confirm()` dialog warns the action cannot be undone.
-- **Delete** — soft-delete. A `confirm()` dialog explains that the **`.py` source is moved to the app trash** (`tools/python/custom/.trash/`) rather than erased, and the detector's **cached algorithm results are wiped**. On success the page shows an info banner naming the on-disk trash path. The detector disappears from the registry immediately, but the source is recoverable from disk — **delete it from `tools/python/custom/.trash/` by hand if you want it gone for good.** The trash folder is a dotfile, so it never reappears in the detector list, and it is git-ignored so trashed sources stay out of commits.
-- **Show in inspector** / **Also surface as editable annotation tab** — checkboxes that mirror `is_algorithm` / `is_annotation`; saving rewrites the `.py` file (at least one must remain checked).
-
-> ⚠️ **Clear outputs is destructive.** Your annotation edits for this detector are removed for every song. The algorithm cache is recomputable; annotation work is not. There is no undo.
+> ⚠️ **Clear outputs is destructive.** It wipes the algorithm cache (`data/algorithm-outputs/custom/<name>/`) and **your** annotation files for that detector (`data/annotations/custom/<name>/<your-annotator-id>/`) — on the selected song, or on every song. The `.py` source and other annotators' work are kept. The every-detector version in the rail's **⋯** does this for *all* detectors. The algorithm cache is recomputable; annotation work is not. There is no undo.
 >
-> ℹ️ **Delete is a soft-delete with no automatic disk cleanup.** The `.py` lands in `tools/python/custom/.trash/`; if you delete a detector and re-create one with the same name later, the old source is still sitting in trash and you must remove it from disk yourself.
+> ℹ️ **Delete is a soft-delete with no automatic disk cleanup.** The `.py` is moved to the app trash (`tools/python/custom/.trash/`), not erased, and the detector's cached results are wiped. If you delete a detector and re-create one with the same name later, the old source is still sitting in trash and you must remove it from disk yourself. Shipped examples can't be deleted.
 
-**Code editor** — CodeMirror (`@uiw/react-codemirror`), Python syntax highlighting, `oneDark` theme. The header shows the **label** (parsed from `label = "..."`) as a small uppercase subtitle and the **filename** (`<name>.py`, parsed from `name = "..."`) as the main title — both update live as you type, so renaming is just editing the relevant line in the code. **Save** writes to `tools/python/custom/<name>.py` (or, when editing an existing detector whose file stem differs from its class `name`, overwrites the existing file in place — e.g. a hand-created `blabla.py` whose class declares `name = "my_detector"` stays at `blabla.py`) and re-scans the registry. Validation errors render below the editor. Every keystroke is autosaved to your browser's `localStorage` under `customscripts.draft.<name>` (or `customscripts.draft.__new__` for a fresh detector), so an accidental tab close / refresh while mid-edit doesn't lose work — reopening the editor restores the draft, and a successful Save clears it.
+**Flags.** Under the list, **Kind** (`output_kind`, in the **Output** section), **is_annotation** and **review** edit the code: flipping one rewrites (or adds) its line in the class, and editing the line updates the control, with *(default)* when the line is absent. `is_annotation` on: running the detector also copies its output into a new layer of whoever ran it (once; a re-run leaves the copy alone). `review` on: every item the detector draws gets a ✓/✗. Save to apply.
+
+**Stems.** The **Stems** row, in the **Input** section, is a chip per stem the detector can read — **mix**, **vocals**, **drums**, **bass**, **other**, **guitar**, **piano** — and edits the `stem` line the same way: tick one and it becomes `stem = "vocals"`, tick several and it becomes a list, `stem = ["vocals", "other"]`. With several ticked the detector **runs once per stem**. Each stem is its own detector as far as the rest of the app is concerned: its own lane in Inspect (so a *Vocals* chip appears in the Detectors sidebar's stem filter; the sidebar still lists the detector once), its own cached result, named `<name>__<stem>` (**mix** keeps the plain name). Inside `detect()`, `ctx.stem` says which stem this run is for. The list still shows the detector once, and a **Run on** dropdown under **Stems** picks which stem **▶ Run** runs and which stem's results the song list and the output show. The last ticked chip can't be unticked — a detector always reads something. A `stem` line the chips can't rewrite safely (a variable, a list split over lines) is shown as written, marked *(in code)*. A detector that declares `stem_parts` — one lane holding several parts, like Pulse's drums — shows the stem they are read from instead, read-only. Renaming or deleting a detector carries every stem's results with it. Ticking or unticking a stem changes the lane's name, so an earlier run under the old name stays behind — re-run it. Save to apply.
+
+**Renaming.** There is no separate name field — the editor reads `name = "..."` and `label = "..."` from the class. Change the `name` line and Save, and the editor refuses to rename in place (it would orphan whatever depends on the old name): it offers to write a brand-new `<new_name>.py`, leaving the old file for you to delete.
+
+**Code editor** — CodeMirror (`@uiw/react-codemirror`), Python syntax highlighting, `oneDark` theme. **Save** writes to `tools/python/custom/<name>.py` (or, for an existing detector whose file stem differs from its class `name`, overwrites that file in place — e.g. a hand-created `blabla.py` whose class declares `name = "my_detector"` stays at `blabla.py`) and re-scans the registry; validation errors go to **Output**. Unsaved changes are kept in your browser's `localStorage` under `customscripts.draft.<name>` (or `customscripts.draft.__new__` for a new detector), so a closed tab or a switch to another detector doesn't lose them — opening the detector again brings them back marked **● unsaved**, and Save or **Revert** clears them.
 
 **Missing-module panel** — When a fatal envelope reports a missing module, the UI renders:
 
@@ -4269,19 +4908,44 @@ Run this in a terminal on the host, then click Reload:
 [↻ Reload registry]
 ```
 
+<a id="detector-packages"></a>**Detector packages — sharing detectors with colleagues.** A package is just a folder of detectors inside `tools/python/custom/`, with an optional `package.json` that names it:
+
+```
+tools/python/custom/beat-kit/
+    package.json      {"title": "Beat kit", "description": "…", "author": "…", "version": "1.2"}
+    kick_finder.py    ← each .py directly in the folder is one detector
+    snare_rolls.py
+    lib/              ← anything in a subfolder is helper code the detectors import
+```
+
+The Playground's left rail lists detectors under their package's title — packages first, then loose files under **Custom** and **Default**. Inside a package, its detectors are clustered under their `group` (the family each one declares with `group = "…"`), one small subheading per group, alphabetical, and any without one last under **Other**; a package where no detector declares a group stays one flat list. Click a title to fold the package; hover it for its description, author and version. A package with no detectors in it still gets its section, so there is somewhere to move detectors into. Its **⋯** holds three actions:
+
+- **Edit package…** opens its `package.json` as a form: **Title**, **Description**, **Author**, **Version**, and **Team only** (the `"public": false` below). Every other key in the file — `bundle`, `licenses` … — is kept as it is.
+- **Share package** downloads the folder as `<package>.zip`, without its [archived](#archived-detectors) detectors. That zip is the whole format: send it by email or chat, or put it in a shared drive. Zipping the folder by hand gives the same thing.
+- **Remove package…** moves the whole folder to `tools/python/custom/.trash/` (nothing is erased) and wipes its detectors' cached results. Shipped packages can be shared but not removed.
+
+To make a package, open the **⋯** next to the **Detectors** title and choose **New package…**: give it a title (and a description if you like) and it becomes a new folder in `tools/python/custom/`, named after the title — *Stage lights* becomes `stage-lights/`. Then drag detectors onto it, or use **Move to package…** on each (see the right-click actions above).
+
+To install a package a colleague sent you, open the **⋯** next to the **Detectors** title, choose **Install package…** and pick the `.zip`. You can also unzip or copy the folder into `tools/python/custom/` yourself and click **Reload**. Install refuses a zip that would write outside its folder or that has no detector at its top level. It also refuses a package whose detector `name`s are already used by another detector — two detectors can't share a name, so rename one first. If a package with the same folder name is already installed, you're asked whether to replace it; the old copy goes to the trash.
+
+If your detectors import helper code that lives elsewhere in `tools/python/` and that other installs may not have, list those folders under `"bundle"` in `package.json` (e.g. `"bundle": ["my_helpers"]` for `tools/python/my_helpers/`). **Share package** then adds the modules your detectors actually import from them, so the zip works on its own. While a detector runs, its own package folder is first on the import path, so two packages can each carry a `lib/` without mixing them up.
+
+To keep a package to your team, add `"public": false` to its `package.json`. Signed-in team members see it as usual. Demo Mode visitors never do: not in the Detectors list, not as lanes, not as source. That's useful for a package that relies on a model whose licence allows private use only.
+
+> ⚠️ **Installing runs someone else's Python.** A package is code, the same as a detector you upload: it runs on the server with the same limits. Only install packages from people you trust. Install and Remove need **researcher** or **admin** access, like Upload.
+
 ### 7. Built-in examples
 
-<a id="default-and-custom"></a>**Default and Custom.** Every list of detectors in the app — the Playground's cards and its **Bulk scope** menu, the **▶ Run…** picker's **Custom** chip, the **Detectors** sidebar, the **Detectors** dropdown, and the annotation **Source** picker — shows yours under a **Custom** title at the top and the shipped detectors under a **Default** title below. When only one kind exists (a fresh clone has only the defaults) the titles are left off and the list is flat, since a single title would label nothing. An example you edit and save becomes your copy in `tools/python/custom/`, so it moves under **Custom**; deleting that copy puts the original back under **Default**.
+<a id="default-and-custom"></a>**Default and Custom.** Every list of detectors in the app — the Playground's left rail, the **Detectors** dropdown, and the annotation **Source** picker — shows yours under a **Custom** title at the top and the shipped detectors under a **Default** title below (the Playground also splits out each [package](#detector-packages) under its own title, above both). The **Detectors** sidebar leaves the **Custom** title off (yours are what it is about) and titles only **Default**. When only one kind exists (a fresh clone has only the defaults) the titles are left off and the list is flat, since a single title would label nothing. An example you edit and save becomes your copy in `tools/python/custom/`, so it moves under **Custom**; deleting that copy puts the original back under **Default**.
 
-Worked examples covering every `output_kind` except `lyrics` ship in `tools/python/custom-default/` — the same split as `data/` and `data-default/`. They register like any detector, but the app never writes to that folder: saving an edited example writes your copy to `tools/python/custom/<file>.py`, which takes its place, and **Delete** refuses a shipped example (deleting your edited copy brings the original back).
+Worked examples covering most `output_kind`s ship in `tools/python/custom-default/` — the same split as `data/` and `data-default/`. They register like any detector, but the app never writes to that folder: saving an edited example writes your copy to `tools/python/custom/<file>.py`, which takes its place, and **Delete** refuses a shipped example (deleting your edited copy brings the original back).
 
 | File | `output_kind` | Purpose |
 |------|---------------|---------|
 | `template.py` | `boundary` | Minimal starter — emits a boundary every 30 s |
 | `example_energy.py` | `boundary` | Boundaries at peaks in the smoothed gradient of `ctx.energy_curve` |
 | `example_random_cues.py` | `cue` | Demonstrates point-event output |
-| `example_hardcoded_spans.py` | `span` | Two fixed spans (intro / outro) — useful for testing the round-trip |
-| `example_random_loops.py` | `loop` *(experimental)* | One 4-bar loop on the first downbeat |
+| `example_random_loops.py` | `loop` | One 4-bar loop on the first downbeat |
 
 ### 8. Example A — RMS-jump boundary detector
 
@@ -4293,7 +4957,6 @@ class RmsJumpDetector(CustomDetector):
     name = "rms_jumps"
     label = "RMS Energy Jumps"
     output_kind = "boundary"
-    is_algorithm = True
 
     WINDOW = 11        # frames (~250 ms)
     Z_THRESH = 2.0     # std above mean
@@ -4332,8 +4995,6 @@ class SpectralFluxCueDetector(CustomDetector):
     name = "spectral_flux_cues"
     label = "Spectral Flux Onsets"
     output_kind = "cue"
-    is_algorithm = True
-    is_annotation = True
 
     W = 7
     Z = 1.2
@@ -4379,12 +5040,20 @@ class SpectralFluxCueDetector(CustomDetector):
 | GET | `/api/custom-scripts/file/<name>` | — | Raw `.py` source |
 | DELETE | `/api/custom-scripts/<name>` | — | Remove file + caches |
 | DELETE | `/api/custom-scripts/<name>/outputs` | header `X-Annotator-Id` | Wipe algorithm cache + this annotator's annotations (keeps `.py`) |
-| POST | `/api/custom-scripts/<name>/flags` | `{is_algorithm, is_annotation}` | Rewrites the surfacing flags in `<name>.py` |
+| POST | `/api/custom-scripts/<name>/flags` | `{is_annotation?, review?}` | Rewrites the flags that are sent in `<name>.py`, adding a line the file lacks |
 | POST | `/api/custom-scripts/run/<name>` | `?slug=<slug>&force=0/1` | Execute + return envelope |
 | GET | `/api/custom-scripts/result/<name>/<slug>` | — | Cached envelope or 404 |
 | GET | `/api/custom-annotations/<name>/<slug>` | header `X-Annotator-Id` | Annotator's editable copy |
 | POST | `/api/custom-annotations/<name>/<slug>` | header `X-Annotator-Id` | Save annotator's edits |
 | DELETE | `/api/custom-annotations/<name>/<slug>` | header `X-Annotator-Id` | Delete editable copy |
+| POST | `/api/custom-scripts/<name>/move` | `{package: <id> \| null}` | Move the file into that package, or out of every package |
+| POST | `/api/custom-scripts/<name>/archive` | `{archived: true\|false}` | Archive or restore; the registry (`GET /api/custom-scripts`) leaves archived detectors out unless `?include_archived=1` |
+| GET | `/api/custom-scripts/packages` | — | Every detector package: manifest + detector names (archived ones listed apart) |
+| POST | `/api/custom-scripts/packages` | `{title, description?}` | Make an empty package `tools/python/custom/<id>/` |
+| POST | `/api/custom-scripts/packages/<id>` | `{title?, description?, author?, version?, public?}` | Rewrite those `package.json` fields, keeping the rest |
+| GET | `/api/custom-scripts/packages/<id>/export` | — | The package folder as `<id>.zip`, without its archived detectors |
+| POST | `/api/custom-scripts/packages/install` | body = the `.zip`; `?filename=&replace=1` | Unpack into `tools/python/custom/<id>/` (`409` if it exists or a name clashes) |
+| DELETE | `/api/custom-scripts/packages/<id>` | — | Move the package folder to `tools/python/custom/.trash/` |
 
 ---
 
@@ -4400,9 +5069,13 @@ class SpectralFluxCueDetector(CustomDetector):
 <!-- /tc-videos:team-dashboard -->
 ![The Agreement tab — inter-annotator agreement across the corpus](images/team-agreement.png)
 
-![The Team dashboard — overview totals plus per-annotator boundary/auto-guess progress](images/team-overview.png)
+![The Team dashboard — per-annotator progress on every layer type](images/team-overview.png)
 
 The Team Dashboard (the `/team` tab) is the place to see how the whole team is doing and to manage who's on it — it shows each annotator's progress side by side and, for admins, lets you add people and set their permission levels. It's restricted: only **admins and researchers** can open it, and anyone else who tries is sent back to the home page.
+
+The **Annotators** tab covers every annotation layer type: **Boundaries, Cues, Spans, Loops, Riff Patterns and Lyrics**. Each annotator's card shows how many songs they annotated and has one tile per layer type: how many songs have at least one item of that type, what share of those songs is marked *reviewed* for that type, and how many items there are. A type the annotator hasn't used yet is shown dimmed.
+
+The **Agreement** tab lists the songs two or more annotators have worked on. Pick one, then pick a layer type — **Boundaries, Cues, Spans, Loops, Riff Patterns or Lyrics** (each button says how many annotators have that type on the song). For every pair of annotators it shows an F1 score at ±0.5 s and at ±3 s: how many of their items line up in time (a span, loop or riff by its start). Boundaries compare each annotator's first boundaries layer; the other types pool all of an annotator's layers of that type. Where the items carry names, a second number shows the share of matched items with the same section type, label, or — for lyrics — the same word.
 
 Each annotator card on the **Annotators** tab is tagged with:
 - a cyan `YOU` chip on your own row,
@@ -4494,10 +5167,6 @@ When that teammate later opens the app and signs in — whether by typing the sa
 
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/qORbd47zPiQ" title="Loops quick-add sizes" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
 
-**▶ Experimental annotation types**
-
-<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/mDCCjarvyQ4" title="Experimental annotation types" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
-
 **▶ Default algorithms**
 
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/MVBjWja_nx8" title="Default algorithms" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
@@ -4531,6 +5200,8 @@ When that teammate later opens the app and signs in — whether by typing the sa
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/pARcBBZfF9E" title="Danger Zone" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
 
 <!-- /tc-videos:settings -->
+
+**Finding a setting.** The search box at the top matches a section's title, its one-line hint, **and the settings inside it** — their labels and descriptions — so typing a toggle's own name ("Enable SPAN-family detectors") opens the section it lives in. Sections that don't match are hidden until the box is cleared with its **✕**.
 ![The Settings page — role banner plus the five collapsible categories](images/settings-overview.png)
 
 The Settings page is where you tune how the app looks and behaves for you, and (if you're an admin) configure defaults for the whole corpus. Most of what's here is *personal* — your choices are saved in your own browser and don't affect teammates. There's no Save button: every change is written immediately and a brief **Saved** pill flashes to confirm. The page's destructive actions are collected at the very bottom in a clearly-marked **Danger Zone**.
@@ -4553,7 +5224,7 @@ Below the banner the page is grouped into **five categories**, each with its own
 | Category | Accent | What lives here |
 |----------|--------|-----------------|
 | **👤 User info** | cyan | Annotator profile, Theme |
-| **✎ Annotation** | indigo | Display & playback defaults, Default signals, Annotations — display, Vocabularies & taxonomies (section / cue / span; admin "Save as dataset default" inline per field), Loops, BPM & grid protection (personal), Experimental annotation types |
+| **✎ Annotation** | indigo | Display & playback defaults, Default signals, Annotations — display, Vocabularies & taxonomies (section / cue / span; admin "Save as dataset default" inline per field), Loops, BPM & grid protection (personal), Experimental detectors |
 | **🔬 Research** | violet | Default algorithms, BPM detection, Evaluation (score region layers as multiple candidates), Auto-guess defaults, Optional GPU tooling. **Read-only for Team / Public** — visible but disabled with an "Admin only" badge |
 | **🛡 Corpus management** | amber | Admin & access, Storage stats. **Read-only for non-admins** — visible but disabled with an "Admin only" badge. *(Corpus-wide vocabulary defaults now live inline in **Annotation → Vocabularies & taxonomies** — each field has a "Save as dataset default" button visible to admins.)* |
 | **⚠ Danger Zone** | rose | Destructive actions, split into *Personal — this browser only* (always usable) and *Corpus-wide — affects every annotator* (admin only) |
@@ -4625,7 +5296,7 @@ precision.
 
 ![Default signals — the 3-Band palette and the twelve signal-row defaults](images/settings-default-signals.png)
 
-The "What's checked in the SIGNALS dropdown when a song opens" group — 12 toggles:
+The "What's checked in the SIGNALS dropdown when a song opens" group — 13 toggles:
 
 | Row | Default | Key |
 |-----|---------|-----|
@@ -4636,7 +5307,8 @@ The "What's checked in the SIGNALS dropdown when a song opens" group — 12 togg
 | Chromagram (pitch-class energy) | `false` | `defaultShowChroma` |
 | Tempogram (BPM strength over time) | `false` | `defaultShowTempogram` |
 | SSM (chroma self-similarity matrix) | `false` | `defaultShowSsm` |
-| Energy (RMS) | `false` | `defaultShowEnergy` |
+| Volume (RMS loudness alone) | `false` | `defaultShowVolume` |
+| Energy (loudness + spectral width + attacks) | `false` | `defaultShowEnergy` |
 | Brightness (spectral centroid) | `false` | `defaultShowBrightness` |
 | Novelty | `false` | `defaultShowNovelty` |
 | Onsets (half-wave rectified flux) | `false` | `defaultShowOnsets` |
@@ -4807,15 +5479,18 @@ Bars convert to seconds using BPM + time signature when applied.
 
 Sets the two **+ N-bar loop** buttons that the Loop editor shows at the playhead. Split into its own section in 2026-05-18; previously sat inside *Annotation defaults*.
 
-#### Experimental Annotation Types
+#### Experimental Detectors
 
-![Experimental annotation types & models — opt-in feature flags](images/settings-experimental.png)
+![Experimental detectors — per-family opt-in flags](images/settings-experimental.png)
 
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
-| Enable Loops and Riff Patterns (in development) | toggle | `false` | `experimentalLoopsAndPatterns` |
+| Enable SPAN-family detectors | toggle | `true` | `experimentalSpanFamily` |
+| Enable CUE-family extras | toggle | `true` | `experimentalCueExtras` |
+| Enable LOOP-family detectors | toggle | `true` | `experimentalLoopFamily` |
+| Enable PATTERN-family detectors | toggle | `true` | `experimentalPatternFamily` |
 
-Boundaries (Manual + Auto-guess), Cues, and Spans are always available. **Loops** and **Riff Patterns** share one toggle.
+Every annotation type — Boundaries (Manual + Auto-guess), Cues, Spans, Loops, Riff Patterns and Lyrics — is always available; these toggles only show or hide detector families. The LYRICS-family detectors have no toggle: they appear whenever the lyrics model server is reachable.
 
 ### 🔬 Research
 
@@ -4827,7 +5502,7 @@ Algorithmic decisions: which detectors run, how their outputs cluster, and how a
 
 ![Default algorithms — which detectors are pre-selected in Algorithm Inspect](images/settings-default-algorithms.png)
 
-Checkbox grid. Seeds the run selection Dataset Prep's batch runner starts from. Ruptures CPD methods are excluded by default — toggle them per-song. (Algorithm Inspect's **▶ Run…** picker does not use this default: it mirrors whatever is ticked in its own Algorithms sidebar.)
+Checkbox grid. Seeds the run selection Prepare's batch runner starts from. Ruptures CPD methods are excluded by default — toggle them per-song. (Inspect's **▶ Run…** picker does not use this default: it mirrors whatever is ticked in its own Algorithms sidebar.)
 
 | Algorithm ID | Default | Notes |
 |--------------|--------|-------|
@@ -4862,7 +5537,7 @@ Key: `enabledBpmDetectors`.
 | Row | Control | Default | Key |
 |-----|---------|---------|-----|
 | Separate stems automatically after upload | toggle | on | `autoStemOnUpload` |
-| Stems per song | button radio: `6 stems` / `4 stems` | `6s` | `defaultStemModel` |
+| Stems per song | button radio: `6 stems` / `4 stems` | `4s` | `defaultStemModel` |
 
 With the toggle on, every song you upload is queued for Demucs in the
 background — one job at a time, while you carry on working. Songs that already
@@ -4871,10 +5546,13 @@ tooling isn't installed (or in Demo Mode). See
 [Per-song stem separation](#per-song-stem-separation) for the queue readout and
 the per-song controls.
 
-**Stems per song** picks the model those runs use: **6 stems** (`htdemucs_6s`)
-puts guitar and piano on their own tracks; **4 stems** (`htdemucs`) folds both
-into *other* and finishes noticeably sooner. It seeds the automatic runs and the
-Dataset Prep re-stem control, where you can still switch per song.
+**Stems per song** picks the model those runs use: **4 stems** (`htdemucs`, the
+default) folds guitar and piano into *other* and finishes noticeably sooner;
+**6 stems** (`htdemucs_6s`) puts them on their own tracks. The 6-stem model
+files each sound under whichever instrument it most resembles, so a sample —
+an animal call, a vocal chop — can come out cut in two, half on *guitar* and
+half on *vocals*; the 4-stem model keeps it whole in *other*. It seeds the automatic runs and the
+Prepare re-stem control, where you can still switch per song.
 
 #### Auto-Guess Defaults
 
@@ -5007,13 +5685,10 @@ The full `UserSettings` schema lives in `src/context/SettingsContext.tsx`. The c
   autoGuessCentroidMethod: 'mean',
   autoGuessMinConsensus: 1,
   autoGuessExpandZoomThreshold: 2,
-  experimentalLoopsAndPatterns: false,
-  experimentalSpanFamily: false,
-  experimentalCueExtras: false,
-  experimentalLoopFamily: false,
-  experimentalLyricsFamily: false,
-  experimentalPatternFamily: false,
-  experimentalSetlist: false,
+  experimentalSpanFamily: true,
+  experimentalCueExtras: true,
+  experimentalLoopFamily: true,
+  experimentalPatternFamily: true,
   manualBoundariesDefault: 'house',
   manualBoundariesCustomLayout: 'intro:16, buildup:8, drop:32, breakdown:16, buildup:8, drop:32, outro:16',
   loopQuickAddBars: [4, 8],
@@ -5046,14 +5721,13 @@ The full `UserSettings` schema lives in `src/context/SettingsContext.tsx`. The c
 <!-- /tc-videos:keyboard-shortcuts -->
 ![The keyboard-shortcuts drawer (press ?) — playback, zoom, and annotation bindings](images/shortcuts-drawer.png)
 
-This is the full list of keyboard shortcuts (you can also pop up a quick reference any time by pressing **?**). To stop them firing while you're typing, shortcuts are ignored whenever your cursor is in a text field, dropdown, or other editable element — with two exceptions that always work: **?** (to open the help drawer) and **Esc** (to close it).
+This is the full list of keyboard shortcuts (you can also pop up a quick reference any time by pressing **?** — it names each key in a word or two, e.g. **Enter** *Add highlight*; this table has the details). To stop them firing while you're typing, shortcuts are ignored whenever your cursor is in a text field, dropdown, or other editable element — with two exceptions that always work: **?** (to open the help drawer) and **Esc** (to close it).
 
 | Group | Key | Action |
 |-------|-----|--------|
 | **Playback** | `Space` | Play / pause |
-|  | `→` | Skip forward by the **small** seek step (default `1 s`; configurable in Settings → Display & playback as `seekStepSmallSeconds`). Also the `▶▶` button on the player toolbar. |
-|  | `←` | Skip back by the **small** seek step (default `1 s`). |
-|  | `Shift + →` / `Shift + ←` | Skip by the **medium** seek step (default `5 s`; `seekStepMediumSeconds`). |
+|  | `→` / `←` | Move the playhead **one grid line** forward / back — the line a boundary would land on: the **Grid** unit when it is finer than a beat (1/8, 1/16, …), one **beat** otherwise. From between two lines it goes to the line on that side, so a press never moves more than one line. Follows the song's grid exactly, pinned beats and tempo changes included. A song with no tempo yet skips by the **small** seek step instead (default `1 s`; Settings → Display & playback, `seekStepSmallSeconds`). The `▶▶` / `◀◀` buttons on the player toolbar still skip by that seek step. |
+|  | `Shift + →` / `Shift + ←` | Move to the next / previous **bar line**. With no tempo: the **medium** seek step (default `5 s`; `seekStepMediumSeconds`). |
 |  | `Alt + →` / `Alt + ←` | Skip by the **large** seek step (default `10 s`; `seekStepLargeSeconds`). |
 |  | `Home` | Jump to start of song (also the `\|◀` button on the player toolbar). |
 |  | `End` | Jump to end of song (also the `▶\|` button on the player toolbar). |
@@ -5061,26 +5735,34 @@ This is the full list of keyboard shortcuts (you can also pop up a quick referen
 | **Zoom** | `+` | Zoom in |
 |  | `−` | Zoom out |
 |  | `0` | Reset zoom |
+|  | `Ctrl/⌘` + `+` | Bigger text and buttons (the header's **+**; hover it to see the current size) — on every page |
+|  | `Ctrl/⌘` + `−` | Smaller text and buttons (the header's **−**) |
+|  | `Ctrl/⌘` + `0` | Text size back to fitting the window. Until you press the header's **−** / **+**, the size follows the window: 120% on a 1920 px screen, smaller on a laptop (90% at 1440 px, 80% at 1280 px), so every tab, both side panels and the header controls stay on screen. Once you pick a size it is remembered in this browser |
 | **Annotation** | `M` | Mark at playhead, timed to the keypress itself (see *The mark lands where the cursor is*) — context-aware to the active tab: **Manual** inserts a section boundary, **Cues** a cue in the focused/first cue layer, **Loops** a quick-add loop sized by *Settings → Loop quick-add bars* (default 4), **Spans** a 1-bar span (or 2 s when no grid). Auto-guess ignores M (algorithm-driven). |
 |  | `S` | Split focused item at playhead. Works in **Manual** (split section), **Spans** (split span), **Loops** (split loop). Disabled in Cues (single-point, nothing to split), Riff Patterns (cycle/repeat semantics would break), and Auto-guess. |
-|  | `Delete` / `Backspace` | Delete focused / nearest item. **Manual:** nearest section boundary within 5 s. **Cues:** focused cue first, otherwise the nearest visible cue within 5 s. **Spans / Loops:** the focused item (no nearest fallback because intervals don't have a single "anchor time"). **Auto-guess:** no-op — review with ✓/✗/@ on each point instead of deleting. |
+|  | `Delete` / `Backspace` | Delete the **⇧/⌘-click selection** when there is one (every picked item, one undo step); otherwise the focused / nearest item. **Manual:** nearest section boundary within 5 s. **Cues:** focused cue first, otherwise the nearest visible cue within 5 s. **Spans / Loops:** the focused item (no nearest fallback because intervals don't have a single "anchor time"). **Auto-guess:** no-op — review with ✓/✗/@ on each point instead of deleting. |
+|  | `E` | **Edit** the item at the playhead: opens the same card a click on it opens, under the item. **Manual:** the section boundary nearest the playhead on the active boundary layer. **Cues:** the nearest cue. **Spans / Loops / Lyrics:** the item the playhead is inside, otherwise the nearest one. Only layers that are showing count. The card opens with its **Label** field focused, so you can type straight away; **Done** or a click outside closes it. Does nothing on **Auto-guess**, on **Riff Patterns**, or when there is nothing to open. |
 |  | `[` | Jump to previous item. **Manual** walks sections, **Auto-guess** walks the algorithm's points, **Cues / Spans / Loops** walk the deduplicated start times across every *visible* layer of that type. |
 |  | `]` | Jump to next item (same per-type list as `[`). |
-|  | `Enter` | Confirm pending region — turns a drag-selection on the visualization into a new item via the active panel's `confirmPending`. Wired for **Manual** (section), **Spans / Loops** (regierns** (interval). Only fires when a *region* is pending (drag, not a single click); no-op otherwise. |
+|  | `Enter` | **Add highlight** — turns the highlighted region (a drag on the visualization) into a new item on the active tab via its `confirmPending`: **Manual** a section, **Spans / Loops / Lyrics / Riff Patterns** an item spanning the whole highlight, **Cues** one cue at its start. Only fires when a *region* is highlighted (drag, not a single click); no-op otherwise. Landed on the wrong lane? Pick the right one from the lane name in the card's header — see [Shared edit popover](#shared-edit-popover-annotationpointcardtsx). |
 |  | `I` | **Mark In** — first half of the two-step ADD for **Spans / Loops**. Stashes the current playhead as the start of a brand-new region. Fires only on Spans / Loops tabs. Same as the **▶\| Mark In** toolbar button. |
 |  | `O` | **Mark Out** — second half of the two-step ADD. Commits a brand-new span / loop with `[stashed Mark In, current playhead]` as its range, then zoom-to-fits the new item so you can see what was just created. No-op until Mark In has been stashed. Mirror of the **\|◀ Mark Out** toolbar button. Use the inline **⌐ / ¬** chips on a specific row to snap an *existing* item's boundary instead. |
 |  | `Y` | **Accept** the detector suggestion under the playhead — the keyboard equivalent of the inline **✓** on a detector row. Acts on whichever **detector layer the active tab is pointed at** (click its lane label on the canvas to aim the tab at it); **Spans / Loops** match the item the playhead is *inside*, **Cues** the nearest point within `0.5 s`. No-op when the active tab is showing a user layer or the playhead isn't in a suggestion, so the key falls through instead of silently reviewing something off-screen. Pressing `Y` again on an already-accepted item clears the decision back to pending, same as clicking ✓ twice. |
 |  | `N` | **Reject** the detector suggestion under the playhead — the keyboard equivalent of the inline **✗**. Same targeting and same toggle-to-clear behaviour as `Y`. |
-|  | `Ctrl + Z` (or `Cmd + Z`) | Undo last edit, context-aware. In **Dataset Prep** it walks the **grid** history — BPM, meter, downbeat, tempo mode, pinned beats and grid segments share one 50-step ring (see *Undoing a grid edit*). In every other workspace it walks the annotations: **Manual** uses a 50-step panel-level `useUndoableState` ring, and **Cues / Spans / Loops / Riff Patterns** share one page-level 50-step ring over the layers document (so ⌘Z reverses whichever of the four you last touched). **Auto-guess** has no undo stack (Ctrl+Z is a no-op there). The grid and annotation rings are separate: you undo where you edited. |
-|  | `Shift + Ctrl + Z` (or `Shift + Cmd + Z`) | Redo. Same scope as Undo: the grid ring in Dataset Prep, per-panel for Manual, shared layers-doc stack for Cues / Spans / Loops / Riff Patterns. Layer visibility toggles, status flips and the Grid Lock preference don't enter any stack. |
+|  | `Ctrl + Z` (or `Cmd + Z`) | Undo last edit, context-aware. In **Prepare** it walks the **grid** history — BPM, meter, downbeat, tempo mode, pinned beats and grid segments share one 50-step ring (see *Undoing a grid edit*). In every other workspace it walks the annotations: **Manual** uses a 50-step panel-level `useUndoableState` ring, and **Cues / Spans / Loops / Riff Patterns** share one page-level 50-step ring over the layers document (so ⌘Z reverses whichever of the four you last touched). **Auto-guess** has no undo stack (Ctrl+Z is a no-op there). The grid and annotation rings are separate: you undo where you edited. |
+|  | `Shift + Ctrl + Z` (or `Shift + Cmd + Z`) | Redo. Same scope as Undo: the grid ring in Prepare, per-panel for Manual, shared layers-doc stack for Cues / Spans / Loops / Riff Patterns. Layer visibility toggles, status flips and the Grid Lock preference don't enter any stack. |
+| **Cues** | `.` / `,` | Selected cue rings 10 ms longer / shorter (its **decay**). Needs a selected cue on a layer you can edit; stepping back to 0 clears the decay. Not on the Loops tab, where these keys belong to the loop. |
+|  | `Shift + .` / `Shift + ,` | The same in 100 ms steps. |
+|  | `Shift + Delete` (or `Shift + Backspace`) | Clear the selected cue's decay, keeping the cue. Cues tab only, where it never deletes anything, even with no cue selected. On the other tabs it acts as `Delete`. |
+|  | `→` / `←`, `Shift + → / ←`, `Delete` *(decay pill focused)* | With **Tab** focus on a cue's decay pill: step the decay by 10 ms / 100 ms, or clear it. These don't seek or delete while the pill has focus. |
 | **Loops** | `,` | Halve focused loop length (÷2 — DJ-style). Only fires when the Loops tab is active. |
 |  | `.` | Double focused loop length (×2). Only fires when the Loops tab is active. |
 |  | `P` | Play / stop the focused loop (seamless looping playback via `useLoopPlayback`). Only fires when the Loops tab is active. |
 | **Layers / Grid** | `G` | *Annotate / Inspect* → toggle Manual layer · *Prep* → **Align grid to playhead (set bar 1 here)** |
 |  | `Shift + G` | Align grid to playhead (any mode) |
 |  | `A` | Toggle Auto-guess layer |
-| **Selection** | `Esc` | Dismiss preview region. Equivalent to clicking empty space on the visualization, which uniformly clears any highlighted drag-region (and any `t1 → t2` pending pill) and seeks the playhead to the click — same behavior across **Boundaries / Cues / Spans / Loops / Riff Patterns**. |
-| **Metronome** *(Dataset Prep only)* | `T` | Tap tempo — each press records one tap into the rolling window and, from the second tap onward, sets the metronome's own tempo (rounded BPM, 60–240). Does **not** change the song's grid. `event.repeat` is suppressed, so holding the key down does not flood the buffer. |
+| **Selection** | `Esc` | Dismiss preview region. Equivalent to clicking empty space on the player or a signal row, which uniformly clears any highlighted drag-region (and any `t1 → t2` pending pill) and seeks the playhead to the click — same behavior across **Boundaries / Cues / Spans / Loops / Riff Patterns**. |
+| **Metronome** *(Prepare only)* | `T` | Tap tempo — each press records one tap into the sequence and, from the second tap onward, sets the metronome's own tempo (rounded BPM, 60–240). Does **not** change the song's grid. `event.repeat` is suppressed, so holding the key down does not flood the buffer. The first press only starts tapping mode and is not counted; **Space** then taps instead of play/pause, and **Esc** stops tapping. |
 | **Help** | `?` | Open / close keyboard shortcuts drawer |
 
 ---
@@ -5104,7 +5786,7 @@ Export lives in **two places** with different scopes:
   there is no song picker. Use this when you want everything you authored on
   the open song.
 - **Full annotation export** — the `⤓ Full annotation export` button at the
-  top of the **Dataset Prep** sidebar (next to `+ Upload songs`). Opens the
+  top of the **Prepare** sidebar (next to `+ Upload songs`). Opens the
   same modal but with the scope picker and per-bucket toggles enabled —
   current track / selected tracks / entire dataset, plus optional audio,
   algorithm caches, and stems.
@@ -5130,12 +5812,13 @@ Any combination of:
 - **Auto-Guess** (algorithm clustering; only points marked correct/partial are exported in flat formats)
 - **Cues** (timestamped events — one file per cue layer per song)
 - **Spans** (labeled intervals)
-- **Loops** (bar-quantised regions — experimental, gated by Settings)
+- **Lyrics** (words and lines — each one a labelled interval, the sung text as its label)
+- **Loops** (bar-quantised regions)
+- **Riff Patterns** (figures and copied drum grooves). JSON carries the figures themselves — nodes, sequences, every play that differed. The flat formats carry **one region per play of a node**, labelled with the node's letter and, when that play differed from it, how (`A`, `A · fill`, `D · variation`); rests are left out. MIDI carries the notes those plays strike (see the MIDI row below).
 
-User-created layer types (Cues / Spans / Loops) ship one file per
+User-created layer types (Cues / Spans / Lyrics / Loops / Riff Patterns) ship one file per
 layer per song at `<slug>/<type>/<layer-name>.<ext>` — so "Kick hits" and
-"FX triggers" stay as separate Cues files. Loops are hidden
-unless `experimentalLoopsAndPatterns` is enabled in Settings.
+"FX triggers" stay as separate Cues files.
 
 ### Formats
 
@@ -5149,11 +5832,13 @@ copies stay side-by-side without clobbering filenames.
 |--------|-----------|-------|
 | **TimeCues JSON** | `.json` | Full annotation object with metadata; round-trips verbatim |
 | **Audacity label track** | `.txt` | Tab-separated `start \t end \t label`. |
-| **Sonic Visualiser CSV** | `.csv` | Header + one row per boundary |
+| **Sonic Visualiser CSV** | `.csv` | `time,label` per row for a layer of instants (boundaries, cues). A layer whose items have a length (spans, lyrics, loops, riff plays) is written `time,duration,label`, which Sonic Visualiser imports as a Regions layer, so the ends survive |
 | **JAMS** | `.jams` | JSON Annotated Music Specification, validates against `jams.load(validate=True, strict=True)`; each layer exports as a `segment_open` annotation |
 | **mir_eval boundaries** | `.lab` | Bare `time \t label` lines — read with `mir_eval.io.load_labeled_events`, then pair with `mir_eval.util.boundaries_to_intervals` for `mir_eval.segment.detection` |
-| **MIDI markers** | `.mid` | Standard MIDI File (format 0, 480 PPQ) with one marker meta-event per section; drag-drop into Ableton / Logic / Reaper / FL Studio / Pro Tools. Tempo set from song BPM when available |
+| **MIDI** | `.mid` | Standard MIDI File (format 0, 480 PPQ); drag-drop into Ableton / Logic / Reaper / FL Studio / Pro Tools. Tempo set from song BPM when available, so the notes also land on the bar grid. A layer of sections, spans or plain cues becomes one marker per item. A **cues** layer whose cues carry a **Note** (a bass line, a melody) becomes a playable note track named after the layer: every pitched cue is a note at its pitch, as hard as its **Velocity** and as long as its **Decay** — the same length the karaoke piano roll draws (no decay: until the next note). Cues in that layer without a note come along as markers. A **Riff Patterns** layer becomes a note track too: every note every play strikes (a dropped hit left out, a fill's notes added), as hard as its accent — a pitched note at its pitch, an unpitched hit on the General MIDI drum channel at its drum's key (kick 36, snare 38, hat 42, toms 45, crash 49, ride 51; a hand-drawn riff with no drum uses side stick 37) — with each play's letter as a marker. A **Lyrics** layer becomes lyric events (what a DAW's lyric track and karaoke players read): each word, split into its syllables where you laid them on the word's onsets, and each line as a marker. |
 | **REAPER regions** | `.csv` | REAPER's own Region/Marker Manager round-trip format (`#,Name,Start,End,Length,Color`) |
+
+**What only JSON keeps.** The flat formats hold a time, an optional length and a label per row, so everything else you record about an item travels in **TimeCues JSON** only: descriptions, importance, colours, beat positions, candidates, prominence envelopes, pulse, ⚡ energy envelopes, a cue's level, a lyric's syllable onsets (MIDI excepted, above), and a riff's nodes and occurrences. Export JSON alongside whichever other format you need when that detail matters.
 
 **Grid labels sidecar.** Alongside the annotation layers, the export expands the
 song's grid (Steady / Mapped / Hand-placed) into an individual labels file at
@@ -5258,8 +5943,44 @@ structured JSON manifest — so the work opens directly in DAWs, Audacity,
 visualizers, or any script without a TimeCues-specific reader. Run:
 
 ```bash
-node tools/export-timing-files.mjs <slug> --annotator <id> [--all] [--out <dir>] [--precision <n>]
+node tools/export-timing-files.mjs <slug> --annotator <id> [--all] [--out <dir>] [--precision <n>] [--with-notes] [--detectors] [--units beats]
 ```
+
+**`--units beats`** writes every position in **beats** instead of seconds —
+fractional beats from the grid origin (bar 1, beat 1 = `0`; the third 16th of
+beat 5 = `4.5`). That covers the `.txt` columns, `<slug>_sections.json`
+(`beat` in place of `time`) and the manifest, which then holds **no seconds**:
+
+- a position that has a beat twin drops its seconds (`start` beside
+  `start_beat` goes; a cue keeps `beat`);
+- a position without one is converted and renamed so the key says so —
+  `candidate_beats`, an envelope's `start_beat` / `peak_beat` / …, a
+  prominence point's `at_beat`, an energy curve point's `at_beat`;
+- a length becomes beats too — a cue's `decay_beats`, an energy reading's
+  `duration_beats` and `attack_beats` …; a pulse drops `interval_ms` and keeps
+  `period_beats`.
+
+The manifest says `"units": "beats"`, and its `grid` block (BPM, `grid_offset`,
+time signature, `tempo_map`) is what turns a beat back into a second. A song
+with no grid (no BPM yet) cannot be written in beats, so it is **skipped**
+with a warning rather than exported in guessed numbers.
+
+A cue layer you copied from a detector — drum hits, bass and melody notes,
+onsets — exports as what it adds up to, never as its hits: how many, how many
+per bar, its pitch range or its mix of drums, and the bars it plays in. The
+patterns found in those hits (riff patterns, grooves) are layers of their own
+and export in full — and when a copied group has such a pattern, its note
+lane is left out altogether. Every cue layer you made yourself exports as
+rows. The
+summaries are in the manifest's `summarized_lanes` and at the end of
+`<slug>_info.txt`; `--with-notes` exports the rows instead.
+
+`--detectors` also writes `<slug>_detectors.txt`: every detector that ran on
+the song, read at the same level — per group, its loops (a drum's rhythm,
+one block per drum lane, or notes per step, how many times, which bars) and the warnings it raised. A
+group's note or hit lane is left out when the group has loops; a detector
+that found only hits gets one line for them. It is for reading or evaluating detector output without
+copying it into layers.
 
 Into `<out>/<slug>/` (default `exports/timing/<slug>/`) it writes, all times
 rounded to the [Timing Export precision setting](#timing-export) (`--precision`,
@@ -5301,11 +6022,25 @@ a bare interval with a name on it:
   and end levels, brightness, the A/D/S/R envelope, the curve. (On disk it
   lives inside the span's `description`; the export lifts it out, so the
   description field stays prose.)
-- **Descriptions, importance, candidates**, and the **beat stamps**
-  (`start_beat` / `end_beat` / `beat`) beside the seconds.
+- **Descriptions, importance, candidates**, and the **beat positions**
+  (`start_beat` / `end_beat` / `beat`) beside the seconds, on every item,
+  lyrics and word onsets included. They are read off the song's grid at
+  export time, and a position within 1 ms of a 1/24-beat step — 1/8 beat and
+  the triplets included — is that step (`64`, not `64.00053`). A song saved
+  under Grid Lock stores the beats alone; the export reads them on the song's
+  grid as it is now.
 - **Every layer type** — including Lyrics and Riff Patterns, with a riff lane's
   motif library (`nodes`, `combos`) so a sequence entry names what it plays
   instead of pointing at an id.
+- **Riff lanes in the shape the app stores them** — no renames. A node is
+  `id`, `name`, `color`, `stepsPerCycle`, `subbeatsPerBeat` and its
+  `segments` (`[{start, end, kind, label?, note?, accent?}]`, in beats; `accent`
+  is 1–127, absent = full strength), plus `names` when it has them (what a
+  musician calls it, e.g. *four on the floor*). An instance carries
+  `repeatCount`, its `sequence` (`[{type, lengthSteps, name}]`) and, for plays
+  that differed from their node, `occurrences` (`[{index, event, added?,
+  missing?}]`, `index` counted from 0 across every repeat of the sequence). A
+  combo is `id`, `name`, `color`, `sequence`.
 - **Layer identity** — colour, group, evaluation mode, and whether the lane is
   read-only detector output (and from which detector / stem).
 
@@ -5320,8 +6055,15 @@ The manifest opens with the grid every derived number was resolved against:
 ```json
 "grid": { "bpm": 124, "bpm_source": "song-info", "detected_bpm": 125,
           "time_signature": "4/4", "beats_per_bar": 4, "grid_offset": 0.07,
-          "grid_mode": "mapped", "signature": "bpm=124;off=0.07;…" }
+          "grid_mode": "mapped",
+          "tempo_map": [{ "beat": 0, "time": 0.07, "bpm": 124 },
+                        { "beat": 128, "time": 61.99, "bpm": 126 }],
+          "signature": "bpm=124;off=0.07;…" }
 ```
+
+`tempo_map` is the grid as constant-tempo stretches: a beat `b` is at
+`time + (b − beat) × 60 / bpm` seconds, using the last entry whose `beat` is
+≤ `b`. Hand-placed (pinned) beats are not in it.
 
 An export is a snapshot, not a subscription. If you re-fit the grid afterwards
 — change the BPM, move the offset, split a tempo segment — the file on disk
@@ -5349,7 +6091,7 @@ data/
 ├── annotations/
 │   ├── layers/<annotator>/<slug>.json               # every layer type, one file per song
 │   ├── auto-guess/<annotator>/<slug>.json
-│   ├── custom/<detector>/<annotator>/<slug>.json   # only if is_annotation=True
+│   ├── custom/<detector>/<annotator>/<slug>.json   # only if review=True
 │   └── timing/<annotator>/<slug>.json
 ├── algorithm-outputs/
 │   ├── bpm-detections/<slug>.json
@@ -5644,6 +6386,20 @@ kill -9 <PID>
 - `docker compose ps` to verify all services are up.
 - `docker compose logs web`.
 
+**Q: An amber bar says the song's layers "were saved from another tab or window".**
+
+The song is open somewhere else too — a second tab, the phone layout, another
+window — and that copy saved after this page loaded the song. A save writes the
+song's whole layer list, so this page stops saving rather than replace what the
+other copy saved. Click **Load the saved version** to pick up the latest layers;
+anything changed on this page since is dropped, so redo it there. If the bar
+says the layers **didn't load**, nothing is saved until **Try again** succeeds —
+the song is not empty, it just hasn't arrived.
+
+As a safety net, any save that leaves a song with fewer layers or items than
+before keeps the previous file in
+`data/annotations/layers-replaced/<you>/<slug>/` (the 20 newest per song).
+
 **Q: I want to undo more than 50 edits.**
 
 The undo ring is fixed at 50 per layer. Workaround: export before major changes, re-import if needed.
@@ -5663,7 +6419,7 @@ You're in the Annotate workspace; BPM is read-only there. Switch to `/prep` (adm
 
 - Check that your class extends `CustomDetector` and overrides `detect` (returns a list of `Boundary` / `Cue`).
 - Read the error block under the Code Editor.
-- Common causes: missing import, indentation, `name` doesn't match `^[a-z][a-z0-9_-]{0,30}$`, both `is_algorithm` and `is_annotation` set to `False`.
+- Common causes: missing import, indentation, `name` doesn't match `^[a-z][a-z0-9_-]{0,30}$`, a flag set to something other than `True` / `False`.
 
 **Q: Algorithm not running on a particular song.**
 
@@ -5706,7 +6462,7 @@ Cast: `Boundary(time_ms=int(round(t * 1000)))`.
 **Q: How do I import a colleague's annotations?**
 
 Two ways:
-- **In the app** — unzip their export, then use **⤒ Import dataset** in the Dataset Prep sidebar and pick the unzipped folder. The scanner reads the export-bundle layout directly (see [Importing a dataset](#importing-a-dataset)); review the per-song chips and click **OK · Import**. Everything lands under your own annotator.
+- **In the app** — unzip their export, then use **⤒ Import dataset** in the Prepare sidebar and pick the unzipped folder. The scanner reads the export-bundle layout directly (see [Importing a dataset](#importing-a-dataset)); review the per-song chips and click **OK · Import**. Everything lands under your own annotator.
 - **On disk** — have them export the Full Dataset (Export → entire dataset → ZIP), unzip into your `data/annotations/`, then switch annotator from the badge in the top bar to view theirs side-by-side.
 
 ---

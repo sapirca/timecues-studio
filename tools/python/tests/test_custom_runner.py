@@ -17,7 +17,7 @@ if str(_TOOLS_PY) not in sys.path:
     sys.path.insert(0, str(_TOOLS_PY))
 
 import numpy as np  # noqa: E402
-from custom_api import Boundary, Cue, DetectionContext, Span  # noqa: E402
+from custom_api import Boundary, Cue, DetectionContext, Loop, Span  # noqa: E402
 from custom_runner import _validate_items  # noqa: E402
 
 
@@ -273,6 +273,29 @@ def test_span_intensity_out_of_range():
     assert any(e.field == "intensity" for e in errs)
 
 
+def test_span_pulse_is_written_only_when_set():
+    items, errs = _validate_items(
+        [Span(start_ms=0, duration_ms=100, pulse="16th"),
+         Span(start_ms=100, duration_ms=100, pulse="silent"),
+         Span(start_ms=200, duration_ms=100)],
+        "span",
+        duration_ms=1000,
+    )
+    assert errs == []
+    assert [it.get("pulse") for it in items] == ["16th", "silent", None]
+    assert "pulse" not in items[2]
+
+
+def test_span_pulse_outside_the_vocabulary_is_rejected():
+    items, errs = _validate_items(
+        [Span(start_ms=0, duration_ms=100, pulse="quarter")],  # type: ignore[arg-type]
+        "span",
+        duration_ms=1000,
+    )
+    assert items == []
+    assert any(e.field == "pulse" for e in errs)
+
+
 def test_span_rejects_cue_instance():
     # Cue (point) passed where Span (interval) is required → drop with error.
     items, errs = _validate_items(
@@ -426,3 +449,106 @@ def test_fatal_from_isolation_timeout_messages():
     fatal = custom_runner._fatal_from_isolation("crash", -11)
     assert fatal["type"] == "RuntimeError"
     assert "-11" in fatal["message"]
+
+
+# ─── Per-item colour, shared by every kind ──────────────────────────────────
+
+
+@pytest.mark.parametrize("kind,item", [
+    ("boundary", lambda c: Boundary(time_ms=100, color=c)),
+    ("cue", lambda c: Cue(time_ms=100, color=c)),
+    ("span", lambda c: Span(start_ms=100, duration_ms=200, color=c)),
+    ("loop", lambda c: Loop(start_ms=100, duration_ms=200, color=c)),
+])
+def test_every_kind_takes_an_optional_color(kind, item):
+    items, errs = _validate_items([item("#A3E635")], kind, duration_ms=1000)
+    assert errs == [] and items[0]["color"] == "#a3e635"
+    items, errs = _validate_items([item(None)], kind, duration_ms=1000)
+    assert errs == [] and "color" not in items[0]
+    items, errs = _validate_items([item("green")], kind, duration_ms=1000)
+    assert items == [] and [e.field for e in errs] == ["color"]
+
+
+# ─── output_kind = "lanes" ───────────────────────────────────────────────────
+
+def test_each_lane_is_validated_as_its_own_kind():
+    from custom_api import Lane, Riff, RiffEntry, RiffItem, RiffNode, RiffNote
+    from custom_runner import _validate_lanes
+
+    node = RiffNode(id="a", name="A", steps_per_cycle=4, notes=[RiffNote(start=0, end=0.25)])
+    lanes, errs = _validate_lanes([
+        Lane(id="kick_notes", label="Kick notes", output_kind="cue", group="Kick",
+             items=[Cue(time_ms=100), Cue(time_ms=99_999)]),
+        Lane(id="kick_pattern", label="Kick pattern", output_kind="riff", group="Kick",
+             items=Riff(nodes=[node], items=[RiffItem(start=0, end=0.5,
+                                                      sequence=[RiffEntry(type="a", length_steps=4)])])),
+    ], duration_ms=1000)
+    assert [(l["id"], l["output_kind"], l["group"], len(l["items"])) for l in lanes] == [
+        ("kick_notes", "cue", "Kick", 1), ("kick_pattern", "riff", "Kick", 1)]
+    assert [n["id"] for n in lanes[1]["nodes"]] == ["a"]
+    # The cue past the end is dropped alone, and its error names its lane.
+    assert len(errs) == 1 and errs[0].field.startswith("kick_notes.items[1]")
+
+
+def test_a_malformed_lane_is_dropped_whole_and_the_rest_kept():
+    from custom_api import Lane
+    from custom_runner import _validate_lanes
+
+    lanes, errs = _validate_lanes([
+        Lane(id="ok", label="Fine", output_kind="cue", items=[Cue(time_ms=1)]),
+        Lane(id="ok", label="Same id", output_kind="cue", items=[]),
+        Lane(id="Bad Id", label="x", output_kind="cue", items=[]),
+        Lane(id="nested", label="x", output_kind="lanes", items=[]),
+        Lane(id="nolabel", label=" ", output_kind="cue", items=[]),
+    ], duration_ms=1000)
+    assert [l["id"] for l in lanes] == ["ok"]
+    assert [e.field for e in errs] == [
+        "lanes[1].id", "lanes[2].id", "lanes[3].output_kind", "lanes[4].label"]
+
+
+def test_lanes_must_be_a_list():
+    from custom_runner import _validate_lanes
+
+    lanes, errs = _validate_lanes({"kick": []}, duration_ms=1000)
+    assert lanes == [] and errs[0].field == "<return>"
+
+
+def test_a_section_run_is_merged_lane_by_lane():
+    from custom_runner import merge_window_lanes
+
+    cue = lambda ms, label=None: {"time_ms": ms, "label": label}  # noqa: E731
+    base = [
+        {"id": "onsets", "label": "Onsets", "output_kind": "cue", "group": None,
+         "items": [cue(100, "a"), cue(1500, "b"), cue(5000, "c")]},
+        {"id": "untouched", "label": "Other", "output_kind": "cue", "group": None,
+         "items": [cue(1200)]},
+    ]
+    incoming = [
+        {"id": "onsets", "label": "Onsets", "output_kind": "cue", "group": None,
+         "items": [cue(1300, "x")]},
+        {"id": "fresh", "label": "New", "output_kind": "cue", "group": None,
+         "items": [cue(1100)]},
+    ]
+    lanes, stats = merge_window_lanes(base, incoming, 1000, 2000, "replace")
+    by_id = {l["id"]: [it["time_ms"] for it in l["items"]] for l in lanes}
+    # Inside the window the run replaces the lane's items; outside, nothing moves.
+    assert by_id == {"onsets": [100, 1300, 5000], "untouched": [1200], "fresh": [1100]}
+    assert [l["id"] for l in lanes] == ["onsets", "untouched", "fresh"]
+    assert stats == {"added": 2, "removed": 1, "duplicates": 0}
+
+
+def test_another_detector_reads_one_lane_of_a_saved_lanes_result():
+    from custom_runner import lane_view
+
+    saved = {"output_kind": "lanes", "items": [], "fatal": None, "lanes": [
+        {"id": "hits", "label": "Hits", "output_kind": "cue", "group": "Drums",
+         "items": [{"time_ms": 10, "label": "kick"}]},
+        {"id": "grooves", "label": "Grooves", "output_kind": "pattern", "group": "Drums", "items": []},
+    ]}
+    hits = lane_view(saved, "hits")
+    assert hits["output_kind"] == "cue" and hits["items"] == [{"time_ms": 10, "label": "kick"}]
+    assert lane_view(saved, "nope")["items"] == []
+    # A result saved before its detector had lanes is read as it is.
+    old = {"output_kind": "cue", "items": [{"time_ms": 5}]}
+    assert lane_view(old, "hits") is old
+    assert lane_view(None, "hits") is None

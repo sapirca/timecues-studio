@@ -2,8 +2,7 @@
  * Client for the annotation-layers API.
  *
  * One document per song per annotator holds EVERY layer the curator authored
- * for that song — boundaries, cues, spans, loops, patterns, riff-patterns,
- * lyrics. Layer ordering, rename, visibility, colour and items all live in
+ * for that song — boundaries, cues, spans, loops, riff-patterns, lyrics. Layer ordering, rename, visibility, colour and items all live in
  * this one file.
  *
  * Backend: web-app/vite.config.ts — /api/annotation-layers/:slug
@@ -13,53 +12,28 @@ import type {
   AnnotationLayer,
   AnnotationLayersDocument,
   BoundaryItem,
-  RiffCombo,
   RiffNode,
-  RiffPatternItem,
-  RiffSeqEntry,
 } from '../types/annotationLayer';
 import {
-  emptyDocument, PATTERN_SUBBEATS_PER_BEAT, RIFF_DEFAULT_ENTRY_STEPS,
-  RIFF_NODE_COLORS, RIFF_COMBO_COLORS, pickFromPalette, pruneGroups,
+  emptyDocument, newId,
+  RIFF_NODE_COLORS, RIFF_COMBO_COLORS, pickFromPalette, pruneGroups, withLyricSpans,
 } from '../types/annotationLayer';
 import type { AnnotationLayerType } from '../types/annotationLayer';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
+import { resolveVocalRuns, type VocalRunGrid } from '../utils/vocalRuns';
+import { toStoredLayers, withSecondsFromBeats } from '../utils/beatTimebase';
 
-/** Upgrade legacy riff-pattern sequences in-place to the length-carrying entry
- *  model. Pre-2026-08-22 documents stored `combo.sequence` / `item.sequence`
- *  as bare `RiffNode.id | RiffCombo.id` strings with no notion of how long
- *  each occurrence lasts. The new model wraps each reference in
- *  `{ type, lengthSteps }` so siblings can lay out end-to-end at their own
- *  width. We detect legacy sequences by their entries being plain strings and
- *  give each one the flat one-bar fallback (RIFF_DEFAULT_ENTRY_STEPS) — the
- *  same "old entries default to 1 bar" rule used for any other legacy-data
- *  upgrade in this file.
- *
- *  Also upgrades nodes missing `subbeatsPerBeat` (pre-2026-08-22 nodes were
- *  always quarter-of-a-beat) to the `PATTERN_SUBBEATS_PER_BEAT` default so the
- *  per-node subdivision picker has a value to start from. */
-function migrateRiffSequences(doc: AnnotationLayersDocument): AnnotationLayersDocument {
+/** Every lyric is a span. Layers saved before that held words with no `end`
+ *  (added by hand) or a zero-length one (an aligner's open-ended last word, a
+ *  short word snapped onto one beat); each gets a real length on load. */
+function migrateLyricSpans(doc: AnnotationLayersDocument): AnnotationLayersDocument {
   let changed = false;
-  const upgradeSeq = (sequence: readonly (string | RiffSeqEntry)[]): RiffSeqEntry[] => {
-    if (sequence.length === 0) return sequence as RiffSeqEntry[];
-    if (typeof sequence[0] === 'string') {
-      changed = true;
-      return (sequence as string[]).map((type) => ({ type, lengthSteps: RIFF_DEFAULT_ENTRY_STEPS }));
-    }
-    return sequence as RiffSeqEntry[];
-  };
-  const upgradeNodes = (nodes: readonly RiffNode[] | undefined): RiffNode[] =>
-    (nodes ?? []).map((n) => {
-      if (n.subbeatsPerBeat != null) return n;
-      changed = true;
-      return { ...n, subbeatsPerBeat: PATTERN_SUBBEATS_PER_BEAT };
-    });
   const nextLayers = doc.layers.map((l) => {
-    if (l.type !== 'riff-patterns') return l;
-    const nodes = upgradeNodes(l.nodes as RiffNode[] | undefined);
-    const combos = (l.combos ?? []).map((c) => ({ ...c, sequence: upgradeSeq(c.sequence) })) as RiffCombo[];
-    const items = (l.items as RiffPatternItem[]).map((it) => ({ ...it, sequence: upgradeSeq(it.sequence) }));
-    return { ...l, nodes, combos, items } as AnnotationLayer;
+    if (l.type !== 'lyrics') return l;
+    const items = withLyricSpans(l.items as AnnotationLayer<'lyrics'>['items']);
+    if (items === l.items) return l;
+    changed = true;
+    return { ...l, items } as AnnotationLayer;
   });
   return changed ? { ...doc, layers: nextLayers } : doc;
 }
@@ -123,7 +97,11 @@ export async function loadAllAnnotatorLayers(): Promise<Record<string, Record<st
     for (const [slug, byAnn] of Object.entries(annotations)) {
       out[slug] = {};
       for (const [ann, doc] of Object.entries(byAnn)) {
-        out[slug][ann] = pruneGroups(migrateRiffColors(migrateRiffSequences(doc)));
+        // A file the doc cannot place (beats, no grid) is left out of the
+        // cross-annotator read rather than shown with marks at nowhere.
+        try {
+          out[slug][ann] = pruneGroups(migrateLyricSpans(migrateRiffColors(withSecondsFromBeats(doc))));
+        } catch { /* skipped */ }
       }
     }
     return out;
@@ -132,24 +110,51 @@ export async function loadAllAnnotatorLayers(): Promise<Record<string, Record<st
   }
 }
 
-/** Load all annotation layers for `slug`. Returns an empty document (not
- *  null) when the song has no layer file yet — callers can render an empty
- *  layer list immediately. */
+/** Load `slug`'s layers for EDITING. The empty document means only one thing
+ *  here — the song has no layer file yet. Anything else (the server didn't
+ *  answer, answered an error, sent something that isn't a layers document)
+ *  throws, because an editor that shows a failed load as an empty song gets
+ *  saved as one: the next edit writes that emptiness over every layer the
+ *  file held. */
+export async function loadLayersForEdit(slug: string): Promise<AnnotationLayersDocument> {
+  const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
+    headers: annotatorHeaders(),
+  });
+  if (!res.ok) throw new Error(`layers load failed: HTTP ${res.status}`);
+  const data = (await res.json()) as AnnotationLayersDocument | null;
+  if (data === null) return emptyDocument(slug);
+  if (!Array.isArray(data.layers)) throw new Error('layers load failed: not a layers document');
+  // A Grid Lock save stores beats only; everything in the app works in
+  // seconds, so they are read off the file's own grid here (and stripped
+  // again by saveLayers). Throws on a beats file with no grid — see above.
+  return pruneGroups(migrateLyricSpans(migrateRiffColors(withSecondsFromBeats(data))));
+}
+
+/** Load all annotation layers for `slug`, for READING (tables, export).
+ *  Returns an empty document (not null) on any failure, so a reader renders
+ *  something; never save what this returns — use loadLayersForEdit. */
 export async function loadLayers(slug: string): Promise<AnnotationLayersDocument> {
   try {
-    const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
-      headers: annotatorHeaders(),
-    });
-    if (!res.ok) return emptyDocument(slug);
-    const data = (await res.json()) as AnnotationLayersDocument | null;
-    if (!data || !Array.isArray(data.layers)) return emptyDocument(slug);
-    return pruneGroups(migrateRiffColors(migrateRiffSequences(data)));
+    return await loadLayersForEdit(slug);
   } catch {
     return emptyDocument(slug);
   }
 }
 
-/** Save the entire layers document. Returns true on success.
+/** `conflict`: the file moved on since `baseRev` — another tab, window or
+ *  device saved this song — and the write was refused rather than let this
+ *  page's copy replace theirs. */
+export type SaveLayersResult = { ok: true; rev: number } | { ok: false; conflict: boolean };
+
+/** Save the entire layers document.
+ *
+ *  Every save names the revision it was edited from (If-Match), `baseRev`
+ *  or else the `rev` the document was loaded with; a document that never had
+ *  a file is revision 0. The server refuses the write when its file is at
+ *  any other revision. Without that a whole-document save is last-write-wins:
+ *  a second tab still holding an older copy of the song, or a page whose load
+ *  failed and showed it empty, replaced every layer added since.
+ *
  *  Pass `keepalive: true` only for tab-close / unmount flush call sites —
  *  Chromium caps `fetch(..., { keepalive: true })` bodies at ~64KiB and
  *  silently rejects (no network attempt) above that, which was dropping
@@ -158,20 +163,34 @@ export async function loadLayers(slug: string): Promise<AnnotationLayersDocument
 export async function saveLayers(
   slug: string,
   doc: AnnotationLayersDocument,
-  opts?: { keepalive?: boolean },
-): Promise<boolean> {
+  opts?: { keepalive?: boolean; baseRev?: number },
+): Promise<SaveLayersResult> {
+  const baseRev = opts?.baseRev ?? doc.rev ?? 0;
   try {
-    const stamped: AnnotationLayersDocument = { ...doc, annotated_at: new Date().toISOString() };
+    // `toStoredLayers` writes a beats document (Grid Lock) by its beats
+    // alone; a seconds document goes as it is. Whoever loaded the document
+    // keeps its timebase, so re-saving a song from elsewhere (the sidebar's
+    // mark-reviewed) cannot quietly turn a beats file back into seconds.
+    const stamped: AnnotationLayersDocument = toStoredLayers({ ...doc, annotated_at: new Date().toISOString() });
     const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
       method: 'POST',
-      headers: annotatorHeaders({ 'Content-Type': 'application/json' }),
+      headers: annotatorHeaders({ 'Content-Type': 'application/json', 'If-Match': String(baseRev) }),
       body: JSON.stringify(stamped),
       keepalive: opts?.keepalive ?? false,
     });
-    return res.ok;
+    if (!res.ok) return { ok: false, conflict: res.status === 409 && (await isStaleRevision(res)) };
+    const body = (await res.json().catch(() => null)) as { rev?: unknown } | null;
+    return { ok: true, rev: typeof body?.rev === 'number' ? body.rev : baseRev + 1 };
   } catch {
-    return false;
+    return { ok: false, conflict: false };
   }
+}
+
+/** A 409 is also how a shared song's edit lock refuses a write; only the
+ *  revision check says `stale revision`. */
+async function isStaleRevision(res: Response): Promise<boolean> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  return body?.error === 'stale revision';
 }
 
 // ─── Boundary-layer helpers ─────────────────────────────────────────────────
@@ -310,4 +329,105 @@ export function reorderLayers(
   const [moved] = next.splice(fromIndex, 1);
   next.splice(toIndex, 0, moved);
   return { ...doc, layers: next };
+}
+
+/** Copy an authored layer to a new layer right below it, named "<name> copy".
+ *  Everything comes along — items, riff node/combo library, vocal runs, group —
+ *  and only the layer gets a new id: item, node and run ids are scoped to their
+ *  own layer, so the copy's can match the original's without colliding. The
+ *  copy is never locked — it is the take you are about to change.
+ *  Read-only detector lanes are re-derived each render; those copy through
+ *  "Copy to manual layer" instead. */
+export function duplicateLayer(
+  doc: AnnotationLayersDocument,
+  layerId: string,
+  copyId: string = newId(),
+): AnnotationLayersDocument {
+  const at = doc.layers.findIndex((l) => l.id === layerId);
+  if (at < 0 || doc.layers[at].readOnly) return doc;
+  const source = doc.layers[at];
+  const copy = structuredClone({ ...source, id: copyId, name: `${source.name} copy`, locked: undefined }) as AnnotationLayer;
+  const layers = doc.layers.slice();
+  layers.splice(at + 1, 0, copy);
+  return { ...doc, layers };
+}
+
+/** True when `sourceId` can be folded into `targetId`: two different authored
+ *  layers of the same type. Read-only detector lanes are re-derived each render
+ *  and never persisted, so there is nothing to merge into or out of. Riff
+ *  patterns are left out: their instances point into a per-layer node and combo
+ *  library by id, and two libraries cannot be joined without renaming every
+ *  reference — a bigger operation than "move these items over". */
+export function canMergeLayers(
+  doc: AnnotationLayersDocument,
+  sourceId: string,
+  targetId: string,
+): boolean {
+  if (sourceId === targetId) return false;
+  const source = doc.layers.find((l) => l.id === sourceId);
+  const target = doc.layers.find((l) => l.id === targetId);
+  return !!source && !!target
+    && source.type === target.type
+    && source.type !== 'riff-patterns'
+    && !source.readOnly && !target.readOnly;
+}
+
+/** Fold every item of `sourceId` into `targetId` and drop the source layer.
+ *
+ *  The target keeps its name, colour, group and position; the merged items are
+ *  sorted by time. An item that is an exact copy of one already in the target
+ *  (same times, same label, same everything but the id) is dropped rather than
+ *  drawn twice — two copies of one detector lane are the common case. A source
+ *  item whose id the target already uses gets a fresh one.
+ *
+ *  Lyrics carry their vocal runs over. When neither layer has stored runs there
+ *  is nothing to carry, and the merged words derive their runs as usual; when
+ *  either has, both sides' resolved runs are stored, so prominence the annotator
+ *  already levelled on either voice survives the merge. `grid` is what the
+ *  unstored side derives its runs against. */
+export function mergeLayers(
+  doc: AnnotationLayersDocument,
+  sourceId: string,
+  targetId: string,
+  grid?: VocalRunGrid,
+): AnnotationLayersDocument {
+  if (!canMergeLayers(doc, sourceId, targetId)) return doc;
+  const source = doc.layers.find((l) => l.id === sourceId)!;
+  const target = doc.layers.find((l) => l.id === targetId)!;
+
+  type AnyItem = { id: string; time?: number; start?: number };
+  const contentKey = (it: AnyItem) => JSON.stringify({ ...it, id: undefined });
+  const targetItems = target.items as readonly AnyItem[];
+  const seenKeys = new Set(targetItems.map(contentKey));
+  const usedIds = new Set(targetItems.map((it) => it.id));
+  const moved: AnyItem[] = [];
+  for (const it of source.items as readonly AnyItem[]) {
+    const key = contentKey(it);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const id = usedIds.has(it.id) ? newId() : it.id;
+    usedIds.add(id);
+    moved.push(id === it.id ? it : { ...it, id });
+  }
+  const at = (it: AnyItem) => it.time ?? it.start ?? 0;
+  const items = [...targetItems, ...moved].sort((a, b) => at(a) - at(b));
+
+  const patch: Partial<AnnotationLayer> = { items: items as AnnotationLayer['items'] };
+  if (target.type === 'lyrics' && (target.vocalRuns || source.vocalRuns)) {
+    const runIds = new Set<string>();
+    patch.vocalRuns = [...resolveVocalRuns(target, grid), ...resolveVocalRuns(source, grid)]
+      .map((r) => {
+        const run = runIds.has(r.id) ? { ...r, id: newId() } : r;
+        runIds.add(run.id);
+        return run;
+      })
+      .sort((a, b) => a.start - b.start);
+  }
+
+  return {
+    ...doc,
+    layers: doc.layers
+      .filter((l) => l.id !== sourceId)
+      .map((l) => (l.id === targetId ? ({ ...l, ...patch } as AnnotationLayer) : l)),
+  };
 }

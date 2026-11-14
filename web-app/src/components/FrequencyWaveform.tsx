@@ -20,76 +20,26 @@
  * its own offsets.
  */
 
-import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, useCallback, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
 import { visibleGridLines, snapTimeToGrid } from '../utils/beatGrid';
 import type { ResolvedSegment } from '../utils/gridSegments';
 import { TiledStrip, type TileGeom } from './TiledStrip';
 import { GridLines } from './GridLines';
 import { getBandColors } from '../utils/bandPalettes';
+import { getBandPeaks } from '../utils/bandPeaks';
 import { useSettings } from '../context/SettingsContext';
 import { useRegionSelectDrag, preventPressDefault } from '../hooks/useTimelineDrag';
+import { usePlayheadTransform } from '../hooks/usePlayhead';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const CANVAS_HEIGHT = 70;          // px
-const RENDER_SAMPLE_RATE = 11025;  // Hz — Nyquist 5512 > 2500 Hz HP crossover
-// Peak resolution kept per band, in peaks per second of audio. The old scheme
-// stored a fixed 32 000 peaks for the WHOLE track, so a 3-minute song was
-// summarized at ~5 ms per peak no matter how far you zoomed — the row could
-// not show detail it had never kept. Storing a fixed RATE instead makes the
-// row's detail independent of track length: 2 000/s is 0.5 ms per peak, finer
-// than one screen pixel until about ×300, and costs 8 KB per second of audio
-// per band (~1.4 MB per band for a 3-minute track).
-const PEAKS_PER_SECOND = 2_000;
-const MIN_PEAKS = 32_000;
-const MAX_PEAKS = 2_000_000;   // ~8 MB per band, i.e. a 16-minute track at full rate
 
 function isLightTheme(): boolean {
   return document.documentElement.getAttribute('data-theme') === 'light';
 }
 
 // ─── Audio helpers ───────────────────────────────────────────────────────────
-
-async function renderBand(
-  source: AudioBuffer,
-  filterChain: Array<{ type: BiquadFilterType; frequency: number; Q?: number }>,
-): Promise<Float32Array> {
-  const numFrames = Math.ceil(source.duration * RENDER_SAMPLE_RATE);
-  const offlineCtx = new OfflineAudioContext(1, numFrames, RENDER_SAMPLE_RATE);
-  const srcNode = offlineCtx.createBufferSource();
-  srcNode.buffer = source;
-
-  let lastNode: AudioNode = srcNode;
-  for (const { type, frequency, Q = 0.5 } of filterChain) {
-    const f = offlineCtx.createBiquadFilter();
-    f.type = type;
-    f.frequency.value = frequency;
-    f.Q.value = Q;
-    lastNode.connect(f);
-    lastNode = f;
-  }
-
-  lastNode.connect(offlineCtx.destination);
-  srcNode.start(0);
-  const rendered = await offlineCtx.startRendering();
-  return rendered.getChannelData(0);
-}
-
-function buildPeaks(pcm: Float32Array, numCols: number): Float32Array {
-  const step = pcm.length / numCols;
-  const peaks = new Float32Array(numCols);
-  for (let col = 0; col < numCols; col++) {
-    const start = Math.floor(col * step);
-    const end   = Math.min(Math.floor((col + 1) * step), pcm.length);
-    let peak = 0;
-    for (let i = start; i < end; i++) {
-      const a = Math.abs(pcm[i]);
-      if (a > peak) peak = a;
-    }
-    peaks[col] = peak;
-  }
-  return peaks;
-}
 
 function drawBand(
   ctx: CanvasRenderingContext2D,
@@ -118,8 +68,6 @@ export interface FrequencyWaveformHandle {
 
 export interface FrequencyWaveformProps {
   audioBuffer: AudioBuffer | null;
-  /** Current playback position in seconds (drives the playhead cursor) */
-  currentTime?: number;
   /** Track duration in seconds (falls back to audioBuffer.duration) */
   duration?: number;
   /** Called when the user clicks (no drag) — seek only */
@@ -156,9 +104,9 @@ export interface FrequencyWaveformProps {
   /** When true (and bpm is set), snap the drag-selection highlight and emitted region to the beat grid. */
   snapToGrid?: boolean;
   /** Replaces the built-in whole-beat snap entirely, `snapToGrid` included.
-   *  Set by a layer type that owns its own granularity — Lyrics, whose times
-   *  describe a sung performance and so follow the layer's SnapMode rather
-   *  than the global switches. Returning `t` unchanged means "don't snap". */
+   *  Set while the Lyrics editor is open, to the identity: a sung word is
+   *  timed to the voice and is never snapped. Returning `t` unchanged means
+   *  "don't snap". */
   snapTimeOverride?: (t: number) => number;
   /** Strip height in px. The row sheet's S/M/L/XL sizes scale it. */
   height?: number;
@@ -166,7 +114,6 @@ export interface FrequencyWaveformProps {
 
 export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWaveformProps>(function FrequencyWaveform({
   audioBuffer,
-  currentTime = 0,
   duration,
   onSeek,
   onRegion,
@@ -190,7 +137,6 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
   const bandPalette = settings.bandPalette;
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const cursorRef    = useRef<HTMLDivElement>(null);
 
   // Drag-selection lives in useRegionSelectDrag (document-level tracking, so
   // the gesture survives leaving the canvas) — see the hook wiring below.
@@ -244,19 +190,13 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
     });
   }, [bpm, beatOffset, beatsPerBar, barGroupSize, subBeatDivision, beatGroupSize, effectiveDuration, beatOverrides, segments]);
 
-  // ── Cursor: direct DOM mutation — no React re-render on every tick ─────────
-  // useLayoutEffect, not useEffect: a passive effect is free to run a frame
-  // after the commit that scheduled it, and at ultra zoom (heavy canvases in
-  // the same tree) it does. Measured at ×128 during playback, this cursor sat
-  // 22 px left of every lane-row cursor — it was showing a time 35 ms older
-  // than theirs. A layout effect lands before paint, in the same frame the
-  // inline `left: pct%` cursors are committed, so they all show one time.
-  useLayoutEffect(() => {
-    const cursor = cursorRef.current;
-    if (!cursor || effectiveDuration <= 0) return;
-    const pct = Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100));
-    cursor.style.left = `${pct}%`;
-  }, [currentTime, effectiveDuration]);
+  // ── Cursor: a transform written from the clock — no re-render, no layout ──
+  // Driven by the playhead clock, the same one every lane-row cursor follows,
+  // so they all move in the same callback and show one time. (A passive
+  // effect keyed on a time prop once left this cursor 22 px behind the others
+  // at ×128 — it ran a frame after the commit that scheduled it.) Re-run when
+  // the buffer lands, since that is what mounts the cursor.
+  const cursorRef = usePlayheadTransform<HTMLDivElement>(effectiveDuration, [audioBuffer]);
 
   // ── Paint one tile's slice of the bands ───────────────────────────────────
   // Bumped when a new set of peaks lands, so the tiles repaint (peaksRef is a
@@ -319,27 +259,10 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
     renderingRef.current = true;
     pendingRef.current = null;
     try {
-      // Render all three bands concurrently, then immediately downsample to
-      // MAX_BUFFER_PX peaks. Storing the full 11025 Hz PCM would cost ~13 MB
-      // per band (~39 MB total) that grows with song length; storing only 32 K
-      // peak values per band keeps it under 400 KB regardless of duration.
-      const [lowPcm, midPcm, highPcm] = await Promise.all([
-        renderBand(buf, [{ type: 'lowpass',  frequency: 150 }]),
-        renderBand(buf, [{ type: 'highpass', frequency: 150 }, { type: 'lowpass', frequency: 2500 }]),
-        renderBand(buf, [{ type: 'highpass', frequency: 2500 }]),
-      ]);
-      const numPeaks = Math.max(MIN_PEAKS, Math.min(MAX_PEAKS, Math.round(buf.duration * PEAKS_PER_SECOND)));
-      const low  = buildPeaks(lowPcm,  numPeaks);
-      const mid  = buildPeaks(midPcm,  numPeaks);
-      const high = buildPeaks(highPcm, numPeaks);
+      // Shared with the overview strip (utils/bandPeaks): one render per song.
+      const { low, mid, high, scales } = await getBandPeaks(buf);
       peaksRef.current = { low, mid, high };
-      const maxOf = (a: Float32Array) => { let m = 0; for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i]; return m; };
-      const lowMax = maxOf(low), midMax = maxOf(mid), highMax = maxOf(high);
-      scalesRef.current = {
-        low:  lowMax  > 0 ? 1 / lowMax  : 1,
-        mid:  midMax  > 0 ? 1 / midMax  : 1,
-        high: highMax > 0 ? 1 / highMax : 1,
-      };
+      scalesRef.current = scales;
       setPeaksVersion((v) => v + 1);
     } finally {
       renderingRef.current = false;
@@ -493,7 +416,7 @@ export const FrequencyWaveform = forwardRef<FrequencyWaveformHandle, FrequencyWa
         <div
           ref={cursorRef}
           className="absolute top-0 bottom-0 pointer-events-none"
-          style={{ left: '0%', width: 0 }}
+          style={{ width: 0 }}
         >
           {/* Triangle cap */}
           <div

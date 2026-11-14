@@ -11,10 +11,11 @@
 import { useState, type CSSProperties } from 'react';
 import type { AnnotationLayer, CueItem } from '../../types/annotationLayer';
 import { useSettings } from '../../context/SettingsContext';
-import { AnnotationPointCard } from './shared/AnnotationPointCard';
+import { AnnotationPointCard, type CardLaneMove } from './shared/AnnotationPointCard';
 import { detectorBadgeLabel } from './shared/detectorBadge';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
 import type { CardSectionSpec } from './shared/CardSection';
+import { ItemColorControl } from './shared/ItemColorControl';
 import { midiNoteName } from '../../utils/drumHits';
 
 export type CueAnchor = PopoverAnchor;
@@ -32,11 +33,15 @@ interface CueEditPopoverProps {
   /** Raw detector output for this cue — shown as a collapsible JSON block on
    *  read-only cards. */
   rawOutput?: unknown;
+  /** Other lanes of this type to move the item to, from the header. */
+  laneMove?: CardLaneMove;
   popoverRef: React.RefObject<HTMLDivElement | null>;
   positionStyle: CSSProperties;
   onChange: (patch: Partial<CueItem>) => void;
   onDelete: () => void;
   onClose: () => void;
+  /** Done on a draft item — see AnnotationPointCard's `onDone`. */
+  onDone?: () => void;
   /** Play a 0.5s preview starting at cue.time. */
   onPlay?: () => void;
   onStop?: () => void;
@@ -49,15 +54,13 @@ interface CueEditPopoverProps {
   /** Resolved grid segments — keeps the bar.beat readout in step with a
    *  split grid, where each segment counts in its own meter from its own bar 1. */
   segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
-  /** Current playhead — enables the crosshair snap button on the time row. */
-  currentTime?: number;
 }
 
 export function CueEditPopover({
-  layer, cue, readOnly = false, rawOutput, popoverRef, positionStyle,
-  onChange, onDelete, onClose,
+  layer, cue, readOnly = false, rawOutput, laneMove, popoverRef, positionStyle,
+  onChange, onDelete, onClose, onDone,
   onPlay, onStop, isPlaying,
-  bpm, gridOffset, beatsPerBar, segments, currentTime,
+  bpm, gridOffset, beatsPerBar, segments,
 }: CueEditPopoverProps) {
   const { settings } = useSettings();
   const suggestions = settings.cueTaxonomyEnabled ? settings.cueTaxonomy : undefined;
@@ -65,6 +68,7 @@ export function CueEditPopover({
     <AnnotationPointCard
       kind="cue"
       layerName={layer.name}
+      laneMove={laneMove}
       layerColor={layer.color}
       badge={readOnly ? detectorBadgeLabel(layer.source) : undefined}
       rawOutput={rawOutput}
@@ -78,7 +82,6 @@ export function CueEditPopover({
       gridOffset={gridOffset}
       beatsPerBar={beatsPerBar}
       segments={segments}
-      currentTime={currentTime}
       readOnly={readOnly}
       width={320}
       sections={[hitSection(cue, layer.color, readOnly, onChange)]}
@@ -96,13 +99,14 @@ export function CueEditPopover({
       onStop={onStop}
       isPlaying={isPlaying}
       onClose={onClose}
+      onDone={onDone}
       popoverRef={popoverRef}
       positionStyle={positionStyle}
     />
   );
 }
 
-/** The struck-hit fields — velocity, level, colour, note, decay — as one
+/** The struck-hit fields — decay, velocity, level, note, colour — as one
  *  foldable section. All optional.
  *  Every cue carries them the same way, whoever set them: a detector fills
  *  them in, a copy keeps them, and here you can set or change them by hand.
@@ -113,12 +117,14 @@ function hitSection(
   readOnly: boolean,
   onChange: (patch: Partial<CueItem>) => void,
 ): CardSectionSpec {
+  // Decay leads: it is the one field the lane also lets you drag, so the
+  // folded summary is where a dragged value is read back in numbers.
   const set = [
+    cue.decay !== undefined && `rings ${Math.round(cue.decay * 1000)} ms`,
     cue.velocity !== undefined && `velocity ${cue.velocity}`,
     cue.levelDb !== undefined && `${cue.levelDb.toFixed(1)} dB`,
     cue.color !== undefined && 'own colour',
     cue.note !== undefined && midiNoteName(cue.note),
-    cue.decay !== undefined && `rings ${Math.round(cue.decay * 1000)} ms`,
   ].filter(Boolean);
   return {
     id: 'cue-hit',
@@ -127,6 +133,16 @@ function hitSection(
     summary: set.length > 0 ? set.join(' · ') : 'not set',
     content: (
       <div className="flex flex-col gap-1.5">
+        <NumberField
+          key={`d:${cue.id}:${cue.decay ?? ''}`}
+          label="Decay ms"
+          hint="How long the hit rings before it fades. The lane draws it as a faint tail after the tick — drag the nub at the tail's end (or just right of a tick with none) to set it there."
+          value={cue.decay !== undefined ? Math.round(cue.decay * 1000) : undefined}
+          min={1} step={10} integer
+          placeholder="—"
+          readOnly={readOnly}
+          onCommit={(v) => onChange({ decay: v === undefined ? undefined : v / 1000 })}
+        />
         <NumberField
           key={`v:${cue.id}:${cue.velocity ?? ''}`}
           label="Velocity"
@@ -158,35 +174,12 @@ function hitSection(
           onCommit={(v) => onChange({ note: v })}
           after={cue.note !== undefined ? midiNoteName(cue.note) : undefined}
         />
-        <NumberField
-          key={`d:${cue.id}:${cue.decay ?? ''}`}
-          label="Decay ms"
-          hint="How long the hit rings before it fades. The lane draws it as a faint tail after the tick."
-          value={cue.decay !== undefined ? Math.round(cue.decay * 1000) : undefined}
-          min={1} step={10} integer
-          placeholder="—"
+        <ItemColorControl
+          color={cue.color}
+          fallbackColor={laneColor}
           readOnly={readOnly}
-          onCommit={(v) => onChange({ decay: v === undefined ? undefined : v / 1000 })}
+          onChange={(color) => onChange({ color })}
         />
-        <div className="flex items-center gap-2 text-[11px] text-slate-300" title="Paints this one tick instead of the layer colour">
-          <span className="w-16 shrink-0">Colour</span>
-          <input
-            type="color"
-            aria-label="Cue colour"
-            value={cue.color ?? laneColor}
-            disabled={readOnly}
-            onChange={(e) => onChange({ color: e.target.value })}
-            className="w-7 h-6 bg-transparent border border-white/[0.08] rounded cursor-pointer disabled:cursor-not-allowed"
-          />
-          <span className="text-[10px] text-slate-400">{cue.color ? cue.color : 'layer colour'}</span>
-          {cue.color && !readOnly && (
-            <button
-              onClick={() => onChange({ color: undefined })}
-              className="ml-auto text-[10px] text-slate-400 hover:text-slate-100"
-              title="Use the layer colour again"
-            >reset</button>
-          )}
-        </div>
       </div>
     ),
   };

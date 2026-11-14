@@ -36,8 +36,6 @@ function renderPanel(addAtPlayhead: {
       autoGuessAnnotation={null}
       activeAnnotationType="spans"
       onSeekAndPlay={() => {}}
-      experimentalLoopsAndPatterns
-      experimentalLyricsFamily={false}
       addAtPlayhead={addAtPlayhead}
     />,
   );

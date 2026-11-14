@@ -40,6 +40,7 @@ RUN pip install --no-cache-dir BeatNet
 
 COPY tools/python/paths.py           /app/tools/python/paths.py
 COPY tools/python/server_common.py   /app/tools/python/server_common.py
+COPY tools/python/pyaudio_shim.py    /app/tools/python/pyaudio_shim.py
 COPY tools/python/beatnet_server.py  /app/tools/python/beatnet_server.py
 
 COPY data-default/                  /app/data-default/

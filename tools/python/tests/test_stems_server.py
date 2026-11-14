@@ -84,8 +84,8 @@ def test_job_initial_state():
     assert j.cancel.is_set() is False
     assert isinstance(j.started_at, int) and j.started_at > 0
     assert isinstance(j.id, str) and len(j.id) > 0
-    # 6 stems unless the caller asks otherwise — the UI's default too.
-    assert j.model == stems_server.DEFAULT_MODEL == "6s"
+    # 4 stems unless the caller asks otherwise — the UI's default too.
+    assert j.model == stems_server.DEFAULT_MODEL == "4s"
 
 
 def test_job_records_requested_model():

@@ -6,8 +6,6 @@
  * Nodes are named beat-chip motifs (leaf riffs). Combos are ordered sequences
  * of nodes and/or nested combos. Instances are placed on the timeline as
  * [start, end] regions referencing a sequence of combos/nodes × repeatCount.
- *
- * Gated by the experimentalLoopsAndPatterns Settings flag.
  */
 
 import {
@@ -17,13 +15,13 @@ import {
 import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import type {
   AnnotationLayer, AnnotationLayersDocument, AnnotationStage,
-  RiffCombo, RiffNode, RiffNodeKind, RiffPatternItem,
+  RiffCombo, RiffNode, RiffPatternItem,
 } from '../../types/annotationLayer';
 import {
   RIFF_NODE_SILENCE_ID, PATTERN_SUBBEATS_PER_BEAT,
   computeRiffDuplicates,
-  defaultRiffEntryLength, resizeRiffNodeLength, resizeRiffNodeSubdivision,
-  resizeBoundaryNodeLength, isBoundaryNode, newRiffBoundaryNode,
+  defaultRiffEntryLength,
+  resizeBoundaryNodeLength,
   getLayerStatus, newRiffCombo, newRiffNode, newRiffPatternItem, newRiffSeqEntry,
   newRiffPatternLayer, nodeEntryLengthSteps, pickDefaultLayerColor, pickRiffComboColor,
   pickRiffNodeColor, riffSequenceSteps, setLayerStatus,
@@ -33,6 +31,12 @@ import type { PendingSelection } from './AnnotationOverlays';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
 import { emptyCapabilities } from './shared/AnnotationPanelController';
 import { resolvePointAddTime } from './boundaryInsert';
+import { PLAYHEAD_SLOT, usePlayheadClock } from '../../hooks/usePlayhead';
+import { LiveLabel } from '../Playhead';
+import { LoopLength } from './LoopNotation';
+import { PULSE_OPTIONS, pulseFits, pulseOf, setNodePulse, toNotesNode } from '../../utils/pitchedRiff';
+import { PALETTE_COLS, SongRuler, SoundPalette } from './SoundPalette';
+import { handPalette } from './paletteModel';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -71,33 +75,18 @@ export function reachableCombos(rootId: string, combos: RiffCombo[]): Set<string
 
 // ─── small sub-components ───────────────────────────────────────────────────
 
-/** Subdivision choices for a node's beat grid — steps per beat. Covers binary
- *  feels (quarters/eighths/sixteenths/thirty-seconds) and compound-meter
- *  triplet feels (eighth/sixteenth triplets). */
-const SUBDIVISION_OPTIONS: { value: number; label: string }[] = [
-  { value: 1, label: '1 (quarter notes)' },
-  { value: 2, label: '2 (eighths)' },
-  { value: 4, label: '4 (sixteenths)' },
-  { value: 8, label: '8 (32nds)' },
-  { value: 3, label: '3 (eighth triplets)' },
-  { value: 6, label: '6 (sixteenth triplets)' },
-];
-
 /** A node's own length (in beats) and grid resolution (steps per beat, e.g. 4
  *  = sixteenth notes, 3 = eighth-note triplets for a compound-meter feel).
  *  Shared by the sidebar's Node popup and the sequence-editing popup's inline
  *  node view. */
 export function NodeLengthControl({
   node, onResize, onResizeSubdivision, onTrimLength, entryLengthSteps, onResizeEntry,
-  showSubdivision = true,
+  beatsPerBar = 4,
 }: {
-  node: Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans' | 'subbeatsPerBeat' | 'segments'>;
-  onResize: (patch: Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans' | 'segments'>) => void;
-  onResizeSubdivision: (patch: Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans' | 'subbeatsPerBeat'>) => void;
-  /** Boundary nodes pass `false`: their content isn't quantised to a
-   *  sub-beat grid, so offering a subdivision would imply a division that
-   *  doesn't exist. They still use the same beats-based Length field. */
-  showSubdivision?: boolean;
+  node: Pick<RiffNode, 'stepsPerCycle' | 'subbeatsPerBeat' | 'segments'>;
+  onResize: (patch: Pick<RiffNode, 'stepsPerCycle' | 'segments'>) => void;
+  /** A new pulse — the node rewritten onto it (`setNodePulse`). */
+  onResizeSubdivision: (patch: Pick<RiffNode, 'stepsPerCycle' | 'subbeatsPerBeat' | 'segments'>) => void;
   /** Applies a new node length as a TRIM (`trimRiffNodeLength`) — the tail is
    *  dropped and every placement shrinks by the same ratio, so what survives
    *  stays exactly the size it's drawn at. Needs the whole layer, so only a
@@ -114,14 +103,21 @@ export function NodeLengthControl({
    *  always edits the node itself. */
   entryLengthSteps?: number | null;
   onResizeEntry?: (lengthSteps: number) => void;
+  /** For saying the length in bars ("1 bar", "½ bar"). 4/4 when unknown. */
+  beatsPerBar?: number;
 }) {
   const subbeats = Math.max(1, Math.round(node.subbeatsPerBeat) || PATTERN_SUBBEATS_PER_BEAT);
   const beats = node.stepsPerCycle / subbeats;
-  const minBeats = 1 / subbeats;
+  // A placement is measured in quarter beats, so a triplet node grows a
+  // whole beat at a time — the one length both grids agree on.
+  const minBeats = subbeats % 3 === 0 ? 1 : 1 / subbeats;
   const entryMinBeats = 1 / PATTERN_SUBBEATS_PER_BEAT;
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2 text-[10px]">
+    // One line: Length (and its length in bars) · Stretch · Pulse. Nothing
+    // is cut to make it fit — on a panel too narrow for all three, a whole
+    // field moves to the next line with its label.
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] min-w-0 whitespace-nowrap">
+      <div className="flex items-center gap-1.5 shrink-0">
         <span className="text-slate-500 uppercase tracking-wider">Length</span>
         <input
           type="number"
@@ -133,56 +129,59 @@ export function NodeLengthControl({
             const b = Math.max(minBeats, Number(e.target.value) || minBeats);
             if (onTrimLength) {
               onTrimLength(b);
-            } else if (showSubdivision) {
-              onResize(resizeRiffNodeLength(node, b));
             } else {
-              // Boundary node: re-tile its blocks to the new length too,
-              // otherwise they'd keep covering the old span.
+              // Re-tile the notes to the new length too, otherwise they'd keep
+              // covering the old span.
               onResize(resizeBoundaryNodeLength(node, b));
             }
           }}
-          className="w-14 bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-400/40"
+          className="w-11 bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-400/40"
         />
         <span className="text-slate-500">
-          beats {showSubdivision ? `(${node.stepsPerCycle} steps)` : ''}
+          beats
         </span>
+        <LoopLength beats={beats} beatsPerBar={beatsPerBar} className="text-[11px] text-slate-300" />
       </div>
       {/* The placement's own width, kept separate from Length above: trimming
           the node carries every placement along, so this field is only for the
           other thing — deliberately stretching THIS occurrence away from the
           node's natural length (the canvas's alt-drag, in a number field). */}
       {entryLengthSteps != null && onResizeEntry && (
-        <div className="flex items-center gap-2 text-[10px]">
+        <div className="flex items-center gap-1.5 shrink-0">
           <span className="text-slate-500 uppercase tracking-wider">Stretch</span>
           <input
             type="number"
             min={entryMinBeats}
             step={entryMinBeats}
             value={entryLengthSteps / PATTERN_SUBBEATS_PER_BEAT}
-            title="How wide THIS placement is drawn, independent of the node's length — stretches or squeezes its content rather than trimming it."
+            title="This placement only: how wide it is drawn, independent of the node's length — stretches or squeezes its content rather than trimming it."
             onChange={(e) => {
               const b = Math.max(entryMinBeats, Number(e.target.value) || entryMinBeats);
               onResizeEntry(Math.max(1, Math.round(b * PATTERN_SUBBEATS_PER_BEAT)));
             }}
-            className="w-14 bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-400/40"
+            className="w-11 bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-400/40"
           />
-          <span className="text-slate-500">beats (this placement)</span>
+          <span className="text-slate-500">beats</span>
         </div>
       )}
-      {showSubdivision && (
-        <div className="flex items-center gap-2 text-[10px]">
-          <span className="text-slate-500 uppercase tracking-wider">Divide beat into</span>
-          <select
-            value={subbeats}
-            onChange={(e) => onResizeSubdivision(resizeRiffNodeSubdivision(node, Number(e.target.value)))}
-            className="bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-400/40"
-          >
-            {SUBDIVISION_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </div>
-      )}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="text-slate-500 uppercase tracking-wider">Pulse</span>
+        <select
+          value={pulseOf(node)}
+          title="The grid the notes are written on. Changing it moves every note to the nearest step of the new one."
+          onChange={(e) => {
+            const patch = setNodePulse(node, Number(e.target.value));
+            if (patch) onResizeSubdivision(patch);
+          }}
+          className="bg-[#0a0b0d] border border-white/[0.06] rounded px-1 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-400/40"
+        >
+          {PULSE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value} disabled={!pulseFits(beats, o.value)}>
+              {o.label}{pulseFits(beats, o.value) ? '' : ' (needs whole beats)'}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }
@@ -223,7 +222,7 @@ function SectionHeader({
         title={addTitle}
         className="text-[10px] text-slate-500 hover:text-slate-200 transition-colors px-1.5 py-0.5 rounded hover:bg-white/5"
       >
-        {addLabel}
+        <LiveLabel text={addLabel} />
       </button>
     </div>
   );
@@ -419,18 +418,17 @@ export function AddToSeqMenu({
 // ─── panel props / main component ───────────────────────────────────────────
 
 export interface RiffPatternEditorPanelProps {
-  currentTime: number;
   duration: number;
   doc: AnnotationLayersDocument;
   onDocChange: (doc: AnnotationLayersDocument) => void;
   grid?: Partial<BarGrid> | null;
   snapToGrid?: boolean;
-  /** The page's grid-aware snapper, used for every add / snap-to-playhead
-   *  time. It honours the GRID unit the user picked (1/2 beat, triplets,
-   *  bars…), per-beat overrides and tempo segments, and returns the time
-   *  untouched while Snap and Grid Lock are both off — the same rule a drag
-   *  on the canvas already followed. Optional: without it these paths fall
-   *  back to whole-beat snapping, which is what they all used to do. */
+  /** The page's snapper (`snapToBeatOrFiner`), used for every add /
+   *  snap-to-playhead time: the nearest beat — or the nearest GRID line when
+   *  the grid divides the beat — whatever Snap and Grid Lock say; the same
+   *  rule a drag on the canvas follows. It honours per-beat
+   *  overrides and tempo segments. Optional: without it these paths fall back
+   *  to whole-beat snapping while Snap is on. */
   snapTime?: (t: number) => number;
   focusedInstance?: { layerId: string; itemId: string } | null;
   onFocusInstance?: (f: { layerId: string; itemId: string } | null) => void;
@@ -445,34 +443,85 @@ export interface RiffPatternEditorPanelProps {
    *  centered (used right after creating a node). */
   onEditNode: (layerId: string, nodeId: string, anchor?: { x: number; y: number }) => void;
   /** Reader for the LIVE media clock (the page's `liveSongTime`). An instance
-   *  started from `currentTime` begins a render behind the riff the annotator
-   *  heard; see `markTime`. Optional — falls back to the prop. */
+   *  started from the playhead clock begins a frame behind the riff the
+   *  annotator heard; see `markTime`. Optional — falls back to the playhead
+   *  clock. */
   getSongTime?: () => number | null;
+  /** Playback for the node list, which is the layer's sound palette: ▶ on a
+   *  node plays one turn of it where it first sounds. */
+  palette?: {
+    beatsPerBar: number;
+    isPlaying: boolean;
+    onPlay: (start: number, end: number) => void;
+    onStop: () => void;
+  };
+}
+
+/** The colour an instance is drawn in on its mini timeline: its first
+ *  node's, as the chip beside it shows. */
+function instanceColor(item: RiffPatternItem, nodes: RiffNode[], combos: RiffCombo[], fallback = '#94a3b8'): string {
+  const first = item.sequence[0]?.type;
+  return nodes.find((n) => n.id === first)?.color ?? combos.find((c) => c.id === first)?.color ?? fallback;
+}
+
+/** Where in the song an instance plays: the whole song as a thin track, the
+ *  instance as a block on it, one notch per repeat — the first turn bright,
+ *  the repeats faint, as the sound palette and the canvas lane draw them. */
+function InstanceTimeline({ item, duration, color }: { item: RiffPatternItem; duration: number; color: string }) {
+  const reps = Math.max(1, Math.floor(item.repeatCount || 1));
+  const cycle = Math.max(0, item.end - item.start);
+  const span = cycle * reps;
+  const pct = (t: number) => `${Math.max(0, Math.min(100, (100 * t) / Math.max(1e-6, duration)))}%`;
+  return (
+    <div
+      className="relative h-4 rounded-sm bg-white/[0.04]"
+      title={`${fmtTime(item.start)} · ×${reps} turns of ${cycle.toFixed(1)} s`}
+    >
+      <div
+        className="absolute top-[2px] bottom-[2px] rounded-sm overflow-hidden"
+        style={{ left: pct(item.start), width: pct(span), minWidth: 3, background: `${color}4d` }}
+      >
+        <span className="absolute top-0 bottom-0 left-0" style={{ width: `${100 / reps}%`, background: color }} />
+        {reps > 1 && Array.from({ length: reps - 1 }, (_, i) => (
+          <span
+            key={i}
+            className="absolute top-0 bottom-0 w-px bg-black/50"
+            style={{ left: `${(100 * (i + 1)) / reps}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function RiffPatternEditorPanelInner(
   {
-    currentTime, duration, doc, onDocChange, grid,
+    duration, doc, onDocChange, grid,
     snapToGrid = false, snapTime,
     focusedInstance, onFocusInstance,
     selectedLayerId = null, onSelectLayer,
     pendingSelection, onClearPendingSelection,
     onCapabilitiesChange,
     saveStatus = 'idle',
+    palette,
     onEditNode,
     getSongTime,
   }: RiffPatternEditorPanelProps,
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
+  // The playhead is read from the clock, not a prop: handlers call
+  // `playheadClock.get()` when they fire, and the "@ <time>" labels re-render
+  // only when the time they print changes.
+  const playheadClock = usePlayheadClock();
   // Where something placed *right now* belongs. Called at the moment of the
-  // placement, never captured: `currentTime` is the media clock one rAF, one
-  // setState and one inspector re-render later.
+  // placement, never captured: the playhead clock is the media clock one rAF
+  // later.
   const markTime = useCallback(
     (atTime?: number) => resolvePointAddTime({
       live: atTime ?? getSongTime?.(),
-      fallback: currentTime,
+      fallback: playheadClock.get(),
     }),
-    [getSongTime, currentTime],
+    [getSongTime, playheadClock],
   );
   const riffLayers = useMemo(
     () => doc.layers.filter((l): l is AnnotationLayer<'riff-patterns'> => l.type === 'riff-patterns'),
@@ -507,8 +556,15 @@ function RiffPatternEditorPanelInner(
 
   // ── section open/close ───────────────────────────────────────────────────
   const [nodesOpen,     setNodesOpen]     = useState(true);
-  const [combosOpen,    setCombosOpen]    = useState(true);
-  const [instancesOpen, setInstancesOpen] = useState(true);
+  // An empty section is one header line, not a header and a sentence; and
+  // with the node list showing where each node plays, the instance list is
+  // the detail you open to edit a sequence or its repeats.
+  const [combosOpen,    setCombosOpen]    = useState(() => (activeLayer?.combos?.length ?? 0) > 0);
+  const [instancesOpen, setInstancesOpen] = useState(!palette);
+  const paletteGroups = useMemo(
+    () => (activeLayer ? handPalette([activeLayer], grid?.bpm && grid.bpm > 20 ? grid.bpm : 120) : []),
+    [activeLayer, grid?.bpm],
+  );
 
   // ── expanded row ids (one per section at a time) ─────────────────────────
   // Nodes edit in a floating popup owned at the page level (`onEditNode`)
@@ -557,7 +613,7 @@ function RiffPatternEditorPanelInner(
   /** A node has no timeline position of its own, but if the user dragged a
    *  region before hitting "New Node" we still honor that drag as a length
    *  hint — beats = duration × (bpm / 60), rounded to the nearest quarter
-   *  beat by `resizeRiffNodeLength`. No tempo grid → fall back to default. */
+   *  step by `resizeBoundaryNodeLength`. No tempo grid → fall back to default. */
   function beatsFromPendingSelection(): number | null {
     if (!pendingSelection || pendingSelection.t2 == null) return null;
     const bpm = grid?.bpm;
@@ -575,7 +631,7 @@ function RiffPatternEditorPanelInner(
    *  exact range with the new node as its sole sequence entry — otherwise the
    *  dragged highlight would just vanish with nothing placed on the riff lane
    *  (same fix as `handleGenerateRiffNodeFromSelection` in InspectorPageV2). */
-  function addNode(kind: RiffNodeKind = 'grid') {
+  function addNode() {
     // With no riff layer yet, the layer is created and the node lands in it in
     // the SAME commit — bailing out after making the layer would swallow both
     // the node the user asked for and the selection they drew for it.
@@ -583,15 +639,11 @@ function RiffPatternEditorPanelInner(
     const target = layers.find((l) => l.id === targetId) as AnnotationLayer<'riff-patterns'> | undefined;
     const targetNodes = target?.nodes ?? [];
     const targetItems = (target?.items ?? []) as RiffPatternItem[];
-    const name = `${kind === 'boundary' ? 'Blocks' : 'Node'} ${targetNodes.length + 1}`;
+    const name = `Node ${targetNodes.length + 1}`;
     const color = pickRiffNodeColor(allRiffNodes);
-    let node = kind === 'boundary' ? newRiffBoundaryNode(name, color) : newRiffNode(name, color);
+    let node = newRiffNode(name, color);
     const beats = beatsFromPendingSelection();
-    if (beats != null) {
-      node = kind === 'boundary'
-        ? { ...node, ...resizeBoundaryNodeLength(node, beats) }
-        : { ...node, ...resizeRiffNodeLength(node, beats) };
-    }
+    if (beats != null) node = { ...node, ...resizeBoundaryNodeLength(node, beats) };
     let placed: RiffPatternItem | null = null;
     if (beats != null && pendingSelection && pendingSelection.t2 != null) {
       const start = Math.min(pendingSelection.t1, pendingSelection.t2);
@@ -629,7 +681,7 @@ function RiffPatternEditorPanelInner(
   function patchNode(nodeId: string, patch: Partial<RiffNode>) {
     if (!activeLayer) return;
     patchLayer(activeLayer.id, {
-      nodes: nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)),
+      nodes: nodes.map((n) => (n.id === nodeId ? toNotesNode({ ...n, ...patch }) : n)),
     });
   }
 
@@ -801,7 +853,7 @@ function RiffPatternEditorPanelInner(
       if (hasRange) onClearPendingSelection?.();
       return;
     }
-    addNode(kindId === 'boundary-node' ? 'boundary' : 'grid');
+    addNode();
   }
 
   // ── layer-level mutations ────────────────────────────────────────────────
@@ -858,17 +910,17 @@ function RiffPatternEditorPanelInner(
       snapBoundaryVisible: true,
       canMarkIn: true,
       canMarkOut: pendingSelection !== null && pendingSelection !== undefined && pendingSelection.t2 === null,
-      snapStartLabel: `@ ${fmtTime(currentTime)}`,
-      snapEndLabel:   `@ ${fmtTime(currentTime)}`,
+      snapStartLabel: `@ ${PLAYHEAD_SLOT}`,
+      snapEndLabel:   `@ ${PLAYHEAD_SLOT}`,
       canAddAtPlayhead: true,
-      addLabel: `+ Add node @ ${fmtTime(currentTime)}`,
+      addLabel: `+ Add node @ ${PLAYHEAD_SLOT}`,
       canAddLayer: true,
       pending: pendingSelection ?? null,
       pendingRequiresRegion: true,
       canExport: false,
       canDeleteAll: riffLayers.length > 0,
     });
-  }, [onCapabilitiesChange, doc, saveStatus, currentTime, pendingSelection, totalItems, riffLayers.length]);
+  }, [onCapabilitiesChange, doc, saveStatus, pendingSelection, totalItems, riffLayers.length]);
 
   const sortedItems = useMemo(
     () => items.slice().sort((a, b) => a.start - b.start),
@@ -932,14 +984,52 @@ function RiffPatternEditorPanelInner(
       <SectionHeader
         title="Nodes" count={nodes.length}
         open={nodesOpen} onToggle={() => setNodesOpen((v) => !v)}
-        onAdd={() => addNode('grid')}
-        extraAdd={{
-          label: '+ Blocks',
-          title: 'New boundary node — free-form blocks in beats, no sub-beat grid',
-          onAdd: () => addNode('boundary'),
-        }}
+        onAdd={() => addNode()}
       />
-      {nodesOpen && (
+      {nodesOpen && palette && activeLayer && (
+        // The node list IS the layer's sound palette: each node once, ▶ to
+        // hear one turn, its length, and where in the song it plays.
+        <div className="pl-1">
+          <SoundPalette
+            compact
+            placement={false}
+            title={`Nodes of ${activeLayer.name}`}
+            groups={paletteGroups}
+            duration={duration}
+            beatsPerBar={palette.beatsPerBar}
+            isPlaying={palette.isPlaying}
+            onPlay={palette.onPlay}
+            onStop={palette.onStop}
+            emptyText="No nodes yet. + Add one, then place it in the song."
+            rowActions={(figure) => {
+              const nodeId = figure.id.slice(activeLayer.id.length + 1);
+              return (
+                <>
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded text-[11px] text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-colors"
+                    onClick={(e) => onEditNode(activeLayer.id, nodeId, { x: e.clientX, y: e.clientY })}
+                    title={`Edit ${figure.name}`}
+                    aria-label={`Edit ${figure.name}`}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded text-[11px] text-slate-500 hover:text-red-400 hover:bg-white/[0.06] transition-colors"
+                    onClick={() => deleteNode(nodeId)}
+                    title={`Delete ${figure.name}`}
+                    aria-label={`Delete ${figure.name}`}
+                  >
+                    ✕
+                  </button>
+                </>
+              );
+            }}
+          />
+        </div>
+      )}
+      {nodesOpen && !(palette && activeLayer) && (
         <div className="space-y-0.5 pl-1">
           {/* built-in silence entry */}
           <div className="flex items-center gap-2 px-2 py-1 rounded text-[11px] text-slate-500 bg-white/[0.02]">
@@ -959,14 +1049,6 @@ function RiffPatternEditorPanelInner(
                   value={node.name}
                   onChange={(e) => patchNode(node.id, { name: e.target.value })}
                 />
-                {isBoundaryNode(node) && (
-                  <span
-                    className="text-[8px] uppercase tracking-wider text-slate-500 border border-white/[0.08] rounded px-1 py-px flex-shrink-0"
-                    title="Boundary node — free-form blocks in beats, not a sub-beat grid"
-                  >
-                    blocks
-                  </span>
-                )}
                 <button
                   type="button"
                   className="text-[9px] text-slate-500 hover:text-slate-200 transition-colors"
@@ -1079,11 +1161,6 @@ function RiffPatternEditorPanelInner(
               </div>
             );
           })}
-          {combos.length === 0 && (
-            <div className="text-[10px] text-slate-600 italic px-2 py-1">
-              No combos yet — add one to sequence nodes together
-            </div>
-          )}
         </div>
       )}
 
@@ -1094,24 +1171,66 @@ function RiffPatternEditorPanelInner(
         onAdd={() => (pendingRange ? confirmPendingAsInstance(null) : addInstance())}
         addLabel={pendingRange
           ? `+ Add ${fmtTime(pendingRange.start)}–${fmtTime(pendingRange.end)}`
-          : `+ Add @ ${fmtTime(currentTime)}`}
+          : `+ Add @ ${PLAYHEAD_SLOT}`}
         addTitle={pendingRange
           ? 'Add an instance spanning the highlighted region'
           : 'Add a 4-second instance at the playhead — highlight a region first to place one there instead'}
       />
       {instancesOpen && (
         <div className="space-y-0.5 pl-1">
+          {/* Where each instance sits is the point of this list, so the song's
+              minutes head its timeline column — the node list above has none. */}
+          {sortedItems.length > 0 && (
+            <div className={`${PALETTE_COLS} px-2 pb-1 text-[10px] uppercase tracking-wider text-slate-500`}>
+              <span>Placed at</span>
+              <span>Plays</span>
+              <span>Repeats</span>
+              <SongRuler duration={duration} />
+            </div>
+          )}
           {sortedItems.map((item, idx) => {
             const dupOf = item.duplicateOfId ? rowNumberById.get(item.duplicateOfId) : undefined;
             return (
             <div key={item.id} className="rounded bg-white/[0.03]">
-              <div className="flex items-center gap-2 px-2 py-1">
-                <span className="text-[9px] font-mono text-slate-600 w-5 text-right flex-shrink-0">#{idx + 1}</span>
-                <span className="text-[10px] font-mono text-slate-400 whitespace-nowrap">
-                  {fmtTime(item.start)}–{fmtTime(item.end)}
-                </span>
-                {/* mini sequence preview */}
-                <div className="flex items-center gap-0.5 flex-1 overflow-hidden">
+              {/* Same columns as the node list above, so this row's song
+                  timeline lines up with every node's. */}
+              <div className={`${PALETTE_COLS} px-2 py-1`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-[9px] font-mono text-slate-600 w-5 text-right flex-shrink-0">#{idx + 1}</span>
+                  <span className="text-[10px] font-mono text-slate-400 whitespace-nowrap" title="Where this instance plays, all its repeats">
+                    {fmtTime(item.start)}–{fmtTime(item.start + (item.end - item.start) * Math.max(1, item.repeatCount))}
+                  </span>
+                  {dupOf != null && (
+                    <span
+                      className="text-[9px] text-amber-400/90 whitespace-nowrap"
+                      title={`Same sequence and repeat count as Instance #${dupOf} — renders identical content; saved in the document as duplicateOfId`}
+                    >
+                      ≡ #{dupOf}
+                    </span>
+                  )}
+                  <span className="ml-auto flex-none flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="w-6 h-6 rounded text-[10px] text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-colors"
+                      onClick={() => setExpandedInstanceId((v) => v === item.id ? null : item.id)}
+                      aria-label={expandedInstanceId === item.id ? 'Close this instance' : 'Edit this instance'}
+                      title={expandedInstanceId === item.id ? 'Close' : 'Edit label, repeats and sequence'}
+                    >
+                      {expandedInstanceId === item.id ? '▲' : '▼'}
+                    </button>
+                    <button
+                      type="button"
+                      className="w-6 h-6 rounded text-[10px] text-slate-500 hover:text-red-400 hover:bg-white/[0.06] transition-colors"
+                      onClick={() => deleteInstance(item.id)}
+                      aria-label="Delete this instance"
+                      title="Delete this instance"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                </div>
+                {/* what it plays */}
+                <div className="flex items-center gap-0.5 min-w-0 overflow-hidden">
                   {item.sequence.map((entry, i) => (
                     <SeqChip key={`${entry.type}-${i}`} id={entry.type} nodes={nodes} combos={combos} />
                   ))}
@@ -1119,29 +1238,8 @@ function RiffPatternEditorPanelInner(
                     <span className="text-[9px] text-slate-600 italic">empty</span>
                   )}
                 </div>
-                <span className="text-[10px] font-semibold text-slate-300 whitespace-nowrap">×{item.repeatCount}</span>
-                {dupOf != null && (
-                  <span
-                    className="text-[9px] text-amber-400/90 whitespace-nowrap"
-                    title={`Same sequence and repeat count as Instance #${dupOf} — renders identical content; saved in the document as duplicateOfId`}
-                  >
-                    ≡ same as #{dupOf}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="text-[9px] text-slate-500 hover:text-slate-200 transition-colors"
-                  onClick={() => setExpandedInstanceId((v) => v === item.id ? null : item.id)}
-                >
-                  {expandedInstanceId === item.id ? '▲' : '▼'}
-                </button>
-                <button
-                  type="button"
-                  className="text-[9px] text-slate-600 hover:text-red-400 transition-colors"
-                  onClick={() => deleteInstance(item.id)}
-                >
-                  ✕
-                </button>
+                <span className="text-[11px] font-semibold text-slate-300 whitespace-nowrap">×{item.repeatCount}</span>
+                <InstanceTimeline item={item} duration={duration} color={instanceColor(item, nodes, combos, activeLayer?.color)} />
               </div>
               {expandedInstanceId === item.id && (
                 <div className="px-2 pb-2 space-y-2">

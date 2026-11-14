@@ -12,8 +12,9 @@ JDCNet down with it.
 Detector
 --------
   panns-cnn14     CNN14 pretrained on AudioSet-2M (Kong et al. 2020).
-                  Released under Apache-2.0 by the authors; weights pulled
-                  from the panns_inference pip package's default URL.
+                  Code (panns_inference) MIT; the CNN14 weights CC-BY-4.0
+                  (Zenodo record 3987831), pulled at run time from the
+                  panns_inference pip package's default URL, never bundled.
 
 Endpoints
 ---------
@@ -50,10 +51,12 @@ Cache
 from __future__ import annotations
 
 import json
+import os
 import sys
+import urllib.request
 import warnings
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -62,7 +65,7 @@ PORT = 8013
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import find_audio, stem_audio, cache_name, PANNS_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
-from server_common import cached_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
+from server_common import cached_result, write_result, cors_headers, err as _common_err, now_iso, time_ms, ModelServer, model_used  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -84,11 +87,42 @@ try:
 except ImportError:
     _LIBROSA_OK = False
 
+# panns_inference fetches its two data files by shelling out to `wget`, which
+# neither macOS nor python:*-slim ships — so on a fresh machine the download
+# silently produced nothing and the detector said "not installed" while every
+# package was installed. We fetch them ourselves, with urllib, before the
+# library looks. The label map has to be at ~/panns_data/ because the library
+# reads it from there at IMPORT time; the checkpoint goes wherever
+# PANNS_CHECKPOINT_DIR says (the Docker image points it at the model-cache
+# volume), defaulting to the same ~/panns_data/ the library would use.
+_LABELS_URL = "https://raw.githubusercontent.com/qiuqiangkong/audioset_tagging_cnn/master/metadata/class_labels_indices.csv"
+_LABELS_PATH = Path.home() / "panns_data" / "class_labels_indices.csv"
+_CHECKPOINT_URL = "https://zenodo.org/record/3987831/files/Cnn14_mAP%3D0.431.pth?download=1"
+_CHECKPOINT_PATH = Path(os.environ.get("PANNS_CHECKPOINT_DIR") or Path.home() / "panns_data") / "Cnn14_mAP=0.431.pth"
+
+
+def _fetch(url: str, dest: Path, min_bytes: int) -> Path:
+    if dest.exists() and dest.stat().st_size >= min_bytes:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    print(f"[panns] fetching {url}", file=sys.stderr)
+    urllib.request.urlretrieve(url, tmp)
+    if tmp.stat().st_size < min_bytes:
+        tmp.unlink()
+        raise RuntimeError(f"download of {url} came back too small")
+    tmp.replace(dest)
+    return dest
+
+
+_PANNS_IMPORT_ERROR = None
 try:
+    _fetch(_LABELS_URL, _LABELS_PATH, 10_000)
     import panns_inference  # noqa: F401
     _PANNS_OK = True
-except Exception:
+except Exception as exc:
     _PANNS_OK = False
+    _PANNS_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 # Process-wide model cache. PANNs loads in a couple of seconds; keep it alive.
@@ -100,14 +134,16 @@ def _err(algo: str, msg: str) -> dict:
 
 
 def _ensure_panns():
-    """Lazy-load the PANNs CNN14 tagger. Triggers a one-time ~80 MB checkpoint
-    download into ~/.cache/panns_data/ on first call; subsequent calls reuse
+    """Lazy-load the PANNs CNN14 tagger. Triggers a one-time ~330 MB checkpoint
+    download into _CHECKPOINT_PATH on first call; subsequent calls reuse
     the in-memory model."""
     global _panns_tagger
+    model_used()
     if _panns_tagger is not None:
         return
     from panns_inference import AudioTagging
-    _panns_tagger = AudioTagging(checkpoint_path=None, device="cpu")
+    _fetch(_CHECKPOINT_URL, _CHECKPOINT_PATH, 300_000_000)
+    _panns_tagger = AudioTagging(checkpoint_path=str(_CHECKPOINT_PATH), device="cpu")
 
 
 def _audioset_labels() -> list[str]:
@@ -123,7 +159,10 @@ def _audioset_labels() -> list[str]:
 def detect_panns_cnn14(audio_path: Path) -> dict:
     algo = "panns-cnn14"
     if not (_PANNS_OK and _TORCH_OK and _LIBROSA_OK and _NUMPY_OK):
-        return _err(algo, "panns_inference / torch / librosa / numpy not installed")
+        missing = [n for n, ok in (("torch", _TORCH_OK), ("librosa", _LIBROSA_OK), ("numpy", _NUMPY_OK)) if not ok]
+        if not _PANNS_OK:
+            missing.append(f"panns_inference ({_PANNS_IMPORT_ERROR})" if _PANNS_IMPORT_ERROR else "panns_inference")
+        return _err(algo, "cannot load " + ", ".join(missing))
     t0 = datetime.now().timestamp() * 1000
     try:
         _ensure_panns()
@@ -149,7 +188,10 @@ def detect_panns_cnn14(audio_path: Path) -> dict:
 
         # AudioTagging.inference is batched (B, win_n) → (B, 527).
         # Force a fresh inference per batch to avoid memory pressure on long tracks.
-        BATCH = 16
+        # Four 1 s windows per forward pass: at 16 the CPU conv scratch alone
+        # took the server past 3 GB; at 4 it stays near the ~1 GB model. Each
+        # window is scored on its own, so the batch size changes no result.
+        BATCH = 4
         scores_chunks: list[np.ndarray] = []
         for i in range(0, n_windows, BATCH):
             chunk = windows[i : i + BATCH].astype(np.float32)
@@ -247,10 +289,7 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
         "ms":          result.get("ms", 0),
         "computed_at": now_iso(),
     }
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=ALGORITHMS[algo]["available"]())
     return payload
 
 
@@ -282,6 +321,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {
                 "ok":         _PANNS_OK and _TORCH_OK and _LIBROSA_OK and _NUMPY_OK,
                 "pannsOk":    _PANNS_OK,
+                "pannsError": _PANNS_IMPORT_ERROR,
                 "torchOk":    _TORCH_OK,
                 "librosaOk":  _LIBROSA_OK,
                 "numpyOk":    _NUMPY_OK,
@@ -351,7 +391,7 @@ def main():
     host = os.environ.get("HOST", "localhost")
     print(f"Starting PANNs server on http://{host}:{PORT}", file=sys.stderr)
     print(f"  panns={_PANNS_OK}  torch={_TORCH_OK}  librosa={_LIBROSA_OK}  numpy={_NUMPY_OK}", file=sys.stderr)
-    HTTPServer((host, PORT), Handler).serve_forever()
+    ModelServer((host, PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":

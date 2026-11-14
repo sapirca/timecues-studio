@@ -41,7 +41,6 @@ export interface Props {
   beatGroupSize?: number;
   /** Multiplier on beat-grid line width (1 = default). */
   gridThickness?: number;
-  currentTime?: number;
   height?: number;
 }
 
@@ -166,7 +165,6 @@ export function TempogramAnnotated({
   barGroupSize,
   beatGroupSize,
   gridThickness = 1,
-  currentTime = 0,
   height = 90,
 }: Props) {
   const baseAxis = hopSize && fftSize && sampleRate
@@ -213,7 +211,7 @@ export function TempogramAnnotated({
       height={Math.max(1, Math.round(height))}
       paint={paint}
       overlay={overlay}
-      overlayFocus={duration > 0 ? currentTime / duration : null}
+      focusDuration={duration}
       className="rounded bg-gray-900 w-full min-w-0 overflow-hidden"
     >
       {!hasData && (

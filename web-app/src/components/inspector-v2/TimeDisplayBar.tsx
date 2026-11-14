@@ -1,9 +1,9 @@
 import type { PendingSelection } from './AnnotationOverlays';
 import type { PreviewRegion } from './PreviewWindow';
 import { CrosshairIcon } from './CrosshairIcon';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
 
 interface Props {
-  currentTime: number;
   pendingSelection?: PendingSelection | null;
   previewRegion?: PreviewRegion | null;
   showPlaybackIcon?: boolean;
@@ -25,9 +25,13 @@ function resolveSelection(
   return null;
 }
 
-function splitTime(totalSeconds: number) {
+/** Seconds → whole milliseconds, the finest unit a readout shows. */
+function wholeMs(totalSeconds: number): number {
   const safe = Number.isFinite(totalSeconds) && totalSeconds > 0 ? totalSeconds : 0;
-  const totalMs = Math.floor(safe * 1000);
+  return Math.floor(safe * 1000);
+}
+
+function splitMs(totalMs: number) {
   const ms = totalMs % 1000;
   const totalSec = Math.floor(totalMs / 1000);
   const s = totalSec % 60;
@@ -41,7 +45,7 @@ const pad2 = (n: number) => n.toString().padStart(2, '0');
 const pad3 = (n: number) => n.toString().padStart(3, '0');
 
 function TimeReadout({ seconds, showMs, dim, large }: { seconds: number; showMs: boolean; dim?: boolean; large?: boolean }) {
-  const { h, m, s, ms } = splitTime(seconds);
+  const { h, m, s, ms } = splitMs(wholeMs(seconds));
   const colorDigit = dim ? 'text-slate-500' : 'text-slate-100';
   const colorUnit = dim ? 'text-slate-600' : 'text-slate-400';
   const sizeDigit = large ? 'text-3xl sm:text-4xl' : 'text-base';
@@ -61,7 +65,16 @@ function TimeReadout({ seconds, showMs, dim, large }: { seconds: number; showMs:
   );
 }
 
-export function TimeDisplayBar({ currentTime, pendingSelection, previewRegion, showPlaybackIcon = true }: Props) {
+/** The playback readout, on its own so the playhead clock re-renders only
+ *  this: it selects the whole millisecond it shows, not the raw time. */
+function PlayheadReadout() {
+  const ms = usePlayheadValue(wholeMs);
+  // Back to seconds mid-millisecond, so the readout's own floor can't land a
+  // millisecond short on float error.
+  return <TimeReadout seconds={(ms + 0.5) / 1000} showMs large />;
+}
+
+export function TimeDisplayBar({ pendingSelection, previewRegion, showPlaybackIcon = true }: Props) {
   const selection = resolveSelection(pendingSelection, previewRegion);
   const hasSel = selection != null;
   const start = selection?.start ?? 0;
@@ -77,7 +90,7 @@ export function TimeDisplayBar({ currentTime, pendingSelection, previewRegion, s
               <CrosshairIcon size={28} strokeWidth={1.5} />
             </span>
           )}
-          <TimeReadout seconds={currentTime} showMs large />
+          <PlayheadReadout />
         </div>
       </div>
       <div className="flex items-center gap-3 px-3 py-2 rounded-md border border-white/[0.08] bg-[#0a0b0d]/90 shadow-inner shadow-black/40">

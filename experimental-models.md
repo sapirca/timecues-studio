@@ -51,14 +51,6 @@ transcription, **[custom]** = user scripts.
 - **input:** audio file → onset envelope.
 - **output:** `cues[]` = one cue per transient onset (kick hits, FX triggers, anything sharp).
 
-### drum-transients  [cue] — `cue_extras_server.py` (:8014)
-- **what is it:** librosa-onsets' detection verbatim, plus a per-band classifier that names each hit. Pure DSP, no weights. Run it on the Demucs **drums** stem — it runs on anything, but the band→instrument mapping is only honest once the harmonic instruments are gone.
-- **input:** audio file. Detection reads a 22.05 kHz mono load (identical to librosa-onsets); classification reads a second 44.1 kHz load, because hats and cymbals live above 11 kHz and a 22.05 kHz load has already discarded them.
-- **output:** `cues[]` = one per hit, `label` ∈ `kick` / `snare` / `hat`, plus two loudness numbers that answer different questions: `velocity` (1-127) is how hard *that drum* was struck against its own hardest hit — a full-force hi-hat is 127; `levelDb` (≤ 0) is the hit's real level against the loudest hit in the track, and is the one comparable *across* instruments.
-- **timing:** the hits are the same ones `librosa-onsets` finds (pinned by a test), but each is moved from the flux peak — which librosa reports 20-30 ms after the drum starts — back to its attack, searching only 40 ms back and 10 ms forward, in the envelope of the hit's own band. On a synthetic fixture with known attacks the error falls from a mean of 19 ms to 2 ms (worst 3.6); on real stems the median move is about 20 ms. The envelope is computed on a 0.65 s slice around each hit, not the whole song: whole-song it cost ~540 MB per band on a 3-minute track for the same answer to within one sample.
-- **measured here (2026-09-22):** scored against librosa's own tracked beats on the three shipped drums stems, hits labelled `kick` land on a beat 94% / 91% of the time on *edm-at-midnight* and *pantheon*, where kick and snare also occupy cleanly anti-correlated beat positions — a textbook backbeat. On *phonk-remix* the labels are near chance (26%): saturated, distorted 808s smear across all three bands. Treat the labels as unreliable on heavily-processed drums. **The detector now says this itself**: each hit carries a `labelConfidence` (how far the winning band beat the runner-up — a different question from `confidence`, which is onset strength), and the result carries a `quality` report plus `warnings[]` naming an unusable band, one band swamping the rest, or labels decided on a hair. On the shipped stems only *phonk-remix* warns: it rolls off at 4.7 kHz and holds 0.09% of its energy in the 6-16 kHz hat band, so every hit it called a hat was a classification of noise. The warnings ride the envelope's `notes[]` into the lane's ⓘ popover, which turns amber.
-- **why not the obvious alternatives:** `backtrack=True` has no bound and moved hits a median of 46 ms (up to 139 ms) — past the attack into the previous decay; the bounded refinement above moves them ~20 ms. Detecting at 44.1 kHz / hop 128 found about as many hits (within 8%) for 8× the frames, with nothing to show the extras were real. Peak-picking separately inside each band fired 6-7 "kicks" a second on tracks with about 2, because a kick's own decay re-triggers the low band. **Caveat for anyone re-measuring:** don't judge timing against `librosa.beat.beat_track`. Its beats are built from the same late hop-512 onset envelope, so it rewards late times — an earlier version of this entry reported backtracking as dropping on-beat agreement from 56% to 6% on exactly that biased metric. Judge timing against audio with known attacks (the test fixture) instead.
-
 ### BeatNet  [cue] — `beatnet_server.py` (:8010)
 - **what is it:** CRNN + Monte-Carlo particle filter (Heydari & Duan 2021, MIT, ~20 MB). Sibling to the BPM server. *(behind `experimentalCueExtras`)*
 - **input:** audio file.
@@ -164,6 +156,11 @@ algorithm the sidecar used is described below for reference.
 - **what is it:** OpenAI Whisper "base" vocal transcription (~140 MB checkpoint, lazy-downloaded, CPU-only). Word timestamps are coarse (~200 ms).
 - **input:** audio file (optional `language` hint).
 - **output:** `words[]` = `{ time, end, text, kind:"word" }`, `lines[]` = line-level segments, plus detected `language`.
+
+### Ivrit  [lyrics]
+- **what is it:** ivrit.ai's Hebrew speech-recognition model (Apache-2.0), via `transformers` (~3.2 GB checkpoint, lazy-downloaded). Hebrew only: the language is pinned to `he`.
+- **input:** audio file (`language` is ignored); best on the vocals stem. Transcribed one phrase at a time, cut at pauses (≤ 28 s); silent stretches are never sent.
+- **output:** same shape as Whisper-base; `lines[]` are drawn from silences between words; `language` is always `"he"`. Held-note spellings, decoder loops and zero-length words are dropped.
 
 ---
 

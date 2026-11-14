@@ -43,8 +43,6 @@ function renderPanel(doc: AnnotationLayersDocument, onSeekAndPlay: (t: number, s
       autoGuessAnnotation={null}
       activeAnnotationType="riff-patterns"
       onSeekAndPlay={onSeekAndPlay}
-      experimentalLoopsAndPatterns
-      experimentalLyricsFamily={false}
     />,
   );
 }
@@ -77,5 +75,18 @@ describe('riff instance row audition', () => {
   it('marks a repeating row with its repeat count', () => {
     renderPanel(docWithRiff({ repeatCount: 4 }), () => {});
     expect(screen.getByText('×4')).toBeTruthy();
+  });
+});
+
+describe('layer collapse', () => {
+  it('hides the layer items from the triangle on the title row, and shows them again', () => {
+    renderPanel(docWithRiff({ repeatCount: 1 }), () => {});
+    expect(screen.queryByText('kick')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Riff Patterns 1' }));
+    expect(screen.queryByText('kick')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Riff Patterns 1' }));
+    expect(screen.queryByText('kick')).toBeTruthy();
   });
 });

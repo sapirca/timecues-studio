@@ -13,14 +13,19 @@
  */
 
 import type { AutoGuessManualAnnotation } from '../types/autoGuess';
+import { ACCENT_FULL } from '../types/annotationLayer';
 import type {
+  AnnotationLayer,
   BoundaryItem,
   CueItem,
   SpanItem,
   LoopItem,
+  LyricsItem,
 } from '../types/annotationLayer';
+import { riffPlays, riffPlayNotes } from './riffPlays';
 import type { SongInfo } from '../types/songInfo';
 import { beatsPerBarFromTimeSignature, getBarBeatOrigin, visibleGridLines } from './beatGrid';
+import { karaokeRowsOf } from './karaokeRows';
 
 export interface ExportSection {
   start: number;
@@ -45,12 +50,18 @@ export function convertToAudacity(sections: ExportSection[]): string {
   return body + '\n';
 }
 
-// Sonic Visualiser expects comma-separated CSV with frame/second points.
-// Quote labels containing commas/quotes/newlines per RFC 4180.
+// Sonic Visualiser CSV. A file of instants is `time,label` (a Time Instants
+// layer); a file where anything has a length is `time,duration,label`, which
+// SV's CSV import reads as a Regions layer — so a span, a loop or a riff play
+// keeps its end instead of collapsing to its start. An instant in such a file
+// gets duration 0. Labels are quoted per RFC 4180.
 export function convertToSonicVisualiser(sections: ExportSection[]): string {
   if (sections.length === 0) return '';
+  const regions = sections.some((s) => s.duration > 0);
   const body = sections
-    .map((s) => `${s.start.toFixed(6)},${csvQuote(s.section)}`)
+    .map((s) => regions
+      ? `${s.start.toFixed(6)},${Math.max(0, s.duration).toFixed(6)},${csvQuote(s.section)}`
+      : `${s.start.toFixed(6)},${csvQuote(s.section)}`)
     .join('\n');
   return body + '\n';
 }
@@ -105,17 +116,20 @@ function formatReaperTime(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(milli).padStart(3, '0')}`;
 }
 
-// MIDI marker track. Standard MIDI File format 0, single track, 480 PPQ.
-// Emits one marker meta-event (0xFF 0x06) per section at its time, with the
-// tempo set so seconds-position is preserved when the file is loaded in a DAW
-// (Ableton / Logic / Reaper / FL Studio all import marker meta-events as
-// project markers). If `bpm` is provided we use it so bar-grid positions also
-// land where the annotator placed them; otherwise we fall back to 120 BPM —
-// marker *seconds* are unaffected by the choice.
+// MIDI. Standard MIDI File format 0, single track, 480 PPQ, with the tempo set
+// so seconds-position is preserved when the file is loaded in a DAW. If `bpm`
+// is provided we use it so bar-grid positions also land where the annotator
+// placed them; otherwise we fall back to 120 BPM — *seconds* are unaffected by
+// the choice.
+//
+// Two files share one writer: a marker track (one 0xFF 0x06 marker per
+// section — Ableton / Logic / Reaper / FL Studio import them as project
+// markers), and a note track for a cue layer whose cues carry a pitch, where
+// every pitched cue is a note-on / note-off pair a DAW plays back.
 //
 // Hand-rolled rather than pulling in a JS MIDI library: the wire format we
-// need is tiny (header + one track + a couple of meta-events) and avoiding
-// the dependency keeps the bundle lean.
+// need is tiny (header + one track + a few event kinds) and avoiding the
+// dependency keeps the bundle lean.
 
 const MIDI_PPQ = 480;
 
@@ -124,33 +138,38 @@ export interface MidiMarkersOptions {
   bpm?: number;
 }
 
-export function convertToMidiMarkers(
-  sections: ExportSection[],
-  opts: MidiMarkersOptions = {},
-): Uint8Array {
-  const bpm = opts.bpm && opts.bpm > 0 ? opts.bpm : 120;
-  const usPerQuarter = Math.round(60_000_000 / bpm);
+/** One event of the track, at an absolute tick. `rank` orders events that
+ *  share a tick: a note-off (0) before a marker (1) before a note-on (2), so a
+ *  note that ends where the next one starts never cuts that one off. */
+interface MidiEvent { tick: number; rank: number; bytes: number[] }
+
+function midiTempo(bpm: number | undefined) {
+  const usPerQuarter = Math.round(60_000_000 / (bpm && bpm > 0 ? bpm : 120));
   const ticksPerSecond = (MIDI_PPQ * 1_000_000) / usPerQuarter;
+  return { usPerQuarter, tickAt: (s: number) => Math.max(0, Math.round(s * ticksPerSecond)) };
+}
 
-  // Events: tempo, then markers (sorted ascending by time), then end-of-track.
-  const sorted = [...sections].sort((a, b) => a.start - b.start);
-  const absTicks: number[] = sorted.map((s) => Math.max(0, Math.round(s.start * ticksPerSecond)));
+function metaText(type: number, text: string): number[] {
+  const bytes = new TextEncoder().encode(text.replace(/[\r\n]+/g, ' '));
+  return [0xFF, type, ...vlq(bytes.length), ...bytes];
+}
 
+/** Header + one track: tempo first, `events` in time order, end-of-track. */
+function smfFormat0(usPerQuarter: number, head: number[][], events: MidiEvent[]): Uint8Array {
   const trackBytes: number[] = [];
-
+  for (const meta of head) trackBytes.push(...vlq(0), ...meta);
   // Tempo: delta=0, 0xFF 0x51 0x03 [3 bytes BE us/quarter]
   trackBytes.push(...vlq(0), 0xFF, 0x51, 0x03,
     (usPerQuarter >> 16) & 0xFF, (usPerQuarter >> 8) & 0xFF, usPerQuarter & 0xFF);
-
+  const sorted = events
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => a.e.tick - b.e.tick || a.e.rank - b.e.rank || a.i - b.i)
+    .map(({ e }) => e);
   let prevTick = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    const delta = absTicks[i] - prevTick;
-    prevTick = absTicks[i];
-    const label = sorted[i].section.replace(/[\r\n]+/g, ' ');
-    const labelBytes = new TextEncoder().encode(label);
-    trackBytes.push(...vlq(delta), 0xFF, 0x06, ...vlq(labelBytes.length), ...labelBytes);
+  for (const e of sorted) {
+    trackBytes.push(...vlq(e.tick - prevTick), ...e.bytes);
+    prevTick = e.tick;
   }
-
   // End of track: delta=0, 0xFF 0x2F 0x00
   trackBytes.push(0x00, 0xFF, 0x2F, 0x00);
 
@@ -170,6 +189,78 @@ export function convertToMidiMarkers(
     ...trackBytes,
   ];
   return new Uint8Array([...header, ...track]);
+}
+
+export function convertToMidiMarkers(
+  sections: ExportSection[],
+  opts: MidiMarkersOptions = {},
+): Uint8Array {
+  const { usPerQuarter, tickAt } = midiTempo(opts.bpm);
+  return smfFormat0(usPerQuarter, [], sections.map((s) => ({
+    tick: tickAt(s.start), rank: 1, bytes: metaText(0x06, s.section),
+  })));
+}
+
+export interface MidiNote {
+  /** Seconds. */
+  time: number;
+  /** Seconds. */
+  end: number;
+  /** 0-127. */
+  midi: number;
+  /** 1-127. */
+  velocity: number;
+  /** 0-15; absent = 0. Channel 9 is General MIDI's drum kit, where the key
+   *  names the drum instead of a pitch. */
+  channel?: number;
+}
+
+export interface MidiNotesOptions extends MidiMarkersOptions {
+  /** Track name (meta 0x03) — the layer's name, so the DAW names the track. */
+  name?: string;
+  /** Cues with no pitch, written as markers alongside the notes. */
+  markers?: ExportSection[];
+  /** Sung words or syllables, written as lyric events (meta 0x05) — what a
+   *  DAW's lyric track and a karaoke player read. */
+  lyrics?: { time: number; text: string }[];
+}
+
+/** A cue layer's pitched cues as a playable note track. Notes are taken from
+ *  `karaokeRowsOf` — the piano roll's own reading — so a note is exactly as
+ *  long in the DAW as it is drawn in the karaoke: its `decay` when it has
+ *  one, else until the next note. A note that would still be sounding when
+ *  the same pitch starts again is cut there, because one key cannot be held
+ *  down twice. */
+export function cueItemsToMidiNotes(items: readonly CueItem[]): MidiNote[] {
+  const row = karaokeRowsOf('export', 'export', '#000000', items).find((r) => r.kind === 'notes');
+  if (!row || row.kind !== 'notes') return [];
+  const notes = row.notes
+    .filter((n) => n.midi >= 0 && n.midi <= 127)
+    .map((n) => ({ time: n.time, end: n.end, midi: n.midi, velocity: Math.round(n.velocity) }));
+  const nextSame = new Map<number, number>();
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const n = notes[i];
+    const next = nextSame.get(n.midi);
+    if (next !== undefined && n.end > next) n.end = next;
+    nextSame.set(n.midi, n.time);
+  }
+  return notes;
+}
+
+export function convertToMidiNotes(notes: readonly MidiNote[], opts: MidiNotesOptions = {}): Uint8Array {
+  const { usPerQuarter, tickAt } = midiTempo(opts.bpm);
+  const events: MidiEvent[] = [];
+  for (const n of notes) {
+    const on = tickAt(n.time);
+    const off = Math.max(on + 1, tickAt(n.end));
+    const vel = Math.max(1, Math.min(127, Math.round(n.velocity)));
+    const ch = (n.channel ?? 0) & 0x0F;
+    events.push({ tick: on, rank: 2, bytes: [0x90 | ch, n.midi & 0x7F, vel] });
+    events.push({ tick: off, rank: 0, bytes: [0x80 | ch, n.midi & 0x7F, 0x40] });
+  }
+  for (const s of opts.markers ?? []) events.push({ tick: tickAt(s.start), rank: 1, bytes: metaText(0x06, s.section) });
+  for (const l of opts.lyrics ?? []) events.push({ tick: tickAt(l.time), rank: 1, bytes: metaText(0x05, l.text) });
+  return smfFormat0(usPerQuarter, opts.name ? [metaText(0x03, opts.name)] : [], events);
 }
 
 /** Variable-length quantity (SMF spec section 1.1). Encodes 7 bits per byte,
@@ -358,6 +449,110 @@ export function loopItemsToExportSections(items: LoopItem[]): ExportSection[] {
       duration: Math.max(0, l.end - l.start),
       section: l.label || 'loop',
     }));
+}
+
+/** Lyrics export as labelled intervals, word or line alike — a lyric is a
+ *  span from `time` to `end` — labelled with what is sung. A layer holding
+ *  both lines and the words inside them writes both, overlapping, as it draws
+ *  them. A lyric with no usable end is an instant. */
+export function lyricsItemsToExportSections(items: readonly LyricsItem[]): ExportSection[] {
+  return items
+    .slice()
+    .sort((a, b) => a.time - b.time)
+    .map((l) => ({
+      start: l.time,
+      duration: typeof l.end === 'number' && l.end > l.time ? l.end - l.time : 0,
+      section: l.text || (l.kind === 'line' ? 'line' : 'word'),
+    }));
+}
+
+/** A lyrics layer as MIDI: every word a lyric event, split into its
+ *  syllables where the annotator laid them on the word's onsets (only those
+ *  inside the word, as the lane draws them); every line a marker. No notes —
+ *  a lyric says what is sung, not at what pitch. */
+export function convertLyricsToMidi(
+  items: readonly LyricsItem[],
+  opts: MidiMarkersOptions & { name?: string } = {},
+): Uint8Array {
+  const lyrics: { time: number; text: string }[] = [];
+  const lines: LyricsItem[] = [];
+  for (const it of items) {
+    if (it.kind === 'line') { lines.push(it); continue; }
+    const end = typeof it.end === 'number' ? it.end : it.time;
+    const sung = (it.onsets ?? [])
+      .filter((o) => o.text && o.time >= it.time - 1e-6 && o.time <= end + 1e-6)
+      .sort((a, b) => a.time - b.time);
+    if (sung.length === 0) { lyrics.push({ time: it.time, text: it.text }); continue; }
+    // A syllable laid after the word's start leaves the start unsung unless
+    // the word itself is written there.
+    if (sung[0].time > it.time + 1e-6) lyrics.push({ time: it.time, text: it.text });
+    for (const o of sung) lyrics.push({ time: o.time, text: o.text! });
+  }
+  return convertToMidiNotes([], {
+    ...opts,
+    lyrics,
+    markers: lyricsItemsToExportSections(lines),
+  });
+}
+
+/** The figure's name as an export label, with how this play differed from
+ *  it — `A`, `A · fill`. */
+function riffPlayLabel(name: string, event: string | undefined): string {
+  return event && event !== 'exact' ? `${name} · ${event}` : name;
+}
+
+/** A riff-patterns layer as labelled intervals: one per play of a node —
+ *  every repeat of every instance, every entry of its sequence, every leaf of
+ *  a combo — labelled with the node's name and, when the play differed from
+ *  the node, how (`A · fill`). Rests are left out: a marker file says where
+ *  something plays. The same plays the lane draws (`riffPlays`), so the file
+ *  and the lane cannot disagree about where A is. */
+export function riffLayerToExportSections(
+  layer: Pick<AnnotationLayer<'riff-patterns'>, 'items' | 'nodes' | 'combos'>,
+  bpm: number | undefined,
+): ExportSection[] {
+  return riffPlays(layer, bpm)
+    .filter((p) => p.node)
+    .map((p) => ({
+      start: p.start,
+      duration: Math.max(0, p.end - p.start),
+      section: riffPlayLabel(p.node!.name || 'riff', p.occ?.event),
+    }));
+}
+
+/** General MIDI drum keys for the drums a copied groove can be. */
+const GM_DRUM_KEY: Record<string, number> = {
+  kick: 36, snare: 38, hat: 42, toms: 45, crash: 49, ride: 51,
+};
+/** A struck note with no pitch on a layer that names no drum: a rhythm, so
+ *  it goes on the drum channel, as a side stick — a click a DAW will play
+ *  without implying a pitch nobody annotated. */
+const GM_UNNAMED_HIT = 37;
+const GM_DRUM_CHANNEL = 9;
+
+/** Every note a riff layer plays, in song seconds, as MIDI notes: a note with
+ *  a pitch at that pitch, a hit without one on the drum channel at its drum's
+ *  key (`layer.drum`), so a copied kick groove opens in a DAW as a kick
+ *  pattern. Velocity is the note's accent; no accent is full strength. */
+export function riffLayerToMidiNotes(
+  layer: Pick<AnnotationLayer<'riff-patterns'>, 'items' | 'nodes' | 'combos' | 'drum'>,
+  bpm: number | undefined,
+): MidiNote[] {
+  const drumKey = (layer.drum && GM_DRUM_KEY[layer.drum]) || GM_UNNAMED_HIT;
+  const out: MidiNote[] = [];
+  for (const p of riffPlays(layer, bpm)) {
+    for (const n of riffPlayNotes(p)) {
+      const pitched = typeof n.note === 'number' && n.note >= 0 && n.note <= 127;
+      out.push({
+        time: n.time,
+        end: n.end,
+        midi: pitched ? Math.round(n.note!) : drumKey,
+        velocity: n.accent ?? ACCENT_FULL,
+        ...(pitched ? {} : { channel: GM_DRUM_CHANNEL }),
+      });
+    }
+  }
+  return out.sort((a, b) => a.time - b.time);
 }
 
 /** Grid resolution the user can pick when exporting the grid-labels sidecar.

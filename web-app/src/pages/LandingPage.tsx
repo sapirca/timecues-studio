@@ -57,7 +57,7 @@ const BUILD_TIME_SHORT = BUILD_TIME_ISO
 export function LandingPage() {
   const navigate = useNavigate();
   const { annotator } = useAnnotator();
-  const { isDemo } = useDemo();
+  const { isDemo, exitDemoKeepWork } = useDemo();
   // The synthetic demo annotator is not a real identity; treat the user as
   // anonymous on the chooser so the corpus card doesn't falsely advertise
   // "Signed in" / "Continue →" for a session that still needs real auth.
@@ -113,8 +113,13 @@ export function LandingPage() {
   }, [annotatorId]);
 
   const goWithAuth = (returnTo: string) => {
-    if (realAnnotator) navigate(returnTo);
-    else navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+    if (realAnnotator) { navigate(returnTo); return; }
+    // From a demo tab the corpus card is a way OUT of the demo: the demo
+    // visitor counts as signed in, so /login would wave it straight through
+    // to the corpus as the demo user — which is where a Google sign-in from
+    // a demo tab used to land.
+    if (isDemo) exitDemoKeepWork();
+    navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`);
   };
 
   const corpusName = summary?.name ?? DEFAULT_NAME;
@@ -153,6 +158,18 @@ export function LandingPage() {
                 'Try it anonymously, or sign in to work on a real corpus.'
               )}
             </p>
+          </div>
+
+          {/* The signature hairline, as on the songs list and LOL's /studios. */}
+          <div
+            role="separator"
+            className="max-w-[520px] mx-auto flex items-center gap-2 select-none"
+          >
+            <div className="flex-1 h-px bg-gradient-to-r from-amber-400 via-fuchsia-500 to-cyan-400 shadow-[0_0_6px_rgba(217,70,239,0.35)]" />
+            <span className="text-[9px] uppercase tracking-[0.22em] font-semibold text-slate-400">
+              Get started
+            </span>
+            <div className="flex-1 h-px bg-gradient-to-r from-cyan-400 via-fuchsia-500 to-amber-400 shadow-[0_0_6px_rgba(217,70,239,0.35)]" />
           </div>
 
           {/* Two cards: Demo + exactly ONE of (new dataset | enter existing),
@@ -205,7 +222,7 @@ export function LandingPage() {
                 title={summary ? `Enter ${corpusName}` : 'Enter dataset'}
                 body={describeCorpus(summary, songCount, !!realAnnotator)}
                 cta={realAnnotator ? 'Continue →' : 'Sign in →'}
-                onClick={() => goWithAuth('/prep')}
+                onClick={() => goWithAuth('/annotate')}
               />
             )}
           </div>

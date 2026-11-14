@@ -255,7 +255,7 @@ describe('customScripts URL contract', () => {
       body: {
         detector: {
           name: 'x', file: '/abs/x.py', status: 'ok', label: 'X',
-          output_kind: 'boundary', is_algorithm: true, is_annotation: false,
+          output_kind: 'boundary', is_annotation: false,
           description: '', version: '0.1', errors: [],
         },
       },

@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAnnotator } from '../context/AnnotatorContext';
 import { useDemo } from '../context/DemoContext';
-import { useSettings } from '../context/SettingsContext';
 import { useVisibleWorkspaceTabs, tabForPath, type WorkspaceTab } from '../components/workspaceTabs';
 import { loadDatasetConfig } from '../services/datasetConfig';
 import { requestPausePlayback } from '../utils/playerEvents';
@@ -17,23 +16,9 @@ import { switchToDesktop } from './mobileMode';
  *   bottom bar  — the desktop workspace tabs, same names, same order, same
  *                 accent colours, same who-sees-what rules. It is the desktop
  *                 tab strip moved to where a thumb is, not a new navigation.
- *
- * Setlist is the one desktop tab left out of the bar: it is experimental and a
- * sixth tab does not fit a phone, so it lives in the account panel instead.
  */
 
 const INSPECTOR_PATHS = new Set(['/prep', '/annotate', '/inspect']);
-
-/** Bottom-bar names. The desktop labels ("Annotator Tool", "Algorithm
- *  Inspect") do not fit five-across at 390px; these are their first words. */
-const SHORT_LABEL: Record<WorkspaceTab, string> = {
-  prep: 'Dataprep',
-  annotate: 'Annotate',
-  inspect: 'Inspect',
-  playground: 'Playground',
-  team: 'Team',
-  setlist: 'Setlist',
-};
 
 const ACCENT_TEXT: Record<string, string> = {
   emerald: 'text-emerald-300',
@@ -99,7 +84,7 @@ export function MobileTopBar() {
 
   return (
     <header
-      className="sticky top-0 z-[70] flex flex-col bg-[#0a0b0d]/95 backdrop-blur border-b border-white/[0.08]"
+      className="sticky top-0 z-[70] flex flex-col bg-[#0a0b0d] border-b border-white/[0.08]"
       style={{ height: 'var(--tc-header-h)' }}
     >
     <div className="h-12 shrink-0 flex items-center gap-2 px-3">
@@ -121,7 +106,7 @@ export function MobileTopBar() {
         </button>
       ) : (
         <span className="flex-1 min-w-0 text-[15px] font-semibold text-white truncate">
-          {here ? SHORT_LABEL[here.id] : pathname === '/settings' ? 'Settings' : 'TimeCues Studio'}
+          {here ? here.label : pathname === '/settings' ? 'Settings' : 'TimeCues Studio'}
         </span>
       )}
       {isDemo && (
@@ -175,13 +160,13 @@ export function MobileTabBar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { setPanel } = useMobile();
-  const tabs = useVisibleWorkspaceTabs().filter((t) => t.id !== 'setlist');
+  const tabs = useVisibleWorkspaceTabs();
   const active = tabForPath(pathname);
 
   return (
     <nav
       aria-label="Workspaces"
-      className="fixed inset-x-0 bottom-0 z-[70] flex bg-[#0d0f12]/97 backdrop-blur border-t border-white/[0.08]"
+      className="fixed inset-x-0 bottom-0 z-[70] flex bg-[#0d0f12]/97 border-t border-white/[0.08]"
       style={{ height: 'var(--tc-nav-h)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
     >
       {tabs.map((t) => {
@@ -205,7 +190,7 @@ export function MobileTabBar() {
           >
             {isActive && <span className={`absolute top-0 left-1/4 right-1/4 h-[2px] rounded-b ${ACCENT_BAR[t.accent]}`} />}
             <TabIcon id={t.id} />
-            <span className="truncate max-w-full px-0.5">{SHORT_LABEL[t.id]}</span>
+            <span className="truncate max-w-full px-0.5">{t.label}</span>
           </button>
         );
       })}
@@ -255,7 +240,6 @@ export function MobileAccountPanel() {
   const navigate = useNavigate();
   const { annotator, signOut } = useAnnotator();
   const { isDemo, requestExitDemo } = useDemo();
-  const { settings } = useSettings();
   const { panel, setPanel } = useMobile();
   const [corpusName, setCorpusName] = useState<string | null>(null);
   useEffect(() => {
@@ -287,9 +271,6 @@ export function MobileAccountPanel() {
         </div>
       )}
       <PanelRow label="Settings" onClick={() => go('/settings')} />
-      {settings.experimentalSetlist && !isDemo && (
-        <PanelRow label="Setlist" hint="Experimental" onClick={() => go('/setlist')} />
-      )}
       <PanelRow label="Home" onClick={() => {
         if (isDemo) { setPanel(null); requestExitDemo(() => navigate('/')); return; }
         go('/');

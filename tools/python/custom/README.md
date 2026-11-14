@@ -39,6 +39,52 @@ values across files are flagged on every conflicting file.
 
 ---
 
+## Packages
+
+Related detectors can live together in a **package**: a folder inside this
+one (or inside `custom-default/`), with an optional `package.json`:
+
+```
+custom/beat-kit/
+    package.json    {"title": "Beat kit", "description": "…", "author": "…",
+                     "version": "1.2", "bundle": ["my_helpers"]}  (all optional)
+    kick_finder.py  one detector per .py directly in the folder
+    lib/            subfolders hold helper code the detectors import
+```
+
+The `/custom` page lists detectors under their package's title, and each
+package has **Edit package** (its `package.json`, other keys kept), **Share
+package** (downloads `<id>.zip`) and **Remove** (moves the folder to
+`.trash/`). **New package** makes an empty folder with a `package.json`, and a
+detector moves between packages by drag, by its **Move to package** menu, or by
+its **Package** picker — only the file moves, its name and outputs stay
+(`custom_server.move_script`). **Install package** unpacks a zip back into this
+folder.
+
+An archived detector is listed by name in `archived.json` here. Its file stays
+put and the Playground still opens it, but the registry leaves it out unless
+asked (`?include_archived=1`, which only the Playground sends), so Algorithm
+Inspect never lists it, and Share package leaves it out of the zip. A zip of the folder is the whole format: unzipping it here by hand and
+clicking **Reload** works the same. The logic is in
+[`custom_packages.py`](../custom_packages.py); the loader's side (which files
+count, package titles, and one package folder on `sys.path` at a time) is in
+[`custom_loader.py`](../custom_loader.py).
+
+`"public": false` in `package.json` keeps the package to signed-in team
+members: a Demo Mode visitor, or a caller with no identity, gets a registry
+without its detectors and a cache miss for their outputs, source and zip
+(`custom_server.py`, "Private packages"). Use it for a package whose licences
+allow private use only — it can then run on our server without the public demo
+showing what it produced. It hides; it is not access control: the identity is
+the `X-Annotator-Id` header, which nothing verifies.
+
+`bundle` names folders under `tools/python/` that the package's detectors
+import but that another install may not have. Share adds just the modules
+the detectors reach (followed through their own imports) under the same
+path inside the zip, e.g. `beat-kit/my_helpers/onsets.py`.
+
+---
+
 ## Quick start
 
 ```bash
@@ -105,7 +151,7 @@ loading, feature extraction, persistence — happens around it.
 | `tools/python/custom_runner.py` | Run + run-time validation + persistence. |
 | `tools/python/custom_server.py` | HTTP server on `:8005`. Auto-spawned by Vite in dev. |
 | `data/algorithm-outputs/custom/<name>/<slug>.json` | Cached run envelopes (algorithm-mode). |
-| `data/annotations/custom/<name>/<annotator>/<slug>.json` | Editable annotations (annotation-mode, when `is_annotation=True`). |
+| `data/annotations/custom/<name>/<annotator>/<slug>.json` | Each annotator's ✓/✗ on a boundary detector's items (when `review=True`). |
 
 Paths are wired through [`tools/python/paths.py`](../paths.py) (Python side)
 and [`web-app/dataPaths.ts`](../../../web-app/dataPaths.ts) (TS side). If
@@ -120,8 +166,8 @@ The contract is strict because user code is untrusted-by-default:
 - **Load-time** (in `custom_loader.py`): the file must define exactly one
   `CustomDetector` subclass. `name` must match `^[a-z][a-z0-9_-]{0,30}$`
   and be unique. `label` is non-empty and ≤ 80 chars. `output_kind` is one
-  of `"boundary"` / `"cue"`. At least one of `is_algorithm` /
-  `is_annotation` is `True`. `detect()` is overridden.
+  of `"boundary"` / `"cue"`. `is_annotation` / `review`, when set, are real
+  bools. `detect()` is overridden.
 - **Run-time** (in `custom_runner.py`): every returned item is validated
   field-by-field against `Boundary` / `Cue`. Out-of-bounds times, wrong
   types, bad `importance` values — each produces a structured error with
@@ -150,7 +196,7 @@ curl -s http://localhost:8005/api/custom-scripts | python -m json.tool
 # Upload a deliberately-broken detector to see the error envelope.
 curl -s -X POST http://localhost:8005/api/custom-scripts/upload \
   -H 'Content-Type: application/json' \
-  -d '{"name":"BAD NAME","code":"from custom_api import CustomDetector\nclass X(CustomDetector): name=\"\"; label=\"\"; output_kind=\"section\"; is_algorithm=False; is_annotation=False"}' \
+  -d '{"name":"BAD NAME","code":"from custom_api import CustomDetector\nclass X(CustomDetector): name=\"\"; label=\"\"; output_kind=\"section\"; is_annotation=\"yes\""}' \
   | python -m json.tool
 ```
 

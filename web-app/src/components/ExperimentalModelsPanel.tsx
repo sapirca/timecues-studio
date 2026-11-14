@@ -64,7 +64,6 @@ export interface ExperimentalModelsPanelProps {
   spanFamilyEnabled: boolean;
   cueExtrasEnabled: boolean;
   loopFamilyEnabled: boolean;
-  lyricsFamilyEnabled: boolean;
   patternFamilyEnabled: boolean;
 }
 
@@ -85,7 +84,6 @@ const CUE_EXTRAS_SIZE_BY_ID: Record<string, string> = {
   'librosa-key':      'pure DSP',
   'autochord-chords': '~2 MB (pip)',
   'librosa-onsets':   'pure DSP',
-  'drum-transients':  'pure DSP',
 };
 
 const PERCUSSIVE_SIZE_BY_ID: Record<string, string> = {
@@ -94,7 +92,8 @@ const PERCUSSIVE_SIZE_BY_ID: Record<string, string> = {
 
 const LYRICS_SIZE_BY_ID: Record<string, string> = {
   'whisper-base':       '~140 MB',
-  'ctc-forced-aligner': '~360 MB',
+  'ivrit':              '~3.2 GB',
+  'ctc-forced-aligner': '~360 MB · Hebrew ~1.3 GB',
 };
 
 const PATTERN_SIZE_BY_ID: Record<string, string> = {
@@ -105,7 +104,6 @@ export function ExperimentalModelsPanel({
   spanFamilyEnabled,
   cueExtrasEnabled,
   loopFamilyEnabled,
-  lyricsFamilyEnabled,
   patternFamilyEnabled,
 }: ExperimentalModelsPanelProps) {
   const [rows, setRows] = useState<Row[]>([]);
@@ -267,7 +265,9 @@ export function ExperimentalModelsPanel({
       }
     }
 
-    if (lyricsFamilyEnabled) {
+    // The lyrics models are listed whatever the flags say: Lyrics is not an
+    // experimental type, so there is no switch to wait for.
+    {
       const lyricsAlgos = await listLyricsAlgorithms();
       if (lyricsAlgos === null) {
         next.push({
@@ -323,7 +323,7 @@ export function ExperimentalModelsPanel({
 
     setRows(next);
     setLoading(false);
-  }, [spanFamilyEnabled, cueExtrasEnabled, loopFamilyEnabled, lyricsFamilyEnabled, patternFamilyEnabled]);
+  }, [spanFamilyEnabled, cueExtrasEnabled, loopFamilyEnabled, patternFamilyEnabled]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -352,8 +352,6 @@ export function ExperimentalModelsPanel({
       await initOne(r);
     }
   }, [rows, initOne]);
-
-  if (!spanFamilyEnabled && !cueExtrasEnabled && !loopFamilyEnabled && !lyricsFamilyEnabled && !patternFamilyEnabled) return null;
 
   // Sum the MB hint baked into each row's `size` string so the user knows
   // the rough bandwidth cost before clicking "Initialize all". Rows that

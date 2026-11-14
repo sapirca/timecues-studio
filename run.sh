@@ -4,14 +4,6 @@ set -e
 cd "$(dirname "$0")"
 
 # ── CLI flags ──────────────────────────────────────────────────────────────
-# --with-dj   Enable the experimental Setlist workspace (DJ-style corpus
-#             ordering). v0 has no extra Python deps — it reuses the cached
-#             BPM detectors — so this only auto-enables the client flag
-#             (via VITE_WITH_DJ → SettingsContext default). When the bigger
-#             DJ research lands (Schreiber key, chord transformer, MERT
-#             embeddings), heavy installs hook in under the WITH_DJ guard
-#             below.
-#
 # --torch     Select which PyTorch build to install: cpu (default) | gpu | none.
 #               cpu  → CPU-only wheels (~200 MB, no CUDA). The safe default.
 #               gpu  → CUDA wheels (pulls ~2.7 GB of nvidia/* libs; needs a GPU).
@@ -28,6 +20,18 @@ cd "$(dirname "$0")"
 #             OSS build) and is loaded by the dev server only when
 #             VITE_WITH_LOL=1. No extra Python deps.
 #
+# --reload    Restart the servers and pick up Python edits, installing
+#             nothing. Refuses to run beside --all or an explicit --torch,
+#             which ask for the opposite. A Python sidecar imports its modules once
+#             at startup and holds them for its whole life, so editing
+#             tools/python/*.py changes nothing until the process is replaced —
+#             and the failure is silent and confusing, because the server keeps
+#             answering happily with the code it loaded hours ago. (A detector
+#             can even report "import failed: cannot import name X" while X is
+#             right there in the file on disk.) `--reload` kills whatever holds
+#             the ports without asking, skips every install, and relaunches.
+#             Vite is not the reason it exists — Vite already hot-reloads.
+#
 # --all       Install EVERYTHING (the full-fat profile). By default run.sh is
 #             LEAN: it installs only the core deps (mir_eval / ruptures /
 #             librosa / sklearn / soundfile) so basic usage — boundary
@@ -38,8 +42,18 @@ cd "$(dirname "$0")"
 #             passed. The sibling `./run_all.sh` is just `./run.sh --all`.
 #             Servers for the heavy families still start in lean mode; they
 #             report "Deps missing" in the UI until you re-run with --all.
-WITH_DJ=0
+#
+# --trust-header  Let a dev script say who it is. The server normally knows you
+#             only from the signed session cookie it issued at sign-in, so a
+#             headless recorder or screenshot script cannot become your Google
+#             account. This sets TC_TRUST_ANNOTATOR_HEADER=1, which makes the
+#             server believe the `X-Annotator-Id` header / `annotator_id`
+#             cookie instead (web-app/server/auth.mjs). While it is on, ANY
+#             local request can claim ANY identity — use it for the recording
+#             session only, then restart without it.
+TRUST_HEADER=0
 WITH_LOL=0
+RELOAD=0
 FULL_INSTALL="${TIMECUES_FULL_INSTALL:-0}"   # 0 = lean (core only) | 1 = every model family
 TORCH_MODE=""      # empty = pick a default from the install profile (see below)
 for arg in "$@"; do
@@ -47,22 +61,25 @@ for arg in "$@"; do
     --all)
       FULL_INSTALL=1
       ;;
-    --with-dj)
-      WITH_DJ=1
-      ;;
     --with-lol)
       WITH_LOL=1
       ;;
+    --reload)
+      RELOAD=1
+      ;;
+    --trust-header)
+      TRUST_HEADER=1
+      ;;
     --torch=*)
-      TORCH_MODE="${arg#--torch=}"
+      TORCH_MODE="${arg#--torch=}"; TORCH_EXPLICIT=1
       ;;
     --torch)
       echo "ERROR: --torch needs a value, e.g. --torch=cpu|gpu|none" >&2
       exit 1
       ;;
-    --cpu)                    TORCH_MODE="cpu" ;;
-    --gpu)                    TORCH_MODE="gpu" ;;
-    --no-torch)               TORCH_MODE="none" ;;
+    --cpu)                    TORCH_MODE="cpu";  TORCH_EXPLICIT=1 ;;
+    --gpu)                    TORCH_MODE="gpu";  TORCH_EXPLICIT=1 ;;
+    --no-torch)               TORCH_MODE="none"; TORCH_EXPLICIT=1 ;;
     -h|--help)
       cat <<'USAGE'
 Usage: ./run.sh [options]
@@ -82,8 +99,19 @@ Usage: ./run.sh [options]
   --cpu|--gpu|--no-torch   Shorthands for the --torch values above.
                    Torch default: none in lean mode, cpu with --all. An explicit
                    --torch/--cpu/--gpu always wins over the profile default.
-  --with-dj        Enable the experimental Setlist workspace at /setlist.
   --with-lol       Enable the private light-visualization read API at /api/lol/*.
+  --reload         Restart the servers to pick up edits to tools/python/*.py.
+                   Kills whatever holds the ports without asking and installs
+                   nothing, so it is fast. A sidecar imports its modules once at
+                   startup, so a Python edit does nothing until you do this —
+                   and nothing warns you: the old code just keeps answering.
+                   Cannot be combined with --all or --torch/--cpu/--gpu: those
+                   install, --reload does not, and the script refuses rather
+                   than guessing which you meant.
+  --trust-header   Trust the X-Annotator-Id header / annotator_id cookie, so a
+                   headless dev script (video recorder, screenshots) can act as
+                   a signed-in user. Any local request can then claim any
+                   identity: use it only while recording, then restart without.
   -h, --help       Show this help and exit.
 
 Env:
@@ -139,6 +167,35 @@ case ":$PATH:" in
   *) export PATH="$HOME/.local/bin:$PATH" ;;
 esac
 
+# --reload is "replace the running processes", not "set the machine up". It
+# therefore forces every install off and answers the busy-ports prompt for you.
+# Torch is forced off too: Step 0 installs it regardless of SKIP_MODEL_INSTALL
+# because the core deps need it, which is right on a first run and wrong here —
+# torch is already present in a tree that has servers running, and re-resolving
+# it is the slowest thing the script can do. An explicit --torch/--cpu/--gpu
+# still wins, for the rare reload that means to change the build.
+if [ "$RELOAD" = "1" ]; then
+  # --reload means "replace the running processes". Anything that asks for an
+  # install contradicts it, and there is no sensible winner: silently honouring
+  # one leaves the user believing the other happened. Say so and stop.
+  if [ "$FULL_INSTALL" = "1" ]; then
+    echo "ERROR: --reload and --all contradict each other." >&2
+    echo "  --reload restarts the servers and installs nothing." >&2
+    echo "  --all installs every model family." >&2
+    echo "  Run ./run.sh --all once to install, then ./run.sh --reload to pick up edits." >&2
+    exit 1
+  fi
+  if [ "$TORCH_EXPLICIT" = "1" ]; then
+    echo "ERROR: --reload installs nothing, so --torch/--cpu/--gpu/--no-torch has no effect." >&2
+    echo "  To change the PyTorch build, run ./run.sh --all --torch=$TORCH_MODE (without --reload)." >&2
+    exit 1
+  fi
+  SKIP_MODEL_INSTALL=1
+  TIMECUES_KILL_PORTS=1
+  export TIMECUES_KILL_PORTS
+  TORCH_MODE="none"
+fi
+
 # Resolve the torch default from the install profile when the user didn't pick
 # one explicitly. Lean run.sh installs NO torch (stems / All-In-One / SPAN
 # degrade to "Deps missing"); --all defaults to the CPU build so those work
@@ -154,14 +211,13 @@ case "$TORCH_MODE" in
     exit 1
     ;;
 esac
-if [ "$FULL_INSTALL" = "1" ]; then
+if [ "$RELOAD" = "1" ]; then
+  # Colours are not defined this early in the script, so this line is plain.
+  echo "Reload: restarting servers to pick up code changes — no installs, ports killed without asking."
+elif [ "$FULL_INSTALL" = "1" ]; then
   echo "Install profile: FULL (--all) — every model family will be installed."
 else
   echo "Install profile: LEAN — core deps only. Re-run with --all (or ./run_all.sh) for the heavy model families."
-fi
-export VITE_WITH_DJ="$WITH_DJ"
-if [ "$WITH_DJ" = "1" ]; then
-  echo "DJ mode: Setlist workspace will be auto-enabled at /setlist."
 fi
 export VITE_WITH_LOL="$WITH_LOL"
 if [ "$WITH_LOL" = "1" ]; then
@@ -206,6 +262,7 @@ echo "Using Python: $TIMECUES_PYTHON  ($($PYTHON --version 2>&1))"
 # first run. SKIP_MODEL_INSTALL=1 force-skips them even under --all (e.g. when
 # you manage your own env or a venv that already has them).
 SKIP_MODEL_INSTALL="${SKIP_MODEL_INSTALL:-0}"
+
 
 # Effective switch for the heavy install block below: install the model
 # families only when the full profile is on AND the user hasn't force-skipped.
@@ -513,54 +570,31 @@ else
     try_install "$label" "$pkg"
   done < tools/requirements-experimental.txt
 
-  # autochord is split out because it pulls a C extension that needs the
-  # system `vamp-plugin-sdk` lib. We make a best-effort attempt to apt-
-  # install that lib first (silent skip on non-Debian / no-sudo hosts),
-  # then install autochord from its own requirements file.
-  if command -v apt-get >/dev/null 2>&1 && ! dpkg -s vamp-plugin-sdk >/dev/null 2>&1; then
-    echo "  Trying to apt-install vamp-plugin-sdk (autochord prereq)…"
-    sudo -n apt-get install -y -q vamp-plugin-sdk 2>/dev/null \
-      && echo "  vamp-plugin-sdk OK." \
-      || echo "  (vamp-plugin-sdk apt install skipped — no sudo or no apt; autochord may fail.)"
-  fi
-  # --no-build-isolation lets vamp's old sdist see numpy from the main env
-  # (see comment in tools/requirements-autochord.txt for the gory details).
-  try_install "autochord" --no-build-isolation -r tools/requirements-autochord.txt
-  # autochord (and vamp) call `pkg_resources` at import time. setuptools
-  # 81+ DROPPED pkg_resources entirely, and the run.sh's earlier
-  # "setuptools/wheel refresh" step lands setuptools 82+ on Python 3.12+
-  # hosts — so autochord's import then fails with
-  # `ModuleNotFoundError: pkg_resources`. We pin setuptools<81 here as
-  # a runtime constraint just for autochord's codepath. Pip's downgrade
-  # logic will install an older wheel even if a newer one is already
-  # present.
-  if "$PYTHON" -c "import autochord" 2>/dev/null; then
-    : # autochord imports cleanly — nothing to fix
-  elif "$PYTHON" -c "import vamp" 2>/dev/null && ! "$PYTHON" -c "import pkg_resources" 2>/dev/null; then
-    echo "  autochord can't import pkg_resources — downgrading setuptools to <81 (last release that still ships it)…"
-    pip_install 'setuptools<81' && echo "  setuptools<81 OK." || warn "setuptools<81 install failed — autochord will keep raising ModuleNotFoundError: pkg_resources"
-  fi
+  # autochord is NOT installed here, on purpose: the NNLS-Chroma Vamp plugin it
+  # loads is GPL, so — like Essentia — it is an opt-in the user installs
+  # themselves. NOTICE.md says how and what it costs. The sidecar reports
+  # "Deps missing" for autochord-chords until then; nothing else depends on it.
+  py_minor=$("$PYTHON" -c "import sys; print(sys.version_info[1])")
 
   # ── Step 4a: sidecars that need their own interpreter ─────────────────
-  # basic-pitch pins tensorflow<2.15.1 and autochord's bundled BiLSTM-CRF
-  # model is only loadable by keras<3 (i.e. tensorflow<2.16). Neither
-  # TF<2.16 NOR TF<2.15 has wheels for Python 3.12+, so bare-metal hosts
-  # on modern Python literally CAN'T install them in the main interpreter.
-  # tensorflow~=2.14.x satisfies BOTH constraints, so one 3.11 venv serves
-  # both sidecars. On a host already running 3.11 or older the main
-  # interpreter can take them (the env marker in requirements-experimental
-  # allows it), and the probe below simply finds them there.
+  # basic-pitch pins tensorflow<2.15.1, which has no wheels for Python 3.12+,
+  # so bare-metal hosts on modern Python CAN'T install it in the main
+  # interpreter. One 3.11 venv serves the pitch and cue-extras sidecars. It
+  # is also where an opted-in autochord goes (its model needs keras<3, the
+  # same tensorflow~=2.14 wall) — see NOTICE.md; run.sh never installs it.
+  # On a host already running 3.11 or older the main interpreter can take
+  # basic-pitch (the env marker in requirements-experimental allows it), and
+  # the probe below simply finds it there.
   VENV_PY311_CUE_PY=""
-  py_minor=$("$PYTHON" -c "import sys; print(sys.version_info[1])")
   if [ "$py_minor" -ge 12 ]; then
     echo ""
-    echo "Python 3.${py_minor} detected — basic-pitch + autochord need Python 3.11."
+    echo "Python 3.${py_minor} detected — basic-pitch needs Python 3.11."
     VENV_PY311_CUE_PY=$(ensure_sidecar_venv "py311-cue" ".cache/py311-cue" "3.11" \
-      "basic_pitch, autochord" \
+      "basic_pitch" \
       --stage1 "numpy" "setuptools<81" "wheel" "Cython" \
       --stage2 "setuptools<81" "tensorflow~=2.14.0" "librosa>=0.10.0" \
-               "soundfile>=0.12.0" "audioread>=3.0.0" "basic-pitch[onnx]" "autochord")
-    [ -n "$VENV_PY311_CUE_PY" ] && echo "  basic-pitch + autochord ready on $VENV_PY311_CUE_PY"
+               "soundfile>=0.12.0" "audioread>=3.0.0" "basic-pitch[onnx]")
+    [ -n "$VENV_PY311_CUE_PY" ] && echo "  basic-pitch ready on $VENV_PY311_CUE_PY"
     export VENV_PY311_CUE_PY
   fi
 
@@ -579,16 +613,6 @@ else
              "librosa>=0.9.0,<0.10.0" "scikit-learn>=1.0,<1.3" "msaf>=0.1.80")
   [ -n "$VENV_MSAF_PY" ] && echo "  MSAF ready on $VENV_MSAF_PY"
   export VENV_MSAF_PY
-
-  # ── Step 4b: DJ-specific deps (only with --with-dj) ───────────────────
-  # Reserved slot. The Setlist v0 needs nothing extra — it reads cached BPM
-  # via the existing bpm_server. Heavier scorers (Schreiber key CNN,
-  # Park chord transformer, MERT embeddings for vibe-matching) will plug in
-  # here as they land. Keeping the guard now so the future install lines
-  # don't change the public CLI surface.
-  if [ "$WITH_DJ" = "1" ]; then
-    echo "Installing DJ-specific deps… (none yet for Setlist v0 — slot reserved)"
-  fi
 
   # ── Step 5: prewarm heavy imports ─────────────────────────────────────
   # Cold-importing torch / allin1 / demucs takes 10-30 s the first time
@@ -671,13 +695,14 @@ ROWS = [
     ("JDCNet (h5py + .hdf5 weights)", "SPAN",              "h5py",              lambda: False),
     ("panns_inference",    "SPAN (PANNs CNN14)",          "panns_inference",   lambda: False),
     ("BeatNet",            "CUE (beats/downbeats/meter)", "BeatNet",           lambda: False),
-    # basic-pitch + autochord live in the .cache/py311-cue/ venv when
+    # basic-pitch (and an opted-in autochord) live in the .cache/py311-cue/ venv when
     # PY_MINOR >= 12. The probe checks the venv via subprocess so the
     # table reflects the actual sidecar runtime, not the host.
     ("basic_pitch",        "CUE (note onsets)",           "basic_pitch",       lambda: False),
     ("autochord",          "CUE extras",                  "autochord",         lambda: False),
     ("openai-whisper",     "LYRICS (Whisper-base)",       "whisper",           lambda: False),
     ("ctc-forced-aligner", "LYRICS (forced aligner)",     "ctc_forced_aligner", lambda: False),
+    ("transformers",       "LYRICS (Ivrit)",             "transformers",      lambda: False),
     ("dtai-locomotif",     "PATTERN (LoCoMotif)",         "locomotif.locomotif", lambda: False),
     # msaf always lives in .cache/msaf-venv/ — its numpy<1.24 pin conflicts
     # with core requirements.txt on EVERY host, not just modern ones.
@@ -692,6 +717,9 @@ VENV_SERVED = {
     "autochord":   (VENV_PY,   ".cache/py311-cue/",  False),
     "msaf":        (VENV_MSAF, ".cache/msaf-venv/",  True),
 }
+# Opt-in packages (copyleft pieces NOTICE.md lists): absent is the default
+# state, so it reads as Skipped, never as a failure to fix.
+OPT_IN = {"autochord": "optional — GPL Vamp plugin, opt-in (see NOTICE.md)"}
 ok, miss, skipped = [], [], []
 for label, section, mod, expected_skip in ROWS:
     if mod is None:
@@ -704,8 +732,12 @@ for label, section, mod, expected_skip in ROWS:
                 success, note = _check_in_venv(mod, venv_py)
                 if success:
                     ok.append((label, section, note))
+                elif mod in OPT_IN:
+                    skipped.append((label, section, OPT_IN[mod]))
                 else:
                     miss.append((label, section, note))
+            elif mod in OPT_IN:
+                skipped.append((label, section, OPT_IN[mod]))
             else:
                 miss.append((label, section, f"no {venv_dir} venv — re-run ./run.sh --all to build it"))
             continue
@@ -728,7 +760,9 @@ for label, section, mod, expected_skip in ROWS:
                 continue
         ok.append((label, section, "Ready"))
     except Exception as e:
-        if expected_skip():
+        if mod in OPT_IN:
+            skipped.append((label, section, OPT_IN[mod]))
+        elif expected_skip():
             skipped.append((label, section, f"intentionally skipped on Python 3.{PY_MINOR}"))
         else:
             miss.append((label, section, f"{type(e).__name__}: {e}"))
@@ -765,11 +799,11 @@ fi
 # ── Reuse sidecar venvs built by an earlier --all run ──────────────────────
 # The install steps above only run under --all. A LEAN rerun must still find
 # the venvs a previous full run left behind, otherwise msaf / basic-pitch /
-# autochord would launch on the main interpreter and report "Deps missing"
+# an opted-in autochord would launch on the main interpreter and report "Deps missing"
 # even though they are installed and one flag built them correctly. The probe
 # is a couple of imports, so this costs nothing on the lean path.
 if [ -z "${VENV_PY311_CUE_PY:-}" ]; then
-  VENV_PY311_CUE_PY=$(sidecar_venv_probe ".cache/py311-cue" "basic_pitch, autochord" || true)
+  VENV_PY311_CUE_PY=$(sidecar_venv_probe ".cache/py311-cue" "basic_pitch" || true)
   export VENV_PY311_CUE_PY
 fi
 if [ -z "${VENV_MSAF_PY:-}" ]; then
@@ -985,6 +1019,14 @@ echo
 echo "${C_BOLD}─── Starting the app ───────────────────────────────────────────────${C_OFF}"
 echo "  Open ${C_BOLD}http://localhost:${VITE_PORT}/${C_OFF}  ${C_DIM}(5173 is left free for the Docker stack)${C_OFF}"
 echo "  ${C_DIM}Ctrl-C here stops the dev server; the model servers keep running in the background.${C_OFF}"
+
+if [ "$TRUST_HEADER" = "1" ]; then
+  export TC_TRUST_ANNOTATOR_HEADER=1
+fi
+if [ "${TC_TRUST_ANNOTATOR_HEADER:-}" = "1" ]; then
+  echo "  ${C_BOLD}WARNING: identity header trusted (TC_TRUST_ANNOTATOR_HEADER=1).${C_OFF}"
+  echo "  ${C_DIM}Any local request can sign in as anyone. Restart without --trust-header when done.${C_OFF}"
+fi
 
 # TIMECUES_PYTHON propagates to the dev server so its /api/capabilities
 # probe inspects the exact same interpreter we installed into above.

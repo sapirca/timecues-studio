@@ -13,8 +13,38 @@ Endpoints
   DELETE /api/custom-scripts/:name              → move .py to custom/.trash + wipe cached results
   DELETE /api/custom-scripts/:name/outputs      → wipe algorithm cache + this annotator's
                                                    annotations for the detector (keeps the .py)
-  POST   /api/custom-scripts/run/:name          → query ?slug=...&force=1 → run + persist
+  POST   /api/custom-scripts/run/:name          → query ?slug=...&force=1[&strictness=0-100][&drum_source=auto|kit|bands] → run + persist
+                                                   [&section_source=auto|annotated|allin1]
+                                                   [&source=<one of the detector's sources>]
+                                                   [&switches=name,name] (ticked; empty = none)
+  POST   /api/custom-scripts/measure/:name      → query ?slug=..., body: what the detector's
+                                                   measure() reads (a lyrics lane's words) →
+                                                   its answer; nothing run or persisted
+  POST   /api/custom-scripts/run-window/:name   → body {slug, start, end, stems?, strictness?} (seconds) → run on
+                                                   that range only; items in song time, NOT
+                                                   persisted; returns a window_token
+  POST   /api/custom-scripts/merge-window/:name → body {token, mode: merge|replace} → fold that
+                                                   window run into the cached output and this
+                                                   annotator's edited copy (reviews re-keyed)
   GET    /api/custom-scripts/result/:name/:slug → cached envelope, or 200 + null when nothing cached
+  POST   /api/custom-scripts/drop-items/:name   → body {slug, indices} → delete those items from the
+                                                   song's cached output and this annotator's edited
+                                                   copy (reviews re-keyed); returns both
+  DELETE /api/custom-scripts/result/:name/:slug/lanes/:lane → drop that one lane from a "lanes"
+                                                   detector's cached output; returns the envelope
+  GET    /api/custom-scripts/packages           → every detector package (folder) + its manifest
+  GET    /api/custom-scripts/packages/:id/export → the package folder as <id>.zip
+  POST   /api/custom-scripts/packages/install   → body = a package .zip; ?filename=&replace=1
+  POST   /api/custom-scripts/packages           → body {title, id?, description?} → a new, empty
+                                                   package folder custom/<id>/ with its package.json
+  POST   /api/custom-scripts/packages/:id       → body {title?, description?, author?, version?,
+                                                   public?} → rewrite those package.json fields
+  POST   /api/custom-scripts/:name/move         → body {package: id | null} → move the file into
+                                                   that package, or out to the top of custom/
+  POST   /api/custom-scripts/:name/archive      → body {archived: bool} → archive / restore; an
+                                                   archived detector is left out of the registry
+                                                   (unless ?include_archived=1) and its package's zip
+  DELETE /api/custom-scripts/packages/:id       → move custom/<id>/ to custom/.trash
 
   GET    /api/custom-annotations/:name/:slug    → editable annotation copy (X-Annotator-Id),
                                                    or 200 + null when none saved yet
@@ -49,7 +79,9 @@ import json
 import os
 import re
 import sys
+import threading
 import traceback
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -59,28 +91,68 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
+import custom_loader  # noqa: E402
 from custom_loader import (  # noqa: E402
     CUSTOM_DIR,
-    EXPERIMENTAL_LOOPS_PATTERNS_KINDS,
+    write_archived_names,
     NAME_RE,
+    PACKAGE_ID_RE,
+    archived_names,
     is_default_file,
+    package_of,
+    package_ids,
+    read_package,
     scan,
 )
+from custom_api import strictness_level  # noqa: E402
+try:  # private: a public checkout has no generators.drum_hits (see custom_runner)
+    from generators.drum_hits import DRUM_SOURCES  # noqa: E402
+except ImportError:  # pragma: no cover - public bundle
+    DRUM_SOURCES = ("auto", "kit", "bands")
 from custom_runner import (  # noqa: E402
+    SECTION_SOURCES,
     delete_results_for,
+    drop_items,
+    drop_lane,
     get_cached,
     result_path,
+    merge_window,
+    measure,
+    merge_window_items,
+    remap_review,
     run,
+    run_window,
+)
+from custom_packages import (  # noqa: E402
+    MAX_PACKAGE_BYTES,
+    PackageError,
+    create_package,
+    export_package,
+    helpers_left_behind,
+    install_package,
+    list_packages,
+    uninstall_package,
+    update_package,
 )
 from paths import (  # noqa: E402
     CUSTOM_ANNOTATIONS_DIR,
     DATA_DIR,
     DETECTOR_OUTPUTS_DIR,
+    STEM_NAMES,
+    cache_name,
     safe_segment,
 )
-from server_common import cors_headers  # noqa: E402
+from server_common import cors_headers, parse_range  # noqa: E402
 
 DATASET_CONFIG_PATH = DATA_DIR / "dataset-config.json"
+
+# Window runs waiting for the annotator to Merge or Replace, by token. Held
+# here rather than sent back by the client so what lands in the cache is the
+# runner's own validated output. In memory: a restart only means running the
+# window again. Oldest dropped past the cap.
+_PENDING_WINDOWS: "dict[str, dict]" = {}
+_PENDING_WINDOWS_CAP = 32
+_PENDING_LOCK = threading.Lock()
 
 PORT = 8005
 ANNOTATOR_ID_RE = re.compile(r"^[a-z0-9._@+\-]+$")
@@ -176,21 +248,69 @@ def _truthy(qs: dict[str, list[str]], key: str) -> bool:
     return raw in ("1", "true", "yes")
 
 
-def _filtered_registry(*, include_experimental_loops_patterns: bool) -> list[dict]:
-    """Registry entries with loop/pattern detectors filtered out when the
-    `experimentalLoopsAndPatterns` UI flag is off.
+# ─── Private packages ────────────────────────────────────────────────────────
+# A package whose package.json says "public": false is for signed-in team
+# members only. A caller with no tier — the demo visitor, or no identity at
+# all — gets a registry without its detectors, and a cache miss, a 404 or an
+# empty answer from every endpoint that would hand over their source or their
+# outputs. Hidden, not refused: a 403 would announce what is there.
+#
+# Knowing which names a package holds means importing every detector file
+# (scan), which takes seconds, so the names are remembered from the last scan
+# and refreshed by every registry read. Before the first one, the first gated
+# request pays for a scan.
 
-    Matches the gating used in web-app/src/components/inspector-v2/shared/
-    tabConfig.ts — when the flag is off, the Loops/Patterns annotation tabs
-    are hidden and so are the detectors that emit those kinds, keeping the
-    registry and the UI consistent.
+_private_names: Optional[frozenset[str]] = None
+_private_lock = threading.Lock()
+
+
+def _private_package_ids() -> set[str]:
+    return {pid for pid in package_ids() if not read_package(pid)["public"]}
+
+
+def _remember_private(entries: list) -> None:
+    global _private_names
+    private = _private_package_ids()
+    names: set[str] = set()
+    for e in entries:
+        if e.package in private:
+            names.add(e.name)
+            if e.base_name:
+                names.add(e.base_name)
+    with _private_lock:
+        _private_names = frozenset(names)
+
+
+def _private_detector_names() -> frozenset[str]:
+    with _private_lock:
+        known = _private_names
+    if known is None:
+        _remember_private(scan())
+        with _private_lock:
+            known = _private_names
+    return known or frozenset()
+
+
+def _is_private_detector(name: str) -> bool:
+    """`name` as a URL carries it: a detector, `<name>__<stem>` for a per-stem
+    run, or the name of the detector's own lane result."""
+    names = _private_detector_names()
+    return name in names or name.split("__", 1)[0] in names
+
+
+def _filtered_registry(*, hide_private: bool, include_archived: bool = False) -> list[dict]:
+    """Registry entries with private packages' detectors filtered out when
+    `hide_private` (see "Private packages"), and archived detectors filtered
+    out unless `include_archived` — only the Playground asks for them, so they
+    are gone from every other list.
     """
     entries = scan()
-    if not include_experimental_loops_patterns:
-        entries = [
-            e for e in entries
-            if e.output_kind not in EXPERIMENTAL_LOOPS_PATTERNS_KINDS
-        ]
+    _remember_private(entries)
+    if hide_private:
+        private = _private_package_ids()
+        entries = [e for e in entries if e.package not in private]
+    if not include_archived:
+        entries = [e for e in entries if not e.archived]
     return [e.to_dict() for e in entries]
 
 
@@ -205,7 +325,9 @@ def _resolve_script_file(name: str) -> Optional[Path]:
     registry first; only fall back to `<name>.py` if scan() turned up nothing.
     """
     for entry in scan():
-        if entry.name == name:
+        # A detector run once per stem is registered as `<name>__<stem>`; its
+        # file is still addressed by the `name` written in it.
+        if entry.name == name or entry.base_name == name:
             p = Path(entry.file)
             if p.is_file():
                 return p
@@ -241,7 +363,7 @@ def write_script(name: str, code: str) -> dict:
     target.write_text(code, encoding="utf-8")
 
     for entry in scan():
-        if entry.name == name or Path(entry.file).stem == name:
+        if entry.name == name or entry.base_name == name or Path(entry.file).stem == name:
             return entry.to_dict()
     # Should not happen — the file was just written.
     return {"name": name, "file": str(target), "status": "load_error",
@@ -256,50 +378,72 @@ def _writable_target(existing: Optional[Path], name: str) -> Path:
     if existing is None:
         return CUSTOM_DIR / f"{name}.py"
     if is_default_file(existing):
-        return CUSTOM_DIR / existing.name
+        # Keep a shipped package's file inside its package folder.
+        target = CUSTOM_DIR / existing.resolve().relative_to(custom_loader.DEFAULT_CUSTOM_DIR.resolve())
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
     return existing
 
 
 _FLAG_RE = re.compile(
-    r"^(?P<lead>[ \t]*)(?P<key>is_algorithm|is_annotation)(?P<gap>[ \t]*=[ \t]*)"
+    r"^(?P<lead>[ \t]*)(?P<key>is_annotation|review)(?P<gap>[ \t]*=[ \t]*)"
     r"(?:True|False)(?P<tail>[ \t]*(#.*)?)$",
+    re.MULTILINE,
+)
+# Where a missing flag line goes: under the last manifest line the class has.
+_FLAG_ANCHOR_RE = re.compile(
+    r"^(?P<lead>[ \t]+)(?:is_annotation|output_kind|label|name)[ \t]*=.*$",
     re.MULTILINE,
 )
 
 
-def patch_script_flags(name: str, *, is_algorithm: bool, is_annotation: bool) -> dict:
-    """Rewrite is_algorithm / is_annotation on the named script and return its updated entry.
+def patch_script_flags(
+    name: str, *, is_annotation: Optional[bool] = None, review: Optional[bool] = None,
+) -> dict:
+    """Rewrite `is_annotation` and/or `review` on the named script and return
+    its updated entry. A flag left as None is not touched.
 
     Found via the regex above. Each match flips just the boolean literal; surrounding
-    whitespace and any trailing inline comment are preserved verbatim. Raises if the
-    file does not exist or either attribute line is missing (the contract requires both).
+    whitespace and any trailing inline comment are preserved verbatim. Both flags are
+    optional in the file (they default to False), so setting one the file does not
+    declare adds the line under the class's last manifest attribute.
     """
     if not _safe_name(name):
         raise ValueError(f"invalid name {name!r}")
-    if not (is_algorithm or is_annotation):
-        raise ValueError("at least one of is_algorithm / is_annotation must be True.")
 
     target = _resolve_script_file(name)
     if target is None:
         raise FileNotFoundError(f"no detector with name={name!r} in {CUSTOM_DIR}")
 
     src = target.read_text(encoding="utf-8")
-    values = {"is_algorithm": is_algorithm, "is_annotation": is_annotation}
+    values = {k: v for k, v in (("is_annotation", is_annotation), ("review", review)) if v is not None}
     seen: set[str] = set()
 
     def _replace(m: "re.Match[str]") -> str:
         key = m.group("key")
         seen.add(key)
+        if key not in values:
+            return m.group(0)
         literal = "True" if values[key] else "False"
         return f"{m.group('lead')}{key}{m.group('gap')}{literal}{m.group('tail')}"
 
     new_src = _FLAG_RE.sub(_replace, src)
-    missing = [k for k in values if k not in seen]
-    if missing:
-        raise ValueError(
-            f"could not find class attribute(s) {', '.join(missing)} in {name}.py — "
-            "open the file in the editor and add them, then save."
-        )
+    for key in ("is_annotation", "review"):
+        if key not in values or key in seen:
+            continue
+        # Class attributes only: stop at the first method, and keep to the
+        # indent of the first match so a `label = …` in a helper never counts.
+        body_end = re.search(r"^[ \t]+def[ \t]", new_src, re.MULTILINE)
+        anchors = [a for a in _FLAG_ANCHOR_RE.finditer(new_src, 0, body_end.start() if body_end else len(new_src))]
+        anchors = [a for a in anchors if a.group("lead") == anchors[0].group("lead")] if anchors else []
+        if not anchors:
+            raise ValueError(
+                f"could not find where to add {key} in {name}.py — "
+                "open the file in the editor and add it, then save."
+            )
+        anchor = anchors[-1]
+        line = f"\n{anchor.group('lead')}{key} = {'True' if values[key] else 'False'}"
+        new_src = new_src[:anchor.end()] + line + new_src[anchor.end():]
 
     if new_src != src:
         CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
@@ -309,6 +453,174 @@ def patch_script_flags(name: str, *, is_algorithm: bool, is_annotation: bool) ->
         if entry.name == name or Path(entry.file).stem == name:
             return entry.to_dict()
     raise RuntimeError("loader did not see the file after patch — try /reload")
+
+
+_CLASS_ATTR_RE = r"^(?P<lead>[ \t]+){key}(?P<gap>[ \t]*=[ \t]*)(?P<q>[\"'])(?P<value>.*?)(?P=q)"
+
+
+def _set_class_attr(src: str, key: str, fn) -> tuple[str, bool]:
+    """Rewrite the string literal of class attribute `key` with fn(old value).
+    Class attributes only — the search stops at the first method."""
+    body_end = re.search(r"^[ \t]+def[ \t]", src, re.MULTILINE)
+    m = re.compile(_CLASS_ATTR_RE.format(key=key), re.MULTILINE).search(
+        src, 0, body_end.start() if body_end else len(src))
+    if m is None:
+        return src, False
+    q = m.group("q")
+    new = f"{m.group('lead')}{key}{m.group('gap')}{q}{fn(m.group('value'))}{q}"
+    return src[:m.start()] + new + src[m.end():], True
+
+
+def _run_names(name: str) -> list[tuple[str, str]]:
+    """Every name a detector file's runs can be stored under, paired with its
+    stem suffix: the bare name, and `<name>__<stem>` for a detector declaring
+    several stems (see custom_loader._per_stem). Listed from STEM_NAMES rather
+    than read off the registry, so a file already moved or trashed still
+    finds them."""
+    return [(name, "")] + [(cache_name(name, s), f"__{s}") for s in STEM_NAMES]
+
+
+def _move_detector_data(old: str, new: str) -> None:
+    """Carry a renamed detector's cached runs, annotation copies and reviewed
+    outputs over to its new name — one folder per stem it runs on. Each
+    envelope records its detector's name, so the moved files are rewritten to
+    match."""
+    import custom_runner
+    for old_run, suffix in _run_names(old):
+        new_run = f"{new}{suffix}"
+        for base in (custom_runner.CUSTOM_RESULTS_DIR, CUSTOM_ANNOTATIONS_DIR, DETECTOR_OUTPUTS_DIR):
+            src, dest = Path(base) / old_run, Path(base) / new_run
+            if not src.is_dir() or dest.exists():
+                continue
+            src.rename(dest)
+            for p in dest.rglob("*.json"):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(data, dict) and data.get("name") == old_run:
+                    data["name"] = new_run
+                    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def copy_script(name: str, new_name: str, *, move: bool = False) -> dict:
+    """Duplicate detector `name` as `new_name` — or, with `move`, rename it.
+
+    The copy is written beside the original (a shipped example's copy lands in
+    the matching folder under custom/), named `<new_name>.py`, with the
+    class's `name` rewritten. A duplicate's label gains " (copy)" so the two
+    read apart in every list. A rename removes the old file and carries its
+    cached runs and annotators' work over to the new name. A shipped example
+    cannot be renamed — duplicate it instead."""
+    if not _safe_name(name):
+        raise ValueError(f"invalid name {name!r}")
+    if not _safe_name(new_name):
+        raise ValueError(
+            f"invalid name {new_name!r}: lowercase letters, digits, _ and - only, "
+            "starting with a letter, at most 31 characters."
+        )
+    if new_name == name:
+        raise ValueError("the new name is the same as the old one.")
+    source = _resolve_script_file(name)
+    if source is None:
+        raise FileNotFoundError(f"no detector named {name!r}")
+    if move and is_default_file(source):
+        raise ShippedDetectorError(
+            f'"{name}" is a shipped example and can\'t be renamed. Duplicate it instead.'
+        )
+    if any(new_name in (e.name, e.base_name) for e in scan()):
+        raise ValueError(f'a detector named "{new_name}" already exists.')
+    folder = _writable_target(source, name).parent
+    target = folder / f"{new_name}.py"
+    if target.exists():
+        raise ValueError(f"{target.name} already exists in that folder.")
+
+    code, found = _set_class_attr(source.read_text(encoding="utf-8"), "name", lambda _old: new_name)
+    if not found:
+        raise ValueError(
+            f"could not find the class's name = \"{name}\" line in {source.name} — "
+            "open the file, change it by hand, and save."
+        )
+    if not move:
+        code, _ = _set_class_attr(code, "label", lambda old: f"{old} (copy)")
+
+    folder.mkdir(parents=True, exist_ok=True)
+    target.write_text(code, encoding="utf-8")
+    if move:
+        source.unlink()
+        _move_detector_data(name, new_name)
+        archived = archived_names()
+        if name in archived:
+            write_archived_names((archived - {name}) | {new_name})
+
+    for entry in scan():
+        if new_name in (entry.name, entry.base_name):
+            return entry.to_dict()
+    return {"name": new_name, "file": str(target), "status": "load_error",
+            "errors": [{"index": None, "field": None,
+                        "message": "loader did not see the file after the copy — try /reload",
+                        "value": None}]}
+
+
+def move_script(name: str, package: Optional[str]) -> dict:
+    """Move detector `name` into package `package` — or, with None, out of
+    every package to the top of custom/. The file keeps its name and so does
+    the detector, so its runs, annotations and reviewed outputs (all keyed by
+    name) stay with it. Refuses a shipped example, a destination that already
+    has a file by that name, and a move that would leave behind a helper the
+    detector imports from its package folder."""
+    if not _safe_name(name):
+        raise ValueError(f"invalid name {name!r}")
+    source = _resolve_script_file(name)
+    if source is None:
+        raise FileNotFoundError(f"no detector named {name!r}")
+    if is_default_file(source):
+        raise ShippedDetectorError(
+            f'"{name}" is a shipped example and can\'t be moved. Duplicate it, and move the copy.'
+        )
+    home = package_of(source)
+    if (home.name if home else None) == package:
+        raise ValueError(f'"{name}" is already there.')
+    root = custom_loader.CUSTOM_DIR
+    if package is None:
+        dest_dir = root
+    else:
+        if not PACKAGE_ID_RE.match(package) or package not in package_ids():
+            raise FileNotFoundError(f"no package named {package!r}")
+        dest_dir = root / package
+    target = dest_dir / source.name
+    if target.exists():
+        raise ValueError(f"{target.relative_to(root.parent)} already exists — rename one of the two first.")
+    left = helpers_left_behind(source, dest_dir)
+    if left:
+        raise ValueError(
+            f'"{name}" imports {", ".join(left)} from its package\'s folder, and '
+            f"{'that package' if package else 'a loose file'} doesn't have "
+            f"{'it' if len(left) == 1 else 'them'}. Copy the helper there first, or leave the detector where it is."
+        )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    for entry in scan():
+        if name in (entry.name, entry.base_name):
+            return entry.to_dict()
+    raise RuntimeError("loader did not see the file after the move — try /reload")
+
+
+def set_archived(name: str, archived: bool) -> dict:
+    """Archive detector `name`, or restore it. Archiving touches no file: the
+    detector stays in its package and keeps its outputs, the Playground still
+    opens it, and every other list, "every detector" run and package zip
+    leaves it out (see _filtered_registry, custom_packages.export_package)."""
+    if not _safe_name(name):
+        raise ValueError(f"invalid name {name!r}")
+    if _resolve_script_file(name) is None:
+        raise FileNotFoundError(f"no detector named {name!r}")
+    names = archived_names()
+    write_archived_names(names | {name} if archived else names - {name})
+    for entry in scan():
+        if name in (entry.name, entry.base_name):
+            return entry.to_dict()
+    raise RuntimeError("loader did not see the detector after archiving — try /reload")
 
 
 # Soft-deleted sources are moved here rather than unlinked, so a researcher
@@ -347,7 +659,11 @@ def delete_script(name: str) -> Optional[Path]:
             suffix += 1
         target.rename(dest)
         trashed_to = dest
-    delete_results_for(name)  # cached results are regenerable; wipe them
+    for run_name, _ in _run_names(name):
+        delete_results_for(run_name)  # cached results are regenerable; wipe them
+    archived = archived_names()
+    if target is not None and name in archived:
+        write_archived_names(archived - {name})
     return trashed_to
 
 
@@ -571,6 +887,11 @@ class Handler(BaseHTTPRequestHandler):
             "message": "Demo Mode cannot upload, modify, delete, or run custom detectors.",
         })
 
+    def _sees_private(self) -> bool:
+        """True when the caller may see private packages: a signed-in member
+        with a tier. The demo id and a missing id have none."""
+        return self._caller_tier()[1] is not None
+
     def _caller_tier(self) -> tuple[Optional[str], Optional[str]]:
         """Returns (annotator_id, tier). Both None if id is missing/invalid."""
         annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
@@ -612,11 +933,38 @@ class Handler(BaseHTTPRequestHandler):
         path = url.path
         qs = parse_qs(url.query)
 
+        sees_private = self._sees_private()
+
         if path == "/api/custom-scripts" or path == "/api/custom-scripts/":
-            include_lp = _truthy(qs, "include_experimental_loops_patterns")
             self._send(200, {"detectors": _filtered_registry(
-                include_experimental_loops_patterns=include_lp,
+                hide_private=not sees_private,
+                include_archived=_truthy(qs, "include_archived"),
             )})
+            return
+
+        if path == "/api/custom-scripts/packages":
+            packages = list_packages()
+            if not sees_private:
+                packages = [p for p in packages if p["public"]]
+            self._send(200, {"packages": packages})
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/packages/([^/]+)/export", path)
+        if m:
+            if not sees_private and unquote(m.group(1)) in _private_package_ids():
+                self._send(404, {"error": "not found"}); return
+            try:
+                filename, data = export_package(unquote(m.group(1)))
+            except PackageError as exc:
+                self._send(exc.status, {"error": str(exc)}); return
+            self.send_response(200)
+            for k, v in _cors().items():
+                self.send_header(k, v)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
 
         m = re.fullmatch(r"/api/custom-scripts/file/([^/]+)", path)
@@ -624,6 +972,8 @@ class Handler(BaseHTTPRequestHandler):
             name = unquote(m.group(1))
             if not _safe_name(name):
                 self._send(400, {"error": "invalid name"}); return
+            if not sees_private and _is_private_detector(name):
+                self._send(404, {"error": "not found"}); return
             src = read_script(name)
             if src is None:
                 self._send(404, {"error": "not found"}); return
@@ -635,7 +985,8 @@ class Handler(BaseHTTPRequestHandler):
             name, slug = unquote(m.group(1)), unquote(m.group(2))
             if not _safe_name(name) or not _safe_slug(slug):
                 self._send(400, {"error": "invalid name or slug"}); return
-            cached = get_cached(name, slug)
+            cached = None if not sees_private and _is_private_detector(name) \
+                else get_cached(name, slug)
             # Cache-miss is 200 + null, not 404 — these endpoints are polled on
             # every song load and a missing cache entry is the expected case.
             self._send(200, cached)
@@ -649,7 +1000,8 @@ class Handler(BaseHTTPRequestHandler):
             annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
             if not annotator:
                 self._send(401, {"error": "missing or invalid X-Annotator-Id header"}); return
-            data = read_annotation(name, annotator, slug)
+            data = None if not sees_private and _is_private_detector(name) \
+                else read_annotation(name, annotator, slug)
             self._send(200, data)
             return
 
@@ -660,7 +1012,10 @@ class Handler(BaseHTTPRequestHandler):
             annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
             if not annotator:
                 self._send(401, {"error": "missing or invalid X-Annotator-Id header"}); return
-            self._send(200, list_detector_outputs_for_annotator(annotator))
+            index = list_detector_outputs_for_annotator(annotator)
+            if not sees_private:
+                index = {k: v for k, v in index.items() if not _is_private_detector(k)}
+            self._send(200, index)
             return
 
         m = re.fullmatch(r"/api/detector-outputs/([^/]+)/(.+)", path)
@@ -671,7 +1026,8 @@ class Handler(BaseHTTPRequestHandler):
             annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
             if not annotator:
                 self._send(401, {"error": "missing or invalid X-Annotator-Id header"}); return
-            self._send(200, read_detector_output(name, annotator, slug))
+            self._send(200, None if not sees_private and _is_private_detector(name)
+                       else read_detector_output(name, annotator, slug))
             return
 
         self._send(404, {"error": "not found"})
@@ -694,10 +1050,95 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/custom-scripts/reload":
             if self._require_researcher_or_admin():
                 return
-            include_lp = _truthy(qs, "include_experimental_loops_patterns")
             self._send(200, {"detectors": _filtered_registry(
-                include_experimental_loops_patterns=include_lp,
+                hide_private=False,
+                include_archived=_truthy(qs, "include_archived"),
             )})
+            return
+
+        if path == "/api/custom-scripts/packages/install":
+            if self._require_researcher_or_admin():
+                return
+            data = self._read_body(MAX_PACKAGE_BYTES)
+            if data is None:
+                return
+            try:
+                pkg = install_package(
+                    data,
+                    filename=(qs.get("filename") or [""])[0],
+                    replace=_truthy(qs, "replace"),
+                )
+            except PackageError as exc:
+                self._send(exc.status, {"error": str(exc), **exc.extra}); return
+            except Exception as e:
+                self._send(500, {
+                    "error": f"install failed: {type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                })
+                return
+            self._send(200, {"package": pkg})
+            return
+
+        if path == "/api/custom-scripts/packages":
+            if self._require_researcher_or_admin():
+                return
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be a JSON object"}); return
+            try:
+                pkg = create_package(
+                    str(body.get("title", "")),
+                    package_id=str(body.get("id", "") or ""),
+                    description=str(body.get("description", "") or ""),
+                )
+            except PackageError as exc:
+                self._send(exc.status, {"error": str(exc)}); return
+            self._send(200, {"package": pkg})
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/packages/([^/]+)", path)
+        if m:
+            if self._require_researcher_or_admin():
+                return
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be a JSON object"}); return
+            try:
+                pkg = update_package(unquote(m.group(1)), body)
+            except PackageError as exc:
+                self._send(exc.status, {"error": str(exc)}); return
+            self._send(200, {"package": pkg})
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/([^/]+)/(move|archive)", path)
+        if m:
+            if self._require_researcher_or_admin():
+                return
+            name = unquote(m.group(1))
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be a JSON object"}); return
+            try:
+                if m.group(2) == "move":
+                    pkg = body.get("package")
+                    entry = move_script(name, str(pkg) if pkg else None)
+                else:
+                    entry = set_archived(name, bool(body.get("archived", True)))
+                self._send(200, {"detector": entry})
+            except ShippedDetectorError as e:
+                self._send(403, {"error": str(e)})
+            except FileNotFoundError as e:
+                self._send(404, {"error": str(e)})
+            except ValueError as e:
+                self._send(400, {"error": str(e)})
+            except Exception as e:
+                self._send(500, {"error": f"{m.group(2)} failed: {type(e).__name__}: {e}"})
             return
 
         if path == "/api/custom-scripts/upload":
@@ -721,6 +1162,175 @@ class Handler(BaseHTTPRequestHandler):
                 })
             return
 
+        m = re.fullmatch(r"/api/custom-scripts/run-window/([^/]+)", path)
+        if m:
+            if self._require_team():
+                return
+            name = unquote(m.group(1))
+            if not _safe_name(name):
+                self._send(400, {"error": "invalid name"}); return
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be a JSON object"}); return
+            slug = str(body.get("slug") or "").strip()
+            if not _safe_slug(slug):
+                self._send(400, {"error": "slug is required"}); return
+            try:
+                rng = parse_range(body, min_seconds=1.0, reads="anything")
+            except ValueError as e:
+                self._send(400, {"error": str(e)}); return
+            if rng is None:
+                self._send(400, {"error": "start and end are required"}); return
+            stems = body.get("stems")
+            if stems is not None and not (isinstance(stems, list)
+                                          and all(isinstance(s, str) for s in stems)):
+                self._send(400, {"error": "stems must be a list of stem names"}); return
+            strictness = body.get("strictness")
+            try:
+                strictness = None if strictness is None else strictness_level(strictness)
+            except ValueError as e:
+                self._send(400, {"error": str(e)}); return
+            # No overwrite check: nothing is written. The edited copy is only
+            # touched when the annotator merges or replaces from the client.
+            try:
+                envelope = run_window(name, slug, int(round(rng[0] * 1000)), int(round(rng[1] * 1000)),
+                                      stems or None, strictness)
+                if not envelope.get("fatal"):
+                    token = uuid.uuid4().hex
+                    with _PENDING_LOCK:
+                        _PENDING_WINDOWS[token] = {"name": name, "slug": slug, "envelope": envelope}
+                        while len(_PENDING_WINDOWS) > _PENDING_WINDOWS_CAP:
+                            _PENDING_WINDOWS.pop(next(iter(_PENDING_WINDOWS)))
+                    envelope = {**envelope, "window_token": token}
+                self._send(200, envelope)
+            except Exception as e:
+                self._send(500, {
+                    "error": f"run failed: {type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                })
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/drop-items/([^/]+)", path)
+        if m:
+            if self._require_team():
+                return
+            name = unquote(m.group(1))
+            if not _safe_name(name):
+                self._send(400, {"error": "invalid name"}); return
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            slug = body.get("slug") if isinstance(body, dict) else None
+            indices = body.get("indices") if isinstance(body, dict) else None
+            if not isinstance(slug, str) or not _safe_slug(slug):
+                self._send(400, {"error": "invalid slug"}); return
+            if not isinstance(indices, list):
+                self._send(400, {"error": "indices must be a list"}); return
+            try:
+                envelope, remap, base = drop_items(name, slug, indices)
+            except LookupError as e:
+                self._send(404, {"error": str(e)}); return
+            # The annotator's edited copy loses the same items, and its ✓/✗
+            # decisions follow the kept ones to their new indices.
+            edited_doc = None
+            annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
+            if annotator:
+                edited = _detector_output_path(name, annotator, slug)
+                if edited.is_file():
+                    doc = json.loads(edited.read_text())
+                    if len(doc.get("items") or []) == len(base):
+                        kind = envelope["output_kind"]
+                        doc["items"] = list(envelope["items"])
+                        doc["review"] = remap_review(doc.get("review") or {}, base, doc["items"], remap, kind)
+                        edited.write_text(json.dumps(doc, indent=2))
+                        edited_doc = doc
+            self._send(200, {"envelope": envelope, "edited": edited_doc})
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/merge-window/([^/]+)", path)
+        if m:
+            if self._require_team():
+                return
+            name = unquote(m.group(1))
+            if not _safe_name(name):
+                self._send(400, {"error": "invalid name"}); return
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be a JSON object"}); return
+            mode = body.get("mode")
+            if mode not in ("merge", "replace"):
+                self._send(400, {"error": "mode must be 'merge' or 'replace'"}); return
+            with _PENDING_LOCK:
+                pending = _PENDING_WINDOWS.get(str(body.get("token") or ""))
+            if pending is None or pending["name"] != name:
+                self._send(410, {"error": "window_run_expired",
+                                 "message": "That window run is no longer held — run it again."})
+                return
+            slug = pending["slug"]
+            win = pending["envelope"]["window"]
+            try:
+                out = merge_window(name, slug, win["start_ms"], win["end_ms"],
+                                   pending["envelope"]["items"], mode, win.get("parts"),
+                                   lanes=pending["envelope"].get("lanes"),
+                                   riff={k: pending["envelope"][k] for k in ("nodes", "combos")
+                                         if k in pending["envelope"]})
+            except Exception as e:
+                self._send(500, {"error": f"merge failed: {type(e).__name__}: {e}",
+                                 "traceback": traceback.format_exc()})
+                return
+            with _PENDING_LOCK:
+                _PENDING_WINDOWS.pop(str(body.get("token")), None)
+            # The annotator's edited copy gets the same window applied, and
+            # its ✓/✗ decisions follow their items to their new indices.
+            edited_doc = None
+            annotator = _safe_annotator(self.headers.get("X-Annotator-Id"))
+            if annotator:
+                edited = _detector_output_path(name, annotator, slug)
+                # A "lanes" detector has no review, so no edited copy to follow.
+                if edited.is_file() and out["envelope"]["output_kind"] != "lanes":
+                    try:
+                        doc = json.loads(edited.read_text())
+                        kind = out["envelope"]["output_kind"]
+                        base = list(doc.get("items") or [])
+                        items, remap, _ = merge_window_items(
+                            base, pending["envelope"]["items"],
+                            win["start_ms"], win["end_ms"], mode, kind, win.get("parts"))
+                        doc["items"] = items
+                        doc["review"] = remap_review(doc.get("review") or {}, base, items, remap, kind)
+                        doc["window_runs"] = out["envelope"]["window_runs"]
+                        edited.write_text(json.dumps(doc, indent=2))
+                        edited_doc = doc
+                    except Exception as e:
+                        self._send(500, {"error": f"edited copy not updated: {type(e).__name__}: {e}",
+                                         "envelope": out["envelope"]})
+                        return
+            self._send(200, {"envelope": out["envelope"], "edited": edited_doc, "stats": out["stats"]})
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/measure/([^/]+)", path)
+        if m:
+            if self._require_team():
+                return
+            name = unquote(m.group(1))
+            slug = (qs.get("slug", [""])[0] or "").strip()
+            if not _safe_name(name) or not _safe_slug(slug):
+                self._send(400, {"error": "invalid name or slug"}); return
+            body = self._read_json(MAX_ANNOTATION_BYTES)
+            if body is None:
+                return
+            try:
+                self._send(200, measure(name, slug, body))
+            except (ValueError, KeyError) as e:
+                self._send(400, {"error": str(e)})
+            except Exception as e:
+                self._send(500, {"error": f"measure failed: {type(e).__name__}: {e}",
+                                 "traceback": traceback.format_exc()})
+            return
+
         m = re.fullmatch(r"/api/custom-scripts/run/([^/]+)", path)
         if m:
             if self._require_team():
@@ -733,6 +1343,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "slug query param is required"}); return
             force = _truthy(qs, "force")
             confirm_overwrite = _truthy(qs, "confirm_overwrite")
+            strictness = (qs.get("strictness", [""])[0] or "").strip() or None
+            try:
+                strictness = None if strictness is None else strictness_level(strictness)
+            except ValueError as e:
+                self._send(400, {"error": str(e)}); return
+            drum_source = (qs.get("drum_source", [""])[0] or "").strip() or None
+            if drum_source is not None and drum_source not in DRUM_SOURCES:
+                self._send(400, {"error": f"drum_source must be one of {', '.join(DRUM_SOURCES)}"}); return
+            section_source = (qs.get("section_source", [""])[0] or "").strip() or None
+            if section_source is not None and section_source not in SECTION_SOURCES:
+                self._send(400, {"error": f"section_source must be one of {', '.join(SECTION_SOURCES)}"}); return
+            source = (qs.get("source", [""])[0] or "").strip() or None
+            # The ticked switches, comma-separated; present but empty = none
+            # ticked, absent = keep the song's last ones.
+            ticked = parse_qs(url.query, keep_blank_values=True).get("switches")
+            switches = None if ticked is None else {
+                s.strip() for s in ticked[0].split(",") if s.strip()}
             # Block re-run when this annotator has an edited copy on disk
             # unless they've explicitly confirmed the overwrite. Keeps the
             # algorithm cache regenerable without silently nuking review
@@ -755,7 +1382,9 @@ class Handler(BaseHTTPRequestHandler):
                     })
                     return
             try:
-                envelope = run(name, slug, force=force)
+                envelope = run(name, slug, force=force, strictness=strictness,
+                               drum_source=drum_source, section_source=section_source,
+                               annotator=annotator, switches=switches, source=source)
                 self._send(200, envelope)
             except Exception as e:
                 self._send(500, {
@@ -777,14 +1406,38 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 entry = patch_script_flags(
                     name,
-                    is_algorithm=bool(body.get("is_algorithm", False)),
-                    is_annotation=bool(body.get("is_annotation", False)),
+                    is_annotation=bool(body["is_annotation"]) if "is_annotation" in body else None,
+                    review=bool(body["review"]) if "review" in body else None,
                 )
                 self._send(200, {"detector": entry})
             except (ValueError, FileNotFoundError) as e:
                 self._send(400, {"error": str(e)})
             except Exception as e:
                 self._send(500, {"error": f"flag patch failed: {type(e).__name__}: {e}"})
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/([^/]+)/copy", path)
+        if m:
+            if self._require_researcher_or_admin():
+                return
+            name = unquote(m.group(1))
+            body = self._read_json(MAX_SCRIPT_BYTES)
+            if body is None:
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be a JSON object"}); return
+            try:
+                entry = copy_script(name, str(body.get("new_name", "")).strip(),
+                                    move=bool(body.get("move")))
+                self._send(200, {"detector": entry})
+            except ShippedDetectorError as e:
+                self._send(403, {"error": str(e)})
+            except FileNotFoundError as e:
+                self._send(404, {"error": str(e)})
+            except ValueError as e:
+                self._send(400, {"error": str(e)})
+            except Exception as e:
+                self._send(500, {"error": f"copy failed: {type(e).__name__}: {e}"})
             return
 
         m = re.fullmatch(r"/api/custom-annotations/([^/]+)/(.+)", path)
@@ -837,6 +1490,35 @@ class Handler(BaseHTTPRequestHandler):
         # annotator's own files.
         if path.startswith("/api/custom-scripts") and self._is_demo_caller():
             self._refuse_demo_playground(); return
+
+        m = re.fullmatch(r"/api/custom-scripts/result/([^/]+)/([^/]+)/lanes/([^/]+)", path)
+        if m:
+            if self._require_team():
+                return
+            name, slug, lane_id = (unquote(g) for g in m.groups())
+            if not _safe_name(name):
+                self._send(400, {"error": "invalid name"}); return
+            if not _safe_slug(slug):
+                self._send(400, {"error": "invalid slug"}); return
+            try:
+                envelope = drop_lane(name, slug, lane_id)
+            except LookupError as e:
+                self._send(404, {"error": str(e)}); return
+            self._send(200, envelope)
+            return
+
+        m = re.fullmatch(r"/api/custom-scripts/packages/([^/]+)", path)
+        if m:
+            if self._require_researcher_or_admin():
+                return
+            try:
+                trashed_to, names = uninstall_package(unquote(m.group(1)))
+            except PackageError as exc:
+                self._send(exc.status, {"ok": False, "error": str(exc)}); return
+            for name in names:
+                delete_results_for(name)
+            self._send(200, {"ok": True, "trashed_to": str(trashed_to), "detectors": names})
+            return
 
         m = re.fullmatch(r"/api/custom-scripts/([^/]+)/outputs", path)
         if m:

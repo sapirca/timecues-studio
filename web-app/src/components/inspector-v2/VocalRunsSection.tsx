@@ -19,7 +19,7 @@
  * word's timing later can't renumber a run that has already been annotated.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { AnnotationLayer, VocalRun } from '../../types/annotationLayer';
 import {
   DEFAULT_VOCAL_RUN_GAP_BARS,
@@ -31,6 +31,7 @@ import {
 } from '../../utils/vocalRuns';
 import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import { formatBeatPosition } from '../../utils/beatGrid';
+import { usePlayheadClock, usePlayheadEffect, usePlayheadValue } from '../../hooks/usePlayhead';
 
 /** Gap choices, in bars. Half a bar splits on every breath; eight fuses a verse
  *  into the chorus after it. Two is the default for the reason given in
@@ -49,8 +50,6 @@ interface VocalRunsSectionProps {
   /** Beat grid the run edges snap out to. Absent ⇒ runs still derive, just
    *  without bar-aligned edges. */
   grid?: VocalRunGrid;
-  /** Playhead, in track seconds — where a split lands. */
-  currentTime: number;
   onPatchLayer: (layerId: string, patch: Partial<AnnotationLayer<'lyrics'>>) => void;
   /** Hand the front to this layer's voice everywhere it sings, demoting whoever
    *  else held it. One document write, one undo. Absent ⇒ the action is hidden. */
@@ -66,7 +65,7 @@ function positionLabel(t: number, grid: VocalRunGrid | undefined): string {
 }
 
 export function VocalRunsSection({
-  layer, grid, currentTime, onPatchLayer, onAssignVocalLead, onSeek,
+  layer, grid, onPatchLayer, onAssignVocalLead, onSeek,
 }: VocalRunsSectionProps) {
   const runs = useMemo(() => resolveVocalRuns(layer, grid), [layer, grid]);
   const derived = vocalRunsAreDerived(layer);
@@ -81,6 +80,13 @@ export function VocalRunsSection({
   function writeRuns(next: VocalRun[]) {
     onPatchLayer(layer.id, { vocalRuns: next });
   }
+
+  // The playhead is where a split lands. Only the run it sits inside can be
+  // cut, so the list re-renders when that run changes, not every frame.
+  const playheadClock = usePlayheadClock();
+  const splittableRunId = usePlayheadValue(
+    (t) => runs.find((r) => t > r.start + 0.05 && t < r.end - 0.05)?.id ?? null,
+  );
 
   if (layer.items.length === 0) return null;
 
@@ -134,7 +140,7 @@ export function VocalRunsSection({
 
       <div className="flex flex-col gap-0.5 max-h-[160px] overflow-y-auto">
         {runs.map((run, i) => {
-          const splittable = currentTime > run.start + 0.05 && currentTime < run.end - 0.05;
+          const splittable = run.id === splittableRunId;
           return (
             <div
               key={run.id}
@@ -150,18 +156,10 @@ export function VocalRunsSection({
               <span className="flex-1 min-w-0 truncate text-[10px] text-slate-600">
                 {fmtTime(run.end - run.start)}
               </span>
-              <button
-                onClick={() => writeRuns(splitVocalRun(runs, run.id, currentTime))}
-                disabled={!splittable}
-                className="shrink-0 w-5 h-5 rounded text-[10px] text-slate-600 hover:text-slate-100 hover:bg-white/[0.06] disabled:text-slate-800 disabled:hover:bg-transparent transition-colors"
-                title={
-                  splittable
-                    ? `Cut this run at the playhead (${fmtTime(currentTime)}) — the voice does stop here`
-                    : 'Move the playhead inside this run to cut it'
-                }
-              >
-                ✂
-              </button>
+              <SplitRunButton
+                splittable={splittable}
+                onSplit={() => writeRuns(splitVocalRun(runs, run.id, playheadClock.get()))}
+              />
               <button
                 onClick={() => writeRuns(mergeVocalRunWithNext(runs, run.id))}
                 disabled={i >= runs.length - 1}
@@ -191,5 +189,30 @@ export function VocalRunsSection({
         </button>
       )}
     </div>
+  );
+}
+
+/** The ✂ on one run. Its tooltip names the playhead time while it is live, and
+ *  follows the clock itself so the list doesn't re-render to keep it current. */
+function SplitRunButton({ splittable, onSplit }: {
+  splittable: boolean;
+  onSplit: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  usePlayheadEffect((t) => {
+    if (!ref.current) return;
+    ref.current.title = splittable
+      ? `Cut this run at the playhead (${fmtTime(t)}) — the voice does stop here`
+      : 'Move the playhead inside this run to cut it';
+  }, [splittable]);
+  return (
+    <button
+      ref={ref}
+      onClick={onSplit}
+      disabled={!splittable}
+      className="shrink-0 w-5 h-5 rounded text-[10px] text-slate-600 hover:text-slate-100 hover:bg-white/[0.06] disabled:text-slate-800 disabled:hover:bg-transparent transition-colors"
+    >
+      ✂
+    </button>
   );
 }

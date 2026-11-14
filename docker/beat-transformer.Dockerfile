@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir "Cython>=0.29" \
 COPY tools/python/paths.py                     /app/tools/python/paths.py
 COPY tools/python/server_common.py             /app/tools/python/server_common.py
 COPY tools/python/beat_segments.py             /app/tools/python/beat_segments.py
+COPY tools/python/madmom_lean.py               /app/tools/python/madmom_lean.py
 COPY tools/python/vendor/                      /app/tools/python/vendor/
 COPY tools/python/beat_transformer_server.py   /app/tools/python/beat_transformer_server.py
 

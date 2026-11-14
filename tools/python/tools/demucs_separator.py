@@ -2,14 +2,16 @@
 """Demucs v4 stem separator (htdemucs_6s / htdemucs).
 
 Two models are selectable with --model:
-  6s (htdemucs_6s, default) → vocals, drums, bass, other, guitar, piano
-  4s (htdemucs)             → vocals, drums, bass, other
+  4s (htdemucs, default)    → vocals, drums, bass, other
+  6s (htdemucs_6s)          → vocals, drums, bass, other, guitar, piano
 
 The 6-source model splits the old single `other` stem into guitar + piano +
 a thinner `other` (synths / leads / pads / FX), so melodic content that used
 to be lumped together is now selectable on its own. It costs roughly 1.5x the
-wall time of the 4-source model, which is why 4s stays on offer for a quick
-pass (and for hosts where the extra two stems aren't worth the wait).
+wall time of the 4-source model — and it files a sample under whichever
+instrument it most resembles, so one sound can be cut across two stems (El
+Jaguar's turkey call went half to guitar, half to vocals). 4s keeps it whole,
+which is why it is the default.
 Writes WAV files to public/stems/<slug>/ and a manifest.json consumed by the Inspector UI.
 
 Audio is loaded via librosa (no ffmpeg needed). To stay within the ~2GB
@@ -52,7 +54,7 @@ import torch
 # default (and the name other scripts import) so existing callers are unchanged.
 MODEL_6S = "htdemucs_6s"
 MODEL_4S = "htdemucs"
-MODEL_NAME = MODEL_6S
+MODEL_NAME = MODEL_4S
 # Short aliases the HTTP layer passes through, plus the real names so either
 # spelling resolves. Anything else is rejected before a job starts.
 MODEL_ALIASES = {
@@ -246,7 +248,7 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default=MODEL_NAME,
-        help=f"Separation model: 6s ({MODEL_6S}, 6 stems, default) or 4s ({MODEL_4S}, 4 stems)",
+        help=f"Separation model: 4s ({MODEL_4S}, 4 stems, default) or 6s ({MODEL_6S}, 6 stems)",
     )
     args = parser.parse_args()
 

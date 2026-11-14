@@ -95,7 +95,6 @@ const ctx = (over: Partial<SongGroupingContext> = {}): SongGroupingContext => ({
   infos: {},
   layerStatuses: {},
   autoGuessStatuses: {},
-  includeLoopsAndPatterns: false,
   ...over,
 });
 

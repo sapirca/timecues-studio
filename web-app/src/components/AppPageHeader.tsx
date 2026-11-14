@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDemo } from '../context/DemoContext';
+import { UiScaleControl } from './UiScaleControl';
 
 interface BackConfig {
   /** Chip label after the arrow. Defaults to 'Back'. */
@@ -81,9 +82,10 @@ export function AppPageHeader({ back, rightSlot }: AppPageHeaderProps) {
           </span>
         )}
       </div>
-      {rightSlot != null && (
-        <div className="flex items-center gap-3 shrink-0">{rightSlot}</div>
-      )}
+      <div className="flex items-center gap-3 shrink-0">
+        <UiScaleControl />
+        {rightSlot}
+      </div>
     </header>
   );
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { ToolResultData } from '../../tools/runTool';
 import { useMirEvalSingle } from '../../services/mirEvalClient';
 import { evaluateCustom } from '../../utils/evaluation';
-import { clusterPoints, computeAllClusterTimes } from '../../utils/boundaryClustering';
+import { clusterPoints, clusterToAutoGuessPoint, computeAllClusterTimes } from '../../utils/boundaryClustering';
 import type { SectionBlock } from '../../types/sectionBlock';
 import type { AutoGuessCentroidMethod } from '../../types/autoGuess';
 import { sendConsensusConfig } from '../../state/consensusHandoff';
@@ -13,6 +13,7 @@ import { ConsensusClusterControls } from './ConsensusClusterControls';
 import { ConsensusPreviewLane, type PreviewCluster } from './ConsensusPreviewLane';
 import { sectionEnd } from './sectionConstants';
 import { InfoDot } from './InfoDot';
+import { algoGridBadge, isGridCutAlgo, savedAlgoGrid } from '../../utils/algoGrid';
 
 type ReferenceMode = EvalReferenceMode;
 
@@ -31,7 +32,7 @@ export interface AlgorithmRow {
    *  emitted, before the lossy map onto time/endTime/label/type) so the algo
    *  Inspect card can surface it as "Raw model output" — parity with the
    *  curator cards. Absent → the card falls back to the mapped section. */
-  sections: { time: number; endTime: number; label: string; type: string; color?: string; raw?: unknown }[];
+  sections: { time: number; endTime: number; label: string; type: string; color?: string; velocity?: number; levelDb?: number; note?: number; decay?: number; raw?: unknown }[];
   /** LOOP-family only: which beat grid the detector aligned to
    *  ("song-info" | "allin1" | "librosa"). Drives a small lane badge so the
    *  annotator can see whether loops sit on the curator-aligned grid. */
@@ -61,9 +62,9 @@ const ALGO_LABELS: Record<string, string> = {
   'librosa-key':               'librosa key',
   'autochord-chords':          'autochord',
   'librosa-onsets':            'librosa onsets',
-  'drum-transients':           'drum transients',
   'hpss-percussive':           'HPSS percussive',
   'whisper-base':              'Whisper-base lyrics',
+  'ivrit':                     'Ivrit lyrics',
   'ctc-forced-aligner':        'CTC forced aligner (lyrics)',
   'locomotif':                 'LoCoMotif',
 };
@@ -78,17 +79,17 @@ export type SpanAlgoId = typeof SPAN_ALGO_IDS[number];
 export const PITCH_ALGO_IDS = ['basic-pitch'] as const;
 export type PitchAlgoId = typeof PITCH_ALGO_IDS[number];
 
-/** CUE-family extras (librosa key, autochord chords, librosa onsets, drum
- *  transients) — gated by `experimentalCueExtras`. */
-export const CUE_EXTRAS_ALGO_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients'] as const;
+/** CUE-family extras (librosa key, autochord chords, librosa onsets) — gated
+ *  by `experimentalCueExtras`. */
+export const CUE_EXTRAS_ALGO_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets'] as const;
 export type CueExtrasAlgoId = typeof CUE_EXTRAS_ALGO_IDS[number];
 
 /** Percussive SPAN-family detector (HPSS) — gated by `experimentalSpanFamily`. */
 export const PERCUSSIVE_ALGO_IDS = ['hpss-percussive'] as const;
 export type PercussiveAlgoId = typeof PERCUSSIVE_ALGO_IDS[number];
 
-/** LYRICS-family detector IDs — gated by `experimentalLyricsFamily`. */
-export const LYRICS_ALGO_IDS = ['whisper-base', 'ctc-forced-aligner'] as const;
+/** LYRICS-family detector IDs. */
+export const LYRICS_ALGO_IDS = ['whisper-base', 'ivrit', 'ctc-forced-aligner'] as const;
 export type LyricsAlgoId = typeof LYRICS_ALGO_IDS[number];
 
 /** PATTERN-family detector IDs — gated by `experimentalPatternFamily`. */
@@ -154,7 +155,11 @@ export function buildAnnotationRows(toolStates: Record<string, ToolState>): Algo
     // `raw` — MSAF carries energy/centroid, lyrics carry per-word fields, etc.,
     // all of which the narrowed type drops but the card should still show.
     const sections = rawSections.map((s) => ({ ...s, raw: s }));
-    const gridSource = (state.result.result as { gridSource?: string | null }).gridSource ?? undefined;
+    // A grid-cut algorithm says whose beats it ran on; a loop detector which
+    // grid it aligned to.
+    const gridSource = isGridCutAlgo(id)
+      ? algoGridBadge(savedAlgoGrid(state.result.result))
+      : (state.result.result as { gridSource?: string | null }).gridSource ?? undefined;
     return [{ id, label: algoLabel(id), sections, gridSource }];
   });
 }
@@ -331,21 +336,27 @@ function AutoConsensusPanel({
   // from that consensus is circular — the F1 above would be the consensus
   // grading itself. So the button stops and says so first.
   const [confirmCircular, setConfirmCircular] = useState(false);
+  const activeRows = useMemo(() => rows.filter((r) => selectedAlgoIds.has(r.id)), [rows, selectedAlgoIds]);
+
+  const clusters = useMemo(() => clusterForConsensus(activeRows, clusterTol), [activeRows, clusterTol]);
+  const filtered = useMemo(() => clusters.filter((c) => new Set(c.members.map((m) => m.algorithmId)).size >= minAgreement), [clusters, minAgreement]);
+
+  // The kept boundaries travel, not just the knobs: rebuilding them on the
+  // other side from its own detector list gave a different set, and the old
+  // points survived next to it. Auto-guess replaces its points with these.
   const sendToAutoGuess = useCallback(() => {
     sendConsensusConfig('autoGuess', {
       clusterWindow: clusterTol,
       minAgreement,
       centroid: method,
       algoIds: [...selectedAlgoIds],
+      points: [...filtered]
+        .sort((a, b) => a.times[method] - b.times[method])
+        .map((c, i) => clusterToAutoGuessPoint(c.members, i, method)),
     });
     setConfirmCircular(false);
     onHandoffToAutoGuess?.();
-  }, [clusterTol, minAgreement, method, selectedAlgoIds, onHandoffToAutoGuess]);
-
-  const activeRows = useMemo(() => rows.filter((r) => selectedAlgoIds.has(r.id)), [rows, selectedAlgoIds]);
-
-  const clusters = useMemo(() => clusterForConsensus(activeRows, clusterTol), [activeRows, clusterTol]);
-  const filtered = useMemo(() => clusters.filter((c) => new Set(c.members.map((m) => m.algorithmId)).size >= minAgreement), [clusters, minAgreement]);
+  }, [clusterTol, minAgreement, method, selectedAlgoIds, filtered, onHandoffToAutoGuess]);
   const consensusTimes = useMemo(() => filtered.map((c) => c.times[method]), [filtered, method]);
 
   // mir_eval (server-side, debounced) — strict boundary retrieval against ref.
@@ -556,16 +567,16 @@ function AutoConsensusPanel({
                 if (referenceMode === 'autoGuess') { setConfirmCircular(true); return; }
                 sendToAutoGuess();
               }}
-              disabled={totalAlgos === 0}
+              disabled={filtered.length === 0}
               className="px-3 py-1.5 rounded-md text-[11px] uppercase tracking-wider bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 disabled:opacity-40 disabled:cursor-not-allowed text-cyan-100 transition-colors flex items-center gap-1.5 shrink-0"
-              title={totalAlgos === 0
-                ? 'Select at least one algorithm'
-                : `Open the Auto-guess panel with these parameters — ±${clusterTol}s, ≥${minAgreement}, ${centroidShort}, ${totalAlgos} detector${totalAlgos === 1 ? '' : 's'}`}
+              title={filtered.length === 0
+                ? 'No boundaries pass the agreement threshold — nothing to copy'
+                : `Replace the Annotator's Auto-guess with these ${filtered.length} boundaries (the Final lane) — ±${clusterTol}s, ≥${minAgreement}, ${centroidShort}, ${totalAlgos} detector${totalAlgos === 1 ? '' : 's'}. Its current points and their ✓/✗ reviews are discarded.`}
             >
               <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M10 3a1 1 0 011 1v9.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 13.586V4a1 1 0 011-1z" clipRule="evenodd" />
               </svg>
-              Use for Auto-guess
+              Copy to Annotator as Auto-guess
             </button>
           )
         )}

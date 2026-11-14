@@ -11,6 +11,20 @@ import {
   type StepKey,
   type ImportProgress,
 } from '../../services/datasetImport';
+import {
+  detectBackup,
+  summarizeBackup,
+  configLocksOut as backupConfigLocksOut,
+  restoreBackup,
+  saveRestoreReport,
+  loadRestoreReport,
+  type Backup,
+  type RestoreProgress,
+  type RestoreResult,
+} from '../../services/backupRestore';
+import { getCurrentAnnotatorId } from '../../context/AnnotatorContext';
+import { fetchAdminStatus } from '../../services/admin';
+import { RestoreReviewStage, RestoringStage, RestoreDoneStage } from './RestoreBackupStages';
 
 export interface ImportDatasetDialogProps {
   open: boolean;
@@ -20,7 +34,9 @@ export interface ImportDatasetDialogProps {
   onImported?: () => void;
 }
 
-type Phase = 'pick' | 'scanning' | 'review' | 'importing' | 'done';
+type Phase = 'pick' | 'scanning' | 'review' | 'importing' | 'done'
+  // A full server backup (a data/ tree) gets its own path: copied verbatim.
+  | 'restore-review' | 'restoring' | 'restore-done';
 
 const STEP_LABEL: Record<StepKey, string> = {
   audio:    'Audio',
@@ -62,6 +78,19 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
   const fileInputRef   = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
   const [dragActive, setDragActive] = useState(false);
+  const [pickedFiles, setPickedFiles] = useState<File[]>([]);
+  const [backup, setBackup] = useState<Backup | null>(null);
+  const [includeConfig, setIncludeConfig] = useState(true);
+  const [configLocksOut, setConfigLocksOut] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState<RestoreProgress | null>(null);
+  const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
+  // Showing a saved report from an earlier run (opened from the pick screen),
+  // rather than the result of one that just finished.
+  const [reportIsSaved, setReportIsSaved] = useState(false);
+  const [savedReport, setSavedReport] = useState<RestoreResult | null>(loadRestoreReport);
+  const [restoreBlocked, setRestoreBlocked] = useState<string | null>(null);
+  const backupSummary = useMemo(() => (backup ? summarizeBackup(backup.entries) : []), [backup]);
+  const backupHasConfig = !!backup?.entries.some((e) => e.rel === 'dataset-config.json');
 
   // Reset when the dialog is closed so reopening always starts fresh.
   useEffect(() => {
@@ -74,11 +103,25 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
       setResults(null);
       setDragActive(false);
       dragDepthRef.current = 0;
+      setPickedFiles([]);
+      setBackup(null);
+      setRestoreProgress(null);
+      setRestoreResult(null);
+      setReportIsSaved(false);
+      setRestoreBlocked(null);
     }
   }, [open]);
 
-  const onFilesPicked = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
+  // A reload mid-restore abandons it and, before the report was saved, lost
+  // every error with it. Ask first.
+  useEffect(() => {
+    if (phase !== 'restoring') return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [phase]);
+
+  const scanSongBySong = useCallback(async (files: File[]) => {
     setPhase('scanning');
     const result = scanDatasetFiles(files);
     setScan(result);
@@ -95,6 +138,44 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
     setSelections(nextSelections);
     setPhase('review');
   }, []);
+
+  const onFilesPicked = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    setPickedFiles(files);
+    const found = detectBackup(files);
+    if (!found) { void scanSongBySong(files); return; }
+    const locksOut = await backupConfigLocksOut(found.entries, getCurrentAnnotatorId());
+    setBackup(found);
+    setConfigLocksOut(locksOut);
+    setIncludeConfig(!locksOut);
+    setPhase('restore-review');
+  }, [scanSongBySong]);
+
+  const beginRestore = useCallback(async () => {
+    if (!backup) return;
+    // The endpoint is admin-only. Checking first turns "6225 files failed"
+    // into one sentence saying who you're signed in as.
+    setRestoreBlocked(null);
+    try {
+      const status = await fetchAdminStatus();
+      if (!status.isAdmin) {
+        const who = getCurrentAnnotatorId();
+        setRestoreBlocked(`You're signed in as ${who ?? 'nobody'}, which isn't an admin on this install, so the server would refuse every file. Sign in with Google as an admin, then restore again.`);
+        return;
+      }
+    } catch {
+      setRestoreBlocked("The server didn't answer. Check that TimeCues is running, then try again.");
+      return;
+    }
+    const entries = includeConfig ? backup.entries : backup.entries.filter((e) => e.rel !== 'dataset-config.json');
+    setPhase('restoring');
+    const out = await restoreBackup(entries, setRestoreProgress);
+    saveRestoreReport(out);
+    setSavedReport(out);
+    setRestoreResult(out);
+    setReportIsSaved(false);
+    setPhase('restore-done');
+  }, [backup, includeConfig]);
 
   const collectDataTransfer = useCallback(async (items: DataTransferItemList | null): Promise<File[]> => {
     if (!items) return [];
@@ -168,9 +249,9 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
   }, [scan, selections]);
 
   const closeAndNotify = useCallback(() => {
-    if (results && results.length > 0) onImported?.();
+    if ((results && results.length > 0) || (restoreResult && restoreResult.restored > 0)) onImported?.();
     onOpenChange(false);
-  }, [results, onImported, onOpenChange]);
+  }, [results, restoreResult, onImported, onOpenChange]);
 
   // ── Header ────────────────────────────────────────────────────────────────
   const title = useMemo(() => {
@@ -180,6 +261,9 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
       case 'review':     return 'Review what was found';
       case 'importing':  return 'Importing…';
       case 'done':       return 'Import complete';
+      case 'restore-review': return 'Restore full backup';
+      case 'restoring':      return 'Restoring backup…';
+      case 'restore-done':   return 'Restore complete';
     }
   }, [phase]);
 
@@ -234,6 +318,13 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
                   if (files.length > 0) void onFilesPicked(files);
                 }}
                 onFiles={(files) => void onFilesPicked(files)}
+                lastReport={savedReport}
+                onShowLastReport={() => {
+                  if (!savedReport) return;
+                  setRestoreResult(savedReport);
+                  setReportIsSaved(true);
+                  setPhase('restore-done');
+                }}
               />
             )}
 
@@ -284,6 +375,30 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
             {phase === 'done' && results && (
               <DoneStage results={results} scan={scan} />
             )}
+
+            {phase === 'restore-review' && backup && (
+              <RestoreReviewStage
+                backup={backup}
+                summary={backupSummary}
+                hasConfig={backupHasConfig}
+                includeConfig={includeConfig}
+                configLocksOut={configLocksOut}
+                onIncludeConfig={setIncludeConfig}
+              />
+            )}
+            {phase === 'restore-review' && restoreBlocked && (
+              <div className="mt-3 rounded border border-rose-400/40 bg-rose-500/[0.06] px-3 py-2 text-[11px] text-rose-200 leading-relaxed">
+                {restoreBlocked}
+              </div>
+            )}
+
+            {phase === 'restoring' && restoreProgress && (
+              <RestoringStage progress={restoreProgress} />
+            )}
+
+            {phase === 'restore-done' && restoreResult && (
+              <RestoreDoneStage result={restoreResult} saved={reportIsSaved} />
+            )}
           </div>
 
           <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-white/[0.06]">
@@ -323,7 +438,33 @@ export function ImportDatasetDialog({ open, onOpenChange, onImported }: ImportDa
               {phase === 'importing' && (
                 <span className="text-[11px] text-slate-400">In progress…</span>
               )}
-              {phase === 'done' && (
+              {phase === 'restore-review' && (
+                <>
+                  <button
+                    onClick={() => setPhase('pick')}
+                    className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] text-slate-300"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => void scanSongBySong(pickedFiles)}
+                    title="Pick songs and parts one by one instead. Only the parts the song importer knows are copied, and every annotation is saved under your name."
+                    className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] text-slate-300"
+                  >
+                    Import song by song instead
+                  </button>
+                  <button
+                    onClick={() => void beginRestore()}
+                    className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border border-emerald-400/50"
+                  >
+                    Restore everything
+                  </button>
+                </>
+              )}
+              {phase === 'restoring' && (
+                <span className="text-[11px] text-slate-400">In progress…</span>
+              )}
+              {(phase === 'done' || phase === 'restore-done') && (
                 <button
                   onClick={closeAndNotify}
                   className="px-3 py-1.5 rounded text-[11px] uppercase tracking-wider bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border border-emerald-400/50"
@@ -350,12 +491,37 @@ function PickStage(props: {
   onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
   onFiles: (files: File[]) => void;
+  lastReport: RestoreResult | null;
+  onShowLastReport: () => void;
 }) {
-  const { folderInputRef, fileInputRef, dragActive, onDragEnter, onDragLeave, onDragOver, onDrop, onFiles } = props;
+  const { folderInputRef, fileInputRef, dragActive, onDragEnter, onDragLeave, onDragOver, onDrop, onFiles, lastReport, onShowLastReport } = props;
+  const lastFailed = lastReport ? lastReport.failures.length : 0;
   return (
     <div className="space-y-4">
+      {lastReport && (
+        <div className={`flex items-center justify-between gap-3 rounded border px-3 py-2 text-[11px] ${
+          lastFailed > 0 || lastReport.stoppedEarly ? 'border-rose-400/40 bg-rose-500/[0.06]' : 'border-emerald-400/30 bg-emerald-500/[0.05]'
+        }`}>
+          <span className="text-slate-300">
+            Last restore, {new Date(lastReport.finishedAt).toLocaleString()}: {lastReport.verified} of {lastReport.total} files verified
+            {lastFailed > 0 && <span className="text-rose-300"> · {lastFailed} failed</span>}
+          </span>
+          <button
+            type="button"
+            onClick={onShowLastReport}
+            className="shrink-0 px-2 py-1 rounded uppercase tracking-wider bg-white/[0.04] hover:bg-white/[0.08] text-slate-200"
+          >
+            Show report
+          </button>
+        </div>
+      )}
       <p className="text-[12px] text-slate-300 leading-relaxed">
         Pick a dataset folder to import. The scanner accepts three layouts:
+      </p>
+      <p className="text-[11px] text-slate-400 leading-relaxed">
+        <span className="text-emerald-300">Restoring a full backup?</span> Unpack the backup's <code className="text-slate-300">.tar</code> and
+        pick the folder: when it has the server's <code className="text-slate-300">songs/</code> and <code className="text-slate-300">annotations/</code>,
+        you'll be offered an exact restore of everything in it.
       </p>
       <ul className="text-[11px] text-slate-400 leading-relaxed space-y-1 pl-4 list-disc">
         <li>
@@ -717,6 +883,13 @@ function DoneStage({ results, scan }: { results: SongImportResult[]; scan: ScanR
                   );
                 })}
               </div>
+              {/* An OK step with something to say — the server re-encoded a
+                  VBR mp3 — says it in the open, not only in a hover title. */}
+              {stepEntries.map(([key, info]) => info?.status === 'ok' && info.message ? (
+                <div key={key} className="mt-1 text-[11px] text-sky-200">
+                  {STEP_LABEL[key]}: {info.message}
+                </div>
+              ) : null)}
             </div>
           );
         })}

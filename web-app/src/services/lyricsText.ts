@@ -1,7 +1,6 @@
 // Per-song reference lyrics text client. Shared across annotators —
 // downstream lyric aligners (Whisper, SOFA, ctc-forced-aligner) score
 // their per-word timestamps against this objective truth.
-// Experimental: surfaced only when `experimentalLyricsFamily` is on.
 
 export async function loadLyricsText(slug: string): Promise<string> {
   try {

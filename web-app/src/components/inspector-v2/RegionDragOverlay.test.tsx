@@ -67,4 +67,28 @@ describe('RegionDragOverlay', () => {
     expect(onVizRegion).not.toHaveBeenCalled();
     expect(onVizClick).not.toHaveBeenCalled();
   });
+
+  it('a ⇧-drag picks the items inside instead of highlighting, and leaves the pending pick alone', () => {
+    const onVizRegion = vi.fn();
+    const onSelectRegion = vi.fn();
+    const onRegionDragStart = vi.fn();
+    const { container } = render(
+      <RegionDragOverlay
+        duration={DURATION} onVizClick={() => {}} onVizRegion={onVizRegion}
+        onRegionDragStart={onRegionDragStart} onSelectRegion={onSelectRegion}
+      />,
+    );
+    const surface = container.firstElementChild!;
+    fireEvent.pointerDown(surface, { isPrimary: true, clientX: 100, shiftKey: true });
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 300 });
+    fireEvent.pointerUp(document, { isPrimary: true, clientX: 300 });
+    expect(onSelectRegion).toHaveBeenCalledWith(10, 30);
+    expect(onVizRegion).not.toHaveBeenCalled();
+    expect(onRegionDragStart).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(surface, { isPrimary: true, clientX: 100 });
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 300 });
+    fireEvent.pointerUp(document, { isPrimary: true, clientX: 300 });
+    expect(onVizRegion).toHaveBeenCalledWith(10, 30);
+  });
 });

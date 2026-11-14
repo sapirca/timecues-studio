@@ -44,7 +44,7 @@ PORT = 8015
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import find_audio, stem_audio, cache_name, PERCUSSIVE_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
-from server_common import cached_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
+from server_common import cached_result, write_result, cors_headers, err as _common_err, now_iso, time_ms  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -65,6 +65,30 @@ def _err(algo: str, msg: str) -> dict:
     return _common_err(algo, msg, spans=[])
 
 
+# Frames per HPSS block, and the context each block borrows on either side.
+# librosa's harmonic median filter spans 31 frames along time (the percussive
+# one runs along frequency, inside a frame), so 16 frames of context make a
+# block's masks exactly what a whole-song pass computes.
+HPSS_BLOCK = 2048
+HPSS_CONTEXT = 16
+
+
+def _hpss_percussive(y: "np.ndarray") -> "np.ndarray":
+    """librosa.effects.hpss(y)[1], block by block. The whole-song call keeps
+    ~950 MB of filter scratch for a 5-minute song; one block at a time keeps
+    a block's worth, and the result is the same samples."""
+    D = librosa.stft(y)
+    n = D.shape[1]
+    perc = np.empty_like(D)
+    for a in range(0, n, HPSS_BLOCK):
+        b = min(n, a + HPSS_BLOCK)
+        lo, hi = max(0, a - HPSS_CONTEXT), min(n, b + HPSS_CONTEXT)
+        _h, p = librosa.decompose.hpss(D[:, lo:hi])
+        perc[:, a:b] = p[:, a - lo:b - lo]
+    del D
+    return librosa.istft(perc, dtype=y.dtype, length=y.shape[-1])
+
+
 def detect_hpss_percussive(audio_path: Path) -> dict:
     algo = "hpss-percussive"
     if not (_LIBROSA_OK and _NUMPY_OK):
@@ -74,7 +98,7 @@ def detect_hpss_percussive(audio_path: Path) -> dict:
         y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
         # HPSS — y_harm + y_perc = y (approximately). The percussive
         # component carries drums + transients + click-y FX.
-        _y_harm, y_perc = librosa.effects.hpss(y)
+        y_perc = _hpss_percussive(y)
         # Short-window RMS for a frame-level percussive-energy curve.
         hop = 512
         rms = librosa.feature.rms(y=y_perc, frame_length=2048, hop_length=hop)[0]
@@ -158,10 +182,7 @@ def detect_one(slug: str, algo: str, stem: str = "mix", force: bool = False) -> 
         "ms":          result.get("ms", 0),
         "computed_at": now_iso(),
     }
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=ALGORITHMS[algo]["available"]())
     return payload
 
 

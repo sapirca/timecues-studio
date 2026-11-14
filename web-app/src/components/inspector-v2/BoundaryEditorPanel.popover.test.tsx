@@ -17,6 +17,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createRef, type ReactElement } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SettingsProvider } from '../../context/SettingsContext';
+import { createPlayheadClock, PlayheadClockContext } from '../../hooks/usePlayhead';
 import { BoundaryEditorPanel } from './BoundaryEditorPanel';
 import type { AnnotationPanelController } from './shared/AnnotationPanelController';
 import type { AnnotationLayer, AnnotationLayersDocument } from '../../types/annotationLayer';
@@ -42,6 +43,7 @@ function boundaryDoc(): AnnotationLayersDocument {
 /** Mounts the panel against a doc the harness owns, applying every write the
  *  way the page does: into state, visible on the NEXT render. */
 function mountPanel(currentTime: number) {
+  const clock = createPlayheadClock(currentTime);
   const openEditorRef = createRef<((idx: number | null, anchor?: { x: number; y: number }) => void) | null>() as
     React.RefObject<((idx: number | null, anchor?: { x: number; y: number }) => void) | null>;
   let doc = boundaryDoc();
@@ -51,13 +53,15 @@ function mountPanel(currentTime: number) {
     doc = typeof next === 'function' ? next(doc) : next;
   });
   const view = () => wrap(
-    <BoundaryEditorPanel
-      ref={createRef<AnnotationPanelController>()}
-      songId="song" currentTime={currentTime} duration={30}
-      songBpm={120} songBeatsPerBar={4} songGridOffset={0}
-      doc={doc} onDocChange={onDocChange} docLoaded
-      selectedLayerId="B1" openEditorRef={openEditorRef}
-    />,
+    <PlayheadClockContext.Provider value={clock}>
+      <BoundaryEditorPanel
+        ref={createRef<AnnotationPanelController>()}
+        songId="song" duration={30}
+        songBpm={120} songBeatsPerBar={4} songGridOffset={0}
+        doc={doc} onDocChange={onDocChange} docLoaded
+        selectedLayerId="B1" openEditorRef={openEditorRef}
+      />
+    </PlayheadClockContext.Provider>,
   );
   const { rerender } = render(view());
   return {

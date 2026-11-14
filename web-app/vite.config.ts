@@ -1,5 +1,6 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import crypto from 'crypto'
 import fs from 'fs'
 import http from 'http'
 import path from 'path'
@@ -8,11 +9,18 @@ import { spawn } from 'child_process'
 import { pathToFileURL } from 'url'
 import { ALGO_OUTPUTS_ROOTS, DATA_DIRS, DATA_FILES, DEFAULT_DATA_DIRS, REPO_ROOT } from './dataPaths'
 import {
+  annotatorIdFromReq, initAuth, isLocalRequest, makeSession, sessionFromReq, setSessionCookie,
+  verifyGoogleIdToken,
+} from './server/auth.mjs'
+import {
   HEARTBEAT_MS, STALE_AFTER_MS, IDLE_AFTER_MS,
-  sharedDocPath, sharedSongDir, isSharedSong, listSharedSlugs,
+  sharedDocPath, isSharedSong, listSharedSlugs,
   initSharedRepo, commitSharedDoc, historyFor, readVersion, hasGit,
   readLock, writeLock, removeLock, listLocks, newLock, canAcquire, isStale,
   viewLock, touchLockEdit, removeSharedSong, writeJsonAtomic,
+  archiveSharedSong, clearUnshareRecord, readUnshareRecord, listUnsharedSlugs,
+  applyUnshareDefault, switchUnshareChoice, dismissUnshareNotice,
+  listSongArchives, restoreSongArchive,
   type LockRecord, type CommitMeta,
 } from './server/sharedAnnotations'
 
@@ -204,31 +212,11 @@ function sanitizeAnnotatorId(raw: string | string[] | undefined | null): string 
   return v
 }
 
-function readAnnotatorIdFromCookie(req: http.IncomingMessage): string | null {
-  const raw = req.headers.cookie
-  if (typeof raw !== 'string' || raw.length === 0) return null
-  // Manual parse — keeps the server free of a `cookie` npm dep. Cookies are
-  // separated by `; `; the value may be URL-encoded (signIn writes it that
-  // way so emails with `@` are safe).
-  for (const pair of raw.split(';')) {
-    const eq = pair.indexOf('=')
-    if (eq < 0) continue
-    if (pair.slice(0, eq).trim() !== 'annotator_id') continue
-    try { return sanitizeAnnotatorId(decodeURIComponent(pair.slice(eq + 1).trim())) }
-    catch { return null }
-  }
-  return null
-}
-
-// Identification falls back from header → cookie. Mutating endpoints (upload,
-// annotation writes, delete) reach this via fetch() and always set the
-// X-Annotator-Id header. Static-asset routes like /audio/<file> are loaded
-// by the browser without custom headers, so the cookie is what identifies
-// the signed-in user there.
+// Who a request is from: its signed session (server/auth.mjs), or the demo id
+// when the page says it is in the demo. The X-Annotator-Id header and the
+// annotator_id cookie no longer name anybody else — see auth.mjs for why.
 function readAnnotatorIdFromReq(req: http.IncomingMessage): string | null {
-  const fromHeader = sanitizeAnnotatorId(req.headers['x-annotator-id'] as string | string[] | undefined)
-  if (fromHeader) return fromHeader
-  return readAnnotatorIdFromCookie(req)
+  return annotatorIdFromReq(req)
 }
 
 // Resolve an annotation file within a single corpus base dir. The caller picks
@@ -458,56 +446,49 @@ function clearStemsForSong(file: string) {
 // Wipe regenerable caches for one song. Includes stems. Annotations + audio
 // are untouched. Used by the ALGOS scope (and the EVERYTHING scope, which
 // additionally clears audio + annotations).
+/** Remove one song from a tree by walking it, not by naming its families.
+ *  Every output family stores a song as `<slug>.json`, `<slug>.txt` or a
+ *  `<slug>/` folder, either directly in the family or `depth` levels below it
+ *  (`custom/<script>/<slug>.json`, `annotations/<kind>/<annotator>/<slug>.json`).
+ *  The hand-kept list this replaces knew 6 of 18 detector families and 2 of
+ *  the annotation kinds, so deleting a song left the rest on disk — every
+ *  family added after the list was written, which is how it always goes. */
+function removeSongEverywhere(dir: string, slug: string, depth: number) {
+  let names: string[]
+  try { names = fs.readdirSync(dir) } catch { return }
+  for (const name of names) {
+    const p = path.join(dir, name)
+    if (name === slug || name === `${slug}.json` || name === `${slug}.txt`) { rmIfExists(p); continue }
+    if (depth <= 0) continue
+    try { if (fs.statSync(p).isDirectory()) removeSongEverywhere(p, slug, depth - 1) } catch { /* gone */ }
+  }
+}
+
+/** Empty a folder but keep it: on the VM and in Docker these are bind mounts
+ *  (data/stems is), and removing a mounted folder strands the container on a
+ *  deleted directory where the next mkdir hangs. */
+function emptyDir(dir: string) {
+  let names: string[]
+  try { names = fs.readdirSync(dir) } catch { return }
+  for (const name of names) rmIfExists(path.join(dir, name))
+}
+
+const ANNOTATIONS_ROOT_DIR = path.dirname(DATA_DIRS.annotationLayers)
+
 function clearCacheForSong(slug: string, file: string) {
   clearStemsForSong(file)
-  rmIfExists(path.join(ANALYSIS_DIR, slug))
-  rmIfExists(path.join(DATA_DIRS.msaf, slug))
-  rmIfExists(path.join(DATA_DIRS.bpmDetections, `${slug}.json`))
-  rmIfExists(path.join(DATA_DIRS.algoClusters, `${slug}.json`))
-  rmIfExists(path.join(DATA_DIRS.mirFeatures, `${slug}.json`))
-  // Custom-script algorithm-mode results live at
-  // data/algorithm-outputs/custom/<script>/<slug>.json — clear the slug file
-  // from every script subdir without nuking the script dirs themselves.
-  if (fs.existsSync(DATA_DIRS.customResults)) {
-    try {
-      for (const script of fs.readdirSync(DATA_DIRS.customResults)) {
-        const scriptDir = path.join(DATA_DIRS.customResults, script)
-        try { if (!fs.statSync(scriptDir).isDirectory()) continue } catch { continue }
-        rmIfExists(path.join(scriptDir, `${slug}.json`))
-      }
-    } catch { /* ignore */ }
-  }
+  // <family>/<slug>[.json] and <family>/<group>/<slug>.json, every family.
+  removeSongEverywhere(ALGO_OUTPUTS_ROOTS.data, slug, 2)
 }
 
 // Remove every annotator's annotation files for a slug across layers/auto-guess
 // and per-script custom annotations, plus the shared song-info file. Only the
 // user-writable tree under data/ is touched — data-default/ seeds stay intact.
 function clearAnnotationsForSong(slug: string) {
-  const annotationBases = [
-    DATA_DIRS.annotationLayers,
-    DATA_DIRS.autoGuessAnnotations,
-  ]
-  for (const base of annotationBases) {
-    if (!fs.existsSync(base)) continue
-    try {
-      for (const annotator of fs.readdirSync(base)) {
-        rmIfExists(path.join(base, annotator, `${slug}.json`))
-      }
-    } catch { /* ignore */ }
-  }
-  // Custom-script annotations: data/annotations/custom/<script>/<annotator>/<slug>.json
-  const customRoot = DATA_DIRS.customAnnotations
-  if (fs.existsSync(customRoot)) {
-    try {
-      for (const script of fs.readdirSync(customRoot)) {
-        const scriptDir = path.join(customRoot, script)
-        if (!fs.statSync(scriptDir).isDirectory()) continue
-        for (const annotator of fs.readdirSync(scriptDir)) {
-          rmIfExists(path.join(scriptDir, annotator, `${slug}.json`))
-        }
-      }
-    } catch { /* ignore */ }
-  }
+  // Every annotation kind — layers, auto-guess, eye, gold, custom scripts,
+  // locks — down to annotations/custom/<script>/<annotator>/<slug>.json.
+  removeSongEverywhere(ANNOTATIONS_ROOT_DIR, slug, 3)
+  rmIfExists(path.join(DATA_DIRS.lyricsText, `${slug}.txt`))
   // A shared song keeps its document, its whole version history and its edit
   // lease in one folder of its own. "Delete everything" has to mean that too —
   // leaving the team's annotations behind after the dialog promised they were
@@ -818,6 +799,26 @@ type ManifestEntry = {
   file: string
   url: string
   hasAnalysis: boolean
+  /** Demucs stems on disk for this song (public/stems/<file-stem>/), in
+   *  canonical order — 4 for htdemucs, 6 for htdemucs_6s, empty when the song
+   *  has not been stemmed yet. Lets the song list say so without a request
+   *  per row. */
+  stems: string[]
+}
+
+const STEM_ORDER = ['vocals', 'drums', 'bass', 'other', 'guitar', 'piano']
+
+// Which stems a finished Demucs run left for this song. Reads the run's
+// manifest.json (only written once every stem is on disk), so a half-written
+// or cancelled run reads as not stemmed.
+function readStemNames(fileStem: string): string[] {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(STEMS_DIR, fileStem, 'manifest.json'), 'utf-8')) as
+      { stems?: Record<string, string> }
+    return STEM_ORDER.filter((s) => !!m.stems?.[s])
+  } catch {
+    return []
+  }
 }
 
 function readSongInfoName(
@@ -868,6 +869,7 @@ function buildManifest(corpus: CorpusBase): ManifestEntry[] {
         file: audioFile,
         url: `/audio/${audioFile}`,
         hasAnalysis: fs.existsSync(path.join(ANALYSIS_DIR, slug)),
+        stems: readStemNames(stem),
       }
     }
   }
@@ -980,11 +982,43 @@ function shippedTwin(dir: string): string | null {
   return path.join(ALGO_OUTPUTS_ROOTS.shipped, rel)
 }
 
+/** DELETE /api/algo-result/<family>/<slug>/<id> — delete one algorithm's
+ *  result for one song: the file a GET of /analysis/<slug>/<id>.json (family
+ *  "analysis") or /api/<family>/detect/<slug>/<id> reads. Team only. A result
+ *  that also ships in data-default/ is refused, since the shipped copy would
+ *  take its place on the next read and the lane would come straight back. */
+function deleteAlgoResult(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const send = (status: number, body: object) => {
+    res.statusCode = status
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify(body))
+  }
+  if (!isOnTeamForReq(req).isOnTeam) return send(403, { error: 'Only the team can delete algorithm results.' })
+  const parts = (req.url ?? '').slice('/api/algo-result/'.length).split('?')[0].split('/')
+  if (parts.length !== 3) return send(400, { error: 'expected /api/algo-result/<family>/<slug>/<id>' })
+  let fam: string, slug: string, id: string
+  try { [fam, slug, id] = parts.map(decodeURIComponent) } catch { return send(400, { error: 'bad encoding' }) }
+  const dir = fam === 'analysis' ? ANALYSIS_DIR : EXPERIMENTAL_FAMILY_DIRS[fam]
+  if (!dir) return send(400, { error: `unknown family: ${fam}` })
+  if ([slug, id].some((s) => !s || s.includes('/') || s.includes('\\') || s.includes('\0') || s.startsWith('.'))) {
+    return send(400, { error: 'invalid slug or id' })
+  }
+  const file = path.join(dir, slug, `${id}.json`)
+  const twin = shippedTwin(dir)
+  if (twin && fs.existsSync(path.join(twin, slug, `${id}.json`))) {
+    return send(409, { error: 'This result ships with the demo corpus, so it cannot be deleted here.' })
+  }
+  if (!fs.existsSync(file)) return send(404, { error: 'No saved result to delete.' })
+  fs.rmSync(file)
+  send(200, { ok: true })
+}
+
 function serveExperimentalCache(): Plugin {
   return {
     name: 'experimental-detector-cache',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        if (req.method === 'DELETE' && req.url?.startsWith('/api/algo-result/')) return deleteAlgoResult(req, res)
         if (req.method !== 'GET' || !req.url) return next()
         const m = req.url.match(/^\/api\/([a-z-]+)\/(detect|cached)\b/)
         if (!m) return next()
@@ -1090,13 +1124,62 @@ function isVbrMp3(file: string): boolean {
   }
 }
 
-/** Body for the 400 a VBR upload gets, naming the file and the way out. */
-function vbrRejectionJson(filename: string): string {
+/** What an upload's response says when its VBR mp3 was re-encoded on arrival. */
+const VBR_CONVERTED_NOTE = 'Converted from variable bitrate (VBR) to constant-bitrate 256 kbps mp3, '
+  + 'so playback lands where you click.'
+
+/** The ffmpeg binary, or null when this machine has none. `FFMPEG_PATH` wins;
+ *  then PATH; then ~/.local/bin, where the Mac's static build lives and which a
+ *  GUI-launched dev server's PATH often leaves out. */
+let ffmpegBinCache: string | null | undefined
+function ffmpegBin(): string | null {
+  if (ffmpegBinCache !== undefined) return ffmpegBinCache
+  const candidates = [
+    process.env.FFMPEG_PATH,
+    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map((d) => path.join(d, 'ffmpeg')),
+    process.env.HOME ? path.join(process.env.HOME, '.local', 'bin', 'ffmpeg') : undefined,
+  ]
+  ffmpegBinCache = candidates.find((c): c is string => {
+    if (!c) return false
+    try { fs.accessSync(c, fs.constants.X_OK); return true } catch { return false }
+  }) ?? null
+  return ffmpegBinCache
+}
+
+/** Re-encode a VBR mp3 in place to CBR 256 kbps — see isVbrMp3() for why the
+ *  corpus can hold nothing else. The new file is written beside the old one
+ *  and renamed over it, so a failed encode leaves the upload as it arrived. */
+function convertVbrToCbr(file: string): Promise<void> {
+  const bin = ffmpegBin()
+  if (!bin) return Promise.reject(new Error('ffmpeg is not installed on the server'))
+  const tmp = `${file}.cbr-${process.pid}.mp3`
+  return new Promise((resolve, reject) => {
+    let stderr = ''
+    const proc = spawn(bin, [
+      '-v', 'error', '-y', '-i', file,
+      '-map', '0:a:0', '-map_metadata', '0',
+      '-c:a', 'libmp3lame', '-b:a', '256k',
+      tmp,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] })
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+    proc.on('error', (err) => { try { fs.unlinkSync(tmp) } catch { /* never written */ } reject(err) })
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        try { fs.unlinkSync(tmp) } catch { /* never written */ }
+        reject(new Error(stderr.trim().split('\n').pop() || `ffmpeg exited with ${code}`))
+        return
+      }
+      try { fs.renameSync(tmp, file); resolve() } catch (err) { reject(err as Error) }
+    })
+  })
+}
+
+/** Body for an upload whose VBR mp3 could not be converted. */
+function vbrFailureJson(filename: string, reason: string): string {
   return JSON.stringify({
-    error: `"${filename}" is a variable-bitrate (VBR) mp3. Browsers cannot seek VBR accurately, `
-         + `so playback lands up to ~1.5 s from where you click while the waveform and the clock `
-         + `both say otherwise. Re-encode to constant bitrate first: `
-         + `ffmpeg -i "${filename}" -c:a libmp3lame -b:a 256k out.mp3`,
+    error: `"${filename}" is a variable-bitrate (VBR) mp3, which browsers cannot play in sync with `
+         + `its waveform, and converting it to constant bitrate failed (${reason}). `
+         + `Export it from your audio software as a constant-bitrate mp3 or a wav and upload that.`,
   })
 }
 
@@ -1176,16 +1259,20 @@ function serveUploadSong(): Plugin {
         const writeStream = fs.createWriteStream(destPath, { flags: isFirst ? 'w' : 'a' })
         req.pipe(writeStream)
 
+        const discard = () => {
+          try { fs.unlinkSync(destPath) } catch { /* nothing landed on disk */ }
+          try { fs.rmdirSync(songDir) } catch { /* dir holds other files — keep it */ }
+        }
         writeStream.on('finish', () => {
-          // Turn a VBR mp3 away at the door — see isVbrMp3() for why one can
-          // never play in sync with its own waveform. Checked on the first
-          // chunk (the VBR tag lives in the first frame) so a large upload
-          // fails in seconds rather than after the whole transfer.
-          if (isFirst && ext === '.mp3' && isVbrMp3(destPath)) {
-            try { fs.unlinkSync(destPath) } catch { /* nothing landed on disk */ }
-            try { fs.rmdirSync(songDir) } catch { /* dir holds other files — keep it */ }
+          // A VBR mp3 can never play in sync with its own waveform (see
+          // isVbrMp3), so it is re-encoded to CBR once the last chunk lands.
+          // Without ffmpeg there is no way to do that, and the first chunk
+          // already says so (the VBR tag lives in the first frame) — fail
+          // then, in seconds, rather than after the whole transfer.
+          if (isFirst && ext === '.mp3' && !ffmpegBin() && isVbrMp3(destPath)) {
+            discard()
             res.statusCode = 400
-            res.end(vbrRejectionJson(filename))
+            res.end(vbrFailureJson(filename, 'ffmpeg is not installed on the server'))
             return
           }
           if (!isLast) {
@@ -1193,7 +1280,19 @@ function serveUploadSong(): Plugin {
             return
           }
           const displayName = stem.replace(/\s*-\s*/g, ' \u2014 ')
-          res.end(JSON.stringify({ id: slug, name: displayName, url: `/audio/${safeFile}`, hasAnalysis: false }))
+          const done = (converted?: string) => res.end(JSON.stringify({
+            id: slug, name: displayName, url: `/audio/${safeFile}`, hasAnalysis: false,
+            ...(converted ? { converted } : {}),
+          }))
+          if (ext !== '.mp3' || !isVbrMp3(destPath)) { done(); return }
+          convertVbrToCbr(destPath).then(
+            () => done(VBR_CONVERTED_NOTE),
+            (err: Error) => {
+              discard()
+              res.statusCode = 500
+              res.end(vbrFailureJson(filename, err.message))
+            },
+          )
         })
 
         writeStream.on('error', (err: Error) => {
@@ -1329,18 +1428,30 @@ function serveUploadStems(): Plugin {
         req.pipe(writeStream)
         writeStream.on('finish', () => {
           // Stems play through the same transport as the mix, so a VBR stem
-          // desyncs exactly like a VBR song would.
-          if (isFirst && ext === '.mp3' && isVbrMp3(destPath)) {
+          // desyncs exactly like a VBR song would — same conversion, same
+          // early failure when there is no ffmpeg to do it.
+          if (isFirst && ext === '.mp3' && !ffmpegBin() && isVbrMp3(destPath)) {
             try { fs.unlinkSync(destPath) } catch { /* nothing landed on disk */ }
             res.statusCode = 400
-            res.end(vbrRejectionJson(`${stem}${ext}`))
+            res.end(vbrFailureJson(`${stem}${ext}`, 'ffmpeg is not installed on the server'))
             return
           }
           if (!isLast) {
             res.end(JSON.stringify({ ok: true, received: chunkIdx + 1, total }))
             return
           }
-          res.end(JSON.stringify({ ok: true, stem, file: `${stem}${ext}` }))
+          const done = (converted?: string) => res.end(JSON.stringify({
+            ok: true, stem, file: `${stem}${ext}`, ...(converted ? { converted } : {}),
+          }))
+          if (ext !== '.mp3' || !isVbrMp3(destPath)) { done(); return }
+          convertVbrToCbr(destPath).then(
+            () => done(VBR_CONVERTED_NOTE),
+            (err: Error) => {
+              try { fs.unlinkSync(destPath) } catch { /* already gone */ }
+              res.statusCode = 500
+              res.end(vbrFailureJson(`${stem}${ext}`, err.message))
+            },
+          )
         })
         writeStream.on('error', (err: Error) => {
           res.statusCode = 500
@@ -1494,12 +1605,12 @@ function wipeCurrentDataset(): {
       songsDeleted += 1
     }
   }
-  // Wipe whole annotation trees in case orphan annotations exist for slugs
-  // that were already missing from data/songs/.
+  // Then every whole tree, so annotations and outputs for slugs that were
+  // never (or no longer) in data/songs/ go too — a workspace delete means
+  // nothing of the corpus is left on disk.
   let annotationDirsDeleted = 0
-  for (const base of [DATA_DIRS.annotationLayers, DATA_DIRS.autoGuessAnnotations, DATA_DIRS.customAnnotations]) {
-    if (fs.existsSync(base)) { rmIfExists(base); annotationDirsDeleted += 1 }
-  }
+  try { annotationDirsDeleted = fs.readdirSync(ANNOTATIONS_ROOT_DIR).length } catch { /* none */ }
+  emptyDir(ANNOTATIONS_ROOT_DIR)
   // Annotator sign-up profiles — wiped so re-signing rebuilds them.
   let annotatorProfilesDeleted = 0
   if (fs.existsSync(DATA_DIRS.annotatorProfiles)) {
@@ -1516,15 +1627,9 @@ function wipeCurrentDataset(): {
     rmIfExists(DATA_FILES.datasetConfig)
     datasetConfigDeleted = true
   }
-  // Also flush song-info and any straggling algo-output caches.
-  rmIfExists(DATA_DIRS.songInfo)
-  rmIfExists(DATA_DIRS.algoClusters)
-  rmIfExists(DATA_DIRS.bpmDetections)
-  rmIfExists(DATA_DIRS.msaf)
-  rmIfExists(DATA_DIRS.mirFeatures)
-  rmIfExists(DATA_DIRS.customResults)
-  rmIfExists(STEMS_DIR)
-  rmIfExists(ANALYSIS_DIR)
+  for (const dir of [ALGO_OUTPUTS_ROOTS.data, DATA_DIRS.songInfo, DATA_DIRS.lyricsText, STEMS_DIR]) {
+    emptyDir(dir)
+  }
   return { songsDeleted, annotationDirsDeleted, annotatorProfilesDeleted, datasetConfigDeleted }
 }
 
@@ -1650,8 +1755,7 @@ function serveSongInfo(): Plugin {
 
 // Serve and persist per-song reference lyrics text at /api/lyrics-text/:slug.
 // One .txt per slug under DATA_DIRS.lyricsText, shared across annotators
-// (objective truth, not opinion). Experimental: written by the LyricsTextPanel
-// only when `experimentalLyricsFamily` is on. Plain text, not JSON, so
+// (objective truth, not opinion), written by the LyricsTextPanel. Plain text, not JSON, so
 // downstream aligners (SOFA / ctc-forced-aligner) can read it as-is.
 //
 // GET    /api/lyrics-text/:slug  → text body, or empty string if absent
@@ -1717,115 +1821,6 @@ function serveLyricsText(): Plugin {
   }
 }
 
-// Serve and persist Setlists at /api/setlists.
-// Per-annotator under <DATA_DIRS.setlists>/<annotatorId>/<name>.json.
-//
-//   GET    /api/setlists              → {names: string[]} for the caller
-//   GET    /api/setlists/:name        → Setlist | null
-//   POST   /api/setlists/:name        → write (team-only)
-//   DELETE /api/setlists/:name        → delete (team-only)
-//
-// Experimental: gated client-side by `experimentalSetlist`. The server still
-// enforces team membership on writes — public/demo POSTs are rejected with 403.
-function serveSetlists(): Plugin {
-  const root = DATA_DIRS.setlists
-  if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true })
-
-  // 1 MB cap — a 200-song setlist with verbose metadata is ~40 KB; this leaves
-  // headroom without inviting abuse.
-  const MAX_SETLIST_BODY = 1 * 1024 * 1024
-
-  return {
-    name: 'setlists',
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        if (!req.url?.startsWith('/api/setlists')) return next()
-
-        res.setHeader('Access-Control-Allow-Origin', '*')
-        res.setHeader('Content-Type', 'application/json')
-
-        const annotatorId = readAnnotatorIdFromReq(req)
-        if (!annotatorId) return send401MissingAnnotator(res)
-
-        const annotatorDir = path.join(root, annotatorId)
-
-        // Path shape: /api/setlists  or  /api/setlists/<name>
-        const suffix = req.url.slice('/api/setlists'.length)
-
-        // Index — list this annotator's setlist names.
-        if (suffix === '' || suffix === '/') {
-          if (req.method !== 'GET') {
-            res.statusCode = 405
-            res.end('{"error":"method not allowed"}')
-            return
-          }
-          if (!fs.existsSync(annotatorDir)) {
-            res.end('{"names":[]}')
-            return
-          }
-          const names = fs.readdirSync(annotatorDir)
-            .filter((f) => f.endsWith('.json'))
-            .map((f) => f.replace(/\.json$/, ''))
-            .sort()
-          res.end(JSON.stringify({ names }))
-          return
-        }
-
-        const match = suffix.match(/^\/([^/]+)$/)
-        if (!match) return next()
-        const name = decodeSegment(match[1])
-        if (!name) return send400BadSegment(res, 'name')
-        const filePath = path.join(annotatorDir, `${name}.json`)
-
-        if (req.method === 'GET') {
-          if (!fs.existsSync(filePath)) {
-            res.end('null')
-            return
-          }
-          res.end(fs.readFileSync(filePath, 'utf-8'))
-          return
-        }
-
-        // Writes require team membership.
-        if (req.method === 'POST' || req.method === 'DELETE') {
-          const { isOnTeam } = isOnTeamForReq(req)
-          if (!isOnTeam) return send403NotOnTeam(res)
-        }
-
-        if (req.method === 'POST') {
-          if (rejectIfBodyTooLarge(req, res, MAX_SETLIST_BODY)) return
-          let body = ''
-          req.on('data', (chunk: Buffer) => { body += chunk.toString() })
-          req.on('end', () => {
-            try {
-              const data = JSON.parse(body)
-              // Stamp the save time server-side so clients can't backdate; per
-              // the no-Date-in-workflows habit we keep timestamps authoritative
-              // here.
-              data.saved_at = new Date().toISOString()
-              if (!fs.existsSync(annotatorDir)) fs.mkdirSync(annotatorDir, { recursive: true })
-              fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
-              res.end('{"ok":true}')
-            } catch {
-              res.statusCode = 400
-              res.end('{"error":"invalid json"}')
-            }
-          })
-          return
-        }
-
-        if (req.method === 'DELETE') {
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-          res.end('{"ok":true}')
-          return
-        }
-
-        next()
-      })
-    },
-  }
-}
-
 // Serve and persist dataset-wide config at /api/dataset-config (single file).
 // Holds access-tier assignments and any corpus-wide defaults.
 // GET  /api/dataset-config → read current config (returns defaults if absent)
@@ -1869,7 +1864,9 @@ function serveDatasetConfig(): Plugin {
             res.end('{"error":"missing id"}')
             return
           }
-          const tier = tierForId(id, readDatasetConfigSafe())
+          // Only your own id: answering for any id would tell a stranger who
+          // is on the team.
+          const tier = id === readAnnotatorIdFromReq(req) ? tierForId(id, readDatasetConfigSafe()) : null
           res.end(JSON.stringify({ tier }))
           return
         }
@@ -2234,6 +2231,105 @@ function serveUploadAlgo(): Plugin {
           fs.mkdirSync(path.dirname(destPath), { recursive: true })
           fs.writeFileSync(destPath, body, 'utf-8')
           res.end('{"ok":true}')
+        })
+      })
+    },
+  }
+}
+
+// Restore a full server backup, one file at a time, to the exact path it was
+// taken from.
+// POST /api/restore-backup?path=<data-relative path>&chunk=<i>&total=<n>
+//   body: raw bytes of chunk i (≤ RESTORE_CHUNK_MAX). Chunks arrive in order;
+//   chunk 0 starts a fresh `.restore-part` file, the last one renames it into
+//   place and answers {ok, bytes, sha256} so the client can prove the copy.
+//
+// A backup is a tar of the server's data/ tree, and the per-feature import
+// endpoints can't carry it: they know three of the eighteen detector-output
+// families, re-file every annotator's layers under whoever is importing, and
+// have nowhere to put eye/gold annotations, annotator profiles or the people
+// list. A byte copy has none of those gaps — so this writes bytes, and only
+// under the top-level folders a data/ tree actually has.
+//
+// Admin only: it can replace dataset-config.json, i.e. the people list itself.
+// `stems/` goes to STEMS_DIR, which is where the server reads stems from (on
+// the VM that mount *is* data/stems, which is why the backup has it there).
+const RESTORE_TOP_LEVEL = new Set([
+  'songs', 'song-info', 'annotations', 'algorithm-outputs', 'stems',
+  'annotators', 'lyrics-text', 'dataset-config.json',
+])
+const RESTORE_CHUNK_MAX = 9 * 1024 * 1024
+const DATA_ROOT_DIR = path.dirname(DATA_FILES.datasetConfig)
+
+/** The on-disk destination for a backup-relative path, or null if the path
+ *  could land anywhere other than inside a data/ folder. */
+function restoreDestination(rel: string): string | null {
+  const parts = rel.split('/')
+  if (parts.length === 0 || !RESTORE_TOP_LEVEL.has(parts[0])) return null
+  if (parts[0] === 'dataset-config.json' && parts.length !== 1) return null
+  for (const seg of parts) {
+    // Shared songs carry a real .git folder; nothing else is dot-named.
+    if (!/^[A-Za-z0-9@+_.,()' -]+$/.test(seg) || seg === '.' || seg === '..') return null
+    if (seg.startsWith('.') && seg !== '.git') return null
+  }
+  if (parts[0] === 'stems') return path.join(STEMS_DIR, ...parts.slice(1))
+  return path.join(DATA_ROOT_DIR, ...parts)
+}
+
+function serveRestoreBackup(): Plugin {
+  return {
+    name: 'restore-backup',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.method !== 'POST' || !req.url?.startsWith('/api/restore-backup')) return next()
+        res.setHeader('Content-Type', 'application/json')
+
+        const { isAdmin } = isAdminForReq(req)
+        if (!isAdmin) return send403NotAdmin(res)
+
+        const urlObj = new URL(req.url, 'http://localhost')
+        const rel = urlObj.searchParams.get('path') ?? ''
+        const chunk = Number(urlObj.searchParams.get('chunk') ?? '0')
+        const total = Number(urlObj.searchParams.get('total') ?? '1')
+        const dest = restoreDestination(rel)
+        if (!dest) {
+          res.statusCode = 400
+          res.end(JSON.stringify({ error: `not a path inside a data/ backup: ${rel}` }))
+          return
+        }
+        if (!Number.isInteger(chunk) || !Number.isInteger(total) || total < 1 || chunk < 0 || chunk >= total) {
+          res.statusCode = 400; res.end('{"error":"bad chunk/total"}'); return
+        }
+        if (rejectIfBodyTooLarge(req, res, RESTORE_CHUNK_MAX)) return
+
+        const part = `${dest}.restore-part`
+        const bufs: Buffer[] = []
+        let size = 0
+        req.on('data', (b: Buffer) => {
+          size += b.length
+          if (size <= RESTORE_CHUNK_MAX) bufs.push(b)
+        })
+        // Async on purpose: a restore is thousands of writes, and one that
+        // stalls (a Docker bind mount whose host folder was replaced hangs
+        // mkdir forever) must not freeze every other request with it.
+        req.on('end', async () => {
+          if (size > RESTORE_CHUNK_MAX) {
+            res.statusCode = 413; res.end('{"error":"chunk too large"}'); return
+          }
+          try {
+            await fs.promises.mkdir(path.dirname(dest), { recursive: true })
+            const body = Buffer.concat(bufs)
+            if (chunk === 0) await fs.promises.writeFile(part, body)
+            else await fs.promises.appendFile(part, body)
+            if (chunk < total - 1) { res.end('{"ok":true}'); return }
+            await fs.promises.rename(part, dest)
+            const bytes = await fs.promises.readFile(dest)
+            const sha256 = crypto.createHash('sha256').update(bytes).digest('hex')
+            res.end(JSON.stringify({ ok: true, bytes: bytes.length, sha256 }))
+          } catch (err) {
+            res.statusCode = 500
+            res.end(JSON.stringify({ error: (err as Error).message }))
+          }
         })
       })
     },
@@ -2728,7 +2824,7 @@ function proxyCustomScripts(): Plugin {
         }
 
         // Demo-mode lockdown for the Playground attack surface. /api/custom-
-        // scripts/{upload,run/*,/*/flags,/* DELETE} write or execute Python
+        // scripts/{upload,run/*,/*/flags,/*/copy,/*/move,/*/archive,packages,/* DELETE} write or execute Python
         // on the server, so they must be unreachable for the synthetic
         // demo-anonymous identity. The UI route guard hides /custom in demo;
         // this is the matching server-side block so a hand-crafted client
@@ -2741,9 +2837,12 @@ function proxyCustomScripts(): Plugin {
           const method = (req.method ?? 'GET').toUpperCase()
           const isPlaygroundMutation =
             url.startsWith('/api/custom-scripts/upload') ||
+            url.startsWith('/api/custom-scripts/packages/install') ||
+            (method === 'POST' && url.startsWith('/api/custom-scripts/packages')) ||
+            (method === 'DELETE' && url.startsWith('/api/custom-scripts/packages/')) ||
             url.startsWith('/api/custom-scripts/run/') ||
             url.startsWith('/api/custom-scripts/reload') ||
-            (method === 'POST' && /^\/api\/custom-scripts\/[^/]+\/flags(\?|$)/.test(url)) ||
+            (method === 'POST' && /^\/api\/custom-scripts\/[^/]+\/(flags|copy|move|archive)(\?|$)/.test(url)) ||
             (method === 'DELETE' && /^\/api\/custom-scripts\/[^/]+(\/outputs)?(\?|$)/.test(url))
           if (isPlaygroundMutation) {
             res.statusCode = 403
@@ -2767,8 +2866,14 @@ function proxyCustomScripts(): Plugin {
         const method = (req.method ?? 'GET').toUpperCase()
         const isAuthorshipMutation =
           url.startsWith('/api/custom-scripts/upload') ||
+          // Installing a package writes Python onto the host; removing one deletes it.
+          url.startsWith('/api/custom-scripts/packages/install') ||
+          // Making a package or editing its package.json writes into custom/.
+          (method === 'POST' && url.startsWith('/api/custom-scripts/packages')) ||
+          (method === 'DELETE' && url.startsWith('/api/custom-scripts/packages/')) ||
           url.startsWith('/api/custom-scripts/reload') ||
-          (method === 'POST' && /^\/api\/custom-scripts\/[^/]+\/flags(\?|$)/.test(url)) ||
+          // Moving a detector between packages, archiving or restoring one.
+          (method === 'POST' && /^\/api\/custom-scripts\/[^/]+\/(flags|copy|move|archive)(\?|$)/.test(url)) ||
           (method === 'DELETE' && /^\/api\/custom-scripts\/[^/]+(\/outputs)?(\?|$)/.test(url))
         if (isAuthorshipMutation) {
           const { ok, annotatorId: authedId } = isResearcherOrAdminForReq(req)
@@ -2820,9 +2925,12 @@ function proxyCustomScripts(): Plugin {
           const headers: Record<string, string | number> = {
             'Content-Length': body.length,
           }
-          // Pass through Content-Type and the annotator header.
+          // Pass through Content-Type and the annotator — from the header, or
+          // the cookie when a plain GET (registry, cached results) sent none:
+          // the sidecar hides private packages from a caller it cannot place
+          // on the team, so a member who did not send the header would lose them.
           if (req.headers['content-type']) headers['Content-Type'] = String(req.headers['content-type'])
-          if (req.headers['x-annotator-id']) headers['X-Annotator-Id'] = String(req.headers['x-annotator-id'])
+          if (annotatorId) headers['X-Annotator-Id'] = annotatorId
 
           const options: http.RequestOptions = {
             hostname: CUSTOM_HOST,
@@ -3156,6 +3264,9 @@ function serveStorageStats(): Plugin {
   }
 }
 
+/** Whose beats a grid-cut algorithm (MSAF / ruptures / LoCoMotif) runs on. */
+type AlgoGrid = 'user' | 'auto'
+
 // Run Python analysis algorithms for a song in the background and stream logs.
 // POST /api/run-algorithms/:slug  → { jobId }
 // GET  /api/run-algorithms/status/:jobId → { status, logs, startedAt, finishedAt? }
@@ -3345,10 +3456,12 @@ function serveRunAlgorithms(): Plugin {
 
   // Run a single ruptures variant by POST-ing to the python server on :8003.
   // Each call writes ruptures-<suffix>.json to the analysis dir.
-  const runRupturesOne = (job: Job, slug: string, suffix: string, force = false): Promise<RunResult> =>
+  // `grid`: whose beats it cuts its features at — 'user' (the song's grid) or
+  // 'auto' (librosa's tracked beats). Same for MSAF and LoCoMotif below.
+  const runRupturesOne = (job: Job, slug: string, suffix: string, force = false, grid: AlgoGrid = 'user'): Promise<RunResult> =>
     runSidecarOne(job, suffix, {
       host: DSP_HOST, port: 8003, apiPath: '/api/ruptures/analyze',
-      body: { slug, suffix, force }, downHint: 'is the ruptures server running on :8003?',
+      body: { slug, suffix, force, grid }, downHint: 'is the ruptures server running on :8003?',
     })
 
   // Run a single SPAN-family detector by POST-ing to the python server on :8009.
@@ -3396,10 +3509,10 @@ function serveRunAlgorithms(): Plugin {
 
   // Run a single MSAF algorithm by POST-ing to the standalone msaf server on
   // :8002 (separate sidecar — incompatible deps). Writes <algorithm>.json.
-  const runMsafOne = (job: Job, slug: string, algorithm: string, force = false): Promise<RunResult> =>
+  const runMsafOne = (job: Job, slug: string, algorithm: string, force = false, grid: AlgoGrid = 'user'): Promise<RunResult> =>
     runSidecarOne(job, algorithm, {
       host: MSAF_HOST, port: 8002, apiPath: '/api/msaf/analyze',
-      body: { slug, algorithm, force }, downHint: 'is the msaf server running on :8002?',
+      body: { slug, algorithm, force, grid }, downHint: 'is the msaf server running on :8002?',
     })
 
   // Run a single custom detector by POST-ing to the custom server on :8005.
@@ -3494,6 +3607,9 @@ function serveRunAlgorithms(): Plugin {
         let lyricsLanguage = ''
         // Algorithm IDs to force-rerun even when a fresh cache file exists.
         let forceAlgos: string[] = []
+        // Whose beats MSAF / ruptures / LoCoMotif cut their features at: the
+        // song's grid ('user', the default) or their own tracked beats ('auto').
+        let grid: AlgoGrid = 'user'
         try {
           const parsed = JSON.parse(bodyStr)
           if (parsed.demucsModel) demucsModel = parsed.demucsModel
@@ -3502,6 +3618,7 @@ function serveRunAlgorithms(): Plugin {
             customDetectors = parsed.customDetectors.filter((n: unknown): n is string => typeof n === 'string')
           }
           if (typeof parsed.lyricsLanguage === 'string') lyricsLanguage = parsed.lyricsLanguage
+          if (parsed.grid === 'auto') grid = 'auto'
           if (Array.isArray(parsed.forceAlgos)) {
             forceAlgos = parsed.forceAlgos.filter((n: unknown): n is string => typeof n === 'string')
           }
@@ -3513,11 +3630,19 @@ function serveRunAlgorithms(): Plugin {
 
         const analysisDir = path.join(ANALYSIS_DIR, slug)
         const exists = (filename: string) => fs.existsSync(path.join(analysisDir, filename))
+        // A grid-cut algorithm's saved result is "done" only on the grid asked
+        // for. Results from before the choice carry no `grid`: all were 'auto'.
+        const onGrid = (filepath: string): boolean => {
+          try {
+            const parsed = JSON.parse(fs.readFileSync(filepath, 'utf-8'))
+            return (parsed?.grid === 'user' ? 'user' : 'auto') === grid
+          } catch { return false }
+        }
 
         // Determine which MSAF algorithms are requested and not yet done
         const msafRequested = ['sf', 'foote', 'cnmf', 'olda']
           .filter((a) => algorithms.includes(`msaf-${a}`)
-            && (!exists(`${a}.json`) || isForced(`msaf-${a}`)))
+            && (!exists(`${a}.json`) || !onGrid(path.join(analysisDir, `${a}.json`)) || isForced(`msaf-${a}`)))
 
         // Determine which All-In-One models are requested and not yet done
         const allin1Requested = algorithms.filter((a) => {
@@ -3530,7 +3655,8 @@ function serveRunAlgorithms(): Plugin {
         const rupturesRequested = algorithms
           .filter((a) => a.startsWith('ruptures-'))
           .map((a) => a.slice('ruptures-'.length))
-          .filter((suffix) => !exists(`ruptures-${suffix}.json`) || isForced(`ruptures-${suffix}`))
+          .filter((suffix) => !exists(`ruptures-${suffix}.json`)
+            || !onGrid(path.join(analysisDir, `ruptures-${suffix}.json`)) || isForced(`ruptures-${suffix}`))
 
         // Experimental sidecars write their result to disk even when the
         // detector reports `ok: false` (missing weights, missing deps,
@@ -3571,8 +3697,8 @@ function serveRunAlgorithms(): Plugin {
           .filter((a) => PITCH_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.pitch, slug, `${a}.json`)) || isForced(a))
 
-        // CUE-extras quartet (librosa key / autochord / librosa onsets / drum transients).
-        const CUE_EXTRAS_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients']
+        // CUE-extras trio (librosa key / autochord / librosa onsets).
+        const CUE_EXTRAS_IDS = ['librosa-key', 'autochord-chords', 'librosa-onsets']
         const cueExtrasRequested = algorithms
           .filter((a) => CUE_EXTRAS_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.cueExtras, slug, `${a}.json`)) || isForced(a))
@@ -3585,8 +3711,8 @@ function serveRunAlgorithms(): Plugin {
 
         // Whisper transcription + CTC forced alignment. ctc-forced-aligner
         // needs the per-song reference text (read below and passed as `text`);
-        // whisper-base ignores it.
-        const LYRICS_IDS = ['whisper-base', 'ctc-forced-aligner']
+        // the two Whispers ignore it.
+        const LYRICS_IDS = ['whisper-base', 'ivrit', 'ctc-forced-aligner']
         const lyricsRequested = algorithms
           .filter((a) => LYRICS_IDS.includes(splitStemId(a).algo))
           .filter((a) => !isFreshCache(path.join(DATA_DIRS.lyrics, slug, `${a}.json`)) || isForced(a))
@@ -3595,7 +3721,10 @@ function serveRunAlgorithms(): Plugin {
         const PATTERN_IDS = ['locomotif']
         const patternRequested = algorithms
           .filter((a) => PATTERN_IDS.includes(splitStemId(a).algo))
-          .filter((a) => !isFreshCache(path.join(DATA_DIRS.pattern, slug, `${a}.json`)) || isForced(a))
+          .filter((a) => {
+            const f = path.join(DATA_DIRS.pattern, slug, `${a}.json`)
+            return !isFreshCache(f) || !onGrid(f) || isForced(a)
+          })
 
         // Count what the user asked for per family so we can report cached
         // vs newly-run vs failed honestly (e.g. "1 cached, 4 failed" instead
@@ -3616,12 +3745,15 @@ function serveRunAlgorithms(): Plugin {
         ;(async () => {
           try {
             job.logs += `\n══ Run algorithms · ${slug} · ${algorithms.length} selected ══\n`
+            // Said in every grid-cut family's heading, so the log and the run
+            // report both name the beats each result was cut at.
+            const onWhichGrid = grid === 'user' ? 'on my grid' : 'on automatic grid'
             if (msafSelectedCount > 0) {
               const cached = msafSelectedCount - msafRequested.length
               const section: SectionResult = {
                 label: msafRequested.length > 0
-                  ? `MSAF (${msafRequested.length} algorithm${msafRequested.length === 1 ? '' : 's'})`
-                  : 'MSAF',
+                  ? `MSAF (${msafRequested.length} algorithm${msafRequested.length === 1 ? '' : 's'}) · ${onWhichGrid}`
+                  : `MSAF · ${onWhichGrid}`,
                 total: msafRequested.length,
                 ok: 0, failed: 0, cached,
               }
@@ -3630,12 +3762,12 @@ function serveRunAlgorithms(): Plugin {
                 job.logs += `\n▶ ${section.label}\n`
                 for (const algo of msafRequested) {
                   if (job.killed) break
-                  const result = await runMsafOne(job, slug, algo, isForced(`msaf-${algo}`))
+                  const result = await runMsafOne(job, slug, algo, isForced(`msaf-${algo}`), grid)
                   if (result.ok) section.ok++
                   else recordFailure(section, `msaf-${algo}`, result.error)
                 }
               } else {
-                job.logs += '\n▶ MSAF\n  (all selected MSAF algorithms already cached)\n'
+                job.logs += `\n▶ MSAF · ${onWhichGrid}\n  (all selected MSAF algorithms already cached on this grid)\n`
               }
             }
 
@@ -3671,8 +3803,8 @@ function serveRunAlgorithms(): Plugin {
               const cached = rupturesSelectedCount - rupturesRequested.length
               const section: SectionResult = {
                 label: rupturesRequested.length > 0
-                  ? `Ruptures CPD (${rupturesRequested.length} variant${rupturesRequested.length === 1 ? '' : 's'})`
-                  : 'Ruptures CPD',
+                  ? `Ruptures CPD (${rupturesRequested.length} variant${rupturesRequested.length === 1 ? '' : 's'}) · ${onWhichGrid}`
+                  : `Ruptures CPD · ${onWhichGrid}`,
                 total: rupturesRequested.length,
                 ok: 0, failed: 0, cached,
               }
@@ -3681,12 +3813,12 @@ function serveRunAlgorithms(): Plugin {
                 job.logs += `\n▶ ${section.label}\n`
                 for (const suffix of rupturesRequested) {
                   if (job.killed) break
-                  const result = await runRupturesOne(job, slug, suffix, isForced(`ruptures-${suffix}`))
+                  const result = await runRupturesOne(job, slug, suffix, isForced(`ruptures-${suffix}`), grid)
                   if (result.ok) section.ok++
                   else recordFailure(section, `ruptures-${suffix}`, result.error)
                 }
               } else {
-                job.logs += '\n▶ Ruptures CPD\n  (all selected variants already cached)\n'
+                job.logs += `\n▶ Ruptures CPD · ${onWhichGrid}\n  (all selected variants already cached on this grid)\n`
               }
             }
 
@@ -3740,7 +3872,7 @@ function serveRunAlgorithms(): Plugin {
               for (const algo of requested) {
                 if (job.killed) break
                 const result = await runExperimentalOne(
-                  job, slug, algo, host, port, apiPath, serviceName, label, extraBody,
+                  job, slug, algo, host, port, apiPath, serviceName, label.split(' · ')[0], extraBody,
                 )
                 if (result.ok) section.ok++
                 else recordFailure(section, algo, result.error)
@@ -3781,8 +3913,8 @@ function serveRunAlgorithms(): Plugin {
               Object.keys(lyricsExtra).length ? lyricsExtra : undefined,
             )
             await runFamilyBlock(
-              'PATTERN family', PATTERN_IDS, PATTERN_HOST, 8017,
-              '/api/pattern/detect', 'pattern', patternRequested,
+              `PATTERN family · ${onWhichGrid}`, PATTERN_IDS, PATTERN_HOST, 8017,
+              '/api/pattern/detect', 'pattern', patternRequested, { grid },
             )
 
             // Custom detectors — folded into the same job so they share one
@@ -3804,7 +3936,13 @@ function serveRunAlgorithms(): Plugin {
                   return false
                 }
               }
-              const customRequested = customDetectors.filter(
+              // The kit split first: a run that reads drums records the kit
+              // it read and goes out of date when the kit is split after it.
+              // Mirrors kitFirst in src/types/customScript.ts.
+              const customRequested = [
+                ...customDetectors.filter((name) => name === 'drum_kit_split'),
+                ...customDetectors.filter((name) => name !== 'drum_kit_split'),
+              ].filter(
                 (name) => !customIsFresh(path.join(DATA_DIRS.customResults, name, `${safeSlug}.json`))
                   || isForced(`custom:${name}`),
               )
@@ -4337,6 +4475,12 @@ function serveAnnotationLayers(): Plugin {
   function listStatusesForAnnotator(annotatorId: string) {
     const bySlug = new Map<string, Record<string, { count: number; status: string }>>()
     const annDir = path.join(layersDir, annotatorId)
+    // A song that stopped being collaborative hands this annotator the newer
+    // of the team's version and their own on first read — the sidebar is often
+    // that first read, and must not show the old file's counts.
+    for (const slug of listUnsharedSlugs()) {
+      if (!isSharedSong(slug)) applyUnshareDefault(slug, annotatorId, path.join(annDir, `${slug}.json`), Date.now())
+    }
     if (fs.existsSync(annDir)) {
       for (const f of fs.readdirSync(annDir).sort()) {
         if (!f.endsWith('.json')) continue
@@ -4355,6 +4499,37 @@ function serveAnnotationLayers(): Plugin {
     return [...bySlug.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([slug, layers]) => ({ slug, layers }))
+  }
+
+  // A save that holds fewer layers or items than the file it replaces keeps
+  // that file first, under annotations/layers-replaced/<annotator>/<slug>/.
+  // A solo song's file is otherwise overwritten in place with no history (a
+  // shared song has its git log), so one bad save — a stale tab, a page that
+  // showed a failed load as empty — took every layer with it for good. The
+  // newest KEEP_REPLACED per song are kept; deleting the song removes them.
+  const replacedDir = path.join(path.dirname(layersDir), 'layers-replaced')
+  const KEEP_REPLACED = 20
+  function countItems(doc: Record<string, unknown>): { layers: number; items: number } {
+    const layers = Array.isArray(doc.layers) ? doc.layers : []
+    let items = 0
+    for (const l of layers) {
+      const its = (l as { items?: unknown } | null)?.items
+      if (Array.isArray(its)) items += its.length
+    }
+    return { layers: layers.length, items }
+  }
+  function keepIfShrinking(annotatorId: string, slug: string, prev: Record<string, unknown>, next: Record<string, unknown>) {
+    const before = countItems(prev)
+    const after = countItems(next)
+    if (after.layers >= before.layers && after.items >= before.items) return
+    try {
+      const dir = path.join(replacedDir, annotatorId, slug)
+      fs.mkdirSync(dir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      fs.writeFileSync(path.join(dir, `${stamp}-rev${typeof prev.rev === 'number' ? prev.rev : 0}.json`), JSON.stringify(prev, null, 2))
+      const kept = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()
+      for (const f of kept.slice(0, Math.max(0, kept.length - KEEP_REPLACED))) fs.unlinkSync(path.join(dir, f))
+    } catch { /* a failed copy must not block the save */ }
   }
 
   return {
@@ -4392,6 +4567,7 @@ function serveAnnotationLayers(): Plugin {
           : path.join(layersDir, annotatorId, `${slug}.json`)
 
         if (req.method === 'GET') {
+          if (!shared) applyUnshareDefault(slug, annotatorId, ownPath, Date.now())
           if (fs.existsSync(ownPath)) res.end(fs.readFileSync(ownPath, 'utf-8'))
           // 200 + null body (not 404): "no layers yet for this song" is a
           // normal first-load result, mirroring serveManualAnnotations.
@@ -4446,6 +4622,7 @@ function serveAnnotationLayers(): Plugin {
               }
               data.rev = prevRev + 1
 
+              if (!shared && prev) keepIfShrinking(annotatorId, slug, prev, data)
               writeJsonAtomic(ownPath, data)
               if (shared) touchLockEdit(slug, annotatorId, Date.now())
               res.end(JSON.stringify({ ok: true, rev: data.rev }))
@@ -4496,7 +4673,11 @@ function serveAnnotationLayers(): Plugin {
 //   POST   /api/annotation-history/:slug     → { sha } restore it as a NEW version
 //
 //   GET    /api/shared-annotations           → which slugs are shared
+//   GET    /api/shared-annotations/:slug     → admin: archived team copies
 //   POST   /api/shared-annotations/:slug     → admin: make collaborative
+//                                              ({ seedFrom } or { restoreArchive })
+//   GET    /api/shared-annotations/:slug/after → this annotator's pick after un-sharing
+//   POST   /api/shared-annotations/:slug/after → { action: switch|dismiss }
 //   DELETE /api/shared-annotations/:slug     → admin: back to per-annotator
 
 /** Display name for a lock holder. Resolved server-side from the annotator's
@@ -4569,7 +4750,7 @@ function denyIfNotHolder(
   const now = Date.now()
   const rec = readLock(slug)
   if (!rec) {
-    return { error: 'this song is shared — take the edit lock before saving', lock: null }
+    return { error: 'this song is shared — grab it before saving', lock: null }
   }
   if (rec.holder !== annotatorId) {
     return {
@@ -4593,8 +4774,6 @@ function serveAnnotationLocks(): Plugin {
   for (const dir of [DATA_DIRS.sharedAnnotations, DATA_DIRS.annotationLocks]) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
   }
-  const sharedArchive = path.join(path.dirname(DATA_DIRS.sharedAnnotations), 'shared-archive')
-
   function readBody(req: http.IncomingMessage, res: http.ServerResponse, done: (v: Record<string, unknown>) => void): void {
     if (rejectIfBodyTooLarge(req, res, MAX_OPTIONS_BODY)) return
     let body = ''
@@ -4659,10 +4838,41 @@ function serveAnnotationLocks(): Plugin {
           return res.end('{"error":"not found"}')
         }
 
-        const match = suffix.match(/^\/([^/]+)$/)
-        if (!match) return next()
+        const match = suffix.match(/^\/([^/]+)(\/after)?$/)
+        if (!match || (match[2] && !isShared)) return next()
         const slug = decodeSegment(match[1])
         if (!slug) return send400BadSegment(res, 'slug')
+
+        // ── After collaboration stopped: this annotator's pick ───────────
+        // Not admin-gated: it only ever reads or swaps the caller's own file.
+        if (match[2]) {
+          const ownPath = path.join(DATA_DIRS.annotationLayers, annotatorId, `${slug}.json`)
+          const rec = isSharedSong(slug) ? null : readUnshareRecord(slug)
+          if (!rec) return res.end(JSON.stringify({ slug, after: null }))
+          const reply = (choice: ReturnType<typeof applyUnshareDefault>) => res.end(JSON.stringify({
+            slug,
+            after: choice && {
+              ...choice,
+              archivedAt: rec.archivedAt,
+              teamUpdatedAt: rec.teamUpdatedAt,
+            },
+          }))
+          if (req.method === 'GET') return reply(applyUnshareDefault(slug, annotatorId, ownPath, Date.now()))
+          if (req.method === 'POST') {
+            return readBody(req, res, (body) => {
+              applyUnshareDefault(slug, annotatorId, ownPath, Date.now())
+              const action = String(body.action ?? '')
+              const choice = action === 'switch' ? switchUnshareChoice(slug, annotatorId, ownPath, Date.now())
+                : action === 'dismiss' ? dismissUnshareNotice(slug, annotatorId)
+                : undefined
+              if (choice === undefined) { res.statusCode = 400; return res.end('{"error":"action must be switch or dismiss"}') }
+              if (!choice) { res.statusCode = 500; return res.end('{"error":"could not change this song"}') }
+              reply(choice)
+            })
+          }
+          res.statusCode = 405
+          return res.end('{"error":"method not allowed"}')
+        }
 
         // ── Version history ──────────────────────────────────────────────
         if (isHistory) {
@@ -4705,11 +4915,25 @@ function serveAnnotationLocks(): Plugin {
           const { isAdmin } = isAdminForReq(req)
           if (!isAdmin) return send403NotAdmin(res)
 
+          if (req.method === 'GET') {
+            return res.end(JSON.stringify({ slug, shared: isSharedSong(slug), archives: listSongArchives(slug) }))
+          }
+
           if (req.method === 'POST') {
             return readBody(req, res, (body) => {
               if (isSharedSong(slug)) {
                 res.statusCode = 409
                 return res.end('{"error":"already shared"}')
+              }
+              // Restart from an archived team copy: its document and its whole
+              // version history move back into place.
+              if (typeof body.restoreArchive === 'string') {
+                const err = restoreSongArchive(slug, body.restoreArchive)
+                if (err) {
+                  res.statusCode = err === 'could not move the archive back' ? 500 : 400
+                  return res.end(JSON.stringify({ error: err }))
+                }
+                return res.end(JSON.stringify({ ok: true, slug, restoredArchive: body.restoreArchive }))
               }
               // Seed from one annotator's existing document, so the team opens
               // the song and finds work rather than a blank canvas. Their own
@@ -4732,6 +4956,9 @@ function serveAnnotationLocks(): Plugin {
                   return res.end('{"error":"seed document is not valid json"}')
                 }
               }
+              // An earlier "stop collaborating" left a pick for each annotator;
+              // it is about a team version this one replaces.
+              clearUnshareRecord(slug)
               const r = initSharedRepo(slug, {
                 event: 'seed',
                 holder: seedFrom ?? annotatorId,
@@ -4747,16 +4974,15 @@ function serveAnnotationLocks(): Plugin {
             if (!isSharedSong(slug)) { res.statusCode = 404; return res.end('{"error":"not shared"}') }
             // Archive rather than delete: the version history is the record of
             // work the team already did, and un-sharing is not a reason to
-            // destroy it.
+            // destroy it. Each annotator then picks up the newer of the
+            // team's version and their own the first time they read the song
+            // (applyUnshareDefault) and can switch to the other.
             try {
-              fs.mkdirSync(sharedArchive, { recursive: true })
-              const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-              fs.renameSync(sharedSongDir(slug), path.join(sharedArchive, `${slug}-${stamp}`))
+              archiveSharedSong(slug, Date.now())
             } catch {
               res.statusCode = 500
               return res.end('{"error":"could not archive the shared folder"}')
             }
-            removeLock(slug)
             return res.end(JSON.stringify({ ok: true, slug, archived: true }))
           }
 
@@ -4980,6 +5206,115 @@ function serveAnnotatorListing(): Plugin {
 // POST   /api/annotators/invite                → admin-only, upsert profile
 //                                                + add to team/admin list
 // DELETE /api/annotators/profile/<id>          → admin-only
+// ─── Sign-in ─────────────────────────────────────────────────────────────────
+// POST /api/auth/google {credential} → verifies Google's ID token, opens a session
+// POST /api/auth/local  {id}         → a `local-…` username; this machine only
+// POST /api/auth/logout              → closes the session
+// GET  /api/auth/me                  → {id, method, localLogin} — id is null
+//                                       without a session
+// The session is an HttpOnly cookie the page can neither read nor forge; every
+// other endpoint learns who is asking from it (readAnnotatorIdFromReq). The
+// rules, and why username sign-in is local-only, are in server/auth.mjs.
+function serveAuth(): Plugin {
+  initAuth({ dataRoot: path.dirname(DATA_FILES.datasetConfig) })
+  // The client id is public; the server needs it to check that a token was
+  // issued for this app and not for somebody else's.
+  const clientId = process.env.VITE_GOOGLE_CLIENT_ID
+    || loadEnv(process.env.NODE_ENV === 'production' ? 'production' : 'development', __dirname, 'VITE_')
+      .VITE_GOOGLE_CLIENT_ID
+    || ''
+
+  function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = []
+      let size = 0
+      req.on('data', (c: Buffer) => {
+        size += c.length
+        if (size > 16 * 1024) { reject(new Error('body too large')); req.destroy(); return }
+        chunks.push(c)
+      })
+      req.on('end', () => {
+        try {
+          const v = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          resolve(v && typeof v === 'object' ? v as Record<string, unknown> : {})
+        } catch (e) { reject(e) }
+      })
+      req.on('error', reject)
+    })
+  }
+
+  function send(res: http.ServerResponse, status: number, body: unknown) {
+    res.statusCode = status
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(JSON.stringify(body))
+  }
+
+  return {
+    name: 'serve-auth',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = (req.url ?? '').split('?')[0]
+        if (!url.startsWith('/api/auth/')) return next()
+
+        if (url === '/api/auth/me' && req.method === 'GET') {
+          const s = sessionFromReq(req)
+          let id = s?.id ?? null
+          // With the dev escape hatch on, the claim is who you are — say so,
+          // or the page would sign out a script that never had a session.
+          if (!id && process.env.TC_TRUST_ANNOTATOR_HEADER === '1') {
+            const claimed = annotatorIdFromReq(req)
+            if (claimed && claimed !== 'demo-anonymous') id = claimed
+          }
+          send(res, 200, { id, method: s?.method ?? null, localLogin: isLocalRequest(req) })
+          return
+        }
+
+        if (url === '/api/auth/logout' && req.method === 'POST') {
+          setSessionCookie(req, res, '')
+          send(res, 200, { ok: true })
+          return
+        }
+
+        if (url === '/api/auth/google' && req.method === 'POST') {
+          readBody(req)
+            .then((body) => verifyGoogleIdToken(String(body.credential ?? ''), clientId))
+            .then(({ email, name }) => {
+              setSessionCookie(req, res, makeSession(email, 'google'))
+              send(res, 200, { id: email, email, name })
+            })
+            .catch((e: Error) => send(res, 401, { error: `Google sign-in failed: ${e.message}` }))
+          return
+        }
+
+        if (url === '/api/auth/local' && req.method === 'POST') {
+          if (!isLocalRequest(req)) {
+            send(res, 403, {
+              error: 'local_login_disabled',
+              message: 'Username sign-in works only on the machine running TimeCues. Sign in with Google.',
+            })
+            return
+          }
+          readBody(req)
+            .then((body) => {
+              const id = sanitizeAnnotatorId(typeof body.id === 'string' ? body.id : undefined)
+              // Only the username namespaces (local-, and the legacy email-): a
+              // username must never become a Google address, which is what the
+              // access list holds.
+              if (!id || !/^(local|email)-/.test(id)) { send(res, 400, { error: 'invalid id' }); return }
+              setSessionCookie(req, res, makeSession(id, 'local'))
+              send(res, 200, { id })
+            })
+            .catch(() => send(res, 400, { error: 'invalid json' }))
+          return
+        }
+
+        send(res, 404, { error: 'not found' })
+      })
+    },
+  }
+}
+
 function serveAnnotatorProfiles(): Plugin {
   const profileDir = DATA_DIRS.annotatorProfiles
 
@@ -5097,6 +5432,8 @@ function serveAnnotatorProfiles(): Plugin {
             const data = (raw ?? {}) as Record<string, unknown>
             const id = sanitizeAnnotatorId(typeof data.id === 'string' ? data.id : undefined)
             if (!id) { res.statusCode = 400; res.end('{"error":"invalid or missing id"}'); return }
+            // Your own profile only — the id is the session's, not the body's.
+            if (id !== readAnnotatorIdFromReq(req)) { res.statusCode = 403; res.end('{"error":"not signed in as this id"}'); return }
             if (typeof data.displayName !== 'string' || !data.displayName.trim()) {
               res.statusCode = 400; res.end('{"error":"displayName required"}'); return
             }
@@ -5466,16 +5803,17 @@ function serveSongAnnotators(): Plugin {
 // Walks user dirs only (data/annotations/*) — shipped seeds in data-default
 // are excluded so the dashboard reflects real human work.
 function serveTeamStats(): Plugin {
-  const layersDir      = DATA_DIRS.annotationLayers
-  const autoGuessDir = DATA_DIRS.autoGuessAnnotations
-  const customDir    = DATA_DIRS.customAnnotations
+  const layersDir = DATA_DIRS.annotationLayers
+  const customDir = DATA_DIRS.customAnnotations
 
-  type SourceStats = {
+  // One bucket per annotation layer type. A song counts toward a type only
+  // when that annotator's document holds at least one item of it.
+  const LAYER_TYPES = ['boundaries', 'cues', 'spans', 'loops', 'riff-patterns', 'lyrics'] as const
+
+  type LayerTypeStats = {
     count: number
     reviewedCount: number
-    totalTimeSeconds: number
-    totalBoundaries: number
-    lastModified: string | null
+    totalItems: number
     songs: string[]
   }
 
@@ -5487,16 +5825,26 @@ function serveTeamStats(): Plugin {
 
   type AnnotatorStats = {
     id: string
-    boundaries: SourceStats
-    autoGuess: SourceStats
+    songCount: number
+    layers: Record<string, LayerTypeStats>
     custom: CustomStats
     totalTimeSeconds: number
     totalAnnotations: number
     lastModified: string | null
   }
 
-  function emptySourceStats(): SourceStats {
-    return { count: 0, reviewedCount: 0, totalTimeSeconds: 0, totalBoundaries: 0, lastModified: null, songs: [] }
+  function emptyAnnotator(id: string): AnnotatorStats {
+    const layers: Record<string, LayerTypeStats> = {}
+    for (const t of LAYER_TYPES) layers[t] = { count: 0, reviewedCount: 0, totalItems: 0, songs: [] }
+    return {
+      id,
+      songCount: 0,
+      layers,
+      custom: { count: 0, scripts: [], songs: [] },
+      totalTimeSeconds: 0,
+      totalAnnotations: 0,
+      lastModified: null,
+    }
   }
 
   function newerIso(a: string | null, b: string | null): string | null {
@@ -5505,32 +5853,19 @@ function serveTeamStats(): Plugin {
     return a > b ? a : b
   }
 
-  // Walks <baseDir>/<annotatorId>/*.json for manual/autoGuess.
-  // `kind` controls how we count "reviewed" and "boundaries" — manual uses
-  // `reviewed` + `sections`, autoGuess uses `auto_guess_status === 'done'`
-  // + `points`.
-  function collectStandardSource(
-    baseDir: string,
-    kind: 'boundaries' | 'autoGuess',
+  // Walks <layersDir>/<annotatorId>/*.json — one annotation-layers document
+  // per (annotator, song) — and tallies every layer type it contains.
+  function collectLayers(
     accum: Map<string, AnnotatorStats>,
     songAnnotators: Map<string, Set<string>>,
   ) {
-    for (const annId of listAnnotatorDirs(baseDir)) {
-      const annDir = path.join(baseDir, annId)
+    for (const annId of listAnnotatorDirs(layersDir)) {
+      const annDir = path.join(layersDir, annId)
       let files: string[] = []
       try { files = fs.readdirSync(annDir).filter((f) => f.endsWith('.json')) }
       catch { continue }
 
-      const entry = accum.get(annId) ?? {
-        id: annId,
-        boundaries: emptySourceStats(),
-        autoGuess: emptySourceStats(),
-        custom: { count: 0, scripts: [], songs: [] },
-        totalTimeSeconds: 0,
-        totalAnnotations: 0,
-        lastModified: null,
-      }
-      const bucket = entry[kind]
+      const entry = accum.get(annId) ?? emptyAnnotator(annId)
 
       for (const f of files) {
         const slug = f.slice(0, -5)
@@ -5538,33 +5873,34 @@ function serveTeamStats(): Plugin {
         try { data = JSON.parse(fs.readFileSync(path.join(annDir, f), 'utf-8')) }
         catch { continue }
 
-        bucket.count += 1
-        bucket.songs.push(slug)
-
-        const timeSpent = Number(data.time_spent_seconds)
-        if (Number.isFinite(timeSpent) && timeSpent > 0) bucket.totalTimeSeconds += timeSpent
-
-        if (kind === 'boundaries') {
-          const statusByType = (data.statusByType ?? {}) as Record<string, unknown>
-          if (statusByType.boundaries === 'reviewed') bucket.reviewedCount += 1
-          const docLayers = Array.isArray(data.layers) ? data.layers : []
-          for (const layer of docLayers) {
-            if (!layer || typeof layer !== 'object') continue
-            if ((layer as { type?: string }).type !== 'boundaries') continue
-            const items = (layer as { items?: unknown }).items
-            bucket.totalBoundaries += Array.isArray(items) ? items.length : 0
-          }
-          const at = typeof data.annotated_at === 'string' ? data.annotated_at : null
-          bucket.lastModified = newerIso(bucket.lastModified, at)
-        } else {
-          if (data.auto_guess_status === 'done') bucket.reviewedCount += 1
-          const points = Array.isArray(data.points) ? data.points : []
-          bucket.totalBoundaries += points.length
-          const at = typeof data.updated_at === 'string'
-            ? data.updated_at
-            : typeof data.created_at === 'string' ? data.created_at : null
-          bucket.lastModified = newerIso(bucket.lastModified, at)
+        const itemsByType = new Map<string, number>()
+        const docLayers = Array.isArray(data.layers) ? data.layers : []
+        for (const layer of docLayers) {
+          if (!layer || typeof layer !== 'object') continue
+          const type = (layer as { type?: string }).type
+          if (!type || !(type in entry.layers)) continue
+          const items = (layer as { items?: unknown }).items
+          const n = Array.isArray(items) ? items.length : 0
+          itemsByType.set(type, (itemsByType.get(type) ?? 0) + n)
         }
+        const statusByType = (data.statusByType ?? {}) as Record<string, unknown>
+        let any = false
+        for (const [type, n] of itemsByType) {
+          if (n <= 0) continue
+          any = true
+          const bucket = entry.layers[type]
+          bucket.count += 1
+          bucket.totalItems += n
+          bucket.songs.push(slug)
+          if (statusByType[type] === 'reviewed') bucket.reviewedCount += 1
+        }
+        if (!any) continue
+
+        entry.songCount += 1
+        const timeSpent = Number(data.time_spent_seconds)
+        if (Number.isFinite(timeSpent) && timeSpent > 0) entry.totalTimeSeconds += timeSpent
+        const at = typeof data.annotated_at === 'string' ? data.annotated_at : null
+        entry.lastModified = newerIso(entry.lastModified, at)
 
         // Register this (slug, annotator) pair for the multi-annotator song list.
         const set = songAnnotators.get(slug) ?? new Set<string>()
@@ -5578,7 +5914,7 @@ function serveTeamStats(): Plugin {
 
   // Walks <customDir>/<script>/<annotatorId>/*.json. Custom annotations are
   // per-script override files; we treat them as a flat count + script list
-  // rather than computing boundaries (their schema varies per script).
+  // rather than computing items (their schema varies per script).
   function collectCustomSource(
     accum: Map<string, AnnotatorStats>,
     songAnnotators: Map<string, Set<string>>,
@@ -5600,15 +5936,7 @@ function serveTeamStats(): Plugin {
         catch { continue }
         if (files.length === 0) continue
 
-        const entry = accum.get(annId) ?? {
-          id: annId,
-          boundaries: emptySourceStats(),
-          autoGuess: emptySourceStats(),
-          custom: { count: 0, scripts: [], songs: [] },
-          totalTimeSeconds: 0,
-          totalAnnotations: 0,
-          lastModified: null,
-        }
+        const entry = accum.get(annId) ?? emptyAnnotator(annId)
         entry.custom.count += files.length
         if (!entry.custom.scripts.includes(script)) entry.custom.scripts.push(script)
         for (const f of files) {
@@ -5639,20 +5967,15 @@ function serveTeamStats(): Plugin {
 
         const accum = new Map<string, AnnotatorStats>()
         const songAnnotators = new Map<string, Set<string>>()
-        collectStandardSource(layersDir,     'boundaries', accum, songAnnotators)
-        collectStandardSource(autoGuessDir, 'autoGuess',  accum, songAnnotators)
+        collectLayers(accum, songAnnotators)
         collectCustomSource(accum, songAnnotators)
 
         // Roll up per-annotator totals + sort song lists for deterministic output.
         const annotators = Array.from(accum.values()).map((a) => {
-          for (const k of ['boundaries', 'autoGuess'] as const) {
-            a[k].songs.sort()
-          }
+          for (const t of LAYER_TYPES) a.layers[t].songs.sort()
           a.custom.songs.sort()
           a.custom.scripts.sort()
-          a.totalTimeSeconds = a.boundaries.totalTimeSeconds + a.autoGuess.totalTimeSeconds
-          a.totalAnnotations = a.boundaries.count + a.autoGuess.count + a.custom.count
-          a.lastModified = newerIso(a.boundaries.lastModified, a.autoGuess.lastModified)
+          a.totalAnnotations = a.songCount + a.custom.count
           return a
         })
         annotators.sort((a, b) => b.totalAnnotations - a.totalAnnotations || a.id.localeCompare(b.id))
@@ -5662,7 +5985,7 @@ function serveTeamStats(): Plugin {
           .map(([slug]) => slug)
           .sort()
 
-        res.end(JSON.stringify({ annotators, multiAnnotatorSongs }))
+        res.end(JSON.stringify({ layerTypes: LAYER_TYPES, annotators, multiAnnotatorSongs }))
       })
     },
   }
@@ -5845,6 +6168,42 @@ function serveCapabilities(): Plugin {
     }
   }
 
+  // The marker lives on the data volume, so it outlives the container that
+  // wrote it: prod kept a June `demucs: true` long after the stems service was
+  // taken off the VM, and every upload then queued a stem run against nothing.
+  // So the marker's `demucs` only counts while the stems daemon answers its
+  // health check. Cached briefly so a page full of capability polls costs one
+  // request.
+  const STEMS_HEALTH_TTL_MS = 15_000
+  let stemsHealth: { ok: boolean; at: number } | null = null
+  let stemsHealthInflight: Promise<boolean> | null = null
+
+  function stemsDaemonUp(): Promise<boolean> {
+    if (stemsHealth && Date.now() - stemsHealth.at < STEMS_HEALTH_TTL_MS) return Promise.resolve(stemsHealth.ok)
+    if (!stemsHealthInflight) {
+      stemsHealthInflight = new Promise<boolean>((resolve) => {
+        const req = http.get(
+          { hostname: STEMS_HOST, port: STEMS_PORT, path: '/api/stems/health', timeout: 2000 },
+          (res) => {
+            let body = ''
+            res.on('data', (c) => { body += c })
+            res.on('end', () => {
+              try { resolve(res.statusCode === 200 && JSON.parse(body).demucsOk === true) }
+              catch { resolve(false) }
+            })
+          },
+        )
+        req.on('timeout', () => req.destroy())
+        req.on('error', () => resolve(false))
+      }).then((ok) => {
+        stemsHealth = { ok, at: Date.now() }
+        stemsHealthInflight = null
+        return ok
+      })
+    }
+    return stemsHealthInflight
+  }
+
   return {
     name: 'serve-capabilities',
     configureServer(server) {
@@ -5861,7 +6220,11 @@ function serveCapabilities(): Plugin {
         // 1. Docker marker is the authoritative source when present (gpu-tools
         //    or cpu-tools profile published it via the container entrypoint).
         const marker = readMarker()
-        if (marker) { res.end(JSON.stringify(marker)); return }
+        if (marker) {
+          if (!marker.demucs) { res.end(JSON.stringify(marker)); return }
+          stemsDaemonUp().then((up) => res.end(JSON.stringify({ ...marker, demucs: up })))
+          return
+        }
 
         // 2. No marker — return the cached host-python probe result if we have
         //    one. ?force=1 invalidates the cache and kicks off a fresh probe.
@@ -5927,7 +6290,7 @@ async function loadExtraServerPlugins(): Promise<Plugin[]> {
 // this resolves to an empty list and none of those routes exist. The host
 // injects the app-specific read helpers so the archive module never
 // re-implements the corpus / identity / path logic the rest of this file owns.
-// Mirrors loadExtraServerPlugins() and the --with-dj → VITE_WITH_DJ convention.
+// Mirrors loadExtraServerPlugins().
 async function loadLolPlugin(): Promise<Plugin[]> {
   if (process.env.VITE_WITH_LOL !== '1') return []
   const modPath = path.join(REPO_ROOT, 'archive', 'lol', 'server.mjs')
@@ -6000,9 +6363,9 @@ export default defineConfig(async () => {
   // so the same middleware is registered on both the dev and preview servers.
   // react() and excludeStemsFromDist() stay unwrapped (no configureServer hook).
   const apiPlugins: Plugin[] = [
-    serveManifest(), serveAnalysis(), serveSongAudio(), serveStems(),
+    serveAuth(), serveManifest(), serveAnalysis(), serveSongAudio(), serveStems(),
     serveAutoGuessAnnotations(),
-    serveSongInfo(), serveLyricsText(), serveSetlists(), serveDatasetConfig(),
+    serveSongInfo(), serveLyricsText(), serveDatasetConfig(),
     serveCorpusStats(), serveAlgoClusters(), serveAnnotationTimes(), serveUploadSong(),
     serveUploadStems(), serveSongsAdmin(), serveDatasetAdmin(), serveRunAlgorithms(),
     serveRunDemucs(), serveBulkAnnotations(), serveLayersBulk(), serveAnnotationLayers(),
@@ -6014,7 +6377,7 @@ export default defineConfig(async () => {
     proxySpan(), proxyBeatnet(), proxyPanns(), proxyPitch(),
     proxyCueExtras(), proxyPercussive(), proxyLyrics(), proxyPattern(),
     proxyBeatThis(), proxyBeatTransformer(),
-    proxyCustomScripts(), serveSongCacheListing(), serveUploadAlgo(), serveStorageStats(),
+    proxyCustomScripts(), serveSongCacheListing(), serveUploadAlgo(), serveRestoreBackup(), serveStorageStats(),
     serveCapabilities(),
     ...await loadLolPlugin(), ...await loadExtraServerPlugins(),
   ]

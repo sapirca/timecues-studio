@@ -1,5 +1,4 @@
-// Per-song reference lyrics text editor. Lives behind the
-// `experimentalLyricsFamily` flag in the lyrics editor surface. Persists
+// Per-song reference lyrics text editor, in the lyrics editor surface. Persists
 // to /api/lyrics-text/<slug> (text/plain) — one file per slug, shared
 // across annotators. The text serves as the alignment target for SOFA /
 // ctc-forced-aligner; Whisper-base (already wired) ignores it.
@@ -20,21 +19,28 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 export function LyricsTextPanel({ slug }: LyricsTextPanelProps) {
   const [text, setText] = useState('');
-  const [loaded, setLoaded] = useState(false);
+  // The song whose text the box holds. Loading is derived from it, so a song
+  // change reads as not-loaded-yet without an effect having to reset anything.
+  const [loadedSlug, setLoadedSlug] = useState<string | null>(null);
+  const loaded = loadedSlug === slug;
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<string>('');
+  // What the box holds and which song it belongs to, as of the last render —
+  // read by the unmount flush, which would otherwise see the first render's
+  // empty text and save it over the lyrics.
+  const latestRef = useRef({ slug, text, loaded });
+  useEffect(() => { latestRef.current = { slug, text, loaded }; });
 
   useEffect(() => {
     let cancelled = false;
-    setLoaded(false);
-    setSaveState('idle');
     (async () => {
       const initial = await loadLyricsText(slug);
       if (cancelled) return;
       setText(initial);
       lastSavedRef.current = initial;
-      setLoaded(true);
+      setSaveState('idle');
+      setLoadedSlug(slug);
     })();
     return () => { cancelled = true; };
   }, [slug]);
@@ -60,11 +66,13 @@ export function LyricsTextPanel({ slug }: LyricsTextPanelProps) {
     debounceRef.current = setTimeout(() => { void flush(value); }, SAVE_DEBOUNCE_MS);
   }, [flush]);
 
-  // Flush on unmount so an in-flight debounce doesn't drop the last edit.
+  // Flush on unmount so an in-flight debounce doesn't drop the last edit. Only
+  // once the song's text has loaded: before that the box is empty because
+  // nothing has arrived yet, not because anyone cleared it.
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (text !== lastSavedRef.current) void saveLyricsText(slug, text);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    const { slug: s, text: t, loaded: l } = latestRef.current;
+    if (l && t !== lastSavedRef.current) void saveLyricsText(s, t);
   }, []);
 
   const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -89,6 +97,7 @@ export function LyricsTextPanel({ slug }: LyricsTextPanelProps) {
         value={text}
         onChange={(e) => onChange(e.target.value)}
         disabled={!loaded}
+        dir="auto"
         placeholder={loaded ? 'Verse 1\nLine one\nLine two\n\nChorus\n…' : 'Loading…'}
         spellCheck={false}
         className="w-full min-h-[160px] max-h-[400px] rounded bg-[#0c0d12] border border-white/[0.06] px-2 py-1.5 text-[12px] font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emerald-400/30 resize-y"

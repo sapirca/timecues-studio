@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { LeadLaneRow, LEAD_LANE_H } from './LeadLaneRow';
+import { PlayheadClockContext, createPlayheadClock } from '../../hooks/usePlayhead';
 import type { LeadCandidate } from '../../utils/leadLane';
 
 const LANE_WIDTH = 1000;
@@ -32,7 +33,7 @@ function openPicker(candidates: LeadCandidate[]) {
     <LeadLaneRow
       candidates={candidates}
       duration={100}
-      currentTime={0}
+     
       onAssignLead={() => {}}
     />,
   );
@@ -85,16 +86,17 @@ describe('splitting a lead region', () => {
 
   const leader = cand({ prominence: [{ t: 0, level: 'lead' as const }] });
 
-  function renderLane(currentTime = 0, item = leader) {
+  function renderLane(playhead = 0, item = leader) {
     const onAssignLead = vi.fn();
     render(
-      <LeadLaneRow
-        candidates={[item]}
-        duration={100}
-        currentTime={currentTime}
-        gridProps={LEAD_GRID}
-        onAssignLead={onAssignLead}
-      />,
+      <PlayheadClockContext.Provider value={createPlayheadClock(playhead)}>
+        <LeadLaneRow
+          candidates={[item]}
+          duration={100}
+          gridProps={LEAD_GRID}
+          onAssignLead={onAssignLead}
+        />
+      </PlayheadClockContext.Provider>,
     );
     const lane = document.querySelector('.bg-gray-950') as HTMLElement;
     const block = lane.querySelector('[title^="Lead:"]') as HTMLElement;
@@ -256,7 +258,7 @@ describe('painting a range snaps to block edges, not only to downbeats', () => {
 
   function drag(from: number, to: number) {
     render(
-      <LeadLaneRow candidates={[offGrid]} duration={100} currentTime={0}
+      <LeadLaneRow candidates={[offGrid]} duration={100}
         gridProps={GRID} onAssignLead={() => {}} />,
     );
     const lane = document.querySelector('.bg-gray-950')!;
@@ -288,7 +290,7 @@ describe('dismissing the picker', () => {
   it('closes on Escape without the panel having been focused', () => {
     render(
       <LeadLaneRow candidates={[cand({ prominence: [{ t: 0, level: 'lead' as const }] })]}
-        duration={100} currentTime={0} onAssignLead={() => {}} />,
+        duration={100} onAssignLead={() => {}} />,
     );
     const lane = document.querySelector('.bg-gray-950')!;
     fireEvent.pointerDown(lane, { isPrimary: true, clientX: 700 });
@@ -315,7 +317,7 @@ describe('the four-level lane', () => {
 
   function renderTiers() {
     render(
-      <LeadLaneRow candidates={[handover]} duration={100} currentTime={0}
+      <LeadLaneRow candidates={[handover]} duration={100}
         gridProps={{ bpm: 120, gridOffset: 0, beatsPerBar: 4 }}
         onAssignLead={() => {}} />,
     );
@@ -352,7 +354,7 @@ describe('the four-level lane', () => {
     // its own level over the range — not a cross-layer contest for the front.
     const onSetLevel = vi.fn();
     render(
-      <LeadLaneRow candidates={[handover]} duration={100} currentTime={0}
+      <LeadLaneRow candidates={[handover]} duration={100}
         gridProps={{ bpm: 120, gridOffset: 0, beatsPerBar: 4 }}
         onAssignLead={() => {}} onSetLevel={onSetLevel} />,
     );
@@ -373,7 +375,7 @@ describe('the four-level lane', () => {
     const onAssignLead = vi.fn();
     const onSetLevel = vi.fn();
     render(
-      <LeadLaneRow candidates={[handover]} duration={100} currentTime={0}
+      <LeadLaneRow candidates={[handover]} duration={100}
         gridProps={{ bpm: 120, gridOffset: 0, beatsPerBar: 4 }}
         onAssignLead={onAssignLead} onSetLevel={onSetLevel} />,
     );

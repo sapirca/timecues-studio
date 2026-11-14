@@ -16,7 +16,10 @@ RUN pip install --no-cache-dir \
         "mir_eval>=0.7.0"
 
 COPY tools/python/paths.py            /app/tools/python/paths.py
+COPY tools/python/layers_timebase.py  /app/tools/python/layers_timebase.py
 COPY tools/python/server_common.py    /app/tools/python/server_common.py
+COPY tools/python/grid_truth.py       /app/tools/python/grid_truth.py
+COPY tools/python/beat_eval.py        /app/tools/python/beat_eval.py
 COPY tools/python/mir_eval_server.py  /app/tools/python/mir_eval_server.py
 
 EXPOSE 8001

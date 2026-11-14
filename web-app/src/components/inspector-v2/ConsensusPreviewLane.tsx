@@ -61,7 +61,11 @@ export interface ConsensusPreviewLaneProps {
 }
 
 const HIT = '#22c55e';
-const MISS = '#ef4444';
+
+/** The Final lane's one colour — the cyan of the button that sends it. Green
+ *  and red belong to the verdict alone: an agreement colour sharing green with
+ *  "matched your edge" made every well-agreed boundary look like a hit. */
+const FINAL = '#22d3ee';const MISS = '#ef4444';
 const AGREE_ROW_H = 34;
 
 const pct = (t: number, duration: number) => `${Math.max(0, Math.min(100, (t / duration) * 100))}%`;
@@ -99,7 +103,8 @@ export function ConsensusPreviewLane({
 
   const maxAgree = Math.max(3, ...clusters.map((c) => c.agree));
   const stubHeight = (agree: number) => Math.max(3, (agree / maxAgree) * (AGREE_ROW_H - 11));
-  const kept = clusters.filter((c) => c.agree >= minAgreement).length;
+  const keptClusters = clusters.filter((c) => c.agree >= minAgreement);
+  const kept = keptClusters.length;
 
   // A bar height is a comparison, not a count — and "how many detectors put a
   // boundary here" is the question the Agreement slider is answering, so print
@@ -170,6 +175,11 @@ export function ConsensusPreviewLane({
             verdict. Hatching is unannotated track. Point at any stub or edge to see which detectors
             proposed it and how far it sits from your nearest edge.
           </span>
+          <span className="block mb-1">
+            The <b>Final</b> row is what <b>Copy to Annotator as Auto-guess</b> sends — one cyan mark per kept
+            boundary, unscored. It replaces the Auto-guess points. Green and red appear only on the rows
+            scored against your {referenceLabel}.
+          </span>
           <span className="block text-slate-500">Also drawn on the Consensus row of the timeline above.</span>
         </InfoDot>
       </span>
@@ -221,6 +231,35 @@ export function ConsensusPreviewLane({
             style={{ top: AGREE_ROW_H - stubHeight(minAgreement), borderTop: '1px dashed rgba(167,139,250,0.55)' }}
           />
           {clusters.map((c) => hoverTarget(c.time))}
+        </div>
+      </div>
+
+      {/* ── Final: exactly the boundaries "Copy to Annotator as Auto-guess"
+           sends, in one neutral colour: it says *where*, not *how good* —
+           the verdict colours stay on the Consensus row below. The count is
+           not printed again; the stub right above carries it. ── */}
+      <div className="flex items-center gap-2.5 mt-1">
+        {getIsMobile() ? (
+          <LaneTag name="Final" />
+        ) : (
+          <span className="w-16 shrink-0 text-right text-[9px] font-mono uppercase tracking-wider text-slate-600 leading-tight">
+            Final
+            <span className="block normal-case tracking-normal text-cyan-400">{kept} to copy</span>
+          </span>
+        )}
+        <div className="relative flex-1 h-6 rounded-sm overflow-hidden bg-white/[0.02]">
+          {keptClusters.map((c) => (
+            <span
+              key={`f-${c.time}`}
+              className="absolute top-0 bottom-0 rounded-sm"
+              style={{
+                left: pct(c.time, duration),
+                width: hovered === c.time ? 3 : 2,
+                background: FINAL,
+              }}
+            />
+          ))}
+          {keptClusters.map((c) => hoverTarget(c.time))}
         </div>
       </div>
 

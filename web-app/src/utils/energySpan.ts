@@ -32,7 +32,8 @@
  * their peaks are going.
  */
 
-import { createHannWindow, fft, magnitudeSpectrum } from '../services/mirAnalysis';
+import { ENERGY_BASS_HZ, createHannWindow, fft, magnitudeSpectrum } from '../services/mirAnalysis';
+import { beatStrengthCurve } from './rhythmSignals';
 
 export type EnergyTrend = 'increasing' | 'decreasing' | 'flat';
 
@@ -77,6 +78,16 @@ export interface EnergyCurvePoint {
    *  Absent on a span too quiet to have a centroid, and on any export written
    *  before brightness was measured. */
   brightness?: number;
+  /** The Beat strength lane at this point — how hard the kick and bass land
+   *  on the beat (utils/rhythmSignals) — as a fraction of its peak within the
+   *  span. Read against the song's beats when the measurement was given them
+   *  (the detector always is); without them, the bass hits alone. Absent on
+   *  any export written before it was measured. */
+  beat_strength?: number;
+  /** The inspector's Flux signal at this point — how much the spectrum
+   *  changes from one frame to the next, i.e. how busy the music is — as a
+   *  fraction of its peak within the span. Absent on older exports. */
+  flux?: number;
 }
 
 /** Spectral centroid across the span: which way the timbre moved, and between
@@ -253,6 +264,9 @@ export function computeStemEnergySpan(opts: {
   startSec: number;
   endSec: number;
   numPoints?: number;
+  /** The song's beats, in seconds from the start of the track, for the Beat
+   *  strength line. Omitted: it reads the bass hits alone. */
+  beatTimesSec?: readonly number[];
 }): EnergySpanResult {
   const { audioBuffer, numPoints = 12 } = opts;
   const sampleRate = audioBuffer.sampleRate;
@@ -264,6 +278,99 @@ export function computeStemEnergySpan(opts: {
   const windowSize = Math.max(1, Math.floor(sampleRate * WINDOW_SEC));
   const hopSize = Math.max(1, Math.floor(windowSize / 2));
   const raw = rmsFrames(audioBuffer, startSample, endSample, windowSize, hopSize);
+
+  const { adsr, rejection } = measureAdsr(audioBuffer, startSec, endSec);
+
+  const maxRaw = Math.max(...raw, 1e-9);
+  const normalized = raw.map((v) => v / maxRaw);
+  const smoothed = movingAverage(normalized, SMOOTH_RADIUS);
+  const points = resample(smoothed, Math.max(2, numPoints));
+  const durationMs = (endSec - startSec) * 1000;
+
+  // Same slice, same point count, different question. Resampling both passes
+  // onto the one grid is what lets a consumer read level and timbre off a
+  // single array and see where they part company.
+  const spectral = spectralFrames(audioBuffer, startSample, endSample);
+  const centroidHz = spectral?.hz ?? null;
+  const smoothedHz = centroidHz ? movingAverage(centroidHz, BRIGHTNESS_SMOOTH_RADIUS) : null;
+  // The Beat strength and Flux lanes' own signals, on the same grid, each
+  // against its own peak within the span.
+  const lanePoints = (frames: number[] | undefined) => {
+    if (!frames || frames.length === 0) return null;
+    const pts = resample(movingAverage(frames, BRIGHTNESS_SMOOTH_RADIUS), Math.max(2, numPoints));
+    const peak = Math.max(...pts, 1e-9);
+    return pts.map((v) => round3(clamp01(v / peak)));
+  };
+  const beatPoints = spectral
+    ? lanePoints(Array.from(beatStrengthCurve(
+      spectral.bassHits,
+      { step: spectral.hopSec, offset: spectral.offsetSec, count: spectral.bassHits.length },
+      opts.beatTimesSec && opts.beatTimesSec.length >= 2
+        ? opts.beatTimesSec.map((t) => t - startSec)
+        : null,
+    )))
+    : null;
+  const fluxPoints = lanePoints(spectral?.flux);
+  const brightnessPoints = smoothedHz ? resample(smoothedHz, Math.max(2, numPoints)) : null;
+  const peakHz = brightnessPoints ? Math.max(...brightnessPoints, 1e-9) : 0;
+
+  const curve: EnergyCurvePoint[] = points.map((energy, idx) => {
+    const point: EnergyCurvePoint = {
+      t_ms: Math.round((idx / (points.length - 1 || 1)) * durationMs),
+      energy: Math.round(energy * 1000) / 1000,
+    };
+    if (brightnessPoints) {
+      point.brightness = Math.round((brightnessPoints[idx] / peakHz) * 1000) / 1000;
+    }
+    if (beatPoints) point.beat_strength = beatPoints[idx];
+    if (fluxPoints) point.flux = fluxPoints[idx];
+    return point;
+  });
+
+  // Direction is fitted across the WHOLE contour — every 25ms frame of it, not
+  // the twelve display points and emphatically not their two ends. See
+  // `fitTravel` for why an endpoint pair cannot answer this question.
+  const fitted = fitTravel(smoothed);
+  const trend: EnergyTrend =
+    Math.abs(fitted.delta) < FLAT_THRESHOLD
+      ? 'flat'
+      : fitted.delta > 0
+        ? 'increasing'
+        : 'decreasing';
+  // What gets reported is that line's own endpoints, so the two numbers quoted
+  // in the description are the two the verdict was read from — they used to be
+  // able to contradict it.
+  const startEnergy = round3(fitted.start);
+  const endEnergy = round3(fitted.end);
+
+  const brightness = smoothedHz ? readBrightness(smoothedHz, peakHz) : null;
+
+  return { curve, startEnergy, endEnergy, trend, adsr, rejection, brightness };
+}
+
+/**
+ * The A/D/S/R half of the reading on its own — the span's envelope, or why it
+ * has none — without the curve and spectral passes `computeStemEnergySpan`
+ * adds. Extract ADSR runs this once per item of a lane, so it stays cheap.
+ */
+export function measureAdsr(
+  audioBuffer: AudioBuffer,
+  fromSec: number,
+  toSec: number,
+): {
+  adsr: AdsrEnvelope | null;
+  rejection: EnvelopeRejection | null;
+  /** Set exactly when `rejection` is: the envelope of the gestures taken
+   *  together — their outer contour, the dips between them filled — for a
+   *  caller that wants one shape for a run of pulses (a gobble, a trill).
+   *  The ⚡ Energy export does not use it; it refuses instead. */
+  outer: AdsrEnvelope | null;
+} {
+  const sampleRate = audioBuffer.sampleRate;
+  const startSec = Math.max(0, Math.min(fromSec, toSec));
+  const endSec = Math.min(audioBuffer.duration, Math.max(fromSec, toSec));
+  const startSample = Math.floor(startSec * sampleRate);
+  const endSample = Math.max(startSample + 1, Math.floor(endSec * sampleRate));
 
   // Envelope gets its own finer pass — see ADSR_WINDOW_SEC. Normalized against
   // its own peak (sharper windows catch a higher transient than the 50ms pass).
@@ -287,51 +394,22 @@ export function computeStemEnergySpan(opts: {
         }
       : null;
   const adsr = rejection ? null : computeAdsrEnvelope(adsrFrames, adsrHopSec, adsrPeakRms);
-
-  const maxRaw = Math.max(...raw, 1e-9);
-  const normalized = raw.map((v) => v / maxRaw);
-  const smoothed = movingAverage(normalized, SMOOTH_RADIUS);
-  const points = resample(smoothed, Math.max(2, numPoints));
-  const durationMs = (endSec - startSec) * 1000;
-
-  // Same slice, same point count, different question. Resampling both passes
-  // onto the one grid is what lets a consumer read level and timbre off a
-  // single array and see where they part company.
-  const centroidHz = centroidFrames(audioBuffer, startSample, endSample);
-  const smoothedHz = centroidHz ? movingAverage(centroidHz, BRIGHTNESS_SMOOTH_RADIUS) : null;
-  const brightnessPoints = smoothedHz ? resample(smoothedHz, Math.max(2, numPoints)) : null;
-  const peakHz = brightnessPoints ? Math.max(...brightnessPoints, 1e-9) : 0;
-
-  const curve: EnergyCurvePoint[] = points.map((energy, idx) => {
-    const point: EnergyCurvePoint = {
-      t_ms: Math.round((idx / (points.length - 1 || 1)) * durationMs),
-      energy: Math.round(energy * 1000) / 1000,
-    };
-    if (brightnessPoints) {
-      point.brightness = Math.round((brightnessPoints[idx] / peakHz) * 1000) / 1000;
-    }
-    return point;
-  });
-
-  // Direction is fitted across the WHOLE contour — every 25ms frame of it, not
-  // the twelve display points and emphatically not their two ends. See
-  // `fitTravel` for why an endpoint pair cannot answer this question.
-  const fitted = fitTravel(smoothed);
-  const trend: EnergyTrend =
-    Math.abs(fitted.delta) < FLAT_THRESHOLD
-      ? 'flat'
-      : fitted.delta > 0
-        ? 'increasing'
-        : 'decreasing';
-  // What gets reported is that line's own endpoints, so the two numbers quoted
-  // in the description are the two the verdict was read from — they used to be
-  // able to contradict it.
-  const startEnergy = round3(fitted.start);
-  const endEnergy = round3(fitted.end);
-
-  const brightness = smoothedHz ? readBrightness(smoothedHz, peakHz) : null;
-
-  return { curve, startEnergy, endEnergy, trend, adsr, rejection, brightness };
+  let outer: AdsrEnvelope | null = null;
+  if (rejection) {
+    // Close the contour over the widest gap between neighbouring peaks: a
+    // running max fills each dip, the running min after it puts the outer
+    // edges back where the sound starts and ends, so the attack is not drawn
+    // earlier than the first pulse nor the release later than the last.
+    const gaps = rejection.peaksAtMs.slice(1).map((t, i) => t - rejection.peaksAtMs[i]);
+    const radius = Math.max(1, Math.ceil((Math.max(...gaps) / 1000 / adsrHopSec) * 0.6));
+    // Silence padded on both sides, so the window's own edges are not filled
+    // in from the nearest pulse.
+    const pad = new Array<number>(2 * radius).fill(0);
+    const closed = lowerEnvelope(upperEnvelope([...pad, ...adsrFrames, ...pad], radius), radius)
+      .slice(pad.length, pad.length + adsrFrames.length);
+    outer = computeAdsrEnvelope(closed, adsrHopSec, adsrPeakRms);
+  }
+  return { adsr, rejection, outer };
 }
 
 /** Trend + absolute anchors for a span's centroid. Split out so the threshold
@@ -359,20 +437,27 @@ function readBrightness(smoothedHz: number[], peakHz: number): BrightnessReading
 }
 
 /**
- * Per-frame spectral centroid in Hz over a slice, on the framing
- * `services/mirAnalysis` uses for the whole song. Returns null when no frame
- * in the slice clears the silence floor.
+ * Per-frame spectral readings over a slice, on the framing `services/mirAnalysis`
+ * uses for the whole song:
  *
- * Frames that don't clear the floor are interpolated across rather than
- * dropped or averaged in: the gap between two hits is silent, its centroid is
- * whatever the noise floor happens to be, and letting that into the curve
- * makes a clean beat look like a timbre that lurches every few hundred ms.
+ *  - `hz` — spectral centroid, or null when no frame clears the silence floor.
+ *    Frames that don't clear it are interpolated across rather than dropped or
+ *    averaged in: the gap between two hits is silent, its centroid is whatever
+ *    the noise floor happens to be, and letting that into the curve makes a
+ *    clean beat look like a timbre that lurches every few hundred ms.
+ *  - `bassHits` — the attacks below ENERGY_BASS_HZ, the kick and bass
+ *    landing, which Beat strength reads against the beats.
+ *  - `flux` — the Flux lane: how far the spectrum moved since the last frame.
+ *
+ * The first frame has no frame before it inside the slice, and diffing it
+ * against silence would open every span on a spike; it takes the second
+ * frame's bass hits and flux instead.
  */
-function centroidFrames(
+function spectralFrames(
   buffer: AudioBuffer,
   startSample: number,
   endSample: number,
-): number[] | null {
+): { hz: number[] | null; bassHits: number[]; flux: number[]; hopSec: number; offsetSec: number } | null {
   const sampleRate = buffer.sampleRate;
   const available = endSample - startSample;
   if (available <= 0) return null;
@@ -387,13 +472,17 @@ function centroidFrames(
   const hopSize = fftSize / 2;
   const halfSpectrum = fftSize / 2 + 1;
   const freqBinWidth = sampleRate / fftSize;
+  const bassMaxBin = Math.max(1, Math.floor(ENERGY_BASS_HZ / freqBinWidth));
   const window = createHannWindow(fftSize);
   const real = new Float32Array(fftSize);
   const imag = new Float32Array(fftSize);
   const mag = new Float32Array(halfSpectrum);
+  const prev = new Float32Array(halfSpectrum);
 
   const hz: number[] = [];
   const weight: number[] = [];
+  const bassHits: number[] = [];
+  const flux: number[] = [];
   const lastStart = Math.max(startSample, endSample - fftSize);
   for (let i = startSample; i <= lastStart; i += hopSize) {
     real.fill(0);
@@ -413,16 +502,30 @@ function centroidFrames(
       weightedSum += b * freqBinWidth * mag[b];
       magSum += mag[b];
     }
-    hz.push(magSum > 0 ? weightedSum / magSum : 0);
+    const centroid = magSum > 0 ? weightedSum / magSum : 0;
+    let bassHit = 0;
+    let moved = 0;
+    for (let b = 0; b < halfSpectrum; b++) {
+      const diff = mag[b] - prev[b];
+      if (diff > 0 && b >= 1 && b <= bassMaxBin) bassHit += diff;
+      moved += diff * diff;
+      prev[b] = mag[b];
+    }
+    hz.push(centroid);
     weight.push(magSum);
+    bassHits.push(bassHit);
+    flux.push(Math.sqrt(moved));
   }
   if (hz.length === 0) return null;
+  if (flux.length > 1) {
+    flux[0] = flux[1];
+    bassHits[0] = bassHits[1];
+  }
 
   const floor = Math.max(...weight) * BRIGHTNESS_SILENCE_FLOOR;
-  if (floor <= 0) return null;
   const loud = hz.map((_, idx) => weight[idx] >= floor);
-  if (!loud.some(Boolean)) return null;
-  return interpolateGaps(hz, loud);
+  const centroids = floor > 0 && loud.some(Boolean) ? interpolateGaps(hz, loud) : null;
+  return { hz: centroids, bassHits, flux, hopSec: hopSize / sampleRate, offsetSec: fftSize / 2 / sampleRate };
 }
 
 /** Replaces every `!keep[i]` entry with a straight line between its nearest
@@ -814,6 +917,18 @@ function lowerEnvelope(values: number[], radius: number): number[] {
     let min = Infinity;
     for (let j = lo; j <= lo + width; j++) min = Math.min(min, values[j]);
     return min;
+  });
+}
+
+/** Running maximum, the mirror of `lowerEnvelope` (same constant-width window). */
+function upperEnvelope(values: number[], radius: number): number[] {
+  const n = values.length;
+  const width = Math.min(2 * radius, n - 1);
+  return values.map((_, i) => {
+    const lo = Math.min(Math.max(0, i - radius), n - 1 - width);
+    let max = -Infinity;
+    for (let j = lo; j <= lo + width; j++) max = Math.max(max, values[j]);
+    return max;
   });
 }
 
@@ -1303,6 +1418,12 @@ export function clipCurve(
     if (a.brightness != null && b.brightness != null) {
       point.brightness = a.brightness + frac * (b.brightness - a.brightness);
     }
+    if (a.beat_strength != null && b.beat_strength != null) {
+      point.beat_strength = a.beat_strength + frac * (b.beat_strength - a.beat_strength);
+    }
+    if (a.flux != null && b.flux != null) {
+      point.flux = a.flux + frac * (b.flux - a.flux);
+    }
     return point;
   };
   const out: EnergyCurvePoint[] = [];
@@ -1331,4 +1452,21 @@ export function envelopeCoverageNote(
   if (vp.exact) return null;
   const shown = (vp.toMs - vp.fromMs) / 1000;
   return `showing ${shown.toFixed(1)}s of the ${(data.duration_ms / 1000).toFixed(1)}s measured at ${measured}`;
+}
+
+/** The lane after saving `next`: every earlier ⚡ Energy measurement of the
+ *  same stem that overlaps it is dropped, so measuring a passage again
+ *  replaces the old reading instead of stacking another copy on top of it.
+ *  Readings of other stems stay — drums and bass over the same bars are two
+ *  measurements worth comparing, not a re-run — as do measurements elsewhere
+ *  in the song and spans that are not energy measurements. */
+export function replaceOverlappingEnergySpans<
+  T extends { start: number; end: number; description?: string | null },
+>(items: readonly T[], next: T): T[] {
+  const stem = parseEnergySpanExport(next.description)?.stem;
+  const kept = items.filter((it) => !(
+    it.start < next.end && next.start < it.end
+    && parseEnergySpanExport(it.description)?.stem === stem
+  ));
+  return [...kept, next];
 }

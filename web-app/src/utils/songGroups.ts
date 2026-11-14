@@ -66,10 +66,10 @@ export const DEFAULT_SONG_GROUP_MODE: SongGroupMode = 'artist';
 export const SONG_GROUP_MODES: readonly { mode: SongGroupMode; label: string; hint: string }[] = [
   { mode: 'none', label: 'Nothing', hint: 'One flat list, sorted by title.' },
   { mode: 'artist', label: 'Artist', hint: 'A heading per artist, alphabetical, with the artist-less songs last.' },
-  { mode: 'collection', label: 'Collection', hint: 'Your own grouping — a heading per collection name, typed per song in Dataset Prep.' },
+  { mode: 'collection', label: 'Collection', hint: 'Your own grouping — a heading per collection name, typed per song in Prepare.' },
   { mode: 'readiness', label: 'Tempo readiness', hint: 'No BPM yet / ready to annotate — the ♩ glyph on each row, as headings. Songs still missing a BPM lead.' },
   { mode: 'annotation', label: 'Annotation status', hint: 'All reviewed / in progress / not started — the status dot on each row, as headings.' },
-  { mode: 'collaborative', label: 'Shared / per-annotator', hint: "The song's own setting: one shared team annotation behind an edit lock, or a copy per annotator. Set it on the song header — “Make collaborative”." },
+  { mode: 'collaborative', label: 'Shared / per-annotator', hint: "The song's own setting: one shared team annotation that one person grabs at a time, or a copy per annotator. Set it on the song header — “Collaborative…”." },
   { mode: 'sharing', label: 'Who else annotated', hint: 'The team-shared songs first, then how many annotators have work on each of the rest.' },
 ];
 
@@ -127,8 +127,6 @@ export interface SongGroupingContext {
   infos: Record<string, SongInfo>;
   layerStatuses: Record<string, SongLayerStatuses>;
   autoGuessStatuses: Record<string, AutoGuessSongStatus>;
-  /** Mirrors settings.experimentalLoopsAndPatterns — see deriveSongTracks. */
-  includeLoopsAndPatterns: boolean;
   /** Omitted until the sidebar has reason to ask the server — the Who else
    *  annotated mode treats a missing state as still loading. */
   sharing?: SongSharingInfo;
@@ -224,7 +222,7 @@ const ANNOTATION_BUCKETS = [
 ] as const;
 
 /** The song's own collaborative setting — the same one the song header offers
- *  as "Make collaborative…". These two buckets are both real states, so neither
+ *  as "Collaborative…". These two buckets are both real states, so neither
  *  is dimmed: a per-annotator song is a decision, not missing information. */
 const COLLABORATION_BUCKETS = [
   { key: 'collab:shared', label: 'Shared with the team' },
@@ -328,7 +326,6 @@ export function groupSongs<T extends GroupableSong>(
         const { overall } = deriveSongTracks({
           layerSummary: ctx.layerStatuses[entry.id],
           autoGuess: ctx.autoGuessStatuses[entry.id],
-          includeLoopsAndPatterns: ctx.includeLoopsAndPatterns,
         });
         return `ann:${overall}`;
       });

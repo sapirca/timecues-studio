@@ -221,15 +221,35 @@ export async function fetchSongAnnotators(slug: string): Promise<string[]> {
   } catch { return []; }
 }
 
+/** A team annotation an earlier "stop collaborating" archived for this song. */
+export interface SongArchive {
+  name: string;
+  archivedAt: string;
+  rev: number | null;
+  items: number;
+}
+
+/** Admin: this song's archived team copies, newest first. */
+export async function fetchSongArchives(slug: string): Promise<SongArchive[]> {
+  try {
+    const res = await fetch(`${SHARED}/${encodeURIComponent(slug)}`, { headers: lockHeaders() });
+    if (!res.ok) return [];
+    return ((await res.json()) as { archives?: SongArchive[] }).archives ?? [];
+  } catch { return []; }
+}
+
 /** Admin: turn one song collaborative, seeding the team's shared document from
- *  an existing annotator's work (or starting empty). Idempotent-ish: refuses
+ *  an existing annotator's work, restoring an archived team copy (document and
+ *  history), or starting empty. Idempotent-ish: refuses
  *  rather than overwriting a song that is already shared. */
-export async function makeSongShared(slug: string, seedFrom?: string): Promise<{ ok: boolean; error?: string }> {
+export async function makeSongShared(
+  slug: string, from?: { seedFrom: string } | { restoreArchive: string },
+): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch(`${SHARED}/${encodeURIComponent(slug)}`, {
       method: 'POST',
       headers: lockHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(seedFrom ? { seedFrom } : {}),
+      body: JSON.stringify(from ?? {}),
     });
     if (res.ok) return { ok: true };
     return { ok: false, error: ((await res.json().catch(() => null)) as { error?: string } | null)?.error };
@@ -245,6 +265,41 @@ export async function makeSongSolo(slug: string): Promise<boolean> {
     });
     return res.ok;
   } catch { return false; }
+}
+
+/** After collaboration stopped on a song: which document this annotator's copy
+ *  holds — the team's last version or their own from before — and whether that
+ *  was the automatic pick (the newer of the two) or their own switch. */
+export interface AfterShared {
+  kept: 'team' | 'own';
+  automatic: boolean;
+  decidedAt: string;
+  hadOwn: boolean;
+  dismissed?: boolean;
+  archivedAt: string;
+  teamUpdatedAt: string;
+}
+
+export async function fetchAfterShared(slug: string): Promise<AfterShared | null> {
+  try {
+    const res = await fetch(`${SHARED}/${encodeURIComponent(slug)}/after`, { headers: lockHeaders() });
+    if (!res.ok) return null;
+    return ((await res.json()) as { after: AfterShared | null }).after;
+  } catch { return null; }
+}
+
+/** `switch` swaps this annotator's file to the other document (what it held is
+ *  kept, so switching back returns it); `dismiss` hides the notice. */
+export async function postAfterShared(slug: string, action: 'switch' | 'dismiss'): Promise<AfterShared | null> {
+  try {
+    const res = await fetch(`${SHARED}/${encodeURIComponent(slug)}/after`, {
+      method: 'POST',
+      headers: lockHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ action }),
+    });
+    if (!res.ok) return null;
+    return ((await res.json()) as { after: AfterShared | null }).after;
+  } catch { return null; }
 }
 
 // ─── Display ────────────────────────────────────────────────────────────────

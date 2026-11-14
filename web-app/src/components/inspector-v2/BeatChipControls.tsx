@@ -1,10 +1,7 @@
 /**
- * BeatChipControls — the sub-beat chip grid and Tap Along machinery shared by
- * every surface that edits a rhythmic cycle.
- *
- * `BeatChipPicker` renders `steps` sub-beat chips grouped into beats; a step
- * is either a lone tick or inside one held span, never both. Tap Along records
- * live taps against the playing audio and quantizes them onto that same grid.
+ * BeatChipControls — the Tap Along machinery shared by every surface that
+ * edits a riff node: it records live presses against the playing audio, and
+ * the caller writes them into the node as notes (`boundarySegmentsFromTaps`).
  *
  * Consumers: the riff-pattern node editor (RiffPatternEditorPanel /
  * NodeEditPopover / RiffPatternEditPopover) and the boundary tap-refine flow.
@@ -14,295 +11,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  accentHeight,
-  accentOpacity,
   BOUNDARY_MIN_SEGMENT_BEATS,
   BOUNDARY_TAP_CLUSTER_BEATS,
   PATTERN_SUBBEATS_PER_BEAT,
-  normalizePatternAccents,
 } from '../../types/annotationLayer';
-
-/** The accent shape of a pattern cycle: lone point-ticks plus held spans. */
-export interface PatternAccents {
-  highlightedBeats: number[];
-  spans: [number, number][];
-}
-
-/** Sub-beat chip grid: `beatsPerBar` groups × PATTERN_SUBBEATS_PER_BEAT chips
- *  each. Down-beats (1st chip in each group) carry the beat number; off-beats
- *  show a "·" to advertise they're interactive, not decorative dividers.
- *
- *  Interaction model (editable cards only):
- *  - **Click** a chip → toggle a lone tick accent on/off.
- *  - **Click a span chip** → un-hold that span.
- *  - **Drag** across ≥2 chips → merge them into one held span (sustained accent).
- *  A step is either a lone tick or inside one span — never both. */
-export function BeatChipPicker({ color, steps, subbeatsPerBeat, highlighted, spans = [], accents, onChange, readOnly = false, playheadStep = null, onTapAlongTap }: {
-  color: string;
-  /** step -> 1..127, how hard each step was struck when a detector measured
-   *  it. Display only: editing a step never writes one, and a step with no
-   *  entry draws at full strength. */
-  accents?: Record<number, number>;
-  /** Total sub-steps in the cycle (the index space). Grouped visually into
-   *  `ceil(steps / subbeatsPerBeat)` beat-groups. */
-  steps: number;
-  /** Sub-steps per beat, for the visual grouping (downbeat markers, "Beat
-   *  N.M" labels) — defaults to the fixed `PATTERN_SUBBEATS_PER_BEAT` used by
-   *  plain Pattern items. Riff Nodes pass their own per-node resolution
-   *  (`RiffNode.subbeatsPerBeat`, user-choosable) here so a triplet or
-   *  quarter-note node groups by its actual beats instead of being sliced
-   *  into groups of 4 regardless of its real subdivision. */
-  subbeatsPerBeat?: number;
-  highlighted: number[];
-  /** Held runs `[startStep, lengthSteps]` (length ≥ 2). */
-  spans?: [number, number][];
-  /** Fires once per edit with the FULL accent shape (ticks + spans) so callers
-   *  can patch both fields in a single update — two separate patches in one
-   *  tick would clobber each other. */
-  onChange: (next: PatternAccents) => void;
-  /** When true, chips render their state but can't be edited — used by
-   *  read-only (detector-sourced) pattern cards. Hides the mode toggle. */
-  readOnly?: boolean;
-  /** Live playhead position as a fractional sub-beat index inside the current
-   *  cycle (0..steps), or null when audio isn't playing through the region.
-   *  Drives the karaoke sweep: passed chips fill, hits "fire", the step under
-   *  the playhead carries a ring. */
-  playheadStep?: number | null;
-  /** When set, clicking a cell places a Tap Along tap at that exact step
-   *  instead of the normal edit gesture — lets the user nail a beat with the
-   *  mouse instead of (or alongside) pressing Space in time; dragging to
-   *  another cell before release passes its step as `endStep`, capturing a
-   *  held span the same way holding Space across beats does. Overrides
-   *  `readOnly`'s lockout for this one gesture (editing the node's actual
-   *  saved pattern directly still stays locked during a session). */
-  onTapAlongTap?: (step: number, endStep?: number) => void;
-}) {
-  const subbeats = Math.max(1, Math.floor(subbeatsPerBeat || PATTERN_SUBBEATS_PER_BEAT));
-  const total = Math.max(1, Math.floor(steps || subbeats));
-  const numBeats = Math.ceil(total / subbeats);
-  const hSet = new Set(highlighted);
-  // Per-step span membership: index → {role, span}. A step in a span renders as
-  // part of a connected pill instead of a lone chip.
-  const spanByStep = new Map<number, { role: 'start' | 'mid' | 'end'; span: [number, number] }>();
-  for (const sp of spans) {
-    const [s, l] = sp;
-    for (let k = 0; k < l; k++) {
-      spanByStep.set(s + k, { role: k === 0 ? 'start' : k === l - 1 ? 'end' : 'mid', span: sp });
-    }
-  }
-  // Karaoke sweep state. `elapsed` (floor) drives the fill/glow trail — every
-  // chip at or before it has "played" this cycle. `current` (round) drives
-  // the ring — it's "which chip would a tap *right now* land on", which must
-  // match `quantizeTapsAt`'s Math.round, not floor: floor would keep the ring
-  // on beat N for the back half of its window too, so tapping there (normal
-  // human reaction lands slightly late) visibly shows beat N ringed while the
-  // tap actually rounds forward onto N+1 — a Tap Along press that looks like
-  // it "missed" the highlighted beat.
-  const sweeping = playheadStep != null;
-  const elapsed = sweeping ? Math.min(total - 1, Math.max(0, Math.floor(playheadStep))) : -1;
-  const current = sweeping ? Math.min(total - 1, Math.max(0, Math.round(playheadStep))) : -1;
-
-  const [dragPreview, setDragPreview] = useState<{ lo: number; hi: number } | null>(null);
-  const anchorRef = useRef<number | null>(null);
-  const isDraggingRef = useRef(false);
-
-  const commit = (ticks: Iterable<number>, nextSpans: [number, number][]) => {
-    onChange(normalizePatternAccents(Array.from(ticks), nextSpans, total));
-  };
-
-  // `onTapAlongTap` reuses this same anchor/drag tracking to let a Tap Along
-  // session accept a mouse click-or-hold on a specific cell, even though
-  // `readOnly` is otherwise locking the grid down during a session (the
-  // normal edit gesture — toggling this node's *saved* pattern — stays
-  // disabled; only the tap-capture path opens up).
-  const editable = !readOnly || !!onTapAlongTap;
-
-  const beginInteraction = (i: number) => {
-    if (!editable) return;
-    anchorRef.current = i;
-    isDraggingRef.current = false;
-    setDragPreview({ lo: i, hi: i });
-  };
-
-  const moveInteraction = (i: number) => {
-    if (!editable || anchorRef.current === null) return;
-    const a = anchorRef.current;
-    if (i !== a) isDraggingRef.current = true;
-    setDragPreview({ lo: Math.min(a, i), hi: Math.max(a, i) });
-  };
-
-  const endInteraction = () => {
-    const anchor = anchorRef.current;
-    const wasDragging = isDraggingRef.current;
-    const preview = dragPreview;
-    anchorRef.current = null;
-    isDraggingRef.current = false;
-    setDragPreview(null);
-    if (!editable || anchor === null || preview === null) return;
-    if (onTapAlongTap) {
-      // A click records a plain tap at the cell pressed; a hold-drag records
-      // a sustained span across wherever the pointer ended up — same
-      // tick-vs-hold split as the normal edit gesture below, but landing as
-      // a captured tap instead of editing the node's saved pattern directly.
-      onTapAlongTap(anchor, wasDragging ? (anchor === preview.lo ? preview.hi : preview.lo) : undefined);
-      return;
-    }
-    if (!wasDragging) {
-      // Single click: toggle tick, or un-hold if chip is part of a span.
-      const hit = spanByStep.get(anchor);
-      if (hit) {
-        commit(highlighted, spans.filter((sp) => sp !== hit.span));
-      } else {
-        const nextTicks = new Set(highlighted);
-        if (nextTicks.has(anchor)) nextTicks.delete(anchor); else nextTicks.add(anchor);
-        commit(nextTicks, spans);
-      }
-    } else {
-      // Drag: create a held span across the preview range.
-      const len = preview.hi - preview.lo + 1;
-      if (len >= 2) {
-        const overlaps = ([s, l]: [number, number]) => preview.lo < s + l && s <= preview.hi;
-        const nextSpans = spans.filter((sp) => !overlaps(sp));
-        nextSpans.push([preview.lo, len]);
-        const ticks = highlighted.filter((t) => t < preview.lo || t > preview.hi);
-        commit(ticks, nextSpans);
-      }
-    }
-  };
-
-  // Bail out cleanly when the pointer is released anywhere / leaves the picker.
-  useEffect(() => {
-    const onUp = () => { endInteraction(); };
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-    return () => {
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-    };
-  });
-
-  return (
-    <div className="space-y-1.5 select-none">
-      <div className={`flex items-center gap-2 flex-wrap ${readOnly && !onTapAlongTap ? 'pointer-events-none opacity-80' : ''}`}>
-      {Array.from({ length: numBeats }, (_, beatIdx) => {
-        // If a held span carries over from the previous beat group, close the
-        // outer gap-2 between beat-group divs so the run reads as unbroken.
-        const firstSpan = spanByStep.get(beatIdx * subbeats);
-        const continuesFromPrevBeat = firstSpan !== undefined && firstSpan.role !== 'start';
-        return (
-        <div key={beatIdx} className="flex items-center gap-0.5" style={continuesFromPrevBeat ? { marginLeft: -8 } : undefined}>
-          {Array.from({ length: subbeats }, (_, subIdx) => {
-            const i = beatIdx * subbeats + subIdx;
-            if (i >= total) return null;
-            const span = spanByStep.get(i);
-            const inSpan = span !== undefined;
-            const on = hSet.has(i) || inSpan;
-            const isDownBeat = subIdx === 0;
-            const isCurrent = sweeping && i === current;
-            const passed = sweeping && i <= elapsed; // already played this cycle
-            const upcoming = sweeping && i > elapsed; // not yet reached this cycle
-            const previewed = dragPreview !== null && i >= dragPreview.lo && i <= dragPreview.hi;
-
-            const classes = ['w-5 h-6 text-[9px] font-mono border cursor-pointer transition-all touch-none'];
-            const style: React.CSSProperties = {};
-            // Span chips connect into one pill: round only the run's outer ends,
-            // and close the 2px intra-group gap so mid-run steps read as held.
-            if (inSpan) {
-              classes.push(
-                span.role === 'start' ? 'rounded-l-sm rounded-r-none'
-                  : span.role === 'end' ? 'rounded-r-sm rounded-l-none'
-                    : 'rounded-none',
-              );
-              if (span.role !== 'start' && subIdx !== 0) style.marginLeft = -2;
-            } else {
-              classes.push('rounded-sm');
-            }
-            if (on) {
-              style.background = color;
-              style.borderColor = color;
-              (style as Record<string, string>)['--chip-glow'] = `${color}88`;
-              classes.push('text-white');
-              if (passed) {
-                // Hit just "fired" — punch up the glow for the karaoke flash.
-                style.boxShadow = `0 0 12px ${color}, 0 0 4px ${color}`;
-              } else if (upcoming) {
-                // Hit hasn't been reached yet this cycle — dim it back.
-                style.opacity = 0.3;
-              } else if (!inSpan) {
-                classes.push('shadow-[0_0_6px_var(--chip-glow)]');
-              }
-              // How hard this step was struck. Skipped while the sweep owns
-              // the opacity (the karaoke dim means something else), and never
-              // applied to an empty chip.
-              if (style.opacity === undefined) style.opacity = accentOpacity(accents?.[i]);
-            } else {
-              style.borderColor = isDownBeat ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.12)';
-              if (passed) {
-                // Empty step the sweep has crossed — faint trail so the fill reads.
-                style.background = 'rgba(255,255,255,0.07)';
-                classes.push(isDownBeat ? 'text-slate-300' : 'text-slate-400');
-              } else {
-                classes.push('bg-[#0a0b0d]');
-                classes.push(isDownBeat ? 'text-slate-300 hover:text-slate-100 hover:bg-white/[0.06]' : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.06]');
-              }
-            }
-            if (previewed) {
-              // Live hold-drag preview — dashed ring over the pending span.
-              style.outline = `2px dashed ${color}`;
-              style.outlineOffset = '1px';
-            } else if (isCurrent) {
-              // Playhead marker — a ring on the step playing right now.
-              style.outline = `2px solid ${color}`;
-              style.outlineOffset = '1px';
-            }
-
-            const title = onTapAlongTap
-              ? `Beat ${beatIdx + 1}${isDownBeat ? '' : `.${subIdx + 1}`} (step ${i + 1}) — click to tap this beat, drag to hold a span`
-              : inSpan
-                ? `Beat ${beatIdx + 1}${isDownBeat ? '' : `.${subIdx + 1}`} (step ${i + 1}) — held span${readOnly ? '' : ', click to un-hold'}`
-                : `Beat ${beatIdx + 1}${isDownBeat ? '' : `.${subIdx + 1}`} (step ${i + 1}) — ${on ? 'accent, click to clear' : 'click to tick · drag to hold'}`;
-
-            return (
-              <button
-                key={`${beatIdx}-${subIdx}`}
-                type="button"
-                onPointerDown={(e) => {
-                  e.preventDefault(); e.stopPropagation();
-                  beginInteraction(i);
-                }}
-                onPointerEnter={() => { moveInteraction(i); }}
-                className={classes.join(' ')}
-                style={style}
-                title={title}
-              >
-                {isDownBeat ? beatIdx + 1 : (on ? '' : '·')}
-              </button>
-            );
-          })}
-        </div>
-        );
-      })}
-      </div>
-    </div>
-  );
-}
 
 // ─── Tap Along ──────────────────────────────────────────────────────────────
 //
-// Lets the user tap in time with a node's real audio instead of hand-placing
-// chips — press Tap Along, a 3-2-1 count-in leads into the node looping again
-// and again, tap the keyboard (Space) on each hit across as many passes as
-// needed watching them land live on the beat grid, then Retry / Save / Cancel
-// the captured pattern. Shared by NodeEditPopover (a bare node's own floating
-// popup) and the inline node view inside RiffPatternEditPopover's sequence
-// tree — `useTapAlong` owns the capture/quantize state, `TapAlongControls`
-// is the dumb button row, and the caller feeds `previewPatch` into its own
-// `BeatChipPicker` so taps are visible on the exact same grid, live, not just
-// after Save.
-
-/** Candidate steps-per-beat grids a tap session can resolve to — same set
- *  `NodeLengthControl`'s "Divide beat into" dropdown offers. */
-const TAP_SUBDIVISION_CANDIDATES = [1, 2, 4, 8, 3, 6];
+// Lets the user tap in time with a node's real audio instead of placing notes
+// by hand — press Tap Along, a 3-2-1 count-in leads into the node looping
+// again and again, tap the keyboard (Space) on each hit across as many passes
+// as needed watching them land live, then Retry / Save / Cancel the captured
+// take. Shared by NodeEditPopover (a bare node's own floating popup) and the
+// inline node view inside RiffPatternEditPopover's sequence tree —
+// `useTapAlong` owns the capture state, `TapAlongControls` is the dumb button
+// row, and the caller draws `tapEvents` as the notes they would become.
 
 /** Visual count-in before recording starts, in seconds. */
 const TAP_COUNTDOWN_SECONDS = 3;
@@ -328,13 +51,6 @@ const TAP_ARM_LEAD_SECONDS = 0.5;
  *  keeps, so the hit survives without being given a length it didn't have. */
 const MIN_HELD_TAP_BEATS = BOUNDARY_MIN_SEGMENT_BEATS;
 
-export interface TapAlongPatch {
-  stepsPerCycle: number;
-  subbeatsPerBeat: number;
-  highlightedBeats: number[];
-  spans: [number, number][];
-}
-
 /** One raw (unquantized) tap — its beat position (0..numBeats, negative if
  *  it landed during the pre-roll lead-in) plus which loop pass it happened
  *  in, so a piano-roll view can lay out one lane per pass. A held press
@@ -347,63 +63,10 @@ export interface TapEvent {
   endBeat?: number;
 }
 
-/** Picks the coarsest subdivision whose grid explains a set of tapped
- *  beat-positions within ~1/50th of a beat of the best-fitting candidate —
- *  so a plain quarter-note tap reads as quarters, not an over-fit triplet
- *  grid chasing human timing jitter. */
-function bestFitSubdivision(tapBeats: number[]): number {
-  const scored = TAP_SUBDIVISION_CANDIDATES.map((subbeats) => {
-    const err = tapBeats.reduce((sum, b) => sum + Math.abs(b - Math.round(b * subbeats) / subbeats), 0)
-      / tapBeats.length;
-    return { subbeats, err };
-  });
-  const bestErr = Math.min(...scored.map((s) => s.err));
-  const within = scored.filter((s) => s.err <= bestErr + 0.02);
-  within.sort((a, b) => a.subbeats - b.subbeats);
-  return within[0]?.subbeats ?? PATTERN_SUBBEATS_PER_BEAT;
-}
-
-/** Quantizes tap events onto a *given* (fixed) subdivision — used for the
- *  live preview while a session is still recording/under review, so the
- *  grid dimensions never move mid-session (only which of its fixed cells are
- *  lit/held changes). A point tap becomes a tick; a held tap (`endBeat` set)
- *  becomes a span once its start/end round to different steps — same
- *  ≥2-step threshold `BeatChipPicker`'s own mouse-drag gesture uses — else
- *  it falls back to a tick, same as a quick press/release. Clamps into
- *  range and normalizes (dedupe, overlap resolution) via
- *  `normalizePatternAccents`. */
-function quantizeTapsAt(taps: TapEvent[], numBeats: number, subbeats: number): TapAlongPatch {
-  const totalSteps = Math.max(1, Math.round(numBeats * subbeats));
-  const clampStep = (b: number) => Math.max(0, Math.min(totalSteps - 1, Math.round(b * subbeats)));
-  const ticks = new Set<number>();
-  const spans: [number, number][] = [];
-  for (const t of taps) {
-    const startStep = clampStep(t.beat);
-    if (t.endBeat == null) { ticks.add(startStep); continue; }
-    const endStep = clampStep(t.endBeat);
-    const lo = Math.min(startStep, endStep);
-    const hi = Math.max(startStep, endStep);
-    if (hi > lo) spans.push([lo, hi - lo + 1]); else ticks.add(startStep);
-  }
-  const normalized = normalizePatternAccents(Array.from(ticks), spans, totalSteps);
-  return { stepsPerCycle: totalSteps, subbeatsPerBeat: subbeats, ...normalized };
-}
-
-/** Converts a *finished* tap session's recorded events (fractional beat
- *  positions, 0..numBeats — an early tap during the pre-roll can be
- *  slightly negative) into a full node grid patch — resolves the best-fit
- *  subdivision off every start/end position (only worth doing once, at
- *  Save; see `quantizeTapsAt` for the live/stable preview used during
- *  recording) and quantizes onto it. */
-function tapsToPatch(taps: TapEvent[], numBeats: number): TapAlongPatch {
-  const allBeats = taps.flatMap((t) => (t.endBeat == null ? [t.beat] : [t.beat, t.endBeat]));
-  return quantizeTapsAt(taps, numBeats, bestFitSubdivision(allBeats));
-}
-
 export type TapAlongPhase = 'idle' | 'countdown' | 'recording' | 'review';
 
 /** Tap-along capture state machine. Samples `playheadStep` — the same
- *  fractional position that drives `BeatChipPicker`'s karaoke sweep — at the
+ *  fractional position that drives the node editor's karaoke sweep — at the
  *  instant of each tap rather than tracking audio time itself, so it stays
  *  correct whether playback is a bare node's own occurrence or this node's
  *  turn inside a full instance sequence replay (where `playheadStep` goes
@@ -422,17 +85,11 @@ export type TapAlongPhase = 'idle' | 'countdown' | 'recording' | 'review';
  *  instead of committing automatically. `save` also works straight out of
  *  `recording` — closing the owning card commits the take that way, so the
  *  blocks the user is watching land are the blocks they keep, and only the
- *  explicit Cancel (✕) throws a session away. Exposes `previewPatch` — the
- *  accumulated taps quantized onto the node's *current* (fixed) subdivision,
- *  same shape as the final
- *  Save patch minus the resize — so a caller can feed it straight into its
- *  own `BeatChipPicker` and show taps landing live, on a grid that never
- *  reflows mid-session (the smarter best-fit subdivision, which can change
- *  the grid's own dimensions, only runs once at Save). Also exposes
- *  `tapEvents` (each tap's raw, unquantized beat position plus which loop
- *  pass it happened in) for a raw-timing view like `TapAlongPianoRoll`. */
+ *  explicit Cancel (✕) throws a session away. Exposes `tapEvents` (each tap's
+ *  raw, unquantized beat position plus which loop pass it happened in), for
+ *  the live preview and for a raw-timing view like `TapAlongPianoRoll`. */
 export function useTapAlong({
-  stepsPerCycle, subbeatsPerBeat, playheadStep, isPlaying, onPlay, onStop, onChange, onSaveTaps, onPhaseChange,
+  stepsPerCycle, subbeatsPerBeat, playheadStep, isPlaying, onPlay, onStop, onSaveTaps, onPhaseChange,
 }: {
   stepsPerCycle: number;
   subbeatsPerBeat: number;
@@ -440,17 +97,10 @@ export function useTapAlong({
   isPlaying?: boolean;
   onPlay?: (preRollSec?: number) => void;
   onStop?: () => void;
-  /** Commits a finished session as a quantised chip-grid patch. Ignored when
-   *  `onSaveTaps` is given. */
-  onChange?: (patch: TapAlongPatch) => void;
-  /** Commits a finished session as its RAW presses instead — fractional beat
-   *  positions, each with the duration it was held for, nothing rounded to a
-   *  subdivision. What a *boundary* node wants (see
-   *  `boundarySegmentsFromTaps`): the same capture loop, the same controls,
-   *  the same taps — only the thing they're written into differs, which is why
-   *  this is an option on the one hook rather than a second tap-along.
-   *  Takes precedence over `onChange` when both are given. */
-  onSaveTaps?: (taps: TapEvent[], numBeats: number) => void;
+  /** Commits a finished session as its RAW presses — fractional beat
+   *  positions, each with the duration it was held for, nothing rounded here.
+   *  The caller writes them into the node (`boundarySegmentsFromTaps`). */
+  onSaveTaps: (taps: TapEvent[], numBeats: number) => void;
   /** Fires whenever the session leaves/re-enters `idle` — lets a caller that
    *  owns several `useTapAlong` instances at once (e.g. one per node in a Riff
    *  Pattern's sequence tree) know a session is live somewhere, so it can hide
@@ -474,18 +124,6 @@ export function useTapAlong({
 
   const subbeats = Math.max(1, Math.round(subbeatsPerBeat) || PATTERN_SUBBEATS_PER_BEAT);
   const numBeats = Math.max(1e-6, stepsPerCycle / subbeats);
-  /** Raw-press mode: the session commits presses, not chips (a boundary
-   *  node — see `onSaveTaps`), so a hold is measured in real time rather
-   *  than in grid steps. */
-  const rawHolds = onSaveTaps != null;
-
-  const previewPatch = useMemo(
-    () => (tapsRef.current.length > 0
-      ? quantizeTapsAt(tapsRef.current, numBeats, subbeats)
-      : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- recomputes off tapCount as a proxy for tapsRef mutating
-    [tapCount, numBeats, subbeats],
-  );
   const tapEvents = useMemo(
     () => tapsRef.current.slice(),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recomputes off tapCount as a proxy for tapsRef mutating
@@ -560,16 +198,10 @@ export function useTapAlong({
     holdRef.current = { beat: step / subbeats, pass: passRef.current };
   }, [subbeats]);
 
-  /** Ends a press started by `beginHold`.
-   *
-   *  On a **grid** node a hold only counts once the playhead crossed into
-   *  another step — a chip grid has no way to draw anything shorter, so a
-   *  brief press records as a plain point, same as before holding was
-   *  supported. On a **boundary** node (`onSaveTaps`, i.e. raw presses) the
-   *  press and the release ARE the block: every hold keeps its own release,
-   *  however short, and nothing is measured against a grid. That's the whole
-   *  contract there — press = start, release = end, no length invented for
-   *  the user.
+  /** Ends a press started by `beginHold`. The press and the release ARE the
+   *  note: every hold keeps its own release, however short, and nothing is
+   *  measured against a grid here — press = start, release = end, no length
+   *  invented for the user.
    *
    *  Two releases can't be read off the playhead: one that lands after the
    *  pass looped (the position has wrapped back near 0) and one taken while
@@ -582,18 +214,11 @@ export function useTapAlong({
     if (!held) return;
     const step = playheadStepRef.current;
     const endBeat = step != null ? step / subbeats : held.beat;
-    let event: TapEvent;
-    if (rawHolds) {
-      const end = endBeat > held.beat ? endBeat : numBeats;
-      event = { beat: held.beat, endBeat: Math.max(end, held.beat + MIN_HELD_TAP_BEATS), pass: held.pass };
-    } else {
-      event = Math.round(endBeat * subbeats) !== Math.round(held.beat * subbeats)
-        ? { beat: held.beat, endBeat, pass: held.pass }
-        : { beat: held.beat, pass: held.pass };
-    }
+    const end = endBeat > held.beat ? endBeat : numBeats;
+    const event: TapEvent = { beat: held.beat, endBeat: Math.max(end, held.beat + MIN_HELD_TAP_BEATS), pass: held.pass };
     tapsRef.current = [...tapsRef.current, event];
     setTapCount(tapsRef.current.length);
-  }, [subbeats, rawHolds, numBeats]);
+  }, [subbeats, numBeats]);
 
   /** Instant point tap — used by the click button (mousedown+up collapse
    *  into a single `onClick`, so there's no hold duration to measure). */
@@ -647,14 +272,11 @@ export function useTapAlong({
     armedRef.current = false;
     holdRef.current = null;
     onStop?.();
-    if (tapsRef.current.length > 0) {
-      if (onSaveTaps) onSaveTaps(tapsRef.current, numBeats);
-      else onChange?.(tapsToPatch(tapsRef.current, numBeats));
-    }
+    if (tapsRef.current.length > 0) onSaveTaps(tapsRef.current, numBeats);
     tapsRef.current = [];
     setTapCount(0);
     setPhase('idle');
-  }, [clearTimers, numBeats, onChange, onSaveTaps, onStop]);
+  }, [clearTimers, numBeats, onSaveTaps, onStop]);
 
   const cancel = useCallback(() => {
     clearTimers();
@@ -684,10 +306,8 @@ export function useTapAlong({
 
   // Space/Enter register a tap from anywhere — the whole point is tapping
   // the keyboard without needing mouse focus on any particular element. A
-  // quick press/release records a single beat; holding across the next
-  // grid step's boundary records a sustained span instead (see `beginHold`
-  // / `endHold`) — the same tick-vs-hold split `BeatChipPicker`'s own
-  // click-vs-drag gesture uses. Guarded against stealing keystrokes from a
+  // press records where the hit starts and the release where it ends (see
+  // `beginHold` / `endHold`). Guarded against stealing keystrokes from a
   // focused text field (belt and braces alongside the blur-on-start above,
   // e.g. if focus wandered back).
   useEffect(() => {
@@ -727,7 +347,7 @@ export function useTapAlong({
   }, [phase, beginHold, endHold]);
 
   return {
-    phase, countdownTick, tapCount, previewPatch, tapEvents, numBeats, subbeats, start, tap, tapAtStep, finishPass, retry, save, cancel,
+    phase, countdownTick, tapCount, tapEvents, numBeats, subbeats, start, tap, tapAtStep, finishPass, retry, save, cancel,
   };
 }
 
@@ -807,17 +427,12 @@ export function TapRefineControls({
 /** Dumb button row for the `useTapAlong` state machine — idle "Tap Along"
  *  button → 3-2-1 count-in → a looping "SPACE to tap" indicator (with
  *  Stop/Cancel) → a Retry / Save / Cancel review step. No internal state of
- *  its own: the caller owns `useTapAlong` (so it can also feed
- *  `previewPatch` into its own `BeatChipPicker`) and passes the whole
- *  returned bag straight through here. */
+ *  its own: the caller owns `useTapAlong` (so it can also draw its
+ *  `tapEvents`) and passes the whole returned bag straight through here. */
 export function TapAlongControls({
-  phase, countdownTick, tapCount, start, tap, finishPass, retry, save, cancel, disabled, mode = 'grid',
+  phase, countdownTick, tapCount, start, tap, finishPass, retry, save, cancel, disabled,
 }: ReturnType<typeof useTapAlong> & {
   disabled?: boolean;
-  /** Only changes the wording: on a grid node a tap lights the nearest chip,
-   *  on a boundary node it lands a block exactly where it fell. Same state
-   *  machine, same buttons — see `useTapAlong`'s `onSaveTaps`. */
-  mode?: 'grid' | 'boundary';
 }) {
   if (phase === 'idle') {
     return (
@@ -828,9 +443,7 @@ export function TapAlongControls({
         className="px-2 py-1 rounded text-[10px] uppercase tracking-wider border transition-colors bg-[#0a0b0d] border-white/[0.08] text-orange-300 hover:text-orange-200 hover:border-orange-400/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-white/[0.08]"
         title={disabled
           ? 'Place this node in a sequence to preview its real audio'
-          : mode === 'boundary'
-          ? 'Play the real audio on a loop and tap the keyboard along with it — press Space where a hit starts, release it where the hit ends, and that press becomes the block'
-          : 'Play the real audio on a loop and tap the keyboard along with it — each tap lights the closest beat'}
+          : 'Play the real audio on a loop and tap the keyboard along with it — press Space where a hit starts, release it where the hit ends, and that press becomes the note'}
       >
         ⌨ Tap Along
       </button>
@@ -863,9 +476,7 @@ export function TapAlongControls({
           type="button"
           onClick={tap}
           className="px-2.5 py-1 rounded text-[10px] uppercase tracking-wider border bg-orange-500/25 border-orange-400/60 text-orange-100 animate-pulse hover:animate-none hover:bg-orange-500/35 transition-colors"
-          title={mode === 'boundary'
-            ? 'Press Space where a hit starts and release it where the hit ends — every press is one block, from the press to the release (click works too, but a click has no length) — loops until you stop'
-            : 'Press Space in time with the beat, or hold it across multiple beats for a long note (click works too, tap-only) — loops until you stop'}
+          title="Press Space where a hit starts and release it where the hit ends — every press is one note, from the press to the release (click works too, but a click has no length) — loops until you stop"
         >
           ⌨ SPACE to tap{tapCount > 0 ? ` (${tapCount})` : ''}
         </button>
@@ -1007,78 +618,3 @@ export function TapAlongPianoRoll({
   );
 }
 
-// ─── ChipStrip (read-only beat grid, drawn inside a canvas tile) ────────────
-
-/** Renders the sub-beat chips inside a tile. `beatsPerBar × 4` mini bars span
- *  the tile width; highlighted sub-beats are full-opacity, others are dim. A
- *  small gap every PATTERN_SUBBEATS_PER_BEAT marks beat boundaries so the
- *  pulse stays readable at small tile widths. Steps inside a held `span` render
- *  as one continuous bar (the inner gaps are suppressed) so a hold reads as a
- *  single sustained accent. The label, when present, sits on the left and
- *  truncates. Read-only — RiffPatternLaneRow draws a Riff Node's own beat grid
- *  with it instead of a flat color block. */
-export function ChipStrip({ color, steps, highlighted, spans, label, accents }: {
-  color: string; steps: number; highlighted: number[]; spans: [number, number][]; label: string;
-  /** step -> 1..127. A step with no entry draws at full strength. */
-  accents?: Record<number, number>;
-}) {
-  const hSet = new Set(highlighted);
-  // index → role within its span, so we can drop the inner gaps of a hold.
-  const spanRole = new Map<number, 'start' | 'mid' | 'end'>();
-  for (const [s, l] of spans) {
-    for (let k = 0; k < l; k++) spanRole.set(s + k, k === 0 ? 'start' : k === l - 1 ? 'end' : 'mid');
-  }
-  return (
-    <span className="flex items-stretch w-full h-full pointer-events-none select-none">
-      {label && (
-        <span
-          className="text-[10px] truncate text-white/90 leading-none px-1 self-center max-w-[40%]"
-          style={{ textShadow: '0 0 4px rgba(0,0,0,0.9)' }}
-        >
-          {label}
-        </span>
-      )}
-      {/* Bottom-aligned, not stretched: a measured step draws as a bar whose
-          HEIGHT is how hard it was hit, standing on the floor of the row like
-          a piano roll's velocity lane. Unmeasured and empty steps stay full
-          height, so a hand-drawn node looks exactly as it always did. */}
-      <span className="flex-1 flex items-end py-0.5 pr-0.5 pl-0.5">
-        {Array.from({ length: steps }, (_, i) => {
-          const role = spanRole.get(i);
-          const inSpan = role !== undefined;
-          const on = hSet.has(i) || inSpan;
-          const isLastInBeat = (i % PATTERN_SUBBEATS_PER_BEAT) === PATTERN_SUBBEATS_PER_BEAT - 1;
-          const isLast = i === steps - 1;
-          // A hold suppresses the 1px inter-chip gap between its own steps so
-          // the run looks continuous; the per-chip gap is otherwise 1px, and a
-          // 2px beat-boundary gap is added at the end of each beat.
-          const gapAfterSpan = inSpan && role !== 'end'; // still inside the hold
-          const marginRight = gapAfterSpan
-            ? 0
-            : (isLast ? 0 : (isLastInBeat ? 2 : 1));
-          const radius = inSpan
-            ? (role === 'start' ? '2px 0 0 2px' : role === 'end' ? '0 2px 2px 0' : '0')
-            : '1px';
-          return (
-            <span
-              key={i}
-              style={{
-                flex: 1,
-                background: on ? color : `${color}33`,
-                // How hard the step was struck, when a detector measured it.
-                // Height carries it and opacity reinforces it; both apply only
-                // to a step that is ON, so neither can be mistaken for empty.
-                height: on ? `${accentHeight(accents?.[i]) * 100}%` : '100%',
-                opacity: on ? accentOpacity(accents?.[i]) : undefined,
-                boxShadow: on ? `0 0 3px ${color}` : undefined,
-                minWidth: 1,
-                marginRight,
-                borderRadius: radius,
-              }}
-            />
-          );
-        })}
-      </span>
-    </span>
-  );
-}

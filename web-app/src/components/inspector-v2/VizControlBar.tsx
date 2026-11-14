@@ -100,11 +100,15 @@ export interface VizControlBarProps {
   showChroma: boolean;      onToggleChroma: (v: boolean) => void;
   showTempogram: boolean;   onToggleTempogram: (v: boolean) => void;
   showSsm: boolean;         onToggleSsm: (v: boolean) => void;
+  showVolume: boolean;      onToggleVolume: (v: boolean) => void;
   showEnergy: boolean;      onToggleEnergy: (v: boolean) => void;
   showBrightness: boolean;  onToggleBrightness: (v: boolean) => void;
   showNovelty: boolean;     onToggleNovelty: (v: boolean) => void;
   showOnsets: boolean;      onToggleOnsets: (v: boolean) => void;
   showFlux: boolean;        onToggleFlux: (v: boolean) => void;
+  showDensity?: boolean;    onToggleDensity?: (v: boolean) => void;
+  showBusyness?: boolean;   onToggleBusyness?: (v: boolean) => void;
+  showBandwidth?: boolean;  onToggleBandwidth?: (v: boolean) => void;
   // Beat grid
   showBeatGrid: boolean;   onToggleBeatGrid: (v: boolean) => void;
   beatGridUnit: BeatGridUnit; onBeatGridUnitChange: (u: BeatGridUnit) => void;
@@ -158,6 +162,8 @@ export interface VizControlBarProps {
   // actually drawn with right now, so the dropdown can show it.
   gridThicknessAdaptive?: boolean; onGridThicknessAdaptiveChange?: (v: boolean) => void;
   effectiveGridLineThickness?: number;
+  // Misc → count every grid line (beat / sub-beat), not just bars.
+  numberEveryGridLine?: boolean; onNumberEveryGridLineChange?: (v: boolean) => void;
   // Zoom — controlled by the WaveSurfer player; the toolbar invokes the
   // callbacks and reflects the current state. `zoomFactor` is the player's
   // multiplier relative to fit (1 = fit, 2 = ×2 …). `atMaxZoom` disables `+`.
@@ -166,7 +172,7 @@ export interface VizControlBarProps {
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onZoomReset?: () => void;
-  // Playback speed — slows the whole song (and every currentTime-driven viz:
+  // Playback speed — slows the whole song (and every playhead-driven viz:
   // karaoke, beat-grid sweep) by multiplying WaveSurfer's playback rate at the
   // source. `playbackRate` is the current multiplier (1 = normal). When
   // `onPlaybackRateChange` is omitted the Speed control is hidden.
@@ -188,7 +194,7 @@ export interface VizControlBarProps {
   // Single-value detector outputs (global key, detected language, …). These
   // detectors produce one value for the whole track, not a timeline, so they
   // render as always-visible read-only pills instead of overlay toggles.
-  singleInfoDetections?: { id: string; label: string; value: string; color?: string }[];
+  singleInfoDetections?: { id: string; label: string; short?: string; value: string; color?: string }[];
   // Custom detector annotations — appended to the Annotations dropdown so the
   // user can hide individual detector strips from the canvas.
   customAnnotationOptions?: CustomAnnotationOption[];
@@ -369,6 +375,14 @@ function Checkbox({ label, color, checked, onChange, title, tag }: {
  *  its label below — every control in the bar uses this so heights line up
  *  perfectly. The wrapper is `position: relative` so popovers/menus on the
  *  buttons inside can anchor to the column. */
+/** The grid unit as the closed toolbar dropdown shows it: the parenthetical
+ *  gloss ("Phrase", "Block", "×3 beats") only makes sense in the open list,
+ *  next to its neighbours. */
+function beatGridUnitShortLabel(unit: BeatGridUnit): string {
+  if (unit === 'compound-beat') return 'Compound';
+  return beatGridUnitLabel(unit).replace(/\s*\(.*\)$/, '');
+}
+
 function Column({ label, children }: { label: string; children: React.ReactNode }) {
   // The label is hidden by CSS at the tiers that can't afford it (and in the
   // compact bar), which is why the name is also on the wrapper as a tooltip.
@@ -667,8 +681,8 @@ function renderModeBadge(
         + `bar ${barBeatOrigin} · beat ${barBeatOrigin}. Change it under `
         + `Settings → Annotations — display → First bar / first beat numbered.`}
     >
-      <span className="font-medium">{title}</span>
-      <span className="tc-viz-badge-detail text-[9px] opacity-90">
+      <span className="text-[9px] opacity-80">{title}</span>
+      <span className="tc-viz-badge-detail text-[12px] font-medium">
         {gridMode === 'static' ? (
           <>
             {Math.round(bpm)} BPM
@@ -730,7 +744,9 @@ function barFits(el: HTMLElement): boolean {
 /** Put a tier on the bar. One attribute write — every size hangs off it in
  *  CSS — so the caller can measure the result immediately. */
 function applyTier(el: HTMLElement, tier: BarDensity): void {
-  el.dataset.vizBarDensity = tier;
+  // Writing the value it already has still invalidates the bar's style, and
+  // the walk's next measurement then pays for a full restyle of the page.
+  if (el.dataset.vizBarDensity !== tier) el.dataset.vizBarDensity = tier;
 }
 
 /** Pick the roomiest tier whose controls fit on one line, and leave the bar
@@ -775,11 +791,15 @@ export function VizControlBar({
   showChroma, onToggleChroma,
   showTempogram, onToggleTempogram,
   showSsm, onToggleSsm,
+  showVolume, onToggleVolume,
   showEnergy, onToggleEnergy,
   showBrightness, onToggleBrightness,
   showNovelty, onToggleNovelty,
   showOnsets, onToggleOnsets,
   showFlux, onToggleFlux,
+  showDensity = false, onToggleDensity,
+  showBusyness = false, onToggleBusyness,
+  showBandwidth = false, onToggleBandwidth,
   showBeatGrid, onToggleBeatGrid,
   beatGridUnit, onBeatGridUnitChange,
   beatGridUnitOptions,
@@ -796,6 +816,7 @@ export function VizControlBar({
   gridLineThickness, onGridLineThicknessChange,
   gridThicknessAdaptive = true, onGridThicknessAdaptiveChange,
   effectiveGridLineThickness,
+  numberEveryGridLine = false, onNumberEveryGridLineChange,
   zoomFactor = 1, atMaxZoom = false, onZoomIn, onZoomOut, onZoomReset,
   playbackRate = 1, onPlaybackRateChange,
   algoOptions, selectedAlgos, onToggleAlgo, showAlgos = true,
@@ -849,6 +870,12 @@ export function VizControlBar({
     // controls want has actually moved. Without it every unrelated re-render
     // of the page would pay for a search.
     const now = measureBar(el);
+    // A hidden bar (the slim header's copy while the full header shows, and
+    // the other way round) has no width to fit. Walking it anyway rewrote its
+    // tier up to `roomy`, so on every header swap the bar coming back walked
+    // all the way down again — a forced restyle of the whole page per tier,
+    // 70–95 ms of frozen scrolling each time. Leave it on the tier it had.
+    if (now.avail <= 0) return;
     const prev = settledRef.current;
     if (!force && prev && Math.abs(prev.avail - now.avail) < 0.5
         && Math.abs(prev.needed - now.needed) < 0.5) return;
@@ -866,10 +893,12 @@ export function VizControlBar({
   useEffect(() => {
     const el = containerRef.current;
     if (!el || compact || typeof ResizeObserver === 'undefined') return;
-    // Re-walk from scratch on a width change — window resize, a sidebar
-    // collapsing, the panel the bar lives in growing. Only the bar's own
-    // children resize, so this can't feed itself a new observation.
-    const ro = new ResizeObserver(() => resettle(true));
+    // Re-walk on a width change — window resize, a sidebar collapsing, the
+    // panel the bar lives in growing. Only the bar's own children resize, so
+    // this can't feed itself a new observation. Not forced: resettle's own
+    // gate already sees a width that moved, and a bar un-hidden at the width
+    // it was settled at (the header swapping back) has nothing to re-walk.
+    const ro = new ResizeObserver(() => resettle());
     ro.observe(el);
     return () => ro.disconnect();
   }, [compact, resettle]);
@@ -977,10 +1006,20 @@ export function VizControlBar({
     { label: 'Chroma',        color: '#84cc16', checked: showChroma,      onChange: onToggleChroma },
     { label: 'Tempogram',     color: '#d946ef', checked: showTempogram,   onChange: onToggleTempogram },
     { label: 'SSM',           color: '#f97316', checked: showSsm,         onChange: onToggleSsm },
-    { label: 'Energy',        color: '#f59e0b', checked: showEnergy,      onChange: onToggleEnergy },
+    { label: 'Volume (RMS)',  color: '#f1f5f9', checked: showVolume,      onChange: onToggleVolume },
+    { label: 'Beat strength', color: '#f59e0b', checked: showEnergy,      onChange: onToggleEnergy },
     { label: 'Brightness',    color: '#22d3ee', checked: showBrightness,  onChange: onToggleBrightness },
     { label: 'Novelty',       color: '#a78bfa', checked: showNovelty,     onChange: onToggleNovelty },
     { label: 'Onsets',        color: '#f472b6', checked: showOnsets,      onChange: onToggleOnsets },
+    ...(onToggleDensity
+      ? [{ label: 'Onset density', color: '#f87171', checked: showDensity, onChange: onToggleDensity }]
+      : []),
+    ...(onToggleBusyness
+      ? [{ label: 'Busyness', color: '#fde047', checked: showBusyness, onChange: onToggleBusyness }]
+      : []),
+    ...(onToggleBandwidth
+      ? [{ label: 'Bandwidth', color: '#60a5fa', checked: showBandwidth, onChange: onToggleBandwidth }]
+      : []),
     { label: 'Spectral Flux', color: '#10b981', checked: showFlux,        onChange: onToggleFlux },
   ];
   const signalsActive = signalRows.filter((r) => r.checked).length;
@@ -1166,7 +1205,7 @@ export function VizControlBar({
             onClick={() => onRequestGridLock?.(!gridLock)}
             title={gridLock
               ? 'Grid Lock is ON — snapping locked, beat display active. Click to disable.'
-              : 'Enable Grid Lock: lock snapping on and re-snap all annotations to the beat grid'}
+              : 'Enable Grid Lock: lock snapping on and pick what to re-snap to the grid'}
             data-testid="viz-grid-lock"
             aria-pressed={gridLock}
             className={[
@@ -1645,28 +1684,37 @@ export function VizControlBar({
           title={gridWarn ? 'Grid is on, but no BPM is set for this song — the grid can only render once BPM is known.' : 'Show beat grid'}
           dataTestId="viz-grid-toggle"
         />
-        <select
-          value={beatGridUnit}
-          onChange={(e) => onBeatGridUnitChange(e.target.value as BeatGridUnit)}
-          disabled={!showBeatGrid || !bpm}
-          title="Grid granularity"
-          data-testid="viz-grid-unit"
-          // Capped in compact mode: w-auto sizes a <select> to its widest
-          // option ("Compound (×3 beats)"), which is 185px of a slim transport
-          // that has to fit between two sidebars. The open list is drawn by the
-          // browser at full width, so only the closed label truncates.
-          className={`tc-viz-ctl tc-viz-select w-auto pl-2 pr-0.5 text-[11px] font-mono rounded border transition-colors focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 ${
+        {/* The closed control is a styled box over an invisible native <select>:
+            a <select> clips its label mid-glyph ("4 Bars (Phras") with no
+            ellipsis, so the box shows a short name that truncates cleanly and
+            the list the browser opens keeps the full names. */}
+        <div
+          className={`tc-viz-ctl tc-viz-select relative ml-1.5 inline-flex items-center gap-1 min-w-0 pl-2 pr-1.5 text-[11px] font-mono rounded border transition-colors focus-within:border-violet-500/50 focus-within:ring-1 focus-within:ring-violet-500/50 ${
             !showBeatGrid || !bpm
               ? 'bg-transparent border-white/[0.15] text-slate-500 cursor-not-allowed'
               : 'bg-white/[0.05] hover:bg-white/[0.10] border-white/[0.22] text-slate-100 cursor-pointer'
           }`}
         >
-          {(beatGridUnitOptions ?? BEAT_GRID_UNIT_OPTIONS)
-            .filter((unit) => unit !== 'compound-beat' || (beatsPerBar != null && beatsPerBar >= 6 && beatsPerBar % 3 === 0))
-            .map((unit) => (
-              <option key={unit} value={unit}>{beatGridUnitLabel(unit)}</option>
-            ))}
-        </select>
+          <span className="truncate" aria-hidden="true">{beatGridUnitShortLabel(beatGridUnit)}</span>
+          <svg className="shrink-0 opacity-70" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <select
+            value={beatGridUnit}
+            onChange={(e) => onBeatGridUnitChange(e.target.value as BeatGridUnit)}
+            disabled={!showBeatGrid || !bpm}
+            title="Grid granularity"
+            aria-label="Grid granularity"
+            data-testid="viz-grid-unit"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-[inherit] disabled:cursor-not-allowed"
+          >
+            {(beatGridUnitOptions ?? BEAT_GRID_UNIT_OPTIONS)
+              .filter((unit) => unit !== 'compound-beat' || (beatsPerBar != null && beatsPerBar >= 6 && beatsPerBar % 3 === 0))
+              .map((unit) => (
+                <option key={unit} value={unit}>{beatGridUnitLabel(unit)}</option>
+              ))}
+          </select>
+        </div>
       </Column>
 
       {/* ── Snap (very visible, next to Grid) ─────────────────────── */}
@@ -1678,7 +1726,7 @@ export function VizControlBar({
             pressed={snapToGrid || gridLock}
             onClick={gridLock ? undefined : () => onToggleSnapToGrid(!snapToGrid)}
             disabled={gridLock}
-            title={gridLock ? 'Snap is locked on in Grid Lock' : 'Snap new boundaries / cues to the beat grid'}
+            title={gridLock ? 'Snap is locked on in Grid Lock' : 'Snap cues to the beat grid. Boundaries, spans, loops and riff patterns always land on the nearest beat, or the finer grid line when the grid divides the beat; lyrics never snap.'}
             dataTestId="viz-snap-toggle"
           />
         </Column>
@@ -1766,32 +1814,44 @@ export function VizControlBar({
               </div>
             )}
           </div>
+          {onNumberEveryGridLineChange && (
+            <div className="pt-2 mt-1 border-t border-white/[0.12]">
+              <Checkbox
+                label="Show beat numbers"
+                color="#22d3ee"
+                checked={numberEveryGridLine}
+                onChange={onNumberEveryGridLineChange}
+                title="On (default): every beat is numbered with its count from the start of the song — 0, 1, 2, 3… to the end, never restarting at a bar — on a second row under the bar numbers. Off: only bars are numbered. Zoomed out, the beat numbers thin out so they stay readable: every 2nd beat, then every 4th, then bars only."
+              />
+            </div>
+          )}
         </DropdownGroup>
       </Column>
 
       {/* ── Detected single-value info (Key / Language) ──────────────
-           Always-visible read-only pills. These detectors produce one value
+           Always-visible read-only info box. These detectors produce one value
            for the whole track, so they don't get a timeline overlay row. ── */}
       {singleInfoDetections && singleInfoDetections.length > 0 && !compact && (
         <>
         <span className="tc-viz-rule tc-viz-drop w-px bg-white/[0.18]" aria-hidden="true" />
-        <Column label="Detected">
-          <div className="flex items-center gap-1.5 flex-wrap max-w-[260px]">
-            {singleInfoDetections.map((d) => {
-              const c = d.color ?? '#94a3b8';
-              return (
-                <span
-                  key={d.id}
-                  className="inline-flex items-center gap-1.5 h-[26px] px-2 rounded border bg-white/[0.04]"
-                  style={{ borderColor: `${c}55` }}
-                  title={`${d.label}: ${d.value}`}
-                >
-                  <span className="text-[9px] uppercase tracking-wider font-semibold" style={{ color: c }}>{d.label}</span>
-                  <span className="text-[11px] font-mono text-slate-100 truncate max-w-[120px]">{d.value}</span>
+        {/* Read-only info, so it wears the grey frame of the static Mode badge
+            rather than a button's: one box as tall as the row, one line per
+            value ("LANG en" over "KEY C maj"), tagged inside the box so the
+            caption below can stay a short generic word. */}
+        <Column label="Info">
+          <span
+            className="tc-viz-badge tc-viz-ctl flex flex-col justify-center gap-0.5 leading-tight rounded border border-slate-500/40 bg-slate-500/10 cursor-default whitespace-nowrap"
+            data-testid="viz-single-info"
+          >
+            {singleInfoDetections.map((d) => (
+              <span key={d.id} className="flex items-baseline gap-1.5" title={`${d.label}: ${d.value}`}>
+                <span className="text-[8px] uppercase tracking-wider font-semibold" style={{ color: d.color ?? '#94a3b8' }}>
+                  {d.short ?? d.label}
                 </span>
-              );
-            })}
-          </div>
+                <span className="text-[11px] font-mono text-slate-300 truncate max-w-[120px]">{d.value}</span>
+              </span>
+            ))}
+          </span>
         </Column>
         </>
       )}

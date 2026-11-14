@@ -13,7 +13,7 @@ import {
 } from '../services/audioAnalysis';
 import { computeMIRFeatures, type MIRFeatures } from '../services/mirAnalysis';
 import { runBandGradient, type BandGradientResult, type BandGradientParams } from '../utils/bandGradient';
-import { cueToSection, type CueSection } from '../utils/drumHits';
+import { cueToSection, pitchNoteToSection, type CueSection } from '../utils/drumHits';
 
 // ─── MIR feature cache ─────────────────────────────────────────────────────────
 // WeakMap keyed on AudioBuffer — GC'd automatically when the buffer is released.
@@ -211,8 +211,9 @@ export interface PitchNoteCueResult {
   algoName: string;
   audioFile: string;
   duration: number;
-  /** One cue per transcribed note. Used by the inspector row renderer. */
-  sections: { time: number; endTime: number; type: string; label: string }[];
+  /** One cue per transcribed note, with its MIDI number and length. Used by
+   *  the inspector row renderer, the piano roll and the MIDI export. */
+  sections: CueSection[];
   computedAt: number;
   elapsedSec: number;
 }
@@ -235,7 +236,7 @@ export interface CueExtrasResult {
   key?: string | null;
 }
 
-export type CueExtrasToolId = 'librosa-key' | 'autochord-chords' | 'librosa-onsets' | 'drum-transients';
+export type CueExtrasToolId = 'librosa-key' | 'autochord-chords' | 'librosa-onsets';
 
 /** HPSS percussive-span result (SPAN family). Same shape as SpanStructureResult. */
 export type PercussiveToolId = 'hpss-percussive';
@@ -254,7 +255,7 @@ export interface LyricsToolResult {
   elapsedSec: number;
 }
 
-export type LyricsToolId = 'whisper-base' | 'ctc-forced-aligner';
+export type LyricsToolId = 'whisper-base' | 'ivrit' | 'ctc-forced-aligner';
 
 // Re-export for use in InspectorPage
 export type { BandGradientResult };
@@ -291,9 +292,9 @@ export type ToolResultData =
   | { toolId: 'librosa-key';      result: CueExtrasResult }
   | { toolId: 'autochord-chords'; result: CueExtrasResult }
   | { toolId: 'librosa-onsets';   result: CueExtrasResult }
-  | { toolId: 'drum-transients'; result: CueExtrasResult }
   | { toolId: 'hpss-percussive';  result: SpanStructureResult }
   | { toolId: 'whisper-base';         result: LyricsToolResult }
+  | { toolId: 'ivrit';        result: LyricsToolResult }
   | { toolId: 'ctc-forced-aligner';   result: LyricsToolResult }
   | { toolId: 'locomotif';        result: PatternStructureResult };
 
@@ -683,9 +684,7 @@ async function loadOrRunPitch(audioSlug: string): Promise<PitchNoteCueResult> {
     algoName:   toolId,
     audioFile:  payload.audio_file ?? `${audioSlug}.mp3`,
     duration:   payload.duration ?? 0,
-    sections:   (payload.notes ?? []).map((n) => ({
-      time: n.time, endTime: n.end, type: n.pitch, label: n.pitch,
-    })),
+    sections:   (payload.notes ?? []).map(pitchNoteToSection),
     computedAt: Date.now(),
     elapsedSec: (payload.ms ?? 0) / 1000,
   };
@@ -1097,8 +1096,7 @@ export async function runTool(
 
     case 'librosa-key':
     case 'autochord-chords':
-    case 'librosa-onsets':
-    case 'drum-transients': {
+    case 'librosa-onsets': {
       if (!audioSlug) throw new Error('CUE-extras tools require an audioSlug.');
       const result = await loadOrRunCueExtras(toolId as CueExtrasToolId, audioSlug);
       return { toolId: toolId as CueExtrasToolId, result };
@@ -1114,6 +1112,12 @@ export async function runTool(
       if (!audioSlug) throw new Error('Whisper-base requires an audioSlug.');
       const result = await loadOrRunLyrics(audioSlug, 'whisper-base');
       return { toolId: 'whisper-base', result };
+    }
+
+    case 'ivrit': {
+      if (!audioSlug) throw new Error('Ivrit requires an audioSlug.');
+      const result = await loadOrRunLyrics(audioSlug, 'ivrit');
+      return { toolId: 'ivrit', result };
     }
 
     case 'ctc-forced-aligner': {

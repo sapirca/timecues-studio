@@ -17,7 +17,7 @@ import { SpanLaneRow } from './SpanLaneRow';
 import { CueLayerRow } from './CueLayerRow';
 import { LoopLayerRow } from './LoopLayerRow';
 import { LyricsLayerRow } from './LyricsLayerRow';
-import { RiffPatternLaneRow } from './RiffPatternLaneRow';
+import { RiffGrooveLaneRow } from './RiffGrooveLaneRow';
 import { LeadLaneRow } from './LeadLaneRow';
 import { newRiffPatternLayer } from '../../types/annotationLayer';
 import type { LaneGridProps } from './BeatGridOverlay';
@@ -31,12 +31,14 @@ const TRIPLETS: LaneGridProps = { ...GRID, subBeatDivision: 3 };
 
 /** Times (seconds) of every grid line the lane drew, read back off the
  *  overlay's `left: %` positions. */
+/** Rule times, in seconds, straight off the grid's SVG: GridLines strokes one
+ *  path per line kind in a viewBox measured in seconds, each rule `M<t> 0V1`. */
 function gridTimes(root: HTMLElement): number[] {
-  const overlay = root.querySelector('.absolute.inset-0.pointer-events-none.overflow-hidden');
-  if (!overlay) return [];
-  return Array.from(overlay.children).map(
-    (el) => (parseFloat((el as HTMLElement).style.left) / 100) * DURATION,
-  );
+  const out: number[] = [];
+  for (const path of root.querySelectorAll('path[data-grid-kind]')) {
+    for (const m of (path.getAttribute('d') ?? '').matchAll(/M([\d.]+) 0V1/g)) out.push(parseFloat(m[1]));
+  }
+  return out.sort((a, b) => a - b);
 }
 
 function hasLineAt(times: number[], t: number): boolean {
@@ -44,12 +46,12 @@ function hasLineAt(times: number[], t: number): boolean {
 }
 
 const LANES: [string, (grid: LaneGridProps) => React.ReactElement][] = [
-  ['SpanLaneRow',        (g) => <SpanLaneRow items={[]} color="#38bdf8" duration={DURATION} currentTime={0} gridProps={g} />],
-  ['CueLayerRow',        (g) => <CueLayerRow items={[]} color="#4ade80" duration={DURATION} currentTime={0} gridProps={g} />],
-  ['LoopLayerRow',       (g) => <LoopLayerRow items={[]} color="#f472b6" duration={DURATION} currentTime={0} gridProps={g} />],
-  ['LyricsLayerRow',     (g) => <LyricsLayerRow items={[]} color="#fbbf24" duration={DURATION} currentTime={0} gridProps={g} />],
-  ['RiffPatternLaneRow', (g) => <RiffPatternLaneRow layer={newRiffPatternLayer('Riffs', '#38bdf8')} duration={DURATION} currentTime={0} gridProps={g} />],
-  ['LeadLaneRow',        (g) => <LeadLaneRow candidates={[]} duration={DURATION} currentTime={0} gridProps={g} />],
+  ['SpanLaneRow',        (g) => <SpanLaneRow items={[]} color="#38bdf8" duration={DURATION} gridProps={g} />],
+  ['CueLayerRow',        (g) => <CueLayerRow items={[]} color="#4ade80" duration={DURATION} gridProps={g} />],
+  ['LoopLayerRow',       (g) => <LoopLayerRow items={[]} color="#f472b6" duration={DURATION} gridProps={g} />],
+  ['LyricsLayerRow',     (g) => <LyricsLayerRow items={[]} color="#fbbf24" duration={DURATION} gridProps={g} />],
+  ['RiffGrooveLaneRow',  (g) => <RiffGrooveLaneRow layer={newRiffPatternLayer('Riffs', '#38bdf8')} duration={DURATION} gridProps={g} />],
+  ['LeadLaneRow',        (g) => <LeadLaneRow candidates={[]} duration={DURATION} gridProps={g} />],
 ];
 
 describe('lane grid props', () => {

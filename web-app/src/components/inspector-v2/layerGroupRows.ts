@@ -63,6 +63,10 @@ export interface GroupDrop {
    *  drop on the header itself means, since a header has no row under it to
    *  aim at. */
   beforeRowId: VizRowId | null;
+  /** Which side of `beforeRowId` it lands on — 'after' for a lane dragged down
+   *  onto it, so it ends up where it was let go (see `ReorderPlace`). Defaults
+   *  to 'before'; ignored for a drop on the header. */
+  place?: ReorderPlace;
 }
 
 /** Read a drop target as a group destination. Every row is a valid target:
@@ -99,6 +103,7 @@ export function moveRowInOrder(
   let at: number;
   if (drop.beforeRowId != null) {
     at = next.indexOf(drop.beforeRowId);
+    if (at >= 0 && drop.place === 'after') at += 1;
   } else {
     // Above whichever member leads the band today: that is the slot the header
     // already draws in, so joining at the top doesn't make the band jump.
@@ -106,5 +111,66 @@ export function moveRowInOrder(
   }
   if (at < 0) return order as VizRowId[];
   next.splice(at, 0, rowId);
+  return next;
+}
+
+/** Which side of the target a plain reorder lands on. A row dragged down takes
+ *  the slot *below* the row it was dropped on, a row dragged up the slot above
+ *  it — so the dragged row always ends up where it was let go. Inserting
+ *  "before" on a downward drag parks it one row short, which for the row just
+ *  below is exactly where it started. */
+export type ReorderPlace = 'before' | 'after';
+
+/** A group's members, in stored order. */
+function membersOf(order: readonly VizRowId[], gid: string, rowGroupId: Readonly<Record<string, string>> | undefined): VizRowId[] {
+  return order.filter((id) => rowGroupId?.[id] === gid);
+}
+
+/** Move a row — or a whole band, when `draggedId` is a band header — to
+ *  `place` of `targetId`, in the *stored* row order, so that the canvas
+ *  (`buildGroupedRowOrder`) draws it there.
+ *
+ *  A band is drawn where its first member sits, with every other member pulled
+ *  up behind it, so the stored slot of a lone member says nothing about where
+ *  the band shows. A row dropped on a band it isn't part of therefore moves
+ *  around the band as a block: above its first member, or below its last once
+ *  the members are gathered together (gathering changes nothing on screen).
+ *  Inside its own band a row moves against the target alone.
+ *
+ *  Membership is not touched here — that is `moveRowInOrder`'s job. Returns the
+ *  input unchanged when the move has nowhere to land. */
+export function reorderRow(
+  order: readonly VizRowId[],
+  draggedId: VizRowId,
+  targetId: VizRowId,
+  place: ReorderPlace,
+  rowGroupId: Readonly<Record<string, string>> | undefined,
+): VizRowId[] {
+  if (draggedId === targetId) return order as VizRowId[];
+  const headerGid = (id: VizRowId) => (id.startsWith(GROUP_ROW_PREFIX) ? id.slice(GROUP_ROW_PREFIX.length) : null);
+  const draggedHeader = headerGid(draggedId);
+  const block = draggedHeader ? membersOf(order, draggedHeader, rowGroupId) : [draggedId];
+  if (block.length === 0 || !order.includes(block[0])) return order as VizRowId[];
+  const draggedGid = draggedHeader ?? rowGroupId?.[draggedId] ?? null;
+  const targetGid = headerGid(targetId) ?? rowGroupId?.[targetId] ?? null;
+
+  const moving = new Set(block);
+  let next = order.filter((id) => !moving.has(id));
+  let targetBlock: VizRowId[];
+  if (targetGid && targetGid !== draggedGid) {
+    targetBlock = membersOf(next, targetGid, rowGroupId);
+    if (targetBlock.length === 0) return order as VizRowId[];
+    // Gather the band behind its first member, where it is already drawn.
+    const inBand = new Set(targetBlock);
+    const lead = next.indexOf(targetBlock[0]);
+    next = [...next.slice(0, lead).filter((id) => !inBand.has(id)), ...targetBlock, ...next.slice(lead).filter((id) => !inBand.has(id))];
+  } else {
+    if (moving.has(targetId) || !next.includes(targetId)) return order as VizRowId[];
+    targetBlock = [targetId];
+  }
+  const at = place === 'before'
+    ? next.indexOf(targetBlock[0])
+    : next.indexOf(targetBlock[targetBlock.length - 1]) + 1;
+  next.splice(at, 0, ...block);
   return next;
 }

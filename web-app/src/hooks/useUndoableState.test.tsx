@@ -91,4 +91,20 @@ describe('useUndoableState', () => {
     expect(result.current[2].canUndo).toBe(false);
     expect(result.current[2].canRedo).toBe(false);
   });
+
+  it('scrub erases a dropped draft from the present and the history alike', () => {
+    // Items as strings; the draft is 'D'. Base edit, add the draft, edit the
+    // draft twice, then drop it: undo must go straight to before the base
+    // edit, never resurrect the draft or spend presses on draft-only edits.
+    const { result } = render<string[]>([]);
+    act(() => result.current[1](['a']));
+    act(() => result.current[1](['a', 'D']));
+    act(() => result.current[1](['a', 'D', 'D-label']));
+    const drop = (v: string[]) => (v.some((x) => x.startsWith('D')) ? v.filter((x) => !x.startsWith('D')) : v);
+    act(() => result.current[2].scrub(drop, (a, b) => JSON.stringify(a) === JSON.stringify(b)));
+    expect(result.current[0]).toEqual(['a']);
+    act(() => result.current[2].undo());
+    expect(result.current[0]).toEqual([]);
+    expect(result.current[2].canUndo).toBe(false);
+  });
 });

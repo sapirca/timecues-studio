@@ -76,7 +76,7 @@ import os
 import sys
 import warnings
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -87,8 +87,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from beat_segments import fit_segments, summarize  # noqa: E402
 from paths import find_audio, BEAT_THIS_OUTPUTS_DIR as CACHE_DIR  # noqa: E402
 from server_common import (  # noqa: E402
-    cached_result, cors_headers, now_iso, parse_range, shift_times, time_ms,
+    cached_result, write_result, cors_headers, now_iso, parse_range, shift_times, time_ms,
     trimmed_audio,
+    ModelServer,
+    model_used,
 )
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -127,6 +129,7 @@ _file2beats = None
 def _ensure_model():
     """Construct the File2Beats pipeline on first use."""
     global _file2beats
+    model_used()
     if _file2beats is not None:
         return
     from beat_this.inference import File2Beats  # type: ignore[import-not-found]
@@ -239,10 +242,7 @@ def detect(slug: str, force: bool = False, span: "tuple[float, float] | None" = 
         "result":      result,
         "computed_at": now_iso(),
     }
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=_BEAT_THIS_OK and _NUMPY_OK)
     return payload
 
 
@@ -343,7 +343,7 @@ def main():
     print(f"Starting Beat This! server on http://{host}:{PORT}", file=sys.stderr)
     print(f"  beat_this={_BEAT_THIS_OK}  numpy={_NUMPY_OK}  "
           f"checkpoint={CHECKPOINT}  device={DEVICE}", file=sys.stderr)
-    server = HTTPServer((host, PORT), Handler)
+    server = ModelServer((host, PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

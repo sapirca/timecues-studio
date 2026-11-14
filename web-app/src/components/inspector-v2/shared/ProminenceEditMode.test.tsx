@@ -17,6 +17,7 @@ import { AnnotationPointCard } from './AnnotationPointCard';
 import { prominenceSection } from './ProminenceControl';
 import { SettingsProvider } from '../../../context/SettingsContext';
 import { ProminenceStrip } from './ProminenceLane';
+import { PlayheadClockContext, createPlayheadClock } from '../../../hooks/usePlayhead';
 import { PROMINENCE_EPSILON, type ProminenceEnvelope } from '../../../types/annotationLayer';
 
 afterEach(() => {
@@ -147,7 +148,11 @@ describe('prominence edit mode', () => {
 
   it('places a level at the playhead from the strip header', () => {
     const onChange = vi.fn();
-    render(<Strip points={[{ t: 0, level: 'lead' }]} currentTime={2} onChange={onChange} />);
+    render(
+      <PlayheadClockContext.Provider value={createPlayheadClock(2)}>
+        <Strip points={[{ t: 0, level: 'lead' }]} onChange={onChange} />
+      </PlayheadClockContext.Provider>,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Backing' }));
     expect(onChange).toHaveBeenCalledWith([
       { t: 0, level: 'lead' },

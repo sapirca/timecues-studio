@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAnnotator } from '../context/AnnotatorContext';
 import type { Annotator } from '../types/annotator';
 import { fetchAdminStatus } from '../services/admin';
+import { fetchSession } from '../services/session';
 import { loadDatasetConfig } from '../services/datasetConfig';
 import { type DatasetConfig, type PersonEntry } from '../types/datasetConfig';
 import { AppPageHeader } from '../components/AppPageHeader';
@@ -12,11 +13,27 @@ const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | unde
 
 type Tab = 'google' | 'identity';
 
+/** Google's four-colour "G", so the Admin box says at a glance that the
+ *  account is a Google sign-in — the same mark its sign-in button shows. */
+function GoogleMark() {
+  return (
+    <svg viewBox="0 0 48 48" className="w-5 h-5" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
+  );
+}
+
 /**
- * Bootstrap a brand-new dataset. The visitor names the corpus and signs in
- * (Google when configured, or email/username as a fallback); on success we
- * atomically save `corpusName` and add their annotator id to `peopleByEmail`
- * as `admin`, then route to /prep.
+ * Bootstrap a brand-new dataset. The visitor names the corpus, signs in if
+ * they aren't already (Google when configured, or email/username as a
+ * fallback), and clicks **Create dataset**; that atomically saves `corpusName`
+ * and adds their annotator id to `peopleByEmail` as `admin`, then routes to
+ * /prep. Signing in and creating are separate steps: signing in only signs in,
+ * and someone already signed in creates with one click instead of having to
+ * sign in again.
  *
  * Google is preferred when available because it's a verified identity, but
  * deploys without `VITE_GOOGLE_CLIENT_ID` (or operators who simply don't have
@@ -35,6 +52,8 @@ export function NewDatasetSetup() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(GOOGLE_CLIENT_ID ? 'google' : 'identity');
+  // Signed in, but chose "Use a different account": show the sign-in panes.
+  const [switching, setSwitching] = useState(false);
 
   // Refs mirror the form state so the GooglePane/IdentityPane callbacks
   // (which capture the callback identity once and re-init only when it
@@ -62,7 +81,7 @@ export function NewDatasetSetup() {
     if (claimed) navigate('/', { replace: true });
   }, [claimed, navigate]);
 
-  const claimAndSignIn = useCallback(async (a: Annotator) => {
+  const claim = useCallback(async (a: Annotator) => {
     const trimmedName = corpusNameRef.current.trim();
     if (!trimmedName) {
       setError('Please enter a corpus name first.');
@@ -76,6 +95,17 @@ export function NewDatasetSetup() {
       const status = await fetchAdminStatus().catch(() => null);
       if (status && status.mode !== 'bootstrap') {
         setClaimed(true);
+        return;
+      }
+      // The server makes whoever its session names the admin — not the name
+      // this page shows. If they differ (the session lapsed, or another
+      // TimeCues on this machine replaced it), creating would hand the
+      // dataset to nobody; ask for a fresh sign-in instead.
+      const session = await fetchSession();
+      if (!session || session.id !== a.id) {
+        setSwitching(true);
+        setBusy(false);
+        setError(`Your sign-in as ${a.displayName} has expired on this server. Sign in again, then click Create dataset.`);
         return;
       }
 
@@ -101,9 +131,6 @@ export function NewDatasetSetup() {
       // `callerTier` is a server-only convenience field; don't write it back.
       delete nextCfg.callerTier;
 
-      // Save dataset-config with explicit X-Annotator-Id. The signed-in state
-      // hasn't been mirrored to the module-level annotator yet (signIn runs
-      // after this), so we can't rely on getCurrentAnnotatorId() here.
       // In bootstrap mode the server accepts the first signed-in id as admin.
       const res = await fetch('/api/dataset-config', {
         method: 'POST',
@@ -114,13 +141,18 @@ export function NewDatasetSetup() {
         throw new Error(res.status === 403 ? 'Server refused the claim (admin required)' : `HTTP ${res.status}`);
       }
 
-      signIn(a);
       navigate('/prep', { replace: true });
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Sign-in failed');
+      setError(e instanceof Error ? e.message : 'Creating the dataset failed');
       setBusy(false);
     }
-  }, [navigate, signIn]);
+  }, [navigate]);
+
+  const onSignedIn = useCallback((a: Annotator) => {
+    signIn(a);
+    setSwitching(false);
+    setError(null);
+  }, [signIn]);
 
   const alreadySignedIn = !!annotator;
   const trimmedName = corpusName.trim();
@@ -141,8 +173,8 @@ export function NewDatasetSetup() {
         <header className="text-center space-y-1.5 pb-3 border-b border-white/[0.05]">
           <h1 className="text-base font-medium text-slate-100">Start a new dataset</h1>
           <p className="text-[12px] sm:text-[11px] text-slate-500 leading-relaxed">
-            Name your corpus, then sign in to claim it. You'll be the dataset's
-            first admin.
+            Name your corpus and create it. The account you're signed in with
+            becomes the dataset's first admin.
           </p>
         </header>
 
@@ -164,59 +196,98 @@ export function NewDatasetSetup() {
           </span>
         </label>
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="text-[12px] sm:text-[10px] uppercase tracking-wider text-slate-500">
-            Sign in as admin
+            Admin
           </div>
 
-          {!trimmedName && (
-            <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono">
-              Enter a corpus name above to enable sign-in.
-            </p>
+          {alreadySignedIn && !switching ? (
+            <div className="flex items-center justify-between gap-3 rounded border border-white/[0.08] bg-white/[0.02] px-3 py-2.5">
+              <div className="flex items-center gap-3 min-w-0">
+                {annotator!.authMethod === 'google' && (
+                  <span className="shrink-0 w-8 h-8 rounded-full bg-white flex items-center justify-center" title="Signed in with Google">
+                    <GoogleMark />
+                  </span>
+                )}
+                <div className="min-w-0">
+                  <div className="text-[13px] sm:text-xs text-slate-100 truncate">{annotator!.displayName}</div>
+                  <div className="text-[12px] sm:text-[10px] text-slate-500 font-mono truncate">{annotator!.id}</div>
+                  <div className="text-[12px] sm:text-[10px] text-slate-500">
+                    {annotator!.authMethod === 'google' ? 'Signed in with Google' : 'Signed in with a username'}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setSwitching(true); setError(null); }}
+                disabled={busy}
+                className="shrink-0 text-[12px] sm:text-[10px] uppercase tracking-wider text-slate-400 hover:text-slate-100 disabled:opacity-40"
+              >
+                Use a different account
+              </button>
+            </div>
+          ) : (
+            <div className={busy ? 'pointer-events-none opacity-40 space-y-3' : 'space-y-3'}>
+              <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono leading-relaxed">
+                Sign in with the account that will own this dataset. Signing in doesn't create anything yet.
+              </p>
+              {GOOGLE_CLIENT_ID ? (
+                <>
+                  <nav className="grid grid-cols-2 gap-px bg-[#0a0b0d] border border-white/[0.06] rounded-md p-0.5 text-[12px] sm:text-[11px] uppercase tracking-wider">
+                    {(['google', 'identity'] as Tab[]).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setTab(t)}
+                        className={`px-2 py-2.5 sm:py-1.5 rounded transition-colors ${
+                          tab === t ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40' : 'text-slate-500 hover:text-slate-200 border border-transparent'
+                        }`}
+                      >
+                        {t === 'google' ? 'Google' : 'Email or username'}
+                      </button>
+                    ))}
+                  </nav>
+                  {tab === 'google' && <GooglePane onSignIn={onSignedIn} />}
+                  {tab === 'identity' && <IdentityPane onSignIn={onSignedIn} />}
+                </>
+              ) : (
+                <>
+                  <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono leading-relaxed">
+                    Google sign-in is not configured on this deploy. Sign in with
+                    an email or pick a username — that identity becomes the
+                    dataset's first admin.
+                  </p>
+                  <IdentityPane onSignIn={onSignedIn} />
+                </>
+              )}
+              {alreadySignedIn && (
+                <button
+                  type="button"
+                  onClick={() => { setSwitching(false); setError(null); }}
+                  className="text-[12px] sm:text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-200"
+                >
+                  Keep {annotator!.displayName}
+                </button>
+              )}
+            </div>
           )}
 
-          <div className={(!trimmedName || busy) ? 'pointer-events-none opacity-40 space-y-3' : 'space-y-3'}>
-            {GOOGLE_CLIENT_ID ? (
-              <>
-                <nav className="grid grid-cols-2 gap-px bg-[#0a0b0d] border border-white/[0.06] rounded-md p-0.5 text-[12px] sm:text-[11px] uppercase tracking-wider">
-                  {(['google', 'identity'] as Tab[]).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setTab(t)}
-                      className={`px-2 py-2.5 sm:py-1.5 rounded transition-colors ${
-                        tab === t ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40' : 'text-slate-500 hover:text-slate-200 border border-transparent'
-                      }`}
-                    >
-                      {t === 'google' ? 'Google' : 'Email or username'}
-                    </button>
-                  ))}
-                </nav>
-                {tab === 'google' && <GooglePane onSignIn={claimAndSignIn} />}
-                {tab === 'identity' && <IdentityPane onSignIn={claimAndSignIn} />}
-              </>
-            ) : (
-              <>
-                <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono leading-relaxed">
-                  Google sign-in is not configured on this deploy. Sign in with
-                  an email or pick a username — that identity becomes the
-                  dataset's first admin.
-                </p>
-                <IdentityPane onSignIn={claimAndSignIn} />
-              </>
-            )}
-          </div>
-
-          {busy && (
-            <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono text-center">Claiming dataset…</p>
+          {alreadySignedIn && !switching && (
+            <button
+              type="button"
+              onClick={() => void claim(annotator!)}
+              disabled={!trimmedName || busy}
+              title={!trimmedName ? 'Enter a corpus name first' : undefined}
+              className="w-full px-4 py-3 sm:py-2 rounded text-[12px] sm:text-[11px] uppercase tracking-wider font-medium bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-100 disabled:bg-white/[0.04] disabled:border-white/[0.06] disabled:text-slate-600 disabled:cursor-not-allowed transition-colors"
+            >
+              {busy ? 'Creating dataset…' : 'Create dataset'}
+            </button>
+          )}
+          {alreadySignedIn && !switching && !trimmedName && (
+            <p className="text-[12px] sm:text-[10px] text-slate-500 font-mono text-center">Enter a corpus name above to create the dataset.</p>
           )}
           {error && (
             <p className="text-[12px] sm:text-[11px] text-red-400 font-mono text-center">{error}</p>
-          )}
-          {alreadySignedIn && !busy && (
-            <p className="text-[12px] sm:text-[10px] text-amber-300 font-mono text-center leading-relaxed">
-              You're already signed in as {annotator!.displayName}. Signing in here will replace that identity.
-            </p>
           )}
         </div>
         </div>

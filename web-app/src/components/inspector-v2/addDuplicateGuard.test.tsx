@@ -12,6 +12,7 @@ import { useRef, useState, useEffect } from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
 import { act, render, cleanup } from '@testing-library/react';
 import { SettingsProvider } from '../../context/SettingsContext';
+import { createPlayheadClock, PlayheadClockContext } from '../../hooks/usePlayhead';
 import { CueEditorPanel } from './CueEditorPanel';
 import { SpanEditorPanel } from './SpanEditorPanel';
 import type { AnnotationPanelController } from './shared/AnnotationPanelController';
@@ -59,7 +60,13 @@ function mountPanel(
     })}</>;
   }
 
-  render(<SettingsProvider><Harness /></SettingsProvider>);
+  // The playhead sits where the transport was paused.
+  const clock = createPlayheadClock(PAUSED_AT);
+  render(
+    <SettingsProvider>
+      <PlayheadClockContext.Provider value={clock}><Harness /></PlayheadClockContext.Provider>
+    </SettingsProvider>,
+  );
   return {
     notices,
     add: () => act(() => { controller?.addAtPlayhead?.(); }),
@@ -74,7 +81,6 @@ describe('CueEditorPanel duplicate guard', () => {
     return mountPanel(docWith(layer), ({ doc, onDocChange, controllerRef, onDuplicateSkipped }) => (
       <CueEditorPanel
         ref={controllerRef}
-        currentTime={PAUSED_AT}
         doc={doc}
         onDocChange={onDocChange}
         selectedLayerId={layer.id}
@@ -116,7 +122,6 @@ describe('SpanEditorPanel duplicate guard', () => {
     return mountPanel(docWith(layer), ({ doc, onDocChange, controllerRef, onDuplicateSkipped }) => (
       <SpanEditorPanel
         ref={controllerRef}
-        currentTime={PAUSED_AT}
         duration={200}
         doc={doc}
         onDocChange={onDocChange}

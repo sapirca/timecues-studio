@@ -57,7 +57,6 @@ function mountAndArm() {
   const view = render(
     <MetronomePanel
       songInfo={songInfo}
-      playerTime={0}
       playerIsPlaying={false}
       clickEnabled={enabled}
       onClickEnabledChange={(next) => { enabled = next; }}
@@ -100,7 +99,6 @@ describe('MetronomePanel resource release', () => {
     const view = render(
       <MetronomePanel
         songInfo={songInfo}
-        playerTime={0}
         playerIsPlaying={false}
         clickEnabled={false}
         onClickEnabledChange={() => {}}

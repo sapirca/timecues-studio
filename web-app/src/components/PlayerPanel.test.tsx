@@ -29,6 +29,8 @@ class FakeWaveSurfer {
   getCurrentTime() { return this.now; }
   getScroll() { return 0; }
   setScroll() {}
+  getWrapper() { return document.createElement('div'); }
+  getPlaybackRate() { return 1; }
   setTime(t: number) { this.setTimeCalls.push(t); this.now = t; }
   zoom() {}
   isPlaying() { return false; }

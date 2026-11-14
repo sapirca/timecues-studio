@@ -21,6 +21,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import ANALYSIS_DIR, REPO_ROOT, ANNOTATION_LAYERS_DIR as ANNOTATIONS_DIR  # noqa: E402
+from layers_timebase import with_seconds  # noqa: E402
 
 ALGO_FILES = {
     "allin1":       "allin1.json",
@@ -46,7 +47,7 @@ def boundary_items(doc: dict) -> list[dict]:
     A song may carry several boundary layers (a second reading of the same
     structure); the first is the reference, matching canvas order.
     """
-    layers = doc.get("layers")
+    layers = with_seconds(doc).get("layers")   # a Grid Lock file stores beats
     if not isinstance(layers, list):
         return []
     for layer in layers:

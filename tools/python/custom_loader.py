@@ -14,16 +14,23 @@ each file in isolation, and produces a registry where every entry is either:
 Every error message is structured (file/field/value/message) so the UI can
 render it inline next to the file.
 
-Files whose name starts with "_" (e.g. _template.py, _example_energy.py) or
-"." are ignored at scan time — they are scaffold / hidden helpers.
+Detectors may also sit one level down, in a package folder
+(custom/<package>/<file>.py) — a folder of related detectors with a
+package.json that titles it, shared between people as a plain folder or zip.
+Only the .py files directly inside the package folder are detectors; code in
+its subfolders is helper code they import. See custom_packages.py.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import inspect
+import json
+import os
 import re
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -39,6 +46,7 @@ from custom_api import (  # noqa: E402
     RegistryEntry,
     ValidationError,
 )
+from paths import cache_name  # noqa: E402
 
 # Two folders, the same split as data/ and data-default/. custom-default/
 # holds the shipped examples and template — tracked, read-only from the app,
@@ -48,20 +56,31 @@ from custom_api import (  # noqa: E402
 CUSTOM_DIR = _THIS_DIR / "custom"
 DEFAULT_CUSTOM_DIR = _THIS_DIR / "custom-default"
 
+# A package is a folder inside either detector folder. Its package.json is
+# optional: without one the folder name is the title.
+PACKAGE_MANIFEST = "package.json"
+PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
+
+# The detectors archived from the Playground — custom/archived.json — by the `name` written in their
+# file: {"detectors": ["old_pulse", …]}. A list beside the files rather than a
+# flag in them, so archiving never rewrites a detector's source, a shipped
+# example can be archived too, and restoring puts it back exactly where it was.
+ARCHIVE_FILE_NAME = "archived.json"
+
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
 LABEL_MAX = 80
-# `loop` and `pattern` validate fine here but are filtered out of the registry
+# `loop` and `riff` validate fine here but are filtered out of the registry
 # response by custom_server when the experimentalLoopsAndPatterns flag is off.
-ALLOWED_OUTPUT_KIND = {"boundary", "cue", "span", "loop", "pattern", "lyrics"}
+ALLOWED_OUTPUT_KIND = {"boundary", "cue", "span", "loop", "riff", "lyrics", "lanes"}
 # Demucs stem a detector reads from, surfaced so the UI can label a layer with
 # its source stem and light it up while that stem is auditioned. "mix" means the
 # whole track (no single stem). Optional — None when the detector declares none.
 ALLOWED_STEM = {"vocals", "drums", "bass", "other", "guitar", "piano", "mix"}
-# Output kinds gated by the experimentalLoopsAndPatterns UI flag. The server
-# filters these from the registry response when the flag is off, mirroring the
-# annotation-tab gating in the web app.
-EXPERIMENTAL_LOOPS_PATTERNS_KINDS = {"loop", "pattern"}
-
+# Filed apart from every stem: a detector that reads several stems into ONE lane
+# and never the full mix (Pulse, Call & response). Filing it under "mix" said it
+# read the mix; under one of its stems, that the rest of its lane came from
+# there. Only as a single `stem` — never in a per-stem list or in stem_parts.
+SEVERAL_STEMS = "stems"
 # Module-name → pip-package-name for the cases where they differ. For modules
 # not in this table the install suggestion is just `pip install <module>`.
 _MODULE_TO_PACKAGE: dict[str, str] = {
@@ -106,9 +125,27 @@ def scan() -> list[RegistryEntry]:
     `name` collisions across files yield validation_error on every conflicting
     file (loader does not silently choose a winner).
     """
-    entries: list[RegistryEntry] = [_load_one(path) for path in detector_files()]
+    # The registry imports every detector, so a generator edited since the
+    # server started has to be dropped here too, not only before a run — or
+    # the list the sidebar draws marks every detector that imports a renamed
+    # or added generator function as failing to load.
+    _evict_stale_generators()
+    entries: list[RegistryEntry] = []
+    for entry in (_load_one(path) for path in detector_files()):
+        if not entry.base_name:
+            entry.base_name = entry.name
+        entries.extend(_per_stem(entry))
+    titles: dict[str, str] = {}
+    archived = archived_names()
     for e in entries:
+        e.archived = (e.base_name or e.name) in archived
         e.is_default = is_default_file(Path(e.file))
+        pkg = package_of(Path(e.file))
+        if pkg is not None:
+            e.package = pkg.name
+            if pkg.name not in titles:
+                titles[pkg.name] = read_package(pkg.name)["title"]
+            e.package_title = titles[pkg.name]
 
     # Detect duplicate names across files (only among ok entries).
     name_counts: dict[str, int] = {}
@@ -133,6 +170,22 @@ def scan() -> list[RegistryEntry]:
     return sorted(entries, key=lambda e: (_status_rank(e.status), e.name))
 
 
+def _per_stem(entry: RegistryEntry) -> list[RegistryEntry]:
+    """A detector declaring several stems, as one entry per stem.
+
+    Each is `<name>__<stem>` ("mix" keeps the bare name), reads that stem, and
+    is otherwise the same detector — so everything keyed by detector name (the
+    cache, lanes, annotations, the batch runner) treats each stem as its own
+    detector without knowing this happened."""
+    if entry.status != "ok" or not entry.stems:
+        return [entry]
+    return [
+        dataclasses.replace(entry, name=cache_name(entry.base_name, s), stem=s,
+                            errors=list(entry.errors))
+        for s in entry.stems
+    ]
+
+
 class DetectorLoadError(ValueError):
     """Raised by load_detector when the entry can't be loaded.
 
@@ -143,6 +196,36 @@ class DetectorLoadError(ValueError):
     def __init__(self, message: str, hint: Optional[dict] = None) -> None:
         super().__init__(message)
         self.hint = hint
+
+
+GENERATORS_DIR = _THIS_DIR / "generators"
+# When the `generators` package now in sys.modules was imported — process start
+# until the first eviction below.
+_generators_loaded_at = time.time()
+
+
+def _evict_stale_generators() -> None:
+    """Drop every cached `generators.*` module once any of their files changes.
+
+    A detector file is re-imported per run, but the `generators` modules it
+    imports are cached for the life of the server, and every run is forked
+    from that cache. Editing one generator while the server is up then leaves
+    the old copy answering, and a sibling imported fresh from disk asks it for
+    a function it doesn't have: `pulse` failed with "cannot import name
+    'hit_verdicts' from 'generators.pulse'" until the server was restarted.
+    All of them go at once, so the next import sees one consistent version.
+    """
+    global _generators_loaded_at
+    try:
+        newest = max(f.stat().st_mtime for f in GENERATORS_DIR.glob("*.py"))
+    except (OSError, ValueError):
+        return
+    if newest <= _generators_loaded_at:
+        return
+    for mod_name in [m for m in sys.modules if m == "generators" or m.startswith("generators.")]:
+        sys.modules.pop(mod_name, None)
+    importlib.invalidate_caches()
+    _generators_loaded_at = time.time()
 
 
 def load_detector(name: str) -> CustomDetector:
@@ -168,19 +251,26 @@ def load_detector(name: str) -> CustomDetector:
                 f"detector {name!r} did not load cleanly: {msgs}",
                 hint=hint,
             )
+        _evict_stale_generators()
         cls = _import_detector_class(Path(entry.file))
         if cls is None:
             raise DetectorLoadError(f"detector {name!r} class not found in {entry.file}")
-        return cls()  # type: ignore[abstract]
+        detector = cls()  # type: ignore[abstract]
+        # One run of a detector that declares several stems: this instance
+        # reads only the stem its entry stands for.
+        detector.stem = entry.stem
+        return detector
     raise DetectorLoadError(f"detector {name!r} not found in {CUSTOM_DIR}")
 
 
 def detector_files() -> list[Path]:
-    """Every candidate detector file, custom/ first and then custom-default/.
+    """Every candidate detector file, custom/ first and then custom-default/:
+    the loose files at the top of each folder, and the top-level files of every
+    package folder inside it.
 
-    A file in custom/ shadows the shipped one with the same filename, the way
-    data/ shadows data-default/ — that is what editing an example from the app
-    leaves behind (see custom_server.write_script), and it keeps the Docker
+    A file in custom/ shadows the shipped one at the same relative path, the
+    way data/ shadows data-default/ — that is what editing an example from the
+    app leaves behind (see custom_server.write_script), and it keeps the Docker
     volume's older seeded copies of the examples from colliding by name.
     """
     files: dict[str, Path] = {}
@@ -190,12 +280,187 @@ def detector_files() -> list[Path]:
         for path in folder.iterdir():
             if _is_user_file(path):
                 files.setdefault(path.name, path)
+            elif _is_package_dir(path):
+                for inner in path.iterdir():
+                    if _is_user_file(inner):
+                        files.setdefault(f"{path.name}/{inner.name}", inner)
     return [files[k] for k in sorted(files)]
 
 
 def is_default_file(path: Path) -> bool:
     """True when `path` is one of the shipped files in custom-default/."""
-    return path.resolve().parent == DEFAULT_CUSTOM_DIR.resolve()
+    parent = path.resolve().parent
+    root = DEFAULT_CUSTOM_DIR.resolve()
+    return parent == root or parent.parent == root
+
+
+# ─── Archive ─────────────────────────────────────────────────────────────────
+
+
+def archived_names() -> set[str]:
+    """The names in custom/archived.json. A missing or unreadable file archives nothing."""
+    try:
+        raw = json.loads((CUSTOM_DIR / ARCHIVE_FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    names = raw.get("detectors") if isinstance(raw, dict) else None
+    return {n for n in names if isinstance(n, str)} if isinstance(names, list) else set()
+
+
+def write_archived_names(names: set[str]) -> None:
+    CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
+    path = CUSTOM_DIR / ARCHIVE_FILE_NAME
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"detectors": sorted(names)}, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+# ─── Packages ────────────────────────────────────────────────────────────────
+
+
+def _is_package_dir(path: Path) -> bool:
+    """A subfolder of custom/ or custom-default/ that holds detectors. Dotted
+    and underscored folders are machinery (.trash, __pycache__), not packages."""
+    return path.is_dir() and not path.name.startswith((".", "_"))
+
+
+def package_of(path: Path) -> Optional[Path]:
+    """The package folder a detector file sits in, or None for a loose file."""
+    parent = path.resolve().parent
+    for root in (CUSTOM_DIR, DEFAULT_CUSTOM_DIR):
+        if parent.parent == root.resolve() and _is_package_dir(parent):
+            return parent
+    return None
+
+
+def package_folders(package_id: str) -> list[Path]:
+    """Where package `package_id` lives: its custom/ folder, its shipped one,
+    or both (an edited shipped package keeps its edits in custom/)."""
+    return [root / package_id for root in (CUSTOM_DIR, DEFAULT_CUSTOM_DIR)
+            if _is_package_dir(root / package_id)]
+
+
+def package_ids() -> list[str]:
+    ids: set[str] = set()
+    for root in (CUSTOM_DIR, DEFAULT_CUSTOM_DIR):
+        if root.is_dir():
+            ids.update(p.name for p in root.iterdir() if _is_package_dir(p))
+    return sorted(ids)
+
+
+def read_package(package_id: str) -> dict:
+    """The package's manifest, normalised. Every field is optional in the file;
+    a missing or broken package.json falls back to the folder name as title,
+    and a broken one says why in `manifest_error`."""
+    folders = package_folders(package_id)
+    raw: dict = {}
+    error: Optional[str] = None
+    for folder in folders:
+        manifest = folder / PACKAGE_MANIFEST
+        if not manifest.is_file():
+            continue
+        try:
+            loaded = json.loads(manifest.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                raw = loaded
+            else:
+                error = f"{PACKAGE_MANIFEST} must be a JSON object."
+        except (OSError, ValueError) as exc:
+            error = f"{PACKAGE_MANIFEST} could not be read: {exc}"
+        break
+
+    def text(key: str, limit: int) -> str:
+        v = raw.get(key)
+        return v.strip()[:limit] if isinstance(v, str) else ""
+
+    bundle = raw.get("bundle")
+    return {
+        "id": package_id,
+        "title": text("title", 80) or package_id.replace("_", " ").replace("-", " ").capitalize(),
+        "description": text("description", 500),
+        "author": text("author", 120),
+        "version": text("version", 40),
+        "bundle": [b for b in bundle if isinstance(b, str)] if isinstance(bundle, list) else [],
+        # "public": false keeps a package to signed-in team members: a demo or
+        # anonymous caller never sees its detectors, their source or their
+        # outputs (custom_server.py). For a package whose licences allow
+        # private use only — the server is ours, the demo is everyone's.
+        "public": raw.get("public") is not False,
+        "is_default": bool(folders) and all(
+            f.resolve().parent == DEFAULT_CUSTOM_DIR.resolve() for f in folders),
+        "manifest_error": error,
+    }
+
+
+# The package folder currently on sys.path. Detectors import their helpers
+# from their own package folder, so only one package's folder is on the path
+# at a time — two packages can each carry a helper module with the same name.
+_active_package: Optional[Path] = None
+
+
+_REALPATHS: dict[str, str] = {}
+
+
+def _realpath(file: str) -> str:
+    """os.path.realpath, remembered: a loaded module's file stays where it is."""
+    real = _REALPATHS.get(file)
+    if real is None:
+        real = _REALPATHS[file] = os.path.realpath(file)
+    return real
+
+
+def _activate_package(pkg: Optional[Path]) -> None:
+    """Put `pkg` (or no package, for a loose file) on sys.path for the next
+    import, and drop cached modules that would answer in its place: anything
+    imported from another package's folder, and any module named like one this
+    package carries but loaded from elsewhere. The folder stays on the path
+    after the import, for imports that detect() makes lazily."""
+    global _active_package
+    if _active_package is not None and str(_active_package) in sys.path:
+        sys.path.remove(str(_active_package))
+    _active_package = None
+
+    provided: set[str] = set()
+    if pkg is not None:
+        for child in pkg.iterdir():
+            if child.name.startswith((".", "__")):
+                continue
+            if child.is_dir():
+                provided.add(child.name)
+            elif child.suffix == ".py":
+                provided.add(child.stem)
+    # Plain string prefixes, not Path.parents: this runs once per detector
+    # file on every registry read, over every module the server has loaded
+    # (~1,900 once numpy, librosa and torch are in), and the Path version was
+    # 95% of a scan — 3.5 s of the Playground's wait.
+    roots = [str(r.resolve()) + os.sep for r in (CUSTOM_DIR, DEFAULT_CUSTOM_DIR)]
+    pkg_prefix = str(pkg.resolve()) + os.sep if pkg is not None else None
+
+    for mod_name, mod in list(sys.modules.items()):
+        mod_file = getattr(mod, "__file__", None)
+        if not mod_file:
+            continue
+        where = _realpath(mod_file)
+        if pkg_prefix is not None and where.startswith(pkg_prefix):
+            # The package's own helpers go too, and are imported fresh — as its
+            # detector files are on every run. Kept, they answer from whatever
+            # the server first loaded: a package's split.py was edited to write WAV
+            # and a manifest, and the running server went on writing FLAC.
+            # Nothing they cache is lost by it: detect() runs in a forked
+            # child, so the server only ever holds their import-time state.
+            sys.modules.pop(mod_name, None)
+            continue
+        in_other_package = any(
+            where.startswith(root) and os.sep in where[len(root):]
+            for root in roots
+        )
+        if in_other_package or mod_name.split(".", 1)[0] in provided:
+            sys.modules.pop(mod_name, None)
+
+    if pkg is not None:
+        sys.path.insert(0, str(pkg))
+        _active_package = pkg
+    importlib.invalidate_caches()
 
 
 # ─── Internals ───────────────────────────────────────────────────────────────
@@ -277,6 +542,7 @@ def _import_detector_class(
     after the user edits the file.
     """
     mod_name = f"_custom_{path.stem}_{abs(hash(str(path))) & 0xFFFFFFFF}"
+    _activate_package(package_of(path))
     spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
         raise _LoadError(f"could not create import spec for {path.name}")
@@ -355,14 +621,94 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
             f"must be one of {sorted(ALLOWED_OUTPUT_KIND)}.",
         ))
 
-    is_algorithm  = bool(getattr(cls, "is_algorithm", False))
-    is_annotation = bool(getattr(cls, "is_annotation", False))
-    if not (is_algorithm or is_annotation):
+    # `is_algorithm` is gone: every detector shows in Algorithm Inspect. A file
+    # that still sets it loads as before — the attribute is simply not read.
+    is_annotation = getattr(cls, "is_annotation", False)
+    if not isinstance(is_annotation, bool):
+        errors.append(_err("is_annotation", is_annotation, "must be True or False (or omitted)."))
+
+    # Must be a real bool: `review = "yes"` would otherwise read as True.
+    review = getattr(cls, "review", False)
+    if not isinstance(review, bool):
+        errors.append(_err("review", review, "must be True or False (or omitted)."))
+
+    windowable = getattr(cls, "windowable", False)
+    if not isinstance(windowable, bool):
+        errors.append(_err("windowable", windowable, "must be True or False (or omitted)."))
+
+    strictness = getattr(cls, "strictness", False)
+    if not isinstance(strictness, bool):
+        errors.append(_err("strictness", strictness, "must be True or False (or omitted)."))
+
+    drum_source = getattr(cls, "drum_source", False)
+    if not isinstance(drum_source, bool):
+        errors.append(_err("drum_source", drum_source, "must be True or False (or omitted)."))
+
+    section_source = getattr(cls, "section_source", False)
+    if not isinstance(section_source, bool):
+        errors.append(_err("section_source", section_source, "must be True or False (or omitted)."))
+
+    sources = getattr(cls, "sources", None) or None
+    if sources is not None and not (
+        isinstance(sources, dict)
+        and all(isinstance(k, str) and NAME_RE.match(k) for k in sources)
+        and all(isinstance(v, (tuple, list)) and len(v) in (2, 3)
+                and all(isinstance(x, str) for x in v) and 0 < len(v[0].strip()) <= 24
+                for v in sources.values())
+    ):
+        errors.append(_err("sources", sources,
+                           "must be a dict of name → (label, hint[, group]): names like detector names, "
+                           "labels 1-24 characters (or omitted)."))
+        sources = None
+
+    lane_sources = getattr(cls, "lane_sources", None) or None
+    if lane_sources is not None and not (isinstance(lane_sources, str) and NAME_RE.match(lane_sources)
+                                         and sources):
+        errors.append(_err("lane_sources", lane_sources,
+                           "must be a layer type such as \"lyrics\", on a detector that declares "
+                           "sources (or omitted)."))
+        lane_sources = None
+
+    reads_layers = getattr(cls, "reads_layers", False)
+    if not isinstance(reads_layers, bool):
+        errors.append(_err("reads_layers", reads_layers, "must be True or False (or omitted)."))
+
+    switches = getattr(cls, "switches", None) or None
+    if switches is not None and not (
+        isinstance(switches, dict)
+        and all(isinstance(k, str) and NAME_RE.match(k) for k in switches)
+        and all(isinstance(v, str) and 0 < len(v.strip()) <= 80 for v in switches.values())
+    ):
+        errors.append(_err("switches", switches,
+                           "must be a dict of name → label: names like detector names, "
+                           "labels 1-80 characters (or omitted)."))
+        switches = None
+
+    stem_parts = getattr(cls, "stem_parts", None)
+    if stem_parts is not None and not (
+        isinstance(stem_parts, dict) and stem_parts
+        and all(k in ALLOWED_STEM and k != "mix" for k in stem_parts)
+        and all(isinstance(v, list) and v and all(isinstance(p, str) and p.strip() for p in v)
+                for v in stem_parts.values())
+    ):
         errors.append(_err(
-            "is_algorithm/is_annotation", False,
-            "at least one of is_algorithm or is_annotation must be True — "
-            "otherwise the detector has nowhere to surface in the UI.",
+            "stem_parts", stem_parts,
+            "must map stems (not 'mix') to non-empty lists of label prefixes, "
+            "e.g. {'drums': ['Kick', 'Snare'], 'bass': ['Bass']} (or be omitted).",
         ))
+        stem_parts = None
+
+    # A "lanes" detector returns several lanes at once. Strictness, section
+    # runs (merged lane by lane), a run per stem and is_annotation (each lane
+    # with a layer to copy into is copied) work as for any detector; the
+    # features that act on ONE list of items — ✓/✗ on each item, parts of one
+    # lane — have nothing to act on.
+    if output_kind == "lanes":
+        if review is True:
+            errors.append(_err("review", review, 'is not available with output_kind = "lanes".'))
+        if stem_parts is not None:
+            errors.append(_err("stem_parts", stem_parts,
+                               'is not available with output_kind = "lanes" — use one Lane per part.'))
 
     detect_fn = getattr(cls, "detect", None)
     if not callable(detect_fn):
@@ -376,13 +722,45 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
     description = str(getattr(cls, "description", "") or "")
     version     = str(getattr(cls, "version", "") or "0.1")
 
-    # Optional source stem. Reject unknown values rather than silently dropping
-    # them, so a typo surfaces the same way a bad output_kind would.
+    # Optional source stem — one, or a list to be run once per stem. Reject
+    # unknown values rather than silently dropping them, so a typo surfaces
+    # the same way a bad output_kind would.
     stem = getattr(cls, "stem", None)
-    if stem is not None and stem not in ALLOWED_STEM:
+    stems: Optional[list[str]] = None
+    if isinstance(stem, (list, tuple)):
+        declared = list(stem)
+        stem = None
+        if not declared or any(not isinstance(s, str) or s not in ALLOWED_STEM for s in declared):
+            errors.append(_err(
+                "stem", declared,
+                f"a list of stems must be non-empty and hold only {sorted(ALLOWED_STEM)}.",
+            ))
+        elif len(set(declared)) != len(declared):
+            errors.append(_err("stem", declared, "lists a stem more than once."))
+        elif stem_parts:
+            errors.append(_err(
+                "stem", declared,
+                "a detector with stem_parts already reads several stems into ONE lane; "
+                "it cannot also be run once per stem. Use one or the other.",
+            ))
+        else:
+            stems = declared
+            # Every per-stem run is addressed as `<name>__<stem>` by the same
+            # routes that address a whole detector, so it must fit their name.
+            too_long = [cache_name(name, s) for s in declared
+                        if isinstance(name, str) and not NAME_RE.match(cache_name(name, s))]
+            if too_long:
+                errors.append(_err(
+                    "name", name,
+                    f"is too long to run per stem: {', '.join(too_long)} exceed 31 characters. "
+                    "Shorten the name.",
+                ))
+    elif stem is not None and (not isinstance(stem, str)
+                               or (stem not in ALLOWED_STEM and stem != SEVERAL_STEMS)):
         errors.append(_err(
             "stem", stem,
-            f"must be one of {sorted(ALLOWED_STEM)} (or omitted).",
+            f"must be one of {sorted(ALLOWED_STEM)}, a list of them, "
+            f"'{SEVERAL_STEMS}' for one lane read from several stems, or omitted.",
         ))
 
     # Optional family/group label (free-form string, max 40 chars).
@@ -396,12 +774,24 @@ def _validate_class(cls: type[CustomDetector], path: Path) -> RegistryEntry:
         status=status,
         label=label if isinstance(label, str) else "",
         output_kind=output_kind if output_kind in ALLOWED_OUTPUT_KIND else "boundary",
-        is_algorithm=is_algorithm,
-        is_annotation=is_annotation,
+        is_annotation=is_annotation is True,
         description=description,
         version=version,
-        stem=stem if stem in ALLOWED_STEM else None,
+        stem=stem if isinstance(stem, str) and (stem in ALLOWED_STEM or stem == SEVERAL_STEMS) else None,
+        stems=stems,
+        base_name=name if isinstance(name, str) and name else path.stem,
         group=group,
+        review=review is True,
+        windowable=windowable is True,
+        stem_parts={k: list(v) for k, v in stem_parts.items()} if stem_parts else None,
+        strictness=strictness is True,
+        drum_source=drum_source is True,
+        section_source=section_source is True,
+        switches=dict(switches) if switches else None,
+        sources=[{"name": k, "label": v[0], "hint": v[1], **({"group": v[2]} if len(v) == 3 else {})}
+                 for k, v in sources.items()]
+        if sources else None,
+        lane_sources=lane_sources,
         errors=errors,
     )
 

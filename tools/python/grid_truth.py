@@ -31,6 +31,8 @@ untouched default. Scoring a tracker against a default grid measures nothing.
 
 from __future__ import annotations
 
+import math
+
 # Mirror of TIME_SIGNATURES_TO_BEATS in web-app/src/utils/beatGrid.ts.
 TIME_SIGNATURES_TO_BEATS = {
     "4/4": 4, "3/4": 3, "6/8": 6, "5/4": 5, "7/8": 7, "2/4": 2, "12/8": 12,
@@ -81,6 +83,7 @@ def resolve_segments(info: dict) -> "list[dict]":
     closes it with the audio duration).
     """
     opening = {
+        "id":             "opening",
         "start":          float(info.get("gridOffset") or 0.0),
         "bpm":            float(info.get("bpm") or 0.0),
         "time_signature": info.get("timeSignature") or "4/4",
@@ -96,6 +99,7 @@ def resolve_segments(info: dict) -> "list[dict]":
         if bpm <= 0:
             continue
         stored.append({
+            "id":             str(seg.get("id") or ""),
             "start":          start,
             "bpm":            bpm,
             "time_signature": seg.get("timeSignature") or "4/4",
@@ -175,7 +179,11 @@ def is_trustworthy(info: dict) -> "tuple[bool, str]":
     mode = info.get("gridMode") or "static"
     if mode == "dynamic" and info.get("tempoAnchors"):
         return False, "Drifting grid — tempoAnchors are not expanded here"
-    if info.get("beatOverrides"):
+    # Overrides, like splits, are inert outside Manual mode — the UI keeps them
+    # as orphan data (getActiveBeatOverrideCount in types/songInfo.ts). Refusing
+    # on them anyway threw away toast3d_peter_the_wolf's static 145 BPM grid,
+    # which folds the drums to 0.98 depth, over three pinned beats it never draws.
+    if mode == "manual" and info.get("beatOverrides"):
         return False, "Hand-placed grid — per-beat overrides are not expanded here"
 
     has_splits = bool(info.get("gridSegments")) and segments_are_active(info)
@@ -194,3 +202,118 @@ def is_trustworthy(info: dict) -> "tuple[bool, str]":
         # PHASE is not, and phase is most of what we are measuring.
         return True, "offset is exactly 0 — downbeat may never have been aligned"
     return True, ""
+
+
+# ─── The grid the annotator sees ────────────────────────────────────────────
+#
+# `expand` is ground truth for scoring trackers, so it keeps only what a
+# curator placed after bar 1. A detector needs more: the grid exactly as the
+# app draws it, so what it cuts at lands on the lines the annotator sees.
+# Mirror of beatTimeAt() / beatsInRange() in web-app/src/utils/beatGrid.ts and
+# buildResolved() / readBeatOverride() in web-app/src/utils/gridSegments.ts.
+
+# gridSegments.ts: CUT_EPS_SEC — a split this close to a beat line lands ON it.
+_CUT_EPS_SEC = 0.003
+_EPS = 1e-6
+
+
+def user_grid(info: "dict | None", duration: float) -> "tuple[list[float], list[float]]":
+    """(beat_times, downbeat_times) in seconds within [0, duration] — the song's
+    grid as the app draws it. Empty when the song has no BPM.
+
+    Differs from `expand` in the two places where the app differs from a list
+    of curated beats: the pulse runs on BEFORE bar 1 (the pickup, negative beat
+    indices, downbeats by sign-safe modulo), and in Manual mode a hand-placed
+    beat sits where the annotator put it.
+    """
+    if not info or float(info.get("bpm") or 0.0) <= 0:
+        return [], []
+    segs = [s for s in resolve_segments(info) if s["bpm"] > 0]
+    if not segs:
+        return [], []
+    overrides = info.get("beatOverrides") if (info.get("gridMode") or "static") == "manual" else None
+    overrides = overrides if isinstance(overrides, dict) else {}
+    split = len(segs) > 1
+
+    beats: "list[tuple[float, bool]]" = []
+    offset = 0                                   # beatIndexOffset of the segment
+    for k, seg in enumerate(segs):
+        dur = 60.0 / seg["bpm"]
+        per_bar = seg["beats_per_bar"]
+        end = seg["end"]
+        if end is not None:
+            tol = max(_EPS, _CUT_EPS_SEC / dur)
+            count = max(0, math.ceil((end - seg["start"]) / dur - tol))
+        else:
+            count = max(0, math.floor((duration - seg["start"]) / dur) + 1)
+        # Only the opening segment runs backwards, through the pickup.
+        first = -math.floor(seg["start"] / dur) if k == 0 else 0
+        for local in range(first, count):
+            index = offset + local
+            pinned = None
+            if overrides:
+                key = f"{seg['id']}:{local}" if split else str(index)
+                v = overrides.get(key, overrides.get(str(index)))
+                if isinstance(v, (int, float)) and math.isfinite(v):
+                    pinned = float(v)
+            t = pinned if pinned is not None else seg["start"] + local * dur
+            if 0.0 <= t <= duration:
+                beats.append((t, local % per_bar == 0))
+        offset += count
+
+    beats.sort(key=lambda b: b[0])
+    return [t for t, _ in beats], [t for t, down in beats if down]
+
+
+# ─── Which beat grid an algorithm runs on ────────────────────────────────────
+#
+# A few algorithms (msaf, ruptures, LoCoMotif) cut their features per beat. The
+# annotator chooses, per run, whose beats those are: the song's grid as they
+# set it ("user", the default) or the algorithm's own tracked beats ("auto").
+# The result records the choice under "grid", and a cached result counts only
+# for the grid it was made on.
+
+GRID_CHOICES = ("user", "auto")
+
+NO_USER_GRID_MESSAGE = ("This song has no beat grid yet — set its BPM and bar 1 in Dataset Prep "
+                        "→ Song Setup, or run with the automatic grid.")
+
+
+class NoUserGrid(Exception):
+    """'Run on my grid' was asked for a song with no BPM."""
+
+    def __init__(self):
+        super().__init__(NO_USER_GRID_MESSAGE)
+
+
+def grid_choice(body: dict) -> str:
+    """The run's grid from a request body; the annotator's unless it says "auto"."""
+    return "auto" if str((body or {}).get("grid", "")).strip().lower() == "auto" else "user"
+
+
+def cached_grid(result: dict) -> str:
+    """The grid a saved result was made on. Results from before the choice
+    existed carry no field, and were all made on the algorithm's own beats."""
+    return "user" if (result or {}).get("grid") == "user" else "auto"
+
+
+def user_beats(slug: str, duration: float) -> list[float]:
+    """The song's beats in seconds, exactly as the app draws its grid (tempo
+    splits and hand-placed beats included). Raises NoUserGrid when the song
+    has no BPM."""
+    import json
+
+    from paths import DEFAULT_SONG_INFO_DIR, SONG_INFO_DIR
+
+    for root in (SONG_INFO_DIR, DEFAULT_SONG_INFO_DIR):
+        p = root / f"{slug}.json"
+        if p.is_file():
+            try:
+                info = json.loads(p.read_text())
+            except Exception:
+                continue
+            beats, _downs = user_grid(info, duration)
+            if len(beats) >= 4:
+                return beats
+            break
+    raise NoUserGrid()

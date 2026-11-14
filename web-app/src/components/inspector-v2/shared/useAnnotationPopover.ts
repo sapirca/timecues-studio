@@ -119,6 +119,12 @@ export function useAnnotationPopover(opts: UseAnnotationPopoverOptions = {}) {
     setOpen({ layerId, itemId, anchor: anchor ?? null });
   }, [close]);
 
+  // The open item moved to another lane (the card's lane picker): follow it
+  // there without closing, so the card stays put and keeps its place.
+  const retarget = useCallback((layerId: string) => {
+    setOpen((o) => (o ? { ...o, layerId } : o));
+  }, []);
+
   // Join the exclusivity registry for as long as this popover is open.
   useEffect(() => {
     if (!open) return;
@@ -157,7 +163,7 @@ export function useAnnotationPopover(opts: UseAnnotationPopoverOptions = {}) {
   const h = measured?.h ?? height;
   // Cap height to the viewport and scroll internally, so a very tall card is
   // always fully on-screen instead of being clipped off the bottom.
-  const fit: CSSProperties = { maxHeight: `calc(100vh - ${2 * margin}px)`, overflowY: 'auto' };
+  const fit: CSSProperties = { maxHeight: `calc(100 * var(--vh-u, 1vh) - ${2 * margin}px)`, overflowY: 'auto' };
   // Just right of the click, just below it. When the card would run off the
   // right edge it FLIPS to the left of the click rather than sliding back
   // over it: these clicks often come from the right-hand sidebar, where a
@@ -176,5 +182,5 @@ export function useAnnotationPopover(opts: UseAnnotationPopoverOptions = {}) {
       }
     : { position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', ...fit };
 
-  return { open, popoverRef, positionStyle, openAt, close, setCloseGuard };
+  return { open, popoverRef, positionStyle, openAt, close, setCloseGuard, retarget };
 }

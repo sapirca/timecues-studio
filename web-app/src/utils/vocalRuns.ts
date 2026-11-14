@@ -123,9 +123,9 @@ function snapBarCeil(t: number, grid: VocalRunGrid | undefined): number {
   return t - b.floor <= PROMINENCE_EPSILON ? b.floor : b.ceil;
 }
 
-/** The stretch one lyric item occupies. Words are instants; only `kind: 'line'`
- *  items carry an `end`, and a malformed one that ends before it starts is read
- *  as the instant it starts on rather than as a negative span. */
+/** The stretch one lyric item occupies. Every lyric carries an `end` once its
+ *  layer has loaded (withLyricSpans); a malformed one that ends before it
+ *  starts is read as the instant it starts on rather than as a negative span. */
 function spanOf(item: LyricsItem): { start: number; end: number } {
   const start = item.time;
   const end = item.end !== undefined && item.end > item.time ? item.end : item.time;

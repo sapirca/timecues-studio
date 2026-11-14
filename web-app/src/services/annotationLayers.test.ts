@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   loadLayers,
+  loadLayersForEdit,
   saveLayers,
   addLayer,
   removeLayer,
   updateLayer,
   reorderLayers,
+  duplicateLayer,
 } from './annotationLayers';
 import {
   emptyDocument,
@@ -13,13 +15,11 @@ import {
   newSpanLayer,
   newCueItem,
   newSpanItem,
-  type AnnotationLayer,
   type AnnotationLayersDocument,
   type CueItem,
 } from '../types/annotationLayer';
 import {
-  normalizePatternAccents, resizeRiffNodeLength, resizeRiffNodeSubdivision,
-  normalizeStepAccents, accentOpacity,
+  accentOpacity,
   flattenRiffEntry, findFirstRiffNodeOccurrence, RIFF_NODE_SILENCE_ID,
   nodeEntryLengthSteps, defaultRiffEntryLength,
   type RiffNode, type RiffCombo, type RiffPatternItem,
@@ -100,6 +100,29 @@ describe('annotation-layers immutable helpers', () => {
     expect(a.name).toBe('A');
   });
 
+  it('duplicateLayer inserts an independent copy right below the source', () => {
+    const a = newCueLayer('Kicks', '#111');
+    a.items = [newCueItem(1, 'kick')];
+    a.groupId = 'g1';
+    const b = newCueLayer('B', '#222');
+    const doc = { ...emptyDocument('s'), layers: [a, b] };
+    const next = duplicateLayer(doc, a.id, 'copy-id');
+    expect(next.layers.map((l) => l.id)).toEqual([a.id, 'copy-id', b.id]);
+    const copy = next.layers[1];
+    expect(copy.name).toBe('Kicks copy');
+    expect(copy.groupId).toBe('g1');
+    expect(copy.items).toEqual(a.items);
+    expect(copy.items).not.toBe(a.items);
+    expect(copy.items[0]).not.toBe(a.items[0]);
+  });
+
+  it('duplicateLayer leaves read-only and unknown layers alone', () => {
+    const a = { ...newCueLayer('Det', '#111'), readOnly: true };
+    const doc = { ...emptyDocument('s'), layers: [a] };
+    expect(duplicateLayer(doc, a.id)).toBe(doc);
+    expect(duplicateLayer(doc, 'nope')).toBe(doc);
+  });
+
   it('reorderLayers moves a layer to a new index', () => {
     const a = newCueLayer('A', '#111');
     const b = newCueLayer('B', '#222');
@@ -163,77 +186,6 @@ describe('annotation-layers JSON roundtrip', () => {
 // occurrence lasts. loadLayers() must wrap each one in { type, lengthSteps },
 // defaulting legacy entries to one bar (RIFF_DEFAULT_ENTRY_STEPS).
 
-describe('annotation-layers legacy riff-sequence migration', () => {
-  it('wraps legacy bare-id sequences in { type, lengthSteps } on load', async () => {
-    const legacyDoc = {
-      song: 'old-riff-song',
-      annotated_at: '2026-08-01T00:00:00.000Z',
-      layers: [
-        {
-          id: 'layer-1',
-          name: 'riff layer',
-          type: 'riff-patterns',
-          visible: true,
-          color: '#818cf8',
-          snap: 'bar',
-          nodes: [{ id: 'node-1', name: 'Node 1', color: '#f97316', highlightedBeats: [], spans: [], stepsPerCycle: 16 }],
-          combos: [{ id: 'combo-1', name: 'Combo 1', color: '#818cf8', sequence: ['node-1', 'node-1'] }],
-          items: [
-            {
-              id: 'item-1', start: 0, end: 2, label: 'verse riff',
-              repeatCount: 1, sequence: ['node-1', 'combo-1'], // legacy bare ids
-            },
-          ],
-        },
-      ],
-    };
-    mockFetchOnce({ ok: true, body: legacyDoc });
-    const doc = await loadLayers('old-riff-song');
-    const layer = doc.layers[0] as AnnotationLayer<'riff-patterns'>;
-    expect(layer.combos?.[0].sequence).toEqual([
-      { type: 'node-1', lengthSteps: 16 },
-      { type: 'node-1', lengthSteps: 16 },
-    ]);
-    expect(layer.items[0].sequence).toEqual([
-      { type: 'node-1', lengthSteps: 16 },
-      { type: 'combo-1', lengthSteps: 16 },
-    ]);
-    // Legacy node has no `subbeatsPerBeat` — migrated to the default (4).
-    expect(layer.nodes?.[0].subbeatsPerBeat).toBe(4);
-  });
-
-  it('leaves already-migrated riff sequences and node subdivisions untouched', async () => {
-    const modernDoc = {
-      song: 's',
-      annotated_at: 'now',
-      layers: [
-        {
-          id: 'layer-1',
-          name: 'riff layer',
-          type: 'riff-patterns',
-          visible: true,
-          color: '#818cf8',
-          snap: 'bar',
-          nodes: [{ id: 'node-1', name: 'Node 1', color: '#f97316', highlightedBeats: [], spans: [], stepsPerCycle: 12, subbeatsPerBeat: 3 }],
-          combos: [],
-          items: [
-            {
-              id: 'item-1', start: 0, end: 2, label: 'verse riff',
-              repeatCount: 1, sequence: [{ type: 'node-1', lengthSteps: 8 }],
-            },
-          ],
-        },
-      ],
-    };
-    mockFetchOnce({ ok: true, body: modernDoc });
-    const doc = await loadLayers('s');
-    const layer = doc.layers[0] as AnnotationLayer<'riff-patterns'>;
-    expect(layer.items[0].sequence).toEqual([{ type: 'node-1', lengthSteps: 8 }]);
-    // Already has a (non-default) subbeatsPerBeat — migration leaves it as-is.
-    expect(layer.nodes?.[0].subbeatsPerBeat).toBe(3);
-  });
-});
-
 // ─── HTTP error paths return a safe empty document, never throw ─────────────
 
 describe('annotation-layers HTTP error handling', () => {
@@ -279,8 +231,8 @@ describe('annotation-layers saveLayers contract', () => {
       ...buildDocWithEveryLayerType(),
       annotated_at: '2020-01-01T00:00:00.000Z',  // stale
     };
-    const ok = await saveLayers('test-song', doc);
-    expect(ok).toBe(true);
+    const result = await saveLayers('test-song', doc);
+    expect(result.ok).toBe(true);
     expect(calls).toHaveLength(1);
     const sent = JSON.parse(calls[0].init!.body as string) as AnnotationLayersDocument;
     expect(sent.annotated_at).not.toBe('2020-01-01T00:00:00.000Z');
@@ -290,89 +242,84 @@ describe('annotation-layers saveLayers contract', () => {
     expect(doc.annotated_at).toBe('2020-01-01T00:00:00.000Z');
   });
 
-  it('returns false on HTTP failure', async () => {
+  it('fails without a conflict on HTTP failure', async () => {
     mockFetchOnce({ ok: false, status: 500 });
-    const ok = await saveLayers('test-song', emptyDocument('test-song'));
-    expect(ok).toBe(false);
+    const result = await saveLayers('test-song', emptyDocument('test-song'));
+    expect(result).toEqual({ ok: false, conflict: false });
   });
 
-  it('returns false when fetch throws', async () => {
+  it('fails without a conflict when fetch throws', async () => {
     global.fetch = vi.fn(async () => {
       throw new Error('offline');
     }) as typeof global.fetch;
-    const ok = await saveLayers('test-song', emptyDocument('test-song'));
-    expect(ok).toBe(false);
+    const result = await saveLayers('test-song', emptyDocument('test-song'));
+    expect(result).toEqual({ ok: false, conflict: false });
   });
 });
 
-describe('normalizePatternAccents', () => {
-  it('keeps ticks and spans disjoint — spans win over overlapping ticks', () => {
-    const r = normalizePatternAccents([2, 3, 8], [[2, 3]], 16);
-    expect(r.spans).toEqual([[2, 3]]);
-    expect(r.highlightedBeats).toEqual([8]); // 2 & 3 dropped (inside the span)
+// ─── Every save names the revision it was edited from ──────────────────────
+//
+// 2026-10-19: a song's file went from a dozen layers to two in one save — a
+// page holding an older copy wrote it whole over the newer one. The server
+// already refused a save from a stale revision; the client never said which
+// revision it had.
+
+describe('annotation-layers saveLayers revision check', () => {
+  const ifMatch = (init?: RequestInit) => (init?.headers as Record<string, string>)['If-Match'];
+
+  it('sends the loaded document\'s rev as If-Match and returns the new rev', async () => {
+    const { calls } = mockFetchOnce({ ok: true, body: { ok: true, rev: 8 } });
+    const result = await saveLayers('s', { ...emptyDocument('s'), rev: 7 });
+    expect(ifMatch(calls[0].init)).toBe('7');
+    expect(result).toEqual({ ok: true, rev: 8 });
   });
 
-  it('drops spans of length < 2 and out-of-range steps', () => {
-    const r = normalizePatternAccents([20, -1, 4], [[5, 1]], 16);
-    expect(r.spans).toEqual([]);
-    expect(r.highlightedBeats).toEqual([4]); // 20 (≥steps) and -1 removed
+  it('prefers an explicit baseRev over the document\'s own rev', async () => {
+    const { calls } = mockFetchOnce({ ok: true, body: { ok: true, rev: 13 } });
+    await saveLayers('s', { ...emptyDocument('s'), rev: 3 }, { baseRev: 12 });
+    expect(ifMatch(calls[0].init)).toBe('12');
   });
 
-  it('drops later spans that overlap earlier ones', () => {
-    const r = normalizePatternAccents([], [[2, 3], [3, 2]], 16);
-    expect(r.spans).toEqual([[2, 3]]);
+  it('names revision 0 for a document that never had a file', async () => {
+    const { calls } = mockFetchOnce({ ok: true, body: { ok: true, rev: 1 } });
+    await saveLayers('s', emptyDocument('s'));
+    expect(ifMatch(calls[0].init)).toBe('0');
   });
 
+  it('reports a stale-revision refusal as a conflict', async () => {
+    mockFetchOnce({ ok: false, status: 409, body: { error: 'stale revision', rev: 46 } });
+    const result = await saveLayers('s', { ...emptyDocument('s'), rev: 40 });
+    expect(result).toEqual({ ok: false, conflict: true });
+  });
+
+  it('does not call a shared-song lock refusal a conflict', async () => {
+    mockFetchOnce({ ok: false, status: 409, body: { reason: 'locked' } });
+    const result = await saveLayers('s', emptyDocument('s'));
+    expect(result).toEqual({ ok: false, conflict: false });
+  });
 });
 
-describe('resizeRiffNodeLength', () => {
-  it('divides a node into quarter-of-a-beat parts scaled to its own length', () => {
-    expect(resizeRiffNodeLength({ highlightedBeats: [], spans: [], subbeatsPerBeat: 4 }, 1).stepsPerCycle).toBe(4); // 1 beat
-    expect(resizeRiffNodeLength({ highlightedBeats: [], spans: [], subbeatsPerBeat: 4 }, 4).stepsPerCycle).toBe(16); // 1 bar (4 beats)
-    expect(resizeRiffNodeLength({ highlightedBeats: [], spans: [], subbeatsPerBeat: 4 }, 0.5).stepsPerCycle).toBe(2); // half a beat
+describe('loadLayersForEdit', () => {
+  it('returns an empty document only when the song has no file', async () => {
+    mockFetchOnce({ ok: true, body: null });
+    const doc = await loadLayersForEdit('new-song');
+    expect(doc.layers).toEqual([]);
+    expect(doc.rev).toBeUndefined();
   });
 
-  it('uses the node\'s own subbeatsPerBeat resolution, not the fixed default', () => {
-    // A triplet-feel node (3 steps/beat) at 1 beat long → 3 steps, not 4.
-    expect(resizeRiffNodeLength({ highlightedBeats: [], spans: [], subbeatsPerBeat: 3 }, 1).stepsPerCycle).toBe(3);
-    expect(resizeRiffNodeLength({ highlightedBeats: [], spans: [], subbeatsPerBeat: 1 }, 4).stepsPerCycle).toBe(4);
+  it('keeps the file\'s rev', async () => {
+    mockFetchOnce({ ok: true, body: { ...emptyDocument('s'), rev: 46 } });
+    expect((await loadLayersForEdit('s')).rev).toBe(46);
   });
 
-  it('clamps existing ticks/spans that fall outside a shrunk grid', () => {
-    // 1 bar (16 steps) shrunk to 1 beat (4 steps) — tick at 8 and the span
-    // starting at 10 no longer fit and must be dropped, not just left dangling.
-    const r = resizeRiffNodeLength({ highlightedBeats: [1, 8], spans: [[10, 2]], subbeatsPerBeat: 4 }, 1);
-    expect(r.stepsPerCycle).toBe(4);
-    expect(r.highlightedBeats).toEqual([1]);
-    expect(r.spans).toEqual([]);
-  });
-});
-
-describe('resizeRiffNodeSubdivision', () => {
-  it('rescales stepsPerCycle to preserve the node\'s length in beats', () => {
-    // 1 bar at 4 steps/beat = 16 steps; switching to 3 steps/beat (triplet
-    // feel) keeps the same 4-beat length but recomputes to 12 steps.
-    const r = resizeRiffNodeSubdivision(
-      { stepsPerCycle: 16, highlightedBeats: [], spans: [], subbeatsPerBeat: 4 }, 3,
-    );
-    expect(r.stepsPerCycle).toBe(12);
-    expect(r.subbeatsPerBeat).toBe(3);
+  it('throws on an HTTP error instead of showing the song empty', async () => {
+    mockFetchOnce({ ok: false, status: 500 });
+    await expect(loadLayersForEdit('s')).rejects.toThrow();
   });
 
-  it('remaps existing ticks proportionally rather than discarding them', () => {
-    // Halving resolution (4 -> 2 steps/beat) on a 1-bar (16-step) node halves
-    // the grid to 8 steps; a tick at step 8 (beat 3) should land at step 4.
-    const r = resizeRiffNodeSubdivision(
-      { stepsPerCycle: 16, highlightedBeats: [8], spans: [], subbeatsPerBeat: 4 }, 2,
-    );
-    expect(r.stepsPerCycle).toBe(8);
-    expect(r.highlightedBeats).toEqual([4]);
-  });
-
-  it('is a no-op when the requested resolution matches the current one', () => {
-    const node = { stepsPerCycle: 16, highlightedBeats: [2, 9], spans: [[4, 2]] as [number, number][], subbeatsPerBeat: 4 };
-    const r = resizeRiffNodeSubdivision(node, 4);
-    expect(r).toEqual(node);
+  it('throws when the response is not a layers document', async () => {
+    mockFetchOnce({ ok: true, body: { layers: 'not-an-array' } });
+    await expect(loadLayersForEdit('s')).rejects.toThrow();
   });
 });
 
@@ -384,7 +331,7 @@ describe('nodeEntryLengthSteps / defaultRiffEntryLength', () => {
     // desyncs the rendered chip grid from real playback time.
     const tripletNode: RiffNode = {
       id: 'nT', name: 'Triplet', color: '#fff',
-      highlightedBeats: [], spans: [], stepsPerCycle: 96, subbeatsPerBeat: 6,
+      segments: [], stepsPerCycle: 96, subbeatsPerBeat: 6,
     };
     expect(nodeEntryLengthSteps(tripletNode)).toBe(64);
     expect(defaultRiffEntryLength('nT', [tripletNode], [])).toBe(64);
@@ -393,7 +340,7 @@ describe('nodeEntryLengthSteps / defaultRiffEntryLength', () => {
   it('is a no-op at the default 4-steps/beat resolution', () => {
     const node: RiffNode = {
       id: 'nQ', name: 'Quarters', color: '#fff',
-      highlightedBeats: [], spans: [], stepsPerCycle: 16, subbeatsPerBeat: 4,
+      segments: [], stepsPerCycle: 16, subbeatsPerBeat: 4,
     };
     expect(nodeEntryLengthSteps(node)).toBe(16);
     expect(defaultRiffEntryLength('nQ', [node], [])).toBe(16);
@@ -409,8 +356,8 @@ describe('nodeEntryLengthSteps / defaultRiffEntryLength', () => {
 });
 
 describe('flattenRiffEntry', () => {
-  const nodeA: RiffNode = { id: 'nA', name: 'A', color: '#fff', highlightedBeats: [], spans: [], stepsPerCycle: 4, subbeatsPerBeat: 4 };
-  const nodeB: RiffNode = { id: 'nB', name: 'B', color: '#000', highlightedBeats: [], spans: [], stepsPerCycle: 8, subbeatsPerBeat: 4 };
+  const nodeA: RiffNode = { id: 'nA', name: 'A', color: '#fff', segments: [], stepsPerCycle: 4, subbeatsPerBeat: 4 };
+  const nodeB: RiffNode = { id: 'nB', name: 'B', color: '#000', segments: [], stepsPerCycle: 8, subbeatsPerBeat: 4 };
   const comboC: RiffCombo = {
     id: 'cC', name: 'C', color: '#abc',
     sequence: [
@@ -440,8 +387,8 @@ describe('flattenRiffEntry', () => {
 });
 
 describe('findFirstRiffNodeOccurrence', () => {
-  const nodeA: RiffNode = { id: 'nA', name: 'A', color: '#fff', highlightedBeats: [], spans: [], stepsPerCycle: 4, subbeatsPerBeat: 4 };
-  const nodeB: RiffNode = { id: 'nB', name: 'B', color: '#000', highlightedBeats: [], spans: [], stepsPerCycle: 8, subbeatsPerBeat: 4 };
+  const nodeA: RiffNode = { id: 'nA', name: 'A', color: '#fff', segments: [], stepsPerCycle: 4, subbeatsPerBeat: 4 };
+  const nodeB: RiffNode = { id: 'nB', name: 'B', color: '#000', segments: [], stepsPerCycle: 8, subbeatsPerBeat: 4 };
   const comboC: RiffCombo = {
     id: 'cC', name: 'C', color: '#abc',
     sequence: [
@@ -481,19 +428,8 @@ describe('findFirstRiffNodeOccurrence', () => {
   });
 });
 
-describe('step accents (per-step velocity)', () => {
-  it('drops accents outside the grid and clamps the rest into 1..127', () => {
-    const out = normalizeStepAccents({ 0: 120, 3: 200, 5: -4, 99: 60 }, 16);
-    expect(out).toEqual({ 0: 120, 3: 127, 5: 1 });
-  });
-
-  it('returns undefined rather than an empty map', () => {
-    expect(normalizeStepAccents(undefined, 16)).toBeUndefined();
-    expect(normalizeStepAccents({}, 16)).toBeUndefined();
-    expect(normalizeStepAccents({ 99: 100 }, 16)).toBeUndefined();
-  });
-
-  it('a step with no accent draws at full strength', () => {
+describe('accent drawing (per-note velocity)', () => {
+  it('a note with no accent draws at full strength', () => {
     expect(accentOpacity(undefined)).toBe(1);
     expect(accentOpacity(127)).toBe(1);
   });
@@ -503,41 +439,5 @@ describe('step accents (per-step velocity)', () => {
     expect(accentOpacity(1)).toBeGreaterThan(0.3);
     expect(accentOpacity(1)).toBeLessThan(accentOpacity(64));
     expect(accentOpacity(64)).toBeLessThan(accentOpacity(127));
-  });
-
-  it('trimming a node drops the accents of steps that are gone', () => {
-    const node = {
-      highlightedBeats: [0, 4, 8, 12], spans: [] as [number, number][],
-      subbeatsPerBeat: 4, accents: { 0: 120, 4: 60, 8: 110, 12: 55 },
-    };
-    const out = resizeRiffNodeLength(node, 2);   // 2 beats -> 8 steps
-    expect(out.stepsPerCycle).toBe(8);
-    expect(out.accents).toEqual({ 0: 120, 4: 60 });
-  });
-
-  it('changing subdivision carries each accent to the step it moved to', () => {
-    const node = {
-      stepsPerCycle: 16, subbeatsPerBeat: 4,
-      highlightedBeats: [0, 4, 8, 12], spans: [] as [number, number][],
-      accents: { 0: 120, 4: 60, 8: 110, 12: 55 },
-    };
-    const out = resizeRiffNodeSubdivision(node, 2);  // 4 beats at 2/beat -> 8 steps
-    expect(out.stepsPerCycle).toBe(8);
-    expect(out.accents).toEqual({ 0: 120, 2: 60, 4: 110, 6: 55 });
-  });
-
-  it('when two steps collapse onto one, the louder survives', () => {
-    const node = {
-      stepsPerCycle: 16, subbeatsPerBeat: 4,
-      highlightedBeats: [0, 1], spans: [] as [number, number][],
-      accents: { 0: 40, 1: 119 },
-    };
-    const out = resizeRiffNodeSubdivision(node, 1);  // 4 beats at 1/beat -> 4 steps
-    expect(out.accents?.[0]).toBe(119);
-  });
-
-  it('a node without accents stays without them', () => {
-    const node = { highlightedBeats: [0], spans: [] as [number, number][], subbeatsPerBeat: 4 };
-    expect(resizeRiffNodeLength(node, 4).accents).toBeUndefined();
   });
 });

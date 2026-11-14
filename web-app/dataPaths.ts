@@ -120,14 +120,7 @@ export const DATA_DIRS = {
   // Per-song reference lyrics text (one .txt per slug). Shared across
   // annotators since lyrics text is generally objective; used as the
   // alignment source for SOFA / ctc-forced-aligner when those land.
-  // Experimental: gated by `experimentalLyricsFamily` user setting.
   lyricsText: path.join(DATA_ROOT, 'lyrics-text'),
-
-  // Saved Setlists (per-annotator: <dir>/<annotator>/<name>.json). Each file
-  // is an ordered list of slugs + the scoring strategy that produced it. New
-  // top-level workspace at /setlist, gated by the `experimentalSetlist`
-  // user setting.
-  setlists: path.join(DATA_ROOT, 'setlists'),
 } as const
 
 // Single-file paths (not directories). Stored under DATA_ROOT.

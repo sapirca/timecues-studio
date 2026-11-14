@@ -36,12 +36,11 @@ export interface AnnotationPanelController {
   /** Insert a new item/section at the playhead.
    *
    *  `atTime` is the caller's own reading of the LIVE media clock, taken at
-   *  the instant of the keypress/click. Pass it whenever you have one: a
-   *  panel's `currentTime` prop is that number one rAF coalesce, one setState
-   *  and one full inspector re-render later, so a mark committed on the prop
-   *  lands where the playhead *was* — tens of milliseconds early on a heavy
-   *  tree, which is exactly the window an annotator is trying to hit. Omit it
-   *  and the panel falls back to the prop, as it always did. */
+   *  the instant of the keypress/click. Pass it whenever you have one: the
+   *  playhead clock a panel otherwise reads is that number one rAF coalesce
+   *  later, so a mark committed on it lands where the playhead *was* — the
+   *  window an annotator is trying to hit. Omit it and the panel falls back
+   *  to the playhead clock. */
   addAtPlayhead?: (atTime?: number) => void;
   /** Insert at the playhead into a specific layer, bypassing the panel's
    *  usual "selected → focused-item → first" fallback. Used by the layer

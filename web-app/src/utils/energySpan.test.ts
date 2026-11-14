@@ -3,6 +3,7 @@ import {
   adsrStages, analyzeGestures, brightnessPlotRange, buildEnergySpanExport, clipCurve,
   computeAdsrEnvelope, computeStemEnergySpan, energySpanLabel, envelopeCoverageNote,
   envelopeViewport, parseEnergySpanExport, peakSequenceNote, peakSequenceWord,
+  replaceOverlappingEnergySpans,
 } from './energySpan';
 import type { EnergySpanExport, EnvelopeExport } from './energySpan';
 
@@ -899,5 +900,104 @@ describe('a span straight out of the ⚡ export never reads as trimmed', () => {
 
   it('still notices a trim a hand could actually aim at', () => {
     expect(envelopeViewport(data, 120.107, 133.294)!.exact).toBe(false);
+  });
+});
+
+describe('the Beat strength and Flux lanes, measured on the span', () => {
+  // Quiet and steady for 2s, then a click every quarter second: the level
+  // barely moves, but the Flux lane (how much the sound changes) jumps, and
+  // Beat strength with it — each click reaches down into the bass.
+  function clicksAfter(onsetSec: number, durationSec: number): Float32Array {
+    const out = tone(durationSec, () => 0.1);
+    const every = Math.floor(0.25 * SAMPLE_RATE);
+    for (let i = Math.floor(onsetSec * SAMPLE_RATE); i < out.length; i += every) {
+      for (let j = 0; j < 200 && i + j < out.length; j++) out[i + j] += 0.8 * (1 - j / 200) * (j % 2 ? 1 : -1);
+    }
+    return out;
+  }
+
+  it('writes both on every curve point, each 0–1 against its own peak', () => {
+    const result = computeStemEnergySpan({ audioBuffer: fakeBuffer(clicksAfter(2, 4)), startSec: 0, endSec: 4 });
+
+    for (const p of result.curve) {
+      expect(p.beat_strength).toBeGreaterThanOrEqual(0);
+      expect(p.beat_strength).toBeLessThanOrEqual(1);
+      expect(p.flux).toBeGreaterThanOrEqual(0);
+      expect(p.flux).toBeLessThanOrEqual(1);
+    }
+    expect(Math.max(...result.curve.map((p) => p.flux!))).toBe(1);
+  });
+
+  it('shows the music getting busier where the clicks start', () => {
+    const result = computeStemEnergySpan({ audioBuffer: fakeBuffer(clicksAfter(2, 4)), startSec: 0, endSec: 4 });
+    const half = result.curve.length / 2;
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const flux = result.curve.map((p) => p.flux!);
+    const beat = result.curve.map((p) => p.beat_strength!);
+
+    expect(mean(flux.slice(half + 1))).toBeGreaterThan(mean(flux.slice(0, half - 1)) * 2);
+    expect(mean(beat.slice(half + 1))).toBeGreaterThan(mean(beat.slice(0, half - 1)));
+  });
+
+  it('carries both through the export', () => {
+    const result = computeStemEnergySpan({ audioBuffer: fakeBuffer(clicksAfter(2, 4)), startSec: 0, endSec: 4 });
+    const blob = buildEnergySpanExport({ songSlug: 's', stem: 'mix', startSec: 0, endSec: 4, result });
+
+    expect(blob.curve.every((p) => p.flux != null && p.beat_strength != null)).toBe(true);
+  });
+});
+
+describe('Beat strength on a span, against the song\'s beats', () => {
+  // A low thump on every beat (120 bpm) for 4s — eight beats, enough for the
+  // steadiness window — then 4s of a quiet pad.
+  function thumps(): Float32Array {
+    const out = new Float32Array(8 * SAMPLE_RATE);
+    for (const t of [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]) {
+      const i0 = Math.floor(t * SAMPLE_RATE);
+      for (let j = 0; j < 0.08 * SAMPLE_RATE && i0 + j < out.length; j++) {
+        out[i0 + j] += Math.sin(2 * Math.PI * 60 * (j / SAMPLE_RATE)) * (1 - j / (0.08 * SAMPLE_RATE));
+      }
+    }
+    for (let i = 4 * SAMPLE_RATE; i < out.length; i++) out[i] += 0.05 * Math.sin(2 * Math.PI * 330 * (i / SAMPLE_RATE));
+    return out;
+  }
+
+  it('is strong while the beat plays and gone once it stops', () => {
+    const beats = Array.from({ length: 17 }, (_, i) => i * 0.5);
+    const result = computeStemEnergySpan({
+      audioBuffer: fakeBuffer(thumps()), startSec: 0, endSec: 8, beatTimesSec: beats,
+    });
+    const b = result.curve.map((p) => p.beat_strength!);
+    const half = Math.floor(b.length / 2);
+    const mean = (xs: number[]) => xs.reduce((a, c) => a + c, 0) / xs.length;
+
+    expect(mean(b.slice(1, half - 1))).toBeGreaterThan(3 * mean(b.slice(half + 1, b.length - 1)));
+  });
+});
+
+describe('replaceOverlappingEnergySpans', () => {
+  const blob = (start: number, end: number, stem: string) => JSON.stringify({
+    type: 'energy_span', stem, start_ms: start * 1000, end_ms: end * 1000,
+    duration_ms: (end - start) * 1000, curve: [0.5],
+  });
+  const span = (id: string, start: number, end: number, stem: string | null = 'mix') =>
+    ({ id, start, end, description: stem ? blob(start, end, stem) : 'hand-written' });
+
+  it('re-measuring a passage replaces the earlier readings of it', () => {
+    const items = [span('a', 10, 20), span('b', 10, 20), span('c', 12, 15)];
+    const out = replaceOverlappingEnergySpans(items, span('new', 10, 20));
+    expect(out.map((s) => s.id)).toEqual(['new']);
+  });
+
+  it('keeps measurements elsewhere and spans that are not measurements', () => {
+    const items = [span('far', 30, 40), span('touching', 20, 25), span('manual', 10, 20, null)];
+    const out = replaceOverlappingEnergySpans(items, span('new', 10, 20));
+    expect(out.map((s) => s.id)).toEqual(['far', 'touching', 'manual', 'new']);
+  });
+
+  it('a reading of another stem over the same passage is kept', () => {
+    const items = [span('bass', 10, 20, 'bass'), span('drums', 10, 20, 'drums')];
+    const out = replaceOverlappingEnergySpans(items, span('new', 10, 20, 'drums'));
+    expect(out.map((s) => s.id)).toEqual(['bass', 'new']);
   });
 });

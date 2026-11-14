@@ -2303,9 +2303,7 @@ export function GlobalEvalStage({ audioFiles }: { audioFiles: AudioEntry[] }) {
         <GlobalEvalLoopTable audioFiles={audioFiles} />
       )}
 
-      {settings.experimentalLyricsFamily && (
-        <GlobalEvalLyricsTable audioFiles={audioFiles} />
-      )}
+      <GlobalEvalLyricsTable audioFiles={audioFiles} />
 
       <p className="text-[10px] text-gray-700 leading-relaxed">
         Each predicted boundary is paired one-to-one with the closest unmatched <strong className="text-gray-600">{evalRef}</strong> boundary

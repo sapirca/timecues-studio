@@ -16,19 +16,21 @@ import { BeatGridOverlay, type LaneGridProps } from './BeatGridOverlay';
 import { isOnGridLine } from '../../utils/snapIndication';
 import { SnapTick } from './SnapIndicator';
 import { useTimelineDrag, createEdgeItemClamp, useBodyMoveDrag } from '../../hooks/useTimelineDrag';
+import { isSelectToggle, useCrossLaneDrop, type CrossLaneDropOptions } from '../../hooks/useCrossLaneDrop';
 import { PendingHighlightOverlay, RegionDragOverlay, type PendingSelection } from './AnnotationOverlays';
 import { ReviewControls, reviewBgFor, type ReviewStatus } from './ReviewControls';
-import { MIN_BAND_PX } from './shared/bandGeometry';
+import { MIN_BAND_PX, withBandStart } from './shared/bandGeometry';
 import { BandEdgeHandle } from './shared/BandEdgeHandle';
+import { usePlayheadValue } from '../../hooks/usePlayhead';
+import { PlayheadLine } from '../Playhead';
 
 interface LoopLayerRowProps {
   items: LoopItem[];
   color: string;
   duration: number;
-  currentTime: number;
   height?: number;
-  /** When true, the loop under the playhead is highlighted (karaoke mode). */
-  karaokeActive?: boolean;
+  /** When true, the loop under the playhead is highlighted (the lane's Visualize switch). */
+  visualize?: boolean;
   focusedItemId?: string | null;
   /** Item whose edit popover is currently OPEN — gates the prominence editor.
    *  Distinct from `focusedItemId`, which lingers after the popover closes. */
@@ -57,6 +59,15 @@ interface LoopLayerRowProps {
   onSeek?: (time: number) => void;
   onRegion?: (t1: number, t2: number) => void;
   onRegionDragStart?: () => void;
+  /** Editable lane: a drag over empty space makes a loop over the dragged
+   *  stretch, in this lane (see laneCreate.ts), instead of the teal
+   *  highlight. Absent on detector lanes. */
+  onCreate?: (t1: number, t2: number) => void;
+  /** The snap `onCreate` applies, so the drag preview lands where the item will. */
+  createSnap?: (t: number) => number;
+  /** Drag an item onto another lane of the same type to move it there — see
+   *  useCrossLaneDrop. Absent on read-only lanes and wherever items can't move. */
+  laneDrop?: CrossLaneDropOptions;
   /** Detector-review mode. When set, loops become read-only and render inline ✓/✗. */
   reviewState?: Record<string, ReviewStatus>;
   onAccept?: (itemId: string) => void;
@@ -64,25 +75,26 @@ interface LoopLayerRowProps {
 }
 
 export function LoopLayerRow({
-  items, color, duration, currentTime, height = 22,
-  karaokeActive,
+  items, color, duration, height = 22,
+  visualize,
   focusedItemId, prominenceEditItemId, onProminenceChange, snapProminenceTime, playingItemId, onLoopClick,
   onLoopEdgeDrag, onLoopEdgeDragStart,
   onLoopMove, onLoopMoveStart,
   gridProps,
   pendingSelection,
-  onSeek, onRegion, onRegionDragStart,
+  onSeek, onRegion, onRegionDragStart, onCreate, createSnap,
   reviewState, onAccept, onReject,
+  laneDrop,
 }: LoopLayerRowProps) {
   const reviewMode = !!reviewState;
   const containerRef = useRef<HTMLDivElement>(null);
-  const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
-  // Karaoke: the loop whose [start, end) contains currentTime.
-  const activeId = useMemo(() => {
-    if (!karaokeActive) return null;
-    return items.find((l) => l.start <= currentTime && currentTime < l.end)?.id ?? null;
-  }, [karaokeActive, items, currentTime]);
+  // Visualize: the loop whose [start, end) contains the playhead. Derived from
+  // the clock, so the row re-renders only when that loop changes.
+  const activeId = usePlayheadValue((t) => {
+    if (!visualize) return null;
+    return items.find((l) => l.start <= t && t < l.end)?.id ?? null;
+  });
 
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -104,6 +116,7 @@ export function LoopLayerRow({
     onMoveStart: (id) => onLoopMoveStart?.(id),
     onMove: (id, ns, ne) => onLoopMove?.(id, ns, ne),
   });
+  const { beginLaneDrop } = useCrossLaneDrop(laneDrop);
   const moveEnabled = !!onLoopMove && !reviewMode;
 
   // The prominence editor only claims vertical space while a popover is open.
@@ -118,8 +131,8 @@ export function LoopLayerRow({
     <div
       ref={containerRef}
       className="flex-1 relative rounded overflow-hidden bg-gray-950"
-      style={{ height: height + (prominenceTarget ? PROMINENCE_EDIT_TOTAL_H + 2 : 0) }}
-      title={items.length === 0 ? 'No loops yet — add one from the Loops editor' : undefined}
+      style={{ minHeight: height + (prominenceTarget ? PROMINENCE_EDIT_TOTAL_H + 2 : 0) }}
+      title={items.length === 0 && !onCreate ? 'No loops yet — add one from the Loops editor' : undefined}
     >
       {gridProps && (
         <BeatGridOverlay {...gridProps} duration={duration} />
@@ -127,13 +140,14 @@ export function LoopLayerRow({
 
       {items.length === 0 && (
         <span className="absolute inset-0 flex items-center px-2 text-[10px] text-gray-700 italic select-none pointer-events-none">
-          no loops yet
+          {onCreate ? 'no loops yet — drag here to add one' : 'no loops yet'}
         </span>
       )}
 
       {/* Behind the bands (z="") — empty space falls through to seek / highlight-drag. */}
       {onSeek && onRegion && (
-        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onRegion} onRegionDragStart={onRegionDragStart} z="" />
+        <RegionDragOverlay duration={duration} onVizClick={onSeek} onVizRegion={onCreate ?? onRegion} onRegionDragStart={onCreate ? undefined : onRegionDragStart} onSelectRegion={laneDrop?.onSelectRange}
+          createColor={onCreate ? color : undefined} snapTime={onCreate ? createSnap : undefined} hint={onCreate ? 'Drag to add a loop · click to move the playhead · ⇧-drag to select the loops inside' : undefined} z="" />
       )}
 
       {items.map((loop) => {
@@ -143,7 +157,9 @@ export function LoopLayerRow({
         const isPlaying = loop.id === playingItemId;
         const isActive = loop.id === activeId;
         const status = reviewState?.[loop.id];
-        const bandColor = reviewMode ? reviewBgFor(color, status) : color;
+        // A loop can carry its own colour (set in its card) over the layer's.
+        const ownColor = loop.color ?? color;
+        const bandColor = reviewMode ? reviewBgFor(ownColor, status) : ownColor;
         const boxShadow = isPlaying
           ? `inset 0 0 0 2px ${bandColor}, 0 0 12px ${bandColor}aa`
           : isActive
@@ -156,12 +172,17 @@ export function LoopLayerRow({
         return (
           <div key={loop.id} className="contents">
             <button
+              data-item-id={loop.id}
               onPointerDown={(e) => {
                 if (!moveEnabled) return;
+                // A ⇧/⌘ press is a selection click, never a drag.
+                if (laneDrop && isSelectToggle(e)) return;
+                if (beginLaneDrop(loop.id, e)) return;
                 startBodyMove(loop.id, loop.start, loop.end, e);
               }}
               onClick={(e) => {
                 e.stopPropagation();
+                if (laneDrop && isSelectToggle(e)) { laneDrop.onToggleSelect(loop.id); return; }
                 if (wasDraggedRef.current) {
                   wasDraggedRef.current = false;
                   return;
@@ -182,9 +203,13 @@ export function LoopLayerRow({
                 background: status ? `${bandColor}ee`
                   : loop.prominence ? prominenceBandBackground(bandColor, isActive || isPlaying)
                   : isPlaying ? `${bandColor}99` : isActive ? `${bandColor}77` : `${bandColor}55`,
-                height,
-                boxShadow,
-                borderRight: '1px solid rgba(0,0,0,0.4)',
+                // Under the prominence editor the band keeps its own height;
+                // otherwise top-0/bottom-0 stretch it to whatever the row is.
+                height: prominenceTarget ? height : undefined,
+                boxShadow: withBandStart(bandColor, boxShadow),
+                // Selected for a cross-lane drag (⇧/⌘-click).
+                outline: laneDrop?.selectedIds.has(loop.id) ? '2px solid #ffffff' : undefined,
+                outlineOffset: -2,
                 opacity: 1,
               }}
               title={reviewMode
@@ -226,11 +251,9 @@ export function LoopLayerRow({
         );
       })}
 
-      {/* Playhead */}
       {prominenceTarget && onProminenceChange && (
         <ProminenceStrip
           points={prominenceTarget.prominence}
-          currentTime={currentTime}
           start={prominenceTarget.start}
           end={prominenceTarget.end}
           duration={duration}
@@ -243,9 +266,11 @@ export function LoopLayerRow({
         />
       )}
 
-      <div
+      {/* Playhead */}
+      <PlayheadLine
+        duration={duration}
         className="absolute top-0 bottom-0 w-px pointer-events-none z-10"
-        style={{ left: `${pct}%`, background: 'rgba(255,255,255,0.75)' }}
+        style={{ background: 'rgba(255,255,255,0.75)' }}
       />
       {pendingSelection && (
         <PendingHighlightOverlay sel={pendingSelection} duration={duration} grid={gridProps} />

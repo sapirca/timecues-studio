@@ -2,21 +2,32 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Fra
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { parseViewUrl, writeViewUrl, URL_LAYERS, URL_SIGNALS, type UrlLayer, type UrlSignal, type ViewUrlState } from '../utils/viewUrl';
-import { SharedVizPanel, DEFAULT_FIXED_ROW_ORDER, BEAT_GRID_UNIT_OPTIONS, type MirCurves, type BeatGridUnit, type VizRowId, type AlgoOverlay, type BoundaryColoringMode } from '../components/inspector-v2/SharedVizPanel';
-import { moveRowInOrder } from '../components/inspector-v2/layerGroupRows';
+import { createLaneItem, sameLayersDoc, withoutItem, type LaneCreateType, type LaneDraft } from '../components/inspector-v2/laneCreate';
+import { createRiffDraft, withoutRiffDraft, type RiffDraft } from '../components/inspector-v2/riffLaneEdit';
+import type { RiffLayerEdit } from '../components/inspector-v2/RiffLaneEditor';
+import { SharedVizPanel, DEFAULT_FIXED_ROW_ORDER, BEAT_GRID_UNIT_OPTIONS, type MirCurves, type BeatGridUnit, type VizRowId, type AlgoOverlay, type BoundaryColoringMode, type LaneRemove } from '../components/inspector-v2/SharedVizPanel';
+import { StemSourceSelect } from '../components/inspector-v2/StemSourcePicker';
+import { moveRowInOrder, reorderRow, type ReorderPlace } from '../components/inspector-v2/layerGroupRows';
 import type { LayerAudioConfig } from '../components/inspector-v2/LayerAudioControls';
 import type { PlayerAccent, ZoomToRange } from '../components/PlayerPanel';
 import { VizControlBar } from '../components/inspector-v2/VizControlBar';
 import { BoundaryEditorPanel } from '../components/inspector-v2/BoundaryEditorPanel';
 import { AnnotationLockBar } from '../components/inspector-v2/AnnotationLockBar';
+import { AfterSharedBar } from '../components/inspector-v2/AfterSharedBar';
 import { useAnnotationLock } from '../hooks/useAnnotationLock';
+import { useResizableSidebar } from '../hooks/useResizableSidebar';
+import { CollapsedSidebarRail, SidebarResizeHandle } from '../components/SidebarChrome';
 import { BoundaryEditPopover, useBoundaryEditPopover } from '../components/inspector-v2/BoundaryEditPopover';
 import { sectionEnd } from '../components/inspector-v2/sectionConstants';
 import {
   mergeBoundaryLanes, mergeLayerName, mergedToSectionBlocks,
   boundaryTimesToSectionBlocks, toggleMergeDropped, readMergeState, writeMergeState,
-  type MergedBoundary, type MergeSourceLane,
+  patchMergeEdit, keptInOrder, mergedStart, mergedToSection,
+  addMergeBoundary, removeMergeBoundary, isHandOnly, fmtMergeTime,
+  type MergedBoundary, type MergeSourceLane, type MergeBoundaryEdit,
 } from '../components/inspector-v2/boundaryMerge';
+import { EDGE_EPS, roundTime } from '../components/inspector-v2/boundaryInsert';
+import { smartMergeBoundaryLanes, levelStepSignals, NO_GRID_REACH_SEC, type SmartAnchor, type SmartMergeContext } from '../components/inspector-v2/smartMerge';
 import { CueEditorPanel } from '../components/inspector-v2/CueEditorPanel';
 import { CueEditPopover, useCueEditPopover } from '../components/inspector-v2/CueEditPopover';
 import { LoopEditorPanel } from '../components/inspector-v2/LoopEditorPanel';
@@ -26,35 +37,49 @@ import { SpanEditPopover, useSpanEditPopover } from '../components/inspector-v2/
 import { LoopEditPopover, useLoopEditPopover } from '../components/inspector-v2/LoopEditPopover';
 import { TAP_PREROLL_SECONDS } from '../components/inspector-v2/BeatChipControls';
 import { RiffPatternEditorPanel, resolveId as resolveRiffId } from '../components/inspector-v2/RiffPatternEditorPanel';
+import { SoundPalette } from '../components/inspector-v2/SoundPalette';
+import { detectorPalette } from '../components/inspector-v2/paletteModel';
 import { LyricsEditorPanel } from '../components/inspector-v2/LyricsEditorPanel';
 import { LyricsEditPopover, useLyricsEditPopover } from '../components/inspector-v2/LyricsEditPopover';
+import { getAudioBuffer } from '../services/audioAnalysis';
+import type { CardLaneMove } from '../components/inspector-v2/shared/AnnotationPointCard';
 import { riffLayerFromMotifs } from '../components/inspector-v2/motifToRiff';
+import { riffGrooveLane, toggleBarStep, toggleNodeStep } from '../components/inspector-v2/riffGrooves';
+import { sameCopy } from '../utils/copyFingerprint';
+import { announceCopyUnchanged } from '../components/inspector-v2/shared/useCopyFeedback';
 import { rawDetectorItem } from '../components/inspector-v2/shared/detectorRaw';
 import { useCardSectionOpen } from '../components/inspector-v2/shared/CardSection';
 import { KaraokePanel } from '../components/inspector-v2/KaraokePanel';
+import { HitKaraokePanel, type KaraokeSource } from '../components/inspector-v2/HitKaraokePanel';
+import { karaokeRowsOf } from '../utils/karaokeRows';
 import { RiffPatternEditPopover, useRiffPatternEditPopover } from '../components/inspector-v2/RiffPatternEditPopover';
 import { NodeEditPopover, useNodeEditPopover } from '../components/inspector-v2/NodeEditPopover';
-import type { BoundaryTickSource } from '../components/inspector-v2/BoundarySegmentEditor';
+import type { BoundaryTickSource } from '../components/inspector-v2/PitchedRiffEditor';
+import { hitsFromOnsets, nameHits, pulseOf, toNotesNode } from '../utils/pitchedRiff';
 import { EnergySpanExportPopover, useEnergySpanExportPopover } from '../components/inspector-v2/EnergySpanExportPopover';
 import {
   buildEnergySpanLayerOptions,
   NEW_SPAN_LAYER_ID, NEW_ENERGY_SPAN_LAYER_ID, ENERGY_SPAN_LAYER_NAME,
 } from '../components/inspector-v2/energySpanLayerOptions';
-import { energySpanLabel, type EnergySpanExport } from '../utils/energySpan';
+import { energySpanLabel, replaceOverlappingEnergySpans, type EnergySpanExport } from '../utils/energySpan';
 import { UnifiedAnnotationListPanel, type UnifiedLayerSelection } from '../components/inspector-v2/UnifiedAnnotationListPanel';
-import { loadLayers, saveLayers, loadAllLayerStatuses, primaryBoundaryItems, type SongLayerStatuses } from '../services/annotationLayers';
+import { loadLayers, loadLayersForEdit, saveLayers, loadAllLayerStatuses, primaryBoundaryItems, mergeLayers, duplicateLayer, updateLayer, type SongLayerStatuses } from '../services/annotationLayers';
+import { lockedLayerEdited, mergeTargets, splitLayerByKind, copyLayerRegion } from '../services/laneActions';
+import type { LaneSnapUnit, UserLaneOps } from '../components/inspector-v2/UserLaneMenuItems';
 import {
   emptyDocument as emptyLayersDoc, pickDefaultLayerColor, newId,
   newRiffNode, newRiffCombo, pickRiffNodeColor, pickRiffComboColor, findFirstRiffNodeOccurrence,
-  newRiffPatternLayer, resizeRiffNodeLength, normalizePatternAccents, nodeEntryLengthSteps, newRiffPatternItem, newRiffSeqEntry,
-  newRiffBoundaryNode, resizeBoundaryNodeLength, boundarySegmentsFromHits, mergeBoundaryHits, riffNodeLengthBeats, isBoundaryNode, trimRiffNodeLength,
+  newRiffPatternLayer, resizeBoundaryNodeLength, nodeEntryLengthSteps, newRiffPatternItem, newRiffSeqEntry,
+  boundarySegmentsFromHits, mergeBoundaryHits, riffNodeLengthBeats, trimRiffNodeLength,
   withFittedRiffInstances,
+  withoutDanglingRiffInstances,
   newSpanLayer, newSpanItem, newBoundaryLayer, shiftProminenceForStartEdge,
-  deleteGroupAndLayers, findGroup, groupLayers, groupVisibility, layersInGroup,
-  setGroupVisible, setLayerGroup, ungroupLayers, updateGroup, setLayerStatus,
+  addLayerToGroupNamed, deleteGroupAndLayers, findGroup, groupLayers, groupVisibility, layersInGroup,
+  setLayerGroup, ungroupLayers, updateGroup, setLayerStatus, transferItems, withLyricSpans,
+  CROSS_LANE_ITEM_TYPES, loopsWouldOverlap,
 } from '../types/annotationLayer';
 import type { AnnotationLayerType } from '../types/annotationLayer';
-import type { AnnotationLayer, AnnotationLayersDocument, BoundaryItem, CueItem, LoopItem, SpanItem, LyricsItem, RiffPatternItem, RiffNode, RiffCombo, ProminenceEnvelope, ProminenceLevel, VocalRun } from '../types/annotationLayer';
+import type { AnnotationLayer, AnnotationLayersDocument, BoundaryItem, CueItem, LoopItem, SpanItem, LyricsItem, RiffPatternItem, RiffNode, RiffCombo, ProminenceEnvelope, ProminenceLevel, SoundEnvelope, VocalRun } from '../types/annotationLayer';
 import { assignLeadOverRange, assignVocalLeadEverywhere, collectLeadCandidates, setLevelOverRange, type LeadPatch } from '../utils/leadLane';
 import type { VocalRunGrid } from '../utils/vocalRuns';
 import { frameAxis } from '../utils/frameTime';
@@ -79,6 +104,31 @@ import {
 /** Type-narrows a SourceId down to one of the three boundary modes. Detector
  *  sources fall through. AnnotationCategory and AnnotationType now coincide;
  *  this helper is the boundary equivalent. */
+// Lyrics are never snapped: the canvas gets this in place of a grid snap while
+// the Lyrics editor is open.
+const unsnappedTime = (t: number): number => t;
+
+/** Open a just-added item's card under it on its lane. The item renders on
+ *  the next frame; one on a lane that is off-screen or collapsed gets the
+ *  card centred. Lane items carry `data-item-id` (lyrics: `data-lyric-id`). */
+function openCardUnderItem(
+  openAt: (layerId: string, itemId: string, anchor?: { x: number; y: number }) => void,
+  layerId: string,
+  itemId: string,
+) {
+  requestAnimationFrame(() => {
+    const id = CSS.escape(itemId);
+    const el = document.querySelector<HTMLElement>(`[data-item-id="${id}"], [data-lyric-id="${id}"]`);
+    const r = el?.getBoundingClientRect();
+    const onScreen = r && r.width > 0 && r.right > 0 && r.left < window.innerWidth;
+    openAt(layerId, itemId, onScreen ? { x: r.left, y: r.bottom } : undefined);
+  });
+}
+
+/** The grid units finer than a beat. Structural marks snap to one of these when
+ *  the GRID selector shows it, and to the beat otherwise. */
+const SUB_BEAT_DIVISIONS: ReadonlySet<string> = new Set(['1/2beat', '1/3beat', '1/4beat', '1/6beat', '1/8beat']);
+
 const isBoundarySource = (s: SourceId): s is BoundarySource =>
   s === 'manual' || s === 'autoGuess';
 
@@ -87,9 +137,31 @@ const isBoundarySource = (s: SourceId): s is BoundarySource =>
  *  track time per type. */
 type TimerKey = BoundarySource | 'cues' | 'spans' | 'loops' | 'lyrics';
 
+/** The last detector → layer copy, for its Undo. `alsoLayerIds`: the other
+ *  layers the same copy made (a groove copies as three, a band as one per lane). */
+type CopyUndo = { layerId: string; alsoLayerIds?: string[]; label: string; prevSource: SourceId; type: AnnotationCategory };
+
 import { DetectorOutputReview } from '../components/inspector-v2/DetectorOutputReview';
 import type { DetectorReviewStatus } from '../components/inspector-v2/DetectorOutputReview';
-import { convertDetectorItems } from '../components/inspector-v2/detectorConvert';
+import { convertDetectorItems, detectorEnvelope, planDetectorAutoCopy } from '../components/inspector-v2/detectorConvert';
+import {
+  CUSTOM_ANNOTATION_PALETTE,
+  detectorBoundaryLayer,
+  detectorColors,
+  detectorCueLayer,
+  detectorItemCount,
+  detectorLaneName,
+  detectorLoopLayer,
+  detectorLyricsLayer,
+  detectorRiffLayer,
+  detectorSpanLayer,
+  asDetectorLane,
+  DETECTOR_LANE_SEP,
+  expandDetectorLanes,
+  laneDetectorName,
+  partLaneBaseId,
+  splitLaneByPart,
+} from '../components/inspector-v2/detectorLayers';
 import {
   loadDetectorOutput,
   saveDetectorOutput,
@@ -123,6 +195,9 @@ import {
   PERCUSSIVE_ALGO_IDS, LYRICS_ALGO_IDS, PATTERN_ALGO_IDS,
 } from '../components/inspector-v2/AlgoInspectStage';
 import { LyricsRangeRerunPanel } from '../components/inspector-v2/LyricsRangeRerunPanel';
+import { DetectorWindowRunPanel } from '../components/inspector-v2/DetectorWindowRunPanel';
+import { DetectorHeadingCheck, DetectorSidebarRow } from '../components/inspector-v2/DetectorSidebarRow';
+import { DETECTOR_LOG_JOB, formatDetectorRun } from '../services/detectorRunLog';
 import { EvaluationStage } from '../components/inspector-v2/EvaluationStage';
 import { InspectKindDropdown } from '../components/inspector-v2/InspectKindDropdown';
 import { ReferenceAnnotatorPicker } from '../components/inspector-v2/ReferenceAnnotatorPicker';
@@ -137,6 +212,7 @@ import { fetchStorageStats, clearSongCaches, clearSongStems, deleteSongEverythin
 import { DeleteConfirmDialog } from '../components/DeleteConfirmDialog';
 import { ClearScopeDialog, type ClearScope } from '../components/ClearScopeDialog';
 import { BpmWarningDialog } from '../components/BpmWarningDialog';
+import { AlgoGridChoice } from '../components/inspector-v2/AlgoGridChoice';
 import { ImportDatasetDialog } from '../components/inspector-v2/ImportDatasetDialog';
 import { useAnnotator } from '../context/AnnotatorContext';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
@@ -146,15 +222,23 @@ import { loadSongInfo, saveSongInfo, loadAllSongInfo } from '../services/songInf
 import { loadCachedBpm, runBpmDetection, type BpmDetectionResult } from '../services/bpmDetection';
 import { loadCachedBeatnet, runBeatnetDetection, type BeatnetDetectionResult } from '../services/beatnetDetection';
 import {
-  listDetectors, getDetectorResult,
+  listDetectors, getDetectorResult, deleteDetectorOutputs, deleteDetectorLane, dropDetectorItems,
   loadCustomAnnotation, saveCustomAnnotation,
+  measureWithDetector,
+  type DetectorWindowApplied,
 } from '../services/customScripts';
 import { groupByDetectorOrigin } from '../utils/detectorOrigin';
-import type { CustomRegistryEntry, CustomResultEnvelope, CustomBoundaryItem, CustomCueItem, CustomSpanItem, CustomLoopItem, CustomLyricsItem } from '../types/customScript';
+import { buildDetectorBands, detectorCopyGroup, isDetectorGroupId } from '../utils/detectorGroups';
+import { requiredStem, stemFilingLabel } from '../utils/detectorStems';
+import { DRUM_KIT_DETECTOR, LYRIC_ENVELOPES_DETECTOR, kitFirst, type DetectorSource, type LyricEnvelopesMeasure, SEVERAL_STEMS, drumReadStale, strictnessLevel, type CustomRegistryEntry, type CustomResultEnvelope, type CustomBoundaryItem, type DetectorStrictness, type DrumSource, type SectionSource } from '../types/customScript';
 import { computeMIRFeatures } from '../services/mirAnalysis';
+import { computeFullRateBands } from '../utils/fullRateBands';
+import { mirFeaturesToCurves } from '../hooks/useMirCurves';
+import { PLAYER_ACCENT_BLUE, PLAYER_ACCENT_FUCHSIA } from '../components/playerAccents';
 import { useCapabilities } from '../hooks/useCapabilities';
-import { useDemucsStems, fetchStemManifest, stemSlugFromUrl, type DemucsModel, type DemucsStem, type StemManifest } from '../hooks/useDemucsStems';
+import { ALL_DEMUCS_STEMS, useDemucsStems, fetchStemManifest, fetchKitManifest, kitPartsFromManifest, stemSlugFromUrl, stemsFromManifest, type DemucsModel, type DemucsStem, type KitManifest, type KitPart, type StemManifest } from '../hooks/useDemucsStems';
 import { useAdmin } from '../hooks/useAdmin';
+import { DECAY_STEP_COARSE_SEC, DECAY_STEP_FINE_SEC, stepCueDecay } from '../utils/cueDecay';
 import { useExperimentalAvailability } from '../hooks/useExperimentalAvailability';
 import { GPU_TOOLS_UNAVAILABLE_HINT } from '../services/capabilities';
 import type { SectionBlock } from '../types/sectionBlock';
@@ -162,6 +246,7 @@ import type { AutoGuessManualAnnotation, AutoGuessPoint } from '../types/autoGue
 import type { SongInfo } from '../types/songInfo';
 import { makeEmptySongInfo, isGridReady, songCollection, effectiveGridMode, getActiveBeatOverrideCount, isMapMode, splitDisplayName, storedGridSegments, normalizeGridSegments, makeGridSegmentId } from '../types/songInfo';
 import type { GridSegment } from '../types/songInfo';
+import { algoGridBadge, isGridCutAlgo, savedAlgoGrid, type AlgoGrid } from '../utils/algoGrid';
 import { groupSongs, songNameParts, isSongGroupMode, SONG_GROUP_MODES, DEFAULT_SONG_GROUP_MODE, type SongGroupMode, type SongSharingInfo, type SongCollaborationInfo } from '../utils/songGroups';
 import { fetchSongAnnotators, fetchSongAnnotatorRoster, describeAnnotatorCount, type SongAnnotatorEntry } from '../services/songAnnotators';
 import { fetchSharedSlugs } from '../services/annotationLocks';
@@ -169,10 +254,16 @@ import { deriveSongTracks, type SongTrack } from '../utils/songAnnotationTracks'
 import { resolveGridSegments, resolveStoredGridSegments, segmentAtTime, canPlaceSegmentAt, canPlaceOriginAt, canMoveHeadTo, snapSegmentHeadTime, remapBeatOverrides, type ResolvedSegment } from '../utils/gridSegments';
 import { GridSegmentListEditor } from '../components/inspector-v2/GridSegmentListEditor';
 import { GridSegmentEditPopover, useGridSegmentPopover } from '../components/inspector-v2/GridSegmentEditPopover';
-import { beatsPerBarFromTimeSignature, snapTimeToGrid, coarsenSnapDivision, formatBeatPosition, beatPositionAt, adaptiveGridThicknessScale } from '../utils/beatGrid';
-import { snapModeToDivision, beatGridUnitToSnapDivision, beatGridUnitLabel, magneticToleranceSec } from '../utils/beatTimeFormat';
+import { snapLayerItems } from '../utils/laneSnap';
+import {
+  applyMeasuredEnvelopes, dropRetimedEnvelopes, envelopeTargets, extractEnvelopes, isEnvelopeLayer,
+  type DroppedEnvelope, type EnvelopeLayerType, type EnvelopeSource,
+} from '../utils/soundEnvelopes';
+import { beatsPerBarFromTimeSignature, snapTimeToGrid, stepTimeOnGrid, formatBeatPosition, beatPositionAt, adaptiveGridThicknessScale } from '../utils/beatGrid';
+import { beatGridUnitToSnapDivision, beatGridUnitLabel } from '../utils/beatTimeFormat';
 import { gridEditCoalesceKey } from '../utils/gridUndo';
 import { GridLockModal, NoBpmModal } from '../components/inspector-v2/GridLockModal';
+import { GRID_LOCK_SNAP_TYPES, planGridLockSnap, type GridLockSnapType } from '../utils/gridLockSnap';
 import { GridChangedModal } from '../components/inspector-v2/GridChangedModal';
 import {
   gridOf, gridSignature, countRetimed, countStaleTimes, describeGridChange,
@@ -180,11 +271,15 @@ import {
   withTimesFromBeats, type BeatGrid,
   withFoldedGridOffset, withShiftedBeatStamps,
 } from '../utils/beatAnchoring';
+import { withSongGrid } from '../utils/beatTimebase';
 import { agreementCount, clusterPoints } from '../utils/boundaryClustering';
-import { riffLayerFromDrumGrooves, type GrooveItem } from '../components/inspector-v2/drumGrooveToRiff';
-import type { ReviewableItem } from '../components/inspector-v2/detectorConvert';
+import { grooveSummary } from '../components/inspector-v2/drumGrooves';
+import type { LaneGridProps } from '../components/inspector-v2/BeatGridOverlay';
+import type { ReviewableCategory, ReviewableItem } from '../components/inspector-v2/detectorConvert';
 import type { ToolResultData } from '../tools/runTool';
-import { cueToSection, struckHitFields } from '../utils/drumHits';
+import { cueToSection, kitPieceOf, pitchNoteToSection, struckHitFields } from '../utils/drumHits';
+import { createPlayheadClock, PlayheadClockContext, usePlayheadValue, type PlayheadSample } from '../hooks/usePlayhead';
+import { PlayheadWithin } from '../components/Playhead';
 
 // ─── Audio catalogue ──────────────────────────────────────────────────────────
 
@@ -198,6 +293,10 @@ interface AudioEntry {
   title?: string;
   artist?: string;
   url: string;
+  /** Demucs stems already on disk, from the manifest builder — 4 (htdemucs),
+   *  6 (htdemucs_6s), or empty when the song still needs stemming. Kept in
+   *  step locally when a stem job finishes or stems are cleared. */
+  stems?: string[];
 }
 
 // ─── Demucs stems ─────────────────────────────────────────────────────────────
@@ -216,7 +315,9 @@ export type RunStemTarget = StemSource | 'all';
 // the stem they were computed on so the lanes group the same way the SOURCE
 // row reads: mix → vocals → drums → bass → other → guitar → piano.
 const STEM_ORDER: StemSource[] = ['mix', 'vocals', 'drums', 'bass', 'other', 'guitar', 'piano'];
-const STEM_RANK: Record<string, number> = Object.fromEntries(STEM_ORDER.map((s, i) => [s, i]));
+// Detectors reading several stems into one lane (never the mix) are filed
+// between the mix and the single stems.
+const STEM_RANK: Record<string, number> = { ...Object.fromEntries(STEM_ORDER.map((s, i) => [s, i])), [SEVERAL_STEMS]: 0.5 };
 /** Sort rank for a layer's source stem. Whole-track / stem-less detectors sort
  *  with the mix (rank 0); user-authored layers (no stem) sort ahead of all
  *  detectors so the user's own lanes stay on top. */
@@ -277,12 +378,16 @@ function uploadErrorText(xhr: XMLHttpRequest, fallback: string): string {
   return raw.slice(0, 400) || fallback;
 }
 
+/** The last chunk's reply. `converted` is set when the server had to re-encode
+ *  the file on arrival (a VBR mp3) and says what it became. */
+type UploadSongResponse = { id?: string; name?: string; url?: string; hasAnalysis?: boolean; converted?: string };
+
 async function uploadSongChunked(
   file: File,
   onProgress?: (p: ChunkProgress) => void,
-): Promise<{ id?: string; name?: string; url?: string; hasAnalysis?: boolean }> {
+): Promise<UploadSongResponse> {
   const total = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_SIZE));
-  let lastResponse: { id?: string; name?: string; url?: string; hasAnalysis?: boolean } = {};
+  let lastResponse: UploadSongResponse = {};
   onProgress?.({ chunk: 0, totalChunks: total, bytesSent: 0, totalBytes: file.size });
   for (let i = 0; i < total; i += 1) {
     const start = i * UPLOAD_CHUNK_SIZE;
@@ -408,6 +513,26 @@ async function fetchManifest(): Promise<AudioEntry[]> {
   }
 }
 
+/** A detector's sources with, after "All yours", each of the annotator's
+ *  lanes of its `lane_sources` type by name (`lane:<layer id>`) — so the row
+ *  can read one lane, not only all of them. */
+function withLaneSources(
+  sources: DetectorSource[], laneType: string | null | undefined, doc: AnnotationLayersDocument | null,
+): DetectorSource[] {
+  const lanes = laneType ? (doc?.layers ?? []).filter((l) => l.type === laneType) : [];
+  if (lanes.length === 0) return sources;
+  const yours = sources.find((s) => s.name === 'yours');
+  const at = sources.indexOf(yours!) + 1 || sources.length;
+  return [
+    ...sources.slice(0, at),
+    ...lanes.map((l) => ({
+      name: `lane:${l.id}`, label: l.name, group: yours?.group,
+      hint: `Only your lane "${l.name}", as you corrected and saved it.`,
+    })),
+    ...sources.slice(at),
+  ];
+}
+
 export function firstVisibleSong(files: AudioEntry[]): AudioEntry | null {
   return files[0] ?? null;
 }
@@ -427,6 +552,32 @@ function writeLastSong(slug: string): void {
   try { localStorage.setItem(LAST_SONG_KEY, slug); } catch { /* storage blocked */ }
 }
 
+/** The Detectors sidebar's choices, remembered per browser and across songs:
+ *  which lanes are hidden, which detectors are ticked to run, which stems the
+ *  filter narrows to, and which detectors have been met at all (so a review
+ *  lane is hidden the first time it turns up, never again after that). */
+const DETECTOR_HIDDEN_KEY = 'tc.detectors.hidden';
+const DETECTOR_TICKS_KEY = 'tc.detectors.ticked';
+const DETECTOR_STEM_FILTER_KEY = 'tc.detectors.stemFilter';
+const DETECTOR_SEEN_KEY = 'tc.detectors.seen';
+
+function readStoredNames(key: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    const v: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredNames(key: string, names: Iterable<string> | null): void {
+  try {
+    if (names) localStorage.setItem(key, JSON.stringify([...names]));
+    else localStorage.removeItem(key);
+  } catch { /* storage blocked */ }
+}
+
 function initialSong(files: AudioEntry[], urlSlug: string | null): AudioEntry | null {
   for (const slug of [urlSlug, readLastSong()]) {
     const hit = slug ? files.find((f) => f.id === slug) : undefined;
@@ -437,11 +588,11 @@ function initialSong(files: AudioEntry[], urlSlug: string | null): AudioEntry | 
 
 // ─── Stage types ──────────────────────────────────────────────────────────────
 
-type Stage = 'annotation' | 'algo' | 'eval' | 'karaoke' | 'global-eval';
+type Stage = 'annotation' | 'algo' | 'eval' | 'karaoke' | 'palette' | 'global-eval';
 /** The views Algorithm Inspect offers of the examined kind. `eval` is the only
  *  one that always exists; `algo` is offered for boundaries and `karaoke` while
  *  a lyrics layer is focused. */
-type InspectSubStage = 'algo' | 'eval' | 'karaoke';
+type InspectSubStage = 'algo' | 'eval' | 'karaoke' | 'palette';
 export type Feature = 'annotate' | 'inspect-song' | 'inspect-all' | 'prep';
 
 /** Examine-kind → the Algorithms-sidebar family chip key that produces it.
@@ -476,6 +627,10 @@ const FEATURE_THEME: Record<Feature, { label: string; pageBg: string }> = {
 // v1 entries (e.g. user-customised dropdowns) are intentionally discarded
 // so everyone sees the new options.
 const BEAT_GRID_UNIT_OPTIONS_STORAGE_KEY = 'timecues.inspector.beatGridUnitOptions.v2';
+/** The detector group whose cues and span edges smart merge places boundaries
+ *  on — the named moves an electronic track makes at a phrase edge. A song
+ *  without those detectors simply has no figures to offer. */
+const PHRASE_EDGES_GROUP = 'Phrase edges';
 
 // A standing answer to "the grid moved — what should annotations keep?", set
 // by ticking "Remember my preference" in that modal. Only 'beats' / 'times'
@@ -619,27 +774,6 @@ function StemChipGroup({ label, hint, accent, chips }: {
  *  counting, exactly like the Merge row's. */
 const CONSENSUS_LAYER_LABEL = 'Consensus';
 
-const WAVEFORM_PEAK_COLOR = '#f97316'; // orange-500 — outer peak halo
-const WAVEFORM_RMS_COLOR  = '#8b5cf6'; // violet-500 — inner RMS body
-
-const PLAYER_ACCENT_BLUE: PlayerAccent = {
-  playBtn:       'bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/30',
-  songText:      'text-cyan-300',
-  slider:        'accent-cyan-500',
-  pill:          'text-cyan-300 bg-cyan-500/10',
-  waveColor:     WAVEFORM_RMS_COLOR,
-  progressColor: WAVEFORM_PEAK_COLOR,
-};
-
-const PLAYER_ACCENT_FUCHSIA: PlayerAccent = {
-  playBtn:       'bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/30',
-  songText:      'text-violet-300',
-  slider:        'accent-violet-500',
-  pill:          'text-violet-300 bg-violet-500/10',
-  waveColor:     WAVEFORM_RMS_COLOR,
-  progressColor: WAVEFORM_PEAK_COLOR,
-};
-
 function playerAccentFor(feature: Feature | null): PlayerAccent {
   return isInspect(feature) ? PLAYER_ACCENT_FUCHSIA : PLAYER_ACCENT_BLUE;
 }
@@ -657,12 +791,12 @@ const ALGO_ORDER = [
   'silero-vad', 'jdcnet-voicing', 'panns-cnn14',
   // CUE-family note-onset detector (`experimentalCueExtras`).
   'basic-pitch',
-  // CUE-family extras (`experimentalCueExtras`): key, chords, onsets, drum hits.
-  'librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients',
+  // CUE-family extras (`experimentalCueExtras`): key, chords, onsets.
+  'librosa-key', 'autochord-chords', 'librosa-onsets',
   // SPAN family addition: percussive HPSS (`experimentalSpanFamily`).
   'hpss-percussive',
-  // LYRICS family — Whisper-base + CTC forced aligner (`experimentalLyricsFamily`).
-  'whisper-base', 'ctc-forced-aligner',
+  // LYRICS family — Whisper-base, Ivrit + CTC forced aligner.
+  'whisper-base', 'ivrit', 'ctc-forced-aligner',
   // PATTERN family — LoCoMotif (`experimentalPatternFamily`).
   'locomotif',
 ] as const;
@@ -671,9 +805,9 @@ const ALLIN1_FOLD_IDS = new Set([0,1,2,3,4,5,6,7].map((n) => `allin1-fold${n}`))
 const SPAN_TOOL_IDS  = new Set(['silero-vad', 'jdcnet-voicing']);
 const PANNS_TOOL_IDS = new Set(['panns-cnn14']);
 const PITCH_TOOL_IDS = new Set(['basic-pitch']);
-const CUE_EXTRAS_TOOL_IDS = new Set(['librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients']);
+const CUE_EXTRAS_TOOL_IDS = new Set(['librosa-key', 'autochord-chords', 'librosa-onsets']);
 const PERCUSSIVE_TOOL_IDS = new Set(['hpss-percussive']);
-const LYRICS_TOOL_IDS     = new Set(['whisper-base', 'ctc-forced-aligner']);
+const LYRICS_TOOL_IDS     = new Set(['whisper-base', 'ivrit', 'ctc-forced-aligner']);
 const PATTERN_TOOL_IDS    = new Set(['locomotif']);
 
 // Plain-language hints shown as a small chip beside each experimental
@@ -689,8 +823,8 @@ const ALGO_HINTS: Record<string, { tag: string; what: string }> = {
   'librosa-key':        { tag: 'key',          what: "Estimates the song's musical key (e.g. C major)." },
   'autochord-chords':   { tag: 'chords',       what: 'Recognizes the chord progression.' },
   'librosa-onsets':     { tag: 'note hits',    what: 'Marks note / transient onset times.' },
-  'drum-transients':    { tag: 'drum hits',    what: 'Marks each drum hit and names it kick, snare or hat.' },
   'whisper-base':       { tag: 'subtitles',    what: 'Transcribes the sung lyrics with rough word timing (auto-subtitles).' },
+  'ivrit':              { tag: 'Hebrew lyrics', what: 'Transcribes Hebrew lyrics with ivrit.ai\'s Hebrew speech model — much better than Whisper base on Hebrew, useless on other languages. Large (~3.2 GB) and slow.' },
   'ctc-forced-aligner': { tag: 'align lyrics', what: 'Lines your pasted reference lyrics up to the audio, word by word.' },
   'locomotif':          { tag: 'motifs',       what: 'Discovers recurring melodic / rhythmic patterns (motifs).' },
 };
@@ -700,13 +834,13 @@ const ALGO_HINTS: Record<string, { tag: string; what: string }> = {
 // still decides — so the row shows a "best on <stem>" chip whenever the target
 // is elsewhere, and clicking it moves the target there. Only detectors whose
 // output is noise off that stem belong here: a voice detector on the full mix
-// fires on every synth pad, a drum classifier on it calls the bass a kick.
+// fires on every synth pad.
 const BEST_STEM: Record<string, DemucsStem> = {
   'silero-vad':         'vocals',
   'jdcnet-voicing':     'vocals',
   'whisper-base':       'vocals',
+  'ivrit':              'vocals',
   'ctc-forced-aligner': 'vocals',
-  'drum-transients':    'drums',
 };
 
 // Per-algorithm reference card shown behind the ⓘ on each algo lane: what the
@@ -731,8 +865,8 @@ const ALGO_INFO: Record<string, AlgoInfo> = {
   'librosa-key':        { model: 'librosa key estimation (Krumhansl–Schmuckler)', extracts: "The song's musical key", input: 'Audio (chroma)', output: 'Single global key (e.g. C major)' },
   'autochord-chords':   { model: 'autochord (chord recognition)', extracts: 'The chord progression', input: 'Audio', output: 'Chord-labelled spans' },
   'librosa-onsets':     { model: 'librosa onset detection (spectral flux)', extracts: 'Note / transient onset times', input: 'Audio', output: 'Onset cue markers (points)' },
-  'drum-transients':    { model: 'librosa onset detection + per-band energy classifier', extracts: 'Drum hits, each labelled kick / snare / hat', input: 'Audio — the drums stem', output: 'One tick per hit — red kick, blue snare, green hat. Tick height is velocity: a full-height tick is that drum at its hardest, a stub is a ghost note. Hover a tick for its velocity and level.' },
   'whisper-base':       { model: 'OpenAI Whisper (base) — speech recognition', extracts: 'Sung lyrics with rough word timing', input: 'Audio — vocals stem', output: 'Transcribed lyrics + detected language' },
+  'ivrit':              { model: 'Ivrit — ivrit.ai Hebrew speech recognition', extracts: 'Hebrew sung lyrics with rough word timing', input: 'Audio — vocals stem', output: 'Transcribed Hebrew lyrics' },
   'ctc-forced-aligner': { model: 'CTC forced aligner', extracts: 'Word-level alignment of your pasted reference lyrics', input: 'Audio + reference lyrics text', output: 'Word-aligned lyrics (timed)' },
   'locomotif':          { model: 'LoCoMotif (motif discovery)', extracts: 'Recurring melodic / rhythmic motifs', input: 'Audio / features', output: 'Motif pattern spans' },
 };
@@ -783,18 +917,6 @@ function applyAllStemsToSelection(sel: Set<string>, stems: readonly string[]): S
   return out;
 }
 
-// Lane label for a detector-sourced layer: when the detector declares a source
-// stem, swap its trailing parenthetical tag (e.g. "(curated)", "(LoCoMotif)")
-// for that stem so the gutter reads "Vocals presence (vocals)" — telling the
-// annotator which stem each curated layer was built upon. Falls back to the raw
-// label when no stem is declared or the label has no trailing "(…)".
-function detectorLaneName(label: string, stem?: string | null): string {
-  const base = label || '';
-  if (!stem) return base;
-  const stripped = base.replace(/\s*\([^()]*\)\s*$/, '');
-  return `${stripped} (${stem})`;
-}
-
 // `null`  → the cache file truly doesn't exist (or fetch failed). UI treats
 //           the tool as never-run.
 // `{ result, error }` with a non-empty error → the file exists but the
@@ -806,6 +928,29 @@ function detectorLaneName(label: string, stem?: string | null): string {
 //           silent track). That's a legitimate cached result — without
 //           returning it here the UI would loop on "Run missing" forever
 //           because toolStates[id] would never flip to 'done'.
+/** Where an algorithm's result for a song is saved: an experimental family's
+ *  cache (/api/<family>/detect/<slug>/<id>) or the analysis folder
+ *  (/analysis/<slug>/<id>.json). A per-stem result carries the composite id
+ *  "<algo>__<stem>": its family is keyed by the base algo, its file by the
+ *  composite. Null for an id that has no saved result of its own. */
+function algoResultSource(toolId: string): { family: string; id: string } | null {
+  const expBase = baseAlgoId(toolId);
+  if (SPAN_TOOL_IDS.has(expBase))       return { family: 'span',       id: toolId };
+  if (PANNS_TOOL_IDS.has(expBase))      return { family: 'panns',      id: toolId };
+  if (PITCH_TOOL_IDS.has(expBase))      return { family: 'pitch',      id: toolId };
+  if (CUE_EXTRAS_TOOL_IDS.has(expBase)) return { family: 'cue-extras', id: toolId };
+  if (PERCUSSIVE_TOOL_IDS.has(expBase)) return { family: 'percussive', id: toolId };
+  if (LYRICS_TOOL_IDS.has(expBase))     return { family: 'lyrics',     id: toolId };
+  if (PATTERN_TOOL_IDS.has(expBase))    return { family: 'pattern',    id: toolId };
+  const algoSlug =
+    toolId.startsWith('msaf-') ? toolId.replace('msaf-', '') :
+    toolId === 'allin1' ? 'allin1' :
+    ALLIN1_FOLD_IDS.has(toolId) ? toolId :
+    toolId.startsWith('ruptures-') ? toolId :
+    toolId === 'band-gradient' ? 'band-gradient' : null;
+  return algoSlug ? { family: 'analysis', id: algoSlug } : null;
+}
+
 async function loadAlgoJson(
   songId: string,
   toolId: string,
@@ -836,6 +981,8 @@ async function loadAlgoJson(
         // LOOP family: which beat grid the detector aligned to
         // ("song-info" | "allin1" | "librosa"). Surfaced as a lane badge.
         grid_source?: string | null;
+        // PATTERN family: whose beats it ran on ('user' | 'auto'; see utils/algoGrid).
+        grid?: string | null;
       };
       const sections =
         kind.kind === 'spans' ? (payload.spans ?? []).map((s) => ({
@@ -844,9 +991,7 @@ async function loadAlgoJson(
         kind.kind === 'loops' ? (payload.loops ?? []).map((l) => ({
           time: l.start, endTime: l.end, type: 'loop', label: l.label,
         })) :
-        kind.kind === 'notes' ? (payload.notes ?? []).map((n) => ({
-          time: n.time, endTime: n.end, type: n.pitch, label: n.pitch,
-        })) :
+        kind.kind === 'notes' ? (payload.notes ?? []).map(pitchNoteToSection) :
         kind.kind === 'cues'  ? (payload.cues ?? []).map(cueToSection) :
         kind.kind === 'patterns' ? (payload.patterns ?? []).map((p) => ({
           time: p.start, endTime: p.end, type: `motif-${p.motif_id}`, label: p.label,
@@ -867,6 +1012,7 @@ async function loadAlgoJson(
           ...(kind.kind === 'cues'  ? { key:      payload.key ?? null } : {}),
           ...(kind.kind === 'words' ? { language: payload.language ?? null } : {}),
           ...(kind.kind === 'loops' ? { gridSource: payload.grid_source ?? null } : {}),
+          ...(kind.kind === 'patterns' ? { grid: payload.grid ?? null } : {}),
         },
       } as ToolResultData;
       const error = payload.ok === false
@@ -876,27 +1022,20 @@ async function loadAlgoJson(
     } catch { return null; }
   }
 
-  // A per-stem result carries the composite id "<algo>__<stem>"; the family is
-  // keyed by the base algo, but readExperimental fetches by the composite
-  // toolId (so /api/<fam>/detect/<slug>/<algo>__<stem> reads the right file).
-  const expBase = toolId.includes('__') ? toolId.slice(0, toolId.indexOf('__')) : toolId;
-  if (SPAN_TOOL_IDS.has(expBase))       return readExperimental('span',       { kind: 'spans' });
-  if (PANNS_TOOL_IDS.has(expBase))      return readExperimental('panns',      { kind: 'spans' });
-  if (PITCH_TOOL_IDS.has(expBase))      return readExperimental('pitch',      { kind: 'notes' });
-  if (CUE_EXTRAS_TOOL_IDS.has(expBase)) return readExperimental('cue-extras', { kind: 'cues' });
-  if (PERCUSSIVE_TOOL_IDS.has(expBase)) return readExperimental('percussive', { kind: 'spans' });
-  if (LYRICS_TOOL_IDS.has(expBase))     return readExperimental('lyrics',     { kind: 'words' });
-  if (PATTERN_TOOL_IDS.has(expBase))    return readExperimental('pattern',    { kind: 'patterns' });
-
-  const algoSlug =
-    toolId.startsWith('msaf-') ? toolId.replace('msaf-', '') :
-    toolId === 'allin1' ? 'allin1' :
-    ALLIN1_FOLD_IDS.has(toolId) ? toolId :
-    toolId.startsWith('ruptures-') ? toolId :
-    toolId === 'band-gradient' ? 'band-gradient' : null;
-  if (!algoSlug) return null;
+  const source = algoResultSource(toolId);
+  if (!source) return null;
+  if (source.family !== 'analysis') {
+    const expBase = baseAlgoId(toolId);
+    return readExperimental(source.family, {
+      kind: SPAN_TOOL_IDS.has(expBase) || PANNS_TOOL_IDS.has(expBase) || PERCUSSIVE_TOOL_IDS.has(expBase) ? 'spans'
+        : PITCH_TOOL_IDS.has(expBase) ? 'notes'
+        : CUE_EXTRAS_TOOL_IDS.has(expBase) ? 'cues'
+        : LYRICS_TOOL_IDS.has(expBase) ? 'words'
+        : 'patterns',
+    });
+  }
   try {
-    const res = await fetch(`/analysis/${songId}/${algoSlug}.json`);
+    const res = await fetch(`/analysis/${songId}/${source.id}.json`);
     if (!res.ok) return null;
     const ct = res.headers.get('content-type') ?? '';
     if (!ct.includes('application/json')) return null;
@@ -971,6 +1110,8 @@ interface RupturesResultJson {
   duration: number;
   sections: { time: number; endTime: number; type: string; label: string }[];
   rawBoundaries: number[];
+  /** Whose beats it ran on ('user' | 'auto'); absent on results from before the choice. */
+  grid?: string;
 }
 
 // Label colors per algo group — used to color the row labels in SharedVizPanel.
@@ -991,14 +1132,11 @@ const ALGO_LABEL_COLORS: Record<string, string> = {
   'librosa-key':       '#2dd4bf',
   'autochord-chords':  '#2dd4bf',
   'librosa-onsets':    '#2dd4bf',
-  // Drum transients — yellow, apart from the teal trio because it answers a
-  // different question (which drum), and apart from HPSS orange because that
-  // one is spans and this one is points.
-  'drum-transients':   '#eab308',
   // HPSS percussive (SPAN family) — orange so it doesn't blend with voicing.
   'hpss-percussive':   '#fb923c',
   // LYRICS family — rose, distinct from cue-extras teal.
   'whisper-base':       '#fb7185',
+  'ivrit':              '#f472b6',
   'ctc-forced-aligner': '#f43f5e',
   // PATTERN family — emerald, distinct from amber loops and rose lyrics.
   'locomotif':         '#10b981',
@@ -1089,20 +1227,6 @@ function algoRenderKind(id: string): AlgoRenderKind {
 // of the algo overlay rows / consensus clustering entirely.
 const SINGLE_INFO_ONLY_IDS = new Set<string>(['librosa-key']);
 
-// Distinct, vivid colors cycled per custom-annotation detector so each row's
-// strip stands out from the others. Indexed by the detector's order in the
-// registry; wraps around if there are more detectors than palette entries.
-const CUSTOM_ANNOTATION_PALETTE: string[] = [
-  '#f43f5e', // rose
-  '#fb923c', // orange
-  '#facc15', // yellow
-  '#84cc16', // lime
-  '#06b6d4', // cyan
-  '#6366f1', // indigo
-  '#d946ef', // fuchsia
-  '#ec4899', // pink
-];
-
 // Distinct hue per Demucs stem, so per-stem overlay rows ("<algo>__<stem>") of
 // one family are easy to tell apart (vocals vs drums vs bass vs other).
 const STEM_OVERLAY_COLORS: Record<string, string> = {
@@ -1112,30 +1236,24 @@ const STEM_OVERLAY_COLORS: Record<string, string> = {
   other:  '#4ade80', // green
 };
 
-// Convert a CustomResultEnvelope of boundary items into the section shape the canvas expects.
-// Each detected boundary becomes the start of a section running up to the next boundary
-// (or end-of-track for the final one), matching how the built-in detectors are flattened.
-// `color` is per-detector and emitted on each section so the algo row paints with a vivid
-// hue instead of falling through to the near-invisible slate-400 default.
-function customEnvelopeToSections(
-  env: CustomResultEnvelope,
-  trackDuration: number,
-  color: string,
-): { time: number; endTime: number; label: string; type: string; color: string; raw?: unknown }[] {
-  if (env.output_kind !== 'boundary') return [];
-  // Carry the original CustomBoundaryItem (importance, candidates, …) as `raw`
-  // so the algo Inspect card can show the detector's full emitted object.
-  const items = (env.items as CustomBoundaryItem[])
-    .map((it) => ({ time: it.time_ms / 1000, label: it.label ?? '', raw: it }))
-    .sort((a, b) => a.time - b.time);
-  return items.map((it, i) => ({
-    time: it.time,
-    endTime: items[i + 1]?.time ?? (trackDuration > 0 ? trackDuration : it.time),
-    label: it.label || 'boundary',
-    type: 'custom',
-    color,
-    raw: it.raw,
-  }));
+
+/** A copied section becomes a boundary the curator owns: the fields a
+ *  boundary has, and a colour only if that section had one of its OWN
+ *  (`ownColor`). A row's `color` is usually just the lane's hue — a detector's,
+ *  a stem's — and copying it would paint every copied section in it. Picking
+ *  fields also keeps a row's render-only extras (`endTime`, `raw`) off disk. */
+function sectionToBoundaryItem(sec: SectionBlock & { ownColor?: string }): BoundaryItem {
+  return {
+    id: newId(),
+    time: sec.time,
+    type: sec.type,
+    label: sec.label,
+    ...(sec.beat !== undefined ? { beat: sec.beat } : {}),
+    ...(sec.description !== undefined ? { description: sec.description } : {}),
+    ...(sec.importance !== undefined ? { importance: sec.importance } : {}),
+    ...(sec.candidates !== undefined ? { candidates: sec.candidates } : {}),
+    ...(sec.ownColor ? { color: sec.ownColor } : {}),
+  };
 }
 
 // Candidate steps-per-beat grids to fit a set of beat-relative onset
@@ -1161,6 +1279,31 @@ function bestFitOnsetSubdivision(beatPositions: number[]): number {
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+
+/** The slim transport's elapsed time and bar·beat readout. It follows the
+ *  playhead clock on its own and re-renders only when the text it shows
+ *  changes (once a second, once a beat) — not every frame, and without
+ *  taking the page with it. */
+function TransportReadout({ duration, format, beatLabel }: {
+  duration: number;
+  format: (s: number) => string;
+  beatLabel?: (t: number) => string;
+}) {
+  const elapsed = usePlayheadValue(format);
+  const beat = usePlayheadValue((t) => beatLabel?.(t) ?? null);
+  return (
+    <span className="font-mono text-[11px] text-slate-300 tabular-nums shrink-0 flex flex-col leading-tight">
+      <span>
+        {elapsed}<span className="text-slate-600 mx-0.5">/</span><span className="text-slate-500">{format(duration)}</span>
+      </span>
+      {beat && (
+        <span className="text-[9px] text-amber-400/80 leading-none mt-0.5">
+          {beat}
+        </span>
+      )}
+    </span>
+  );
+}
 
 // `onBack` prop kept on the type so the caller in App.tsx remains stable —
 // not currently consumed by the V2 page (mode-switcher is now in-page).
@@ -1219,6 +1362,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // ── Demucs stem player ───────────────────────────────────────────────────
   const [selectedStemSource, setSelectedStemSource] = useState<StemSource>('mix');
   const [stemManifest, setStemManifest] = useState<StemManifest | null>(null);
+  /** The stem a detector filed under `stem` cannot run without and this song
+   *  has not separated yet, or null — the mix and "several stems" need none. */
+  const missingStem = (stem: string | null | undefined): string | null => {
+    const need = requiredStem(stem);
+    return need && !stemManifest?.stems?.[need as DemucsStem] ? need : null;
+  };
   // Which audio source the run picker computes detectors against. Independent of
   // the player's selectedStemSource (which only swaps playback). 'mix' is the
   // full track; a stem runs the ticked CUE/SPAN/LOOP/lyrics detectors on that
@@ -1288,12 +1437,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }, []);
   // The disk-usage breakdown at the foot of the song sidebar is a reference
   // readout, not something you watch while working — so it folds away to its
-  // one-line total and stays folded until you ask for it again.
+  // one-line total and stays folded until you ask for it again. The old key
+  // was written open on every mount, so it can't tell a choice from the old
+  // default — it is dropped, and everyone starts folded once.
   const [storageFooterOpen, setStorageFooterOpen] = useState<boolean>(() => {
-    try { return localStorage.getItem('tc:storage-footer-collapsed') !== '1'; } catch { return true; }
+    try {
+      localStorage.removeItem('tc:storage-footer-collapsed');
+      return localStorage.getItem('tc:storage-footer-open') === '1';
+    } catch { return false; }
   });
   useEffect(() => {
-    try { localStorage.setItem('tc:storage-footer-collapsed', storageFooterOpen ? '0' : '1'); } catch {}
+    try { localStorage.setItem('tc:storage-footer-open', storageFooterOpen ? '1' : '0'); } catch {}
   }, [storageFooterOpen]);
   // Pending confirmation: a slug to clear, or 'all' for the global clear.
   const [pendingCacheClear, setPendingCacheClear] = useState<string | 'all' | null>(null);
@@ -1342,52 +1496,27 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       return next;
     });
   }, []);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('tc:song-sidebar-collapsed');
-      if (stored !== null) return stored === '1';
-      return getCurrentSettings().defaultSidebarCollapsed;
-    } catch { return getCurrentSettings().defaultSidebarCollapsed; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem('tc:song-sidebar-collapsed', sidebarCollapsed ? '1' : '0'); } catch {}
-  }, [sidebarCollapsed]);
   const SIDEBAR_MIN_WIDTH = 180;
   const SIDEBAR_MAX_WIDTH = 560;
   const SIDEBAR_DEFAULT_WIDTH = 256;
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('tc:song-sidebar-width');
-      const n = stored ? parseInt(stored, 10) : NaN;
-      if (Number.isFinite(n) && n >= SIDEBAR_MIN_WIDTH && n <= SIDEBAR_MAX_WIDTH) return n;
-    } catch {}
-    return SIDEBAR_DEFAULT_WIDTH;
+  // Every side panel opens at the same share of the window, so a narrow screen
+  // gets narrow panels and the centre keeps its room. A drag overrides it.
+  const SIDEBAR_WIDTH_FRACTION = 0.18;
+  // Algorithm Inspect opens two right-hand panels side by side (Detectors and
+  // Algorithms), so each takes a smaller share and the timeline keeps its room.
+  const PAIRED_SIDEBAR_WIDTH_FRACTION = 0.12;
+  // ...but never below what their rows need: at 12% of a 1280px window (1600
+  // layout px under the small-screen zoom) each came out 192px, and the
+  // Detectors heading buttons and the algorithm family chips ran into each
+  // other. It is the floor for a drag too.
+  const PAIRED_SIDEBAR_MIN_WIDTH = 232;
+  const songSidebar = useResizableSidebar({
+    storageKey: 'tc:song-sidebar', side: 'left',
+    minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH, defaultWidth: SIDEBAR_DEFAULT_WIDTH,
+    widthFraction: SIDEBAR_WIDTH_FRACTION,
+    defaultCollapsed: getCurrentSettings().defaultSidebarCollapsed,
   });
-  useEffect(() => {
-    try { localStorage.setItem('tc:song-sidebar-width', String(sidebarWidth)); } catch {}
-  }, [sidebarWidth]);
-  const [sidebarResizing, setSidebarResizing] = useState(false);
-  const startSidebarResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setSidebarResizing(true);
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, startW + (ev.clientX - startX)));
-      setSidebarWidth(next);
-    };
-    const onUp = () => {
-      setSidebarResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
+  const { collapsed: sidebarCollapsed, setCollapsed: setSidebarCollapsed, width: sidebarWidth } = songSidebar;
 
   // Right-edge annotation sidebar (replaces the legacy "Start annotating"
   // collapsible). Holds the marker config row, tabs, and add panel; the
@@ -1398,102 +1527,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // SIDEBAR_MIN_WIDTH) so the right edge doesn't dominate the layout and the
   // centre column gets the room it needs. Max stays wide for annotators who
   // want to spread out.
-  const ANNOTATE_SIDEBAR_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
-  const ANNOTATE_SIDEBAR_MAX_WIDTH = 640;
   const ANNOTATE_SIDEBAR_DEFAULT_WIDTH = SIDEBAR_DEFAULT_WIDTH;
-  const [annotateSidebarCollapsed, setAnnotateSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('tc:annotate-sidebar-collapsed');
-      return stored === '1';
-    } catch { return false; }
+  const annotateSidebar = useResizableSidebar({
+    storageKey: 'tc:annotate-sidebar', side: 'right',
+    minWidth: SIDEBAR_MIN_WIDTH, maxWidth: 640, defaultWidth: ANNOTATE_SIDEBAR_DEFAULT_WIDTH,
+    widthFraction: SIDEBAR_WIDTH_FRACTION,
   });
-  useEffect(() => {
-    try { localStorage.setItem('tc:annotate-sidebar-collapsed', annotateSidebarCollapsed ? '1' : '0'); } catch {}
-  }, [annotateSidebarCollapsed]);
-  const [annotateSidebarWidth, setAnnotateSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('tc:annotate-sidebar-width');
-      const n = stored ? parseInt(stored, 10) : NaN;
-      if (Number.isFinite(n) && n >= ANNOTATE_SIDEBAR_MIN_WIDTH && n <= ANNOTATE_SIDEBAR_MAX_WIDTH) return n;
-    } catch {}
-    return ANNOTATE_SIDEBAR_DEFAULT_WIDTH;
-  });
-  useEffect(() => {
-    try { localStorage.setItem('tc:annotate-sidebar-width', String(annotateSidebarWidth)); } catch {}
-  }, [annotateSidebarWidth]);
-  const [annotateSidebarResizing, setAnnotateSidebarResizing] = useState(false);
-  const startAnnotateSidebarResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setAnnotateSidebarResizing(true);
-    const startX = e.clientX;
-    const startW = annotateSidebarWidth;
-    const onMove = (ev: MouseEvent) => {
-      // Right-anchored sidebar: dragging LEFT (clientX decreases) widens.
-      const next = Math.min(ANNOTATE_SIDEBAR_MAX_WIDTH, Math.max(ANNOTATE_SIDEBAR_MIN_WIDTH, startW + (startX - ev.clientX)));
-      setAnnotateSidebarWidth(next);
-    };
-    const onUp = () => {
-      setAnnotateSidebarResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
-  // ── Curated sidebar (annotate mode) — a SECOND right column, left of the
-  // Annotate sidebar, holding the per-stem show/hide filter for detector-sourced
+  const { collapsed: annotateSidebarCollapsed, setCollapsed: setAnnotateSidebarCollapsed, width: annotateSidebarWidth } = annotateSidebar;
+  // ── Curated sidebar (Algorithm Inspect) — a SECOND right column, left of the
+  // Algorithms sidebar, holding the per-stem show/hide filter for detector-sourced
   // ("curated") layers. Mirrors the annotate sidebar's collapse/width/resize
   // pattern; narrower max since the curated list is a thin column. ───────────
-  const CURATED_SIDEBAR_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
-  const CURATED_SIDEBAR_MAX_WIDTH = 400;
   const CURATED_SIDEBAR_DEFAULT_WIDTH = 340;
-  const [curatedSidebarCollapsed, setCuratedSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('tc:curated-sidebar-collapsed');
-      return stored === '1';
-    } catch { return false; }
+  const curatedSidebar = useResizableSidebar({
+    storageKey: 'tc:curated-sidebar', side: 'right',
+    minWidth: PAIRED_SIDEBAR_MIN_WIDTH, maxWidth: 400, defaultWidth: CURATED_SIDEBAR_DEFAULT_WIDTH,
+    widthFraction: PAIRED_SIDEBAR_WIDTH_FRACTION,
   });
-  useEffect(() => {
-    try { localStorage.setItem('tc:curated-sidebar-collapsed', curatedSidebarCollapsed ? '1' : '0'); } catch {}
-  }, [curatedSidebarCollapsed]);
-  const [curatedSidebarWidth, setCuratedSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('tc:curated-sidebar-width');
-      const n = stored ? parseInt(stored, 10) : NaN;
-      if (Number.isFinite(n) && n >= CURATED_SIDEBAR_MIN_WIDTH && n <= CURATED_SIDEBAR_MAX_WIDTH) return n;
-    } catch {}
-    return CURATED_SIDEBAR_DEFAULT_WIDTH;
-  });
-  useEffect(() => {
-    try { localStorage.setItem('tc:curated-sidebar-width', String(curatedSidebarWidth)); } catch {}
-  }, [curatedSidebarWidth]);
-  const [curatedSidebarResizing, setCuratedSidebarResizing] = useState(false);
-  const startCuratedSidebarResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setCuratedSidebarResizing(true);
-    const startX = e.clientX;
-    const startW = curatedSidebarWidth;
-    const onMove = (ev: MouseEvent) => {
-      // Right-anchored sidebar: dragging LEFT (clientX decreases) widens.
-      const next = Math.min(CURATED_SIDEBAR_MAX_WIDTH, Math.max(CURATED_SIDEBAR_MIN_WIDTH, startW + (startX - ev.clientX)));
-      setCuratedSidebarWidth(next);
-    };
-    const onUp = () => {
-      setCuratedSidebarResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
+  const { collapsed: curatedSidebarCollapsed, setCollapsed: setCuratedSidebarCollapsed, width: curatedSidebarWidth } = curatedSidebar;
   // Overflow menu in the sidebar title row — holds rare actions (Export
   // Manager, Delete-all) that used to live in a dedicated header block
   // below the title. Closing on outside-click keeps it from sticking open
@@ -1518,51 +1569,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // to a hover tab on the right edge). Persists per browser.
   // Match the left song-list sidebar's default + min (see the Annotate
   // sidebar note above) so both right-edge sidebars stay narrow by default.
-  const ALGO_SIDEBAR_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
-  const ALGO_SIDEBAR_MAX_WIDTH = 640;
   const ALGO_SIDEBAR_DEFAULT_WIDTH = SIDEBAR_DEFAULT_WIDTH;
-  const [algoSidebarCollapsed, setAlgoSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('tc:algo-sidebar-collapsed');
-      return stored === '1';
-    } catch { return false; }
+  const algoSidebar = useResizableSidebar({
+    storageKey: 'tc:algo-sidebar', side: 'right',
+    minWidth: PAIRED_SIDEBAR_MIN_WIDTH, maxWidth: 640, defaultWidth: ALGO_SIDEBAR_DEFAULT_WIDTH,
+    widthFraction: PAIRED_SIDEBAR_WIDTH_FRACTION,
   });
-  useEffect(() => {
-    try { localStorage.setItem('tc:algo-sidebar-collapsed', algoSidebarCollapsed ? '1' : '0'); } catch {}
-  }, [algoSidebarCollapsed]);
-  const [algoSidebarWidth, setAlgoSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('tc:algo-sidebar-width');
-      const n = stored ? parseInt(stored, 10) : NaN;
-      if (Number.isFinite(n) && n >= ALGO_SIDEBAR_MIN_WIDTH && n <= ALGO_SIDEBAR_MAX_WIDTH) return n;
-    } catch {}
-    return ALGO_SIDEBAR_DEFAULT_WIDTH;
-  });
-  useEffect(() => {
-    try { localStorage.setItem('tc:algo-sidebar-width', String(algoSidebarWidth)); } catch {}
-  }, [algoSidebarWidth]);
-  const [algoSidebarResizing, setAlgoSidebarResizing] = useState(false);
-  const startAlgoSidebarResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setAlgoSidebarResizing(true);
-    const startX = e.clientX;
-    const startW = algoSidebarWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.min(ALGO_SIDEBAR_MAX_WIDTH, Math.max(ALGO_SIDEBAR_MIN_WIDTH, startW + (startX - ev.clientX)));
-      setAlgoSidebarWidth(next);
-    };
-    const onUp = () => {
-      setAlgoSidebarResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
+  const { collapsed: algoSidebarCollapsed, setCollapsed: setAlgoSidebarCollapsed, width: algoSidebarWidth } = algoSidebar;
 
   // ── Run picker popover ──────────────────────────────────────────────
   // The inspect sidebar's per-row checkboxes now toggle *visibility* of cached
@@ -1608,53 +1621,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // time signature / alignment) + the Metronome, so the curator can tune the
   // grid alongside the waveform without scrolling past it. Mirrors the
   // Annotate / Algo sidebar geometry (drag-left to widen, collapses to a
-  // hover tab on the right edge). Wider default than the others because the
-  // grid params sit in a 3-up row. Persists per browser.
-  const PREP_SIDEBAR_MIN_WIDTH = 360;
-  const PREP_SIDEBAR_MAX_WIDTH = 760;
+  // hover tab on the right edge). Opens at the same width as the song list
+  // (SIDEBAR_WIDTH_FRACTION of the window); its floor is higher because the
+  // grid params sit in a 3-up row. Persists per browser once dragged.
   const PREP_SIDEBAR_DEFAULT_WIDTH = 500;
-  const [prepSidebarCollapsed, setPrepSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('tc:prep-sidebar-collapsed');
-      return stored === '1';
-    } catch { return false; }
+  const prepSidebar = useResizableSidebar({
+    storageKey: 'tc:prep-sidebar', side: 'right',
+    minWidth: 280, maxWidth: 760, defaultWidth: PREP_SIDEBAR_DEFAULT_WIDTH,
+    widthFraction: SIDEBAR_WIDTH_FRACTION,
   });
-  useEffect(() => {
-    try { localStorage.setItem('tc:prep-sidebar-collapsed', prepSidebarCollapsed ? '1' : '0'); } catch {}
-  }, [prepSidebarCollapsed]);
-  const [prepSidebarWidth, setPrepSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('tc:prep-sidebar-width');
-      const n = stored ? parseInt(stored, 10) : NaN;
-      if (Number.isFinite(n) && n >= PREP_SIDEBAR_MIN_WIDTH && n <= PREP_SIDEBAR_MAX_WIDTH) return n;
-    } catch {}
-    return PREP_SIDEBAR_DEFAULT_WIDTH;
-  });
-  useEffect(() => {
-    try { localStorage.setItem('tc:prep-sidebar-width', String(prepSidebarWidth)); } catch {}
-  }, [prepSidebarWidth]);
-  const [prepSidebarResizing, setPrepSidebarResizing] = useState(false);
-  const startPrepSidebarResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setPrepSidebarResizing(true);
-    const startX = e.clientX;
-    const startW = prepSidebarWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.min(PREP_SIDEBAR_MAX_WIDTH, Math.max(PREP_SIDEBAR_MIN_WIDTH, startW + (startX - ev.clientX)));
-      setPrepSidebarWidth(next);
-    };
-    const onUp = () => {
-      setPrepSidebarResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
+  const { collapsed: prepSidebarCollapsed, setCollapsed: setPrepSidebarCollapsed, width: prepSidebarWidth } = prepSidebar;
 
   // ── Upload ────────────────────────────────────────────────────────────────
   const [uploading, setUploading] = useState(false);
@@ -1690,9 +1666,29 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // stay inside it. Declared here rather than next to runPickerOpen because the
   // scrim is dropped once a job starts (the panel becomes a progress readout you
   // can tab away from), and that depends on runJob.
-  useFocusTrap(runPickerRef, runPickerOpen && runJob?.status !== 'running');
+  // It stays dropped after the job ends: the finished run's summary, warnings
+  // and failures are in the log panel behind it, and re-dimming the page the
+  // moment they arrive hid exactly what the user was waiting to read. Opening
+  // the picker again brings the scrim back.
+  const [runPickerScrimOff, setRunPickerScrimOff] = useState(false);
+  useEffect(() => {
+    if (runJob?.status === 'running') setRunPickerScrimOff(true);
+  }, [runJob?.status]);
+  const runPickerModal = runPickerOpen && runJob?.status !== 'running' && !runPickerScrimOff;
+  useFocusTrap(runPickerRef, runPickerModal);
   const logPreRef = useRef<HTMLPreElement>(null);
+  // The job box itself: when a run ends it scrolls into view and flashes in
+  // its outcome colour, so the result is seen even if the user scrolled away.
+  const runJobBoxRef = useRef<HTMLDivElement>(null);
+  const [runJobFlash, setRunJobFlash] = useState<string | null>(null);
   const [, setElapsedTick] = useState(0);
+
+  // Keep the song list's stem badge in step with the disk without refetching
+  // the manifest: a finished job, or a clear, patches just that field.
+  // `id: null` patches every song (Clear all caches).
+  const setSongStems = useCallback((id: string | null, stems: string[]) => {
+    setAudioFiles((prev) => prev.map((f) => (id === null || f.id === id ? { ...f, stems } : f)));
+  }, []);
 
   // ── Demucs stem job (per song, separate from runJob so stemming doesn't block the run-algo panel) ──
   // The whole run/poll/cancel/kill lifecycle lives in useDemucsStems so the
@@ -1714,6 +1710,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   } = useDemucsStems({
     onComplete: (audio, m) => {
       if (selectedAudioRef.current?.id === audio.id) setStemManifest(m);
+      setSongStems(audio.id, stemsFromManifest(m));
     },
   });
 
@@ -1740,6 +1737,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Empty string = auto-detect (Whisper's default). Set to an ISO 639-1 code
   // (e.g. "fr") to skip language detection and force a specific language.
   const [lyricsLanguage, setLyricsLanguage] = useState<string>('');
+  // Whose beats MSAF / ruptures / LoCoMotif cut their features at, for the
+  // next run: the song's grid ('user') or their own tracked beats ('auto').
+  const [algoGrid, setAlgoGrid] = useState<AlgoGrid>('user');
   const [selectedAlgorithms, setSelectedAlgorithms] = useState<Set<string>>(() => {
     const userDefaults = getCurrentSettings().defaultAlgorithms;
     return new Set([
@@ -1811,7 +1811,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // ── Player state ─────────────────────────────────────────────────────────
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
-  const [playerTime, setPlayerTime] = useState(0);
+  // The playhead lives in a clock, not state: it changes every animation
+  // frame during playback, and as state it re-rendered this whole page and
+  // everything under it per frame. See hooks/usePlayhead.
+  const [playheadClock] = useState(createPlayheadClock);
+  // Refs mirroring player state — used inside event handlers without re-binding effects
+  const playerTimeRef = useRef(0);
+  const setPlayerTime = useCallback((t: number, sample?: PlayheadSample) => {
+    playerTimeRef.current = t;
+    playheadClock.set(t, sample);
+  }, [playheadClock]);
   const [playerIsPlaying, setPlayerIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   // Playback speed multiplier. Lives here (not in the player) so it survives
@@ -1821,30 +1830,48 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Seeded from the user's saved default so the existing Settings preference
   // actually drives playback instead of sitting unused.
   const [playbackRate, setPlaybackRate] = useState(() => getCurrentSettings().defaultPlaybackRate ?? 1);
-  // Where WaveSurfer itself sits. Same as `playerTime` except while a loop
+  // Where WaveSurfer itself sits. Same as the playhead clock except while a loop
   // preview has borrowed the playhead (see `handleLoopPosition`) — that's the
   // position the cursor returns to when the preview stops.
   const truePlayerTimeRef = useRef(0);
-  const handlePlayerTime = useCallback((t: number) => {
+  const handlePlayerTime = useCallback((t: number, sample?: PlayheadSample) => {
     truePlayerTimeRef.current = t;
-    setPlayerTime(t);
-  }, []);
+    setPlayerTime(t, sample);
+  }, [setPlayerTime]);
   // ── Sticky slim transport ────────────────────────────────────────────────
   // When the user scrolls the full waveform player up under the pinned header,
   // collapse the header to a one-line title + play/stop controls so playback
   // stays reachable (no waveform, no BPM) — a "slim" look on scroll.
-  const [headerCollapsed, setHeaderCollapsed] = useState(false);
+  //
+  // The swap happens once the player's OWN transport row is half behind the
+  // header, and on a slow scroll it is a crossfade: the slim bar fades in as
+  // the player's row fades out, so there is always one transport on screen
+  // and never two. On a fast scroll it is a cut — at speed a fade only reads
+  // as lag.
+  //
+  // The swap moves no geometry. Both headers share one grid cell, so the
+  // header box is always the full header's height, and the one not showing is
+  // `visibility: hidden` at opacity 0 (`data-off`, index.css), not `hidden`.
+  // Every earlier version changed the header's height on the swap — the page
+  // re-laid out under it, the toolbar re-measured itself, and the pinned time
+  // ruler re-placed itself a frame later, which read as a jump — and on a song
+  // with thousands of notes each of those was a stall. The box paints no
+  // background of its own and passes clicks through; each header paints and
+  // takes its own, so with the slim bar showing, the rest of the box shows
+  // what is under it. The ruler hugs whichever header is showing (see
+  // rulerPinRef in SharedVizPanel).
+  //
+  // None of this is a render: it runs on every scroll event, and a render of
+  // this page is ~75 ms in the dev build on a demo song, more with many layers.
   const playerWrapRef = useRef<HTMLDivElement | null>(null);
   const headerBarRef = useRef<HTMLDivElement | null>(null);
+  const slimHeaderRef = useRef<HTMLDivElement | null>(null);
+  const fullHeaderRef = useRef<HTMLDivElement | null>(null);
   const collapsedRef = useRef(false);
-  // The slim bar's own bottom edge — 72px app bar plus the bar itself. Learned
-  // the first time it renders (it wraps to two lines on a narrow column); 120
-  // is the one-line height it has the rest of the time.
-  const slimBottomRef = useRef(120);
-  // Where the player's transport row landed once the swap had reflowed. See
-  // the hand-back rule in `update`.
-  const handBackAtRef = useRef<number | null>(null);
   const transportRowRef = useRef<Element | null>(null);
+  // The row styleForCollapse last faded, so a player that remounts while
+  // collapsed gets its fresh row faded too.
+  const styledRowRef = useRef<Element | null>(null);
   // The player's own transport row. Cached, because the lookup walks the whole
   // waveform subtree (the row sits below every lane) and this runs on each
   // scroll event; re-resolved when the player remounts.
@@ -1856,80 +1883,67 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }
     return transportRowRef.current;
   }, []);
-  useLayoutEffect(() => {
-    collapsedRef.current = headerCollapsed;
-    if (!headerCollapsed) { handBackAtRef.current = null; return; }
-    // Read after the swap has reflowed, so both numbers describe the world the
-    // slim bar actually made.
-    const header = headerBarRef.current;
-    const row = findTransportRow();
-    if (header) slimBottomRef.current = header.getBoundingClientRect().bottom;
-    handBackAtRef.current = row ? row.getBoundingClientRect().bottom : null;
-  }, [headerCollapsed, findTransportRow]);
+  // Apply the collapsed / full look to the two headers and the player's row.
+  // Writes only — nothing here reads layout back.
+  const styleForCollapse = useCallback((collapsed: boolean, cut: boolean) => {
+    for (const [el, off] of [[slimHeaderRef.current, !collapsed], [fullHeaderRef.current, collapsed]] as const) {
+      if (!el) continue;
+      // Left in place until the next swap: cleared in the same frame, the
+      // transition would still run.
+      el.style.transition = cut ? 'none' : '';
+      el.toggleAttribute('data-off', off);
+    }
+    const row = findTransportRow() as HTMLElement | null;
+    if (row) {
+      row.style.transition = cut ? 'none' : 'opacity 160ms ease-out';
+      row.style.opacity = collapsed ? '0' : '';
+      row.style.pointerEvents = collapsed ? 'none' : '';
+    }
+    styledRowRef.current = row;
+  }, [findTransportRow]);
   useEffect(() => {
-    // Hand over the moment the player's OWN transport row goes under the slim
-    // bar — not when the player's top edge passes a line, which is what this
-    // used to test. The transport sits at the BOTTOM of the player, so the old
-    // rule put the slim transport on screen while the real one was still
-    // sitting right below it: two play buttons, two clocks, one of them
-    // ignorable.
-    //
-    // Both states are judged against the same line, the slim bar's bottom
-    // edge, because that is the header that exists whenever the slim transport
-    // is up. Judging against the live header instead decides in one layout and
-    // lands in another, and the two then chase each other across the boundary.
-    //
-    // Coming back needs its own threshold. Chrome's scroll anchoring cancels
-    // most of the reflow — the header loses ~110px, the browser pays it back
-    // in scrollTop, and the row drops toward the line instead of rising clear
-    // of it — so `handBackAtRef` records where the row actually landed and the
-    // full header only returns once the row has climbed past that. Without it
-    // the two states sit either side of one pixel and flicker.
-    //
-    // The cost of an exact hand-off is a short stretch, while the row is
-    // behind the tall header and the slim bar is not up yet, with no transport
-    // on screen. Closing that gap means showing both, which is the bug.
+    // A header that outlived the last run keeps whatever it shows; a fresh
+    // one comes up full.
+    const slim = slimHeaderRef.current;
+    collapsedRef.current = !!slim && !slim.hasAttribute('data-off');
+    // Faster than this (px of row travel per ms, ~1500 px/s) the swap is a cut.
+    const FAST_PX_PER_MS = 1.5;
+    let lastMid = NaN;
+    let lastT = 0;
     const update = () => {
       const wrap = playerWrapRef.current;
       const header = headerBarRef.current;
-      if (!wrap || !header) { setHeaderCollapsed(false); return; }
-      const row = findTransportRow();
-      const line = slimBottomRef.current;
-      // No player mounted yet: fall back to the player's own top edge.
-      if (!row) { setHeaderCollapsed(wrap.getBoundingClientRect().top < line); return; }
-      const rowBottom = row.getBoundingClientRect().bottom;
-      if (!collapsedRef.current) {
-        // A page with nothing much under the player can run out of scroll
-        // before the row ever reaches the line. Rather than leave no transport
-        // at all down there, hand over once the row is behind the tall header:
-        // a duplicated play button beats an unreachable one.
-        const scroller = document.scrollingElement;
-        const stuck = !!scroller
-          && scroller.scrollHeight > scroller.clientHeight + 1
-          && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
-        setHeaderCollapsed(rowBottom < line
-          || (stuck && rowBottom < header.getBoundingClientRect().bottom));
+      if (!wrap || !header) {
+        if (collapsedRef.current) { collapsedRef.current = false; styleForCollapse(false, true); }
         return;
       }
-      setHeaderCollapsed(rowBottom <= Math.max(line, (handBackAtRef.current ?? line) + 1));
+      const line = header.getBoundingClientRect().bottom;
+      const row = findTransportRow();
+      // No player mounted yet: fall back to the player's own top edge.
+      const r = row?.getBoundingClientRect();
+      const rowMid = r ? (r.top + r.bottom) / 2 : wrap.getBoundingClientRect().top;
+      const now = performance.now();
+      const dt = now - lastT;
+      const fast = dt > 0 && dt < 100 && Math.abs(rowMid - lastMid) / dt > FAST_PX_PER_MS;
+      lastMid = rowMid;
+      lastT = now;
+      const collapse = rowMid <= line;
+      if (collapse !== collapsedRef.current) {
+        collapsedRef.current = collapse;
+        styleForCollapse(collapse, fast);
+      } else if (collapse && row && row !== styledRowRef.current) {
+        // The player remounted underneath us.
+        styleForCollapse(true, true);
+      }
     };
     update();
     window.addEventListener('scroll', update, true);
-    const onResize = () => {
-      // Both bars wrap with the column width, so the recorded landing point
-      // describes a layout that no longer exists.
-      const header = headerBarRef.current;
-      const row = findTransportRow();
-      if (collapsedRef.current && header) slimBottomRef.current = header.getBoundingClientRect().bottom;
-      if (collapsedRef.current && row) handBackAtRef.current = row.getBoundingClientRect().bottom;
-      update();
-    };
-    window.addEventListener('resize', onResize);
+    window.addEventListener('resize', update);
     return () => {
       window.removeEventListener('scroll', update, true);
-      window.removeEventListener('resize', onResize);
+      window.removeEventListener('resize', update);
     };
-  }, [selectedAudio, findTransportRow]);
+  }, [selectedAudio, findTransportRow, styleForCollapse]);
   // A pending copy-undo belongs to one song; drop it when the song changes so
   // the banner can't revert an edit on a different track.
   useEffect(() => { setLastCopyUndo(null); }, [selectedAudio]);
@@ -2045,12 +2059,43 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const canEditDocRef = useRef(true);
   // Set when an edit was refused, so the lock bar can say why.
   const [blockedByLock, setBlockedByLock] = useState(false);
+  // One-line, self-dismissing notice for adds that couldn't honor the
+  // selection as-drawn (a region added to Cues, which are points; an edit to a locked lane).
+  const [annotationNotice, setAnnotationNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!annotationNotice) return;
+    const id = setTimeout(() => setAnnotationNotice(null), 6000);
+    return () => clearTimeout(id);
+  }, [annotationNotice]);
   const [cueLayersDoc, setCueLayersDocRaw, annotationDocsCtl] =
     useUndoableState<AnnotationLayersDocument | null>(null);
+  // Items whose envelope a retime cleared, waiting to be read again (see the
+  // re-extract effect by Extract ADSR); the wake starts its check.
+  const reextractRef = useRef(new Map<string, DroppedEnvelope>());
+  const reextractWakeRef = useRef<() => void>(() => {});
+  // Algorithm Inspect has two undo histories — the annotations and the Merge
+  // row's working state — and ⌘Z walks back whichever was edited last.
+  const lastUndoSurfaceRef = useRef<'docs' | 'merge'>('docs');
   const setCueLayersDoc = useCallback<SetUndoableState<AnnotationLayersDocument | null>>(
     (next, opts) => {
       if (!canEditDocRef.current) { setBlockedByLock(true); return; }
-      setCueLayersDocRaw(next, opts);
+      // A lane locked from its ⋮ menu: an edit that would change what it says
+      // is refused whole, whichever path it came by — a drag, a shortcut, a
+      // move from another lane, a merge into it.
+      let refused = null as AnnotationLayer | null;
+      const guarded = (prev: AnnotationLayersDocument | null) => {
+        // A lyric retimed by this edit loses its envelope: it measured the
+        // word's old span, and a stale shape is worse than none.
+        const computed = dropRetimedEnvelopes(prev, typeof next === 'function' ? next(prev) : next, (d) => {
+          reextractRef.current.set(d.itemId, d);
+          reextractWakeRef.current();
+        });
+        refused = lockedLayerEdited(prev, computed);
+        return refused ? prev : computed;
+      };
+      if (!opts?.skipHistory) lastUndoSurfaceRef.current = 'docs';
+      setCueLayersDocRaw(guarded, opts);
+      if (refused) setAnnotationNotice(`"${refused.name}" is locked — unlock it from its lane's ⋮ menu to edit it.`);
     },
     [setCueLayersDocRaw],
   );
@@ -2103,28 +2148,136 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }), opts);
   }, [setCueLayersDoc]);
 
-  /** Copy a detector's accepted section blocks into a NEW boundary layer named
-   *  after it — the boundary twin of the copy-to-layer every other detector
-   *  kind gets. Returns the new layer's id so the caller can offer an undo. */
-  const copyBoundarySectionsToNewLayer = useCallback((
-    sections: readonly SectionBlock[],
+  /** Copy boundary items into a NEW boundary layer named after their source —
+   *  the boundary twin of the copy-to-layer every other detector kind gets.
+   *  Returns the new layer's id so the caller can offer an undo. */
+  const copyBoundaryItemsToNewLayer = useCallback((
+    incoming: readonly BoundaryItem[],
     name: string,
+    /** What the copy came from, when that isn't its name — an algo row's id,
+     *  which the row's copy count is keyed by. */
+    importedFrom: string = name,
   ): string | null => {
-    if (sections.length === 0) return null;
+    if (incoming.length === 0) return null;
     const created = newBoundaryLayer(name, pickDefaultLayerColor(cueLayersDocRef.current?.layers ?? []));
-    const items: BoundaryItem[] = [...sections]
-      .sort((a, b) => a.time - b.time)
-      .map((sec) => ({ ...sec, id: newId() }));
+    const items: BoundaryItem[] = [...incoming].sort((a, b) => a.time - b.time);
+    // Clicked twice with nothing changed: the first copy is the copy.
+    const already = sameCopy({ ...created, items, importedFrom }, cueLayersDocRef.current?.layers ?? []);
+    if (already) {
+      announceCopyUnchanged();
+      setSelectedBoundaryLayerId(already.id);
+      return null;
+    }
     setCueLayersDoc((d) => {
       const base = d ?? emptyLayersDoc(selectedAudioRef.current?.id ?? '');
       return {
         ...base,
-        layers: [...base.layers, { ...created, items, source: 'user', importedFrom: name } as AnnotationLayer],
+        layers: [...base.layers, { ...created, items, source: 'user', importedFrom } as AnnotationLayer],
       };
     });
     setSelectedBoundaryLayerId(created.id);
     return created.id;
   }, [setCueLayersDoc]);
+
+
+  /** Copy detector items of any copyable kind into a NEW layer of the
+   *  annotator's own, named after the detector. The one conversion behind the
+   *  lane's ⬇, the sidebar row's ⬇ and a detector's `is_annotation` auto-copy.
+   *  Returns the new layer's id, or null when there was nothing to copy. */
+  const copyDetectorItemsToNewLayer = useCallback((
+    category: ReviewableCategory,
+    items: readonly ReviewableItem[],
+    name: string,
+    /** The detector's shared group (see utils/detectorGroups): the copy joins
+     *  the annotation group of that name, made by whichever copy comes first. */
+    groupName: string | null = null,
+  ): string | null => {
+    if (items.length === 0) return null;
+    const converted = convertDetectorItems(category, [...items] as ReviewableItem[]);
+    if (!converted || converted.length === 0) return null;
+    if (category === 'boundaries') return copyBoundaryItemsToNewLayer(converted as BoundaryItem[], name);
+    const copiedItems = (category === 'lyrics' ? withLyricSpans(converted as LyricsItem[]) : converted) as never;
+    // Clicked twice with nothing changed: the first copy is the copy.
+    if (sameCopy({ type: category, items: copiedItems, importedFrom: name }, cueLayersDocRef.current?.layers ?? [])) {
+      announceCopyUnchanged();
+      return null;
+    }
+    const layerId = newId();
+    setCueLayersDoc((d) => {
+      const base = d ?? emptyLayersDoc(selectedAudioRef.current?.id ?? '');
+      const layer: AnnotationLayer = {
+        id: layerId,
+        name,
+        type: category,
+        visible: true,
+        color: pickDefaultLayerColor(base.layers),
+        // A copied lyrics take keeps newLyricsLayer's 'off': its words are
+        // timed to the voice, and a beat snap would pull every drag onto the grid.
+        snap: category === 'loops' ? 'bar' : category === 'lyrics' ? 'off' : 'beat',
+        items: copiedItems,
+        source: 'user',
+        importedFrom: name,
+      };
+      const next = { ...base, layers: [...base.layers, layer] };
+      return groupName ? addLayerToGroupNamed(next, layerId, groupName) : next;
+    });
+    return layerId;
+  }, [copyBoundaryItemsToNewLayer, setCueLayersDoc]);
+
+  /** Copy a detector's riff lane into a NEW riff-patterns layer of your own:
+   *  the lane as it is — its nodes, instances and occurrences — with ids of
+   *  its own, and the lane's big picture in one line (`grooveSummary`) for a
+   *  reader of the export. The one copy behind the lane's ⬇, its band's and
+   *  its sidebar row's. Returns the new layer's id; null when nothing was made. */
+  const copyRiffToNewLayer = useCallback((
+    layer: AnnotationLayer<'riff-patterns'>,
+    name: string,
+    groupName: string | null = null,
+  ): string | null => {
+    if (layer.items.length === 0) return null;
+    const nodeIds = new Map((layer.nodes ?? []).map((n) => [n.id, newId()]));
+    const comboIds = new Map((layer.combos ?? []).map((c) => [c.id, newId()]));
+    const ref = (t: string) => nodeIds.get(t) ?? comboIds.get(t) ?? t;
+    const sequence = (seq: RiffPatternItem['sequence']) => seq.map((e) => ({ ...e, type: ref(e.type) }));
+    const grid = {
+      bpm: songInfo?.bpm ?? 0,
+      gridOffset: songInfo?.gridOffset ?? 0,
+      beatsPerBar: beatsPerBarFromTimeSignature(songInfo?.timeSignature),
+      segments: resolveGridSegments(songInfo),
+    } as LaneGridProps;
+    const summary = layer.summary ?? grooveSummary(riffGrooveLane(layer, grid).model);
+    const made: AnnotationLayer<'riff-patterns'> = {
+      ...newRiffPatternLayer(name, pickDefaultLayerColor(cueLayersDocRef.current?.layers ?? [])),
+      nodes: (layer.nodes ?? []).map((n) => ({ ...n, id: nodeIds.get(n.id)! })),
+      combos: (layer.combos ?? []).map((c) => ({ ...c, id: comboIds.get(c.id)!, sequence: sequence(c.sequence) })),
+      items: (layer.items as RiffPatternItem[]).map((it) => ({ ...it, id: newId(), sequence: sequence(it.sequence) })),
+      source: 'user',
+      importedFrom: name,
+      ...(layer.drum ? { drum: layer.drum } : {}),
+      ...(summary ? { summary } : {}),
+    };
+    // Clicked twice with nothing changed: the first copy is the copy.
+    if (sameCopy(made, cueLayersDocRef.current?.layers ?? [])) {
+      announceCopyUnchanged();
+      return null;
+    }
+    setCueLayersDoc((d) => {
+      const base = d ?? emptyLayersDoc(selectedAudioRef.current?.id ?? '');
+      const next = { ...base, layers: [...base.layers, made as AnnotationLayer] };
+      return groupName ? addLayerToGroupNamed(next, made.id, groupName) : next;
+    });
+    return made.id;
+  }, [songInfo, setCueLayersDoc]);
+
+  /** Same, for callers that hold rendered SectionBlock rows rather than stored
+   *  items (the merge preview). Detector output does NOT come through here:
+   *  it converts straight to BoundaryItem via convertDetectorItems, so it
+   *  never round-trips through the render shape. */
+  const copyBoundarySectionsToNewLayer = useCallback((
+    sections: readonly SectionBlock[],
+    name: string,
+  ): string | null => copyBoundaryItemsToNewLayer(sections.map(sectionToBoundaryItem), name),
+  [copyBoundaryItemsToNewLayer]);
 
   /** Merge accepted section blocks into the active boundary layer, creating
    *  "Boundaries 1" when the song has none yet. The target for every
@@ -2132,7 +2285,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
    *  boundary twin of DetectorOutputReview's copy-to-layer. */
   const appendBoundarySections = useCallback((sections: readonly SectionBlock[]) => {
     if (sections.length === 0) return;
-    const incoming: BoundaryItem[] = sections.map((sec) => ({ ...sec, id: newId() }));
+    const incoming: BoundaryItem[] = sections.map(sectionToBoundaryItem);
     const layer = activeBoundaryLayerRef.current;
     if (layer) {
       updateBoundaryItems(layer.id, (prev) => [...prev, ...incoming].sort((a, b) => a.time - b.time));
@@ -2156,6 +2309,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // doesn't depend on cueLayersDoc, to avoid re-flushing on every keystroke)
   // can always read the latest value.
   const pendingLayersDocRef = useRef<{ slug: string; doc: AnnotationLayersDocument } | null>(null);
+  // The file revision this page's copy of the layers was read at — set on
+  // load, advanced by each save, named by the next one. The server refuses a
+  // save from an older revision: another tab saved since, and saving here
+  // would replace their layers with this page's copy.
+  const layersRevRef = useRef<{ slug: string; rev: number } | null>(null);
+  // Saves run one after another, so each one names the revision the last
+  // one produced.
+  const layersSaveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  // Why this page has stopped saving the song's layers: they failed to load
+  // (an empty song here is not the file's contents), or another tab saved
+  // the song since it loaded here.
+  const [layersSyncProblem, setLayersSyncProblem] = useState<null | 'load-failed' | 'conflict'>(null);
   // True once the per-song `loadLayers` call below has settled (whether or not
   // a file existed) — distinguishes "still loading" from "loaded, nothing
   // annotated yet" for the editor panels, which look the same otherwise.
@@ -2178,24 +2343,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // `updateBoundaryItems`, mirroring the Cue/Span/Loop popover pattern above.
   const boundaryPopover = useBoundaryEditPopover();
 
-  // Loops (experimental, gated by Settings.experimentalLoopsAndPatterns).
+  // Loops.
   // Loop layers live in the same AnnotationLayersDocument as cue layers; the
   // editor / canvas filter by `type` so they don't bleed into each other.
   const [focusedLoop, setFocusedLoop] = useState<{ layerId: string; itemId: string } | null>(null);
   // While a loop preview runs, its engine owns the playhead — mirroring its
-  // position into `playerTime` sweeps the waveform cursor, the lane rows and
+  // position into the playhead clock sweeps the waveform cursor, the lane rows and
   // every other currentTime-driven overlay through the loop instead of
   // freezing them where the track was last stopped. On stop the playhead goes
   // back to where the main player actually sits, so pressing Play resumes
   // from the same spot the cursor shows.
   const handleLoopPosition = useCallback((timeSec: number | null) => {
     setPlayerTime(timeSec ?? truePlayerTimeRef.current);
-    // `playerTime` reaches the lane rows through a re-render; the player's own
-    // playhead is placed imperatively off the media clock and would otherwise
+    // The clock moves the lane rows' cursors; the player's own playhead is
+    // placed imperatively off the media clock and would otherwise
     // stay parked where WaveSurfer was paused, one cursor out of step with
     // every other one on screen.
     externalTimeRef.current?.(timeSec);
-  }, []);
+  }, [setPlayerTime]);
   const loopPlayback = useLoopPlayback({ audioBuffer, onPosition: handleLoopPosition });
   // The hook returns a fresh object every render, so anything that closes over
   // `loopPlayback` itself churns its identity once per frame while a loop is
@@ -2240,10 +2405,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const nodePopover = useNodeEditPopover();
   const energySpanPopover = useEnergySpanExportPopover();
   const [energySpanRange, setEnergySpanRange] = useState<{ start: number; end: number } | null>(null);
-  // Which lane the open export was asked for, when it was asked for by name —
-  // the energies lane's own "+ ADD" sets it; the pending pill's ⚡ ENERGY
-  // clears it and lets the picker preselect the energies lane as before.
-  const [energySpanTargetLayerId, setEnergySpanTargetLayerId] = useState<string | null>(null);
   // The Prominence lane's open lead-assign range, reported up by LeadLaneRow.
   // Used as a zoom focus; null whenever that picker is closed.
   const [leadPendingRange, setLeadPendingRange] = useState<{ start: number; end: number } | null>(null);
@@ -2257,11 +2418,92 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const [nodePopoverEntryCtx, setNodePopoverEntryCtx] =
     useState<{ patternItemId: string; entryIndex: number } | null>(null);
   const lyricsPopover = useLyricsEditPopover();
+  // A new lyric lands with no text, so its card opens right away, under the
+  // word on the lane, with the text box focused. The word renders on the next
+  // frame; a lane that is off-screen or collapsed gets the card centred.
+  const openNewLyricCard = useCallback(({ layerId, itemId }: { layerId: string; itemId: string }) => {
+    openCardUnderItem(lyricsPopover.openAt, layerId, itemId);
+  }, [lyricsPopover]);
   useEffect(() => {
     if (lyricsPopover.open) {
       setFocusedLyrics({ layerId: lyricsPopover.open.layerId, itemId: lyricsPopover.open.itemId });
     }
   }, [lyricsPopover.open]);
+
+  // ── Lane drafts ───────────────────────────────────────────────────────────
+  // An item made by a gesture on its lane (handleLaneCreate) opens its card
+  // and is only an offer until that card's Done: autosave writes the document
+  // without it, and closing the card any other way — ×, Escape, a click
+  // elsewhere — takes it back out, undo history included, as if it had never
+  // been drawn.
+  const [laneDraft, setLaneDraftState] = useState<LaneDraft | null>(null);
+  const laneDraftRef = useRef<LaneDraft | null>(null);
+  const setLaneDraft = useCallback((d: LaneDraft | null) => {
+    laneDraftRef.current = d;
+    setLaneDraftState(d);
+  }, []);
+  const popoverFor = (type: LaneCreateType) => (
+    type === 'cues' ? cuePopover : type === 'spans' ? spanPopover : type === 'loops' ? loopPopover : lyricsPopover
+  );
+  const draftPopoverOpen = laneDraft ? popoverFor(laneDraft.type).open : null;
+  const discardLaneDraft = useCallback(() => {
+    const d = laneDraftRef.current;
+    if (!d) return;
+    setLaneDraft(null);
+    annotationDocsCtl.scrub((doc) => withoutItem(doc, d.itemId), sameLayersDoc);
+  }, [setLaneDraft, annotationDocsCtl]);
+  useEffect(() => {
+    if (!laneDraft) return;
+    if (draftPopoverOpen?.itemId === laneDraft.itemId) {
+      if (!laneDraft.opened) setLaneDraft({ ...laneDraft, opened: true });
+    } else if (laneDraft.opened) {
+      discardLaneDraft();
+    }
+  }, [laneDraft, draftPopoverOpen, setLaneDraft, discardLaneDraft]);
+  const keepLaneDraft = () => {
+    const d = laneDraftRef.current;
+    if (!d) return;
+    // A close guard (an unsaved Tap Along take) can veto; the draft stays one.
+    if (popoverFor(d.type).close() === false) return;
+    // Cleared in the same batch as the close, so the effect above never sees
+    // a closed card with a draft still pending. Clearing it is also what lets
+    // autosave write the item at last.
+    setLaneDraft(null);
+  };
+  // A draft belongs to the song it was drawn on.
+  useEffect(() => { setLaneDraft(null); }, [selectedAudio?.id, setLaneDraft]);
+
+  // ── The riff open on its lane ─────────────────────────────────────────────
+  // One instance at a time is built on its lane (RiffLaneEditor). A new one —
+  // dragged out on empty lane — is a draft, like every lane-drawn item: it and
+  // the nodes made for it are left out of every save, Done keeps them, and
+  // Discard / Esc takes them out of the undo history too. An existing
+  // instance opened from its card edits live: Close only closes.
+  const [riffEditor, setRiffEditorState] = useState<{ layerId: string; itemId: string; draftNodeIds: string[] | null } | null>(null);
+  const riffEditorRef = useRef<typeof riffEditor>(null);
+  const setRiffEditor = useCallback((next: typeof riffEditor) => {
+    riffEditorRef.current = next;
+    setRiffEditorState(next);
+  }, []);
+  const riffDraft: RiffDraft | null = riffEditor?.draftNodeIds
+    ? { layerId: riffEditor.layerId, itemId: riffEditor.itemId, nodeIds: riffEditor.draftNodeIds }
+    : null;
+  const discardRiffEditor = useCallback(() => {
+    const ed = riffEditorRef.current;
+    if (!ed) return;
+    setRiffEditor(null);
+    if (ed.draftNodeIds) {
+      const draft = { layerId: ed.layerId, itemId: ed.itemId, nodeIds: ed.draftNodeIds };
+      annotationDocsCtl.scrub((doc) => withoutRiffDraft(doc, draft), sameLayersDoc);
+    }
+  }, [setRiffEditor, annotationDocsCtl]);
+  // Clearing the editor is also what lets autosave write a kept draft.
+  const doneRiffEditor = useCallback(() => setRiffEditor(null), [setRiffEditor]);
+  const riffNodeCreated = useCallback((nodeId: string) => {
+    const ed = riffEditorRef.current;
+    if (ed?.draftNodeIds) setRiffEditor({ ...ed, draftNodeIds: [...ed.draftNodeIds, nodeId] });
+  }, [setRiffEditor]);
+  useEffect(() => { setRiffEditor(null); }, [selectedAudio?.id, setRiffEditor]);
 
   // ── Active ADD-target layer per multi-layer type ──────────────────────────
   // Set by clicking a layer card (or by picking from the ▾ next to ADD), and
@@ -2352,6 +2594,43 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   );
   const customDetectorsRef = useRef<CustomRegistryEntry[]>([]);
   useEffect(() => { customDetectorsRef.current = customDetectors; }, [customDetectors]);
+  const customResultsRef = useRef<Record<string, CustomResultEnvelope>>({});
+  useEffect(() => { customResultsRef.current = customResults; }, [customResults]);
+
+  // `is_annotation`: a detector that asks for it has its output copied into a
+  // layer of the annotator who ran it, as soon as the run lands — the lane's ⬇,
+  // done for them. Once: if they already hold a copy (auto or by hand) a re-run
+  // leaves it alone, since they may have edited it. Only a run on the open song
+  // copies; its layers are the only ones this page holds. Returns the line the
+  // run log gets, or '' when nothing was copied.
+  const autoCopyDetectorRun = useCallback((name: string, slug: string, env: CustomResultEnvelope): string => {
+    if (selectedAudioRef.current?.id !== slug) return '';
+    const det = customDetectorsRef.current.find((d) => d.name === name);
+    // A `lanes` detector copies each lane that has a layer to copy into, as
+    // that lane's ⬇ would: "<detector> · <lane>", in "<detector> · <group>".
+    if (det && env.lanes) {
+      return env.lanes.map((lane) => {
+        const label = `${det.label || det.name} · ${lane.label}`;
+        const plan = planDetectorAutoCopy(
+          { name: det.name, label, output_kind: lane.output_kind, is_annotation: det.is_annotation },
+          { fatal: env.fatal, items: lane.items }, cueLayersDocRef.current?.layers ?? []);
+        if (!plan) return '';
+        if (plan.held) return `  ⬇ your copy "${plan.label}" was left as it is\n`;
+        const group = `${det.label || det.name}${lane.group ? ` · ${lane.group}` : ''}`;
+        return copyDetectorItemsToNewLayer(plan.category, lane.items as ReviewableItem[], plan.label, group)
+          ? `  ⬇ copied into a new layer of yours, "${plan.label}" in the group "${group}"\n`
+          : '';
+      }).join('');
+    }
+    const plan = planDetectorAutoCopy(det, env, cueLayersDocRef.current?.layers ?? []);
+    if (!plan) return '';
+    if (plan.held) return `  ⬇ your copy "${plan.label}" was left as it is\n`;
+    const group = detectorCopyGroup(name, customDetectorsRef.current);
+    return copyDetectorItemsToNewLayer(plan.category, env.items as ReviewableItem[], plan.label, group)
+      ? `  ⬇ copied into a new layer of yours, "${plan.label}"${group ? ` in the group "${group}"` : ''}\n`
+      : '';
+  }, [copyDetectorItemsToNewLayer]);
+
   // Registry-race back-fill: the per-song loader reads customDetectorsRef at
   // select time, but the registry (listDetectors) resolves asynchronously. On a
   // fresh session the song often loads BEFORE the registry, leaving the ref
@@ -2373,17 +2652,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Debounce per-detector saves so a quick burst of clicks coalesces.
   const customAnnotationSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  // Fetch the registry. Re-fetches when the experimentalLoopsAndPatterns flag
-  // flips, since the server filters loop/pattern detectors out of the response
-  // when the flag is off — adding/removing the entries from the dropdown
-  // would otherwise lag a page reload. A failure (Python server down) is silent
-  // — built-in algorithms continue to work; the custom group stays empty.
-  const experimentalLoopsAndPatternsFlag = useSettings().settings.experimentalLoopsAndPatterns;
+  // Fetch the registry. A failure (Python server down) is silent — built-in
+  // algorithms continue to work; the custom group stays empty.
   useEffect(() => {
-    listDetectors({
-      includeExperimentalLoopsAndPatterns: experimentalLoopsAndPatternsFlag,
-    }).then(setCustomDetectors).catch(() => {});
-  }, [experimentalLoopsAndPatternsFlag]);
+    listDetectors().then(setCustomDetectors).catch(() => {});
+  }, []);
 
   // ── Top-level feature ─────────────────────────────────────────────────────
   // The landing/mode picker has moved to <LandingPage> at `/`. This component
@@ -2454,7 +2727,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const reclaimedWidth =
     ((mode === 'song' || mode === 'prep') && sidebarCollapsed ? Math.max(0, sidebarWidth - COLLAPSED_RAIL_WIDTH) : 0) +
     (rightPanel?.collapsed ? Math.max(0, rightPanel.width - COLLAPSED_RAIL_WIDTH) : 0);
-  const contentMaxWidth = BASE_CONTENT_MAX_WIDTH + reclaimedWidth;
+  // The per-song workspaces are timelines: every pixel is more of the song, so
+  // they take the whole width between the side panels, capped or not — Dataset
+  // Prep included once a song is open. Only the reading-shaped pages (Prep with
+  // no song, the all-songs table) keep the cap.
+  const contentMaxWidth = feature === 'annotate' || feature === 'inspect-song'
+    || (feature === 'prep' && selectedAudio)
+    ? undefined
+    : BASE_CONTENT_MAX_WIDTH + reclaimedWidth;
 
   // ── Sub-tab ──────────────────────────────────────────────────────────────
   const [activeAnnotationType, setActiveAnnotationType] = useState<AnnotationType>(urlView.type ?? 'boundaries');
@@ -2476,15 +2756,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     'riff-patterns': 'manual',
     lyrics:          'manual',
   });
+  // The lane last picked under a detector source, per type — the source alone
+  // can't say which lane of a `lanes` detector (Voice, Animals, …) was meant.
+  const [selectedDetectorLaneByType, setSelectedDetectorLaneByType] = useState<Partial<Record<AnnotationType, string>>>({});
 
   /** Records the most recent "copy algorithm output → Manual" action so it can
    *  be reverted with a single click. The copy is otherwise only undoable via
    *  the page-level Ctrl+Z stack (layers) or the Manual panel stack
    *  (boundaries), neither of which is discoverable right after the click.
    *  Cleared on undo, on dismiss, or when the song changes. */
-  const [lastCopyUndo, setLastCopyUndo] = useState<
-    { layerId: string; label: string; prevSource: SourceId; type: AnnotationCategory } | null
-  >(null);
+  const [lastCopyUndo, setLastCopyUndo] = useState<CopyUndo | null>(null);
 
   /** The current boundary source as a `BoundarySource`. Returns `null` when
    *  the picker has a `detector:<name>` selection — in that case the source
@@ -2602,6 +2883,79 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, []);
 
+  /** Take cleared detector outputs off the canvas and out of every per-
+   *  detector state, once their files are gone. */
+  const forgetDetectorOutputs = useCallback((cleared: string[], slug: string) => {
+    if (cleared.length === 0 || selectedAudioRef.current?.id !== slug) return;
+    const gone = new Set(cleared);
+    const drop = <T,>(prev: Record<string, T>) => {
+      if (!Object.keys(prev).some((k) => gone.has(k))) return prev;
+      return Object.fromEntries(Object.entries(prev).filter(([k]) => !gone.has(k)));
+    };
+    setCustomResults(drop);
+    setDetectorOutputDocs(drop);
+    setCustomAnnotationOverrides(drop);
+    setDetectorOutputIndex((prev) => {
+      const next = { ...prev };
+      for (const name of cleared) {
+        const remaining = (next[name] ?? []).filter((s) => s !== slug);
+        if (remaining.length === 0) delete next[name];
+        else next[name] = remaining;
+      }
+      return next;
+    });
+  }, []);
+
+  /** The Detectors sidebar's ×, and its **Clear N** for every detector at
+   *  once: throw away detectors' output for this song — the shared algorithm
+   *  cache, this annotator's review copy and their annotation file. A detector
+   *  runs on one stem, so this is that stem's output and nothing else. The
+   *  layers leave the canvas; running the detectors again brings them back.
+   *  One confirm for the lot; a detector that fails to delete keeps its lane
+   *  and is named afterwards. */
+  const clearDetectorOutputsForSong = useCallback(async (detectors: { name: string; label: string }[]) => {
+    const slug = selectedAudioRef.current?.id;
+    if (!slug || detectors.length === 0) return;
+    const kept = 'Layers you copied to the Annotate tab with ⬇ are kept.';
+    const question = detectors.length === 1
+      ? `Delete "${detectors[0].label}" output for this song?\n\n` +
+        `Deletes its saved result from disk — the lane is gone for every annotator, not just you — ` +
+        `and your ✓/✗ review and edits of it. ${kept} Run the detector again to get it back.`
+      : `Delete the output of ${detectors.length} detectors for this song?\n\n` +
+        `${detectors.map((d) => d.label).join(', ')}\n\n` +
+        `Deletes their saved results from disk — the lanes are gone for every annotator, not just you — ` +
+        `and your ✓/✗ reviews and edits of them. ${kept} Run them again to get them back.`;
+    if (!window.confirm(question)) return;
+    const cleared: string[] = [];
+    const failed: string[] = [];
+    for (const d of detectors) {
+      try {
+        await deleteDetectorOutputs(d.name, slug);
+        await deleteDetectorOutput(d.name, slug);
+        cleared.push(d.name);
+      } catch (err) {
+        failed.push(detectors.length === 1 && err instanceof Error ? err.message : d.label);
+      }
+    }
+    if (failed.length > 0) {
+      alert(detectors.length === 1
+        ? failed[0] || 'Could not delete the detector output.'
+        : `Could not delete the output of: ${failed.join(', ')}.`);
+    }
+    forgetDetectorOutputs(cleared, slug);
+  }, [forgetDetectorOutputs]);
+
+  /** One detector's output for this song, deleted from a lane's ⋮ menu — the
+   *  same delete as the sidebar's ×, with the lane menu's own confirm. Throws
+   *  with the server's reason. */
+  const clearDetectorOutputForSong = useCallback(async (name: string) => {
+    const slug = selectedAudioRef.current?.id;
+    if (!slug) return;
+    await deleteDetectorOutputs(name, slug);
+    await deleteDetectorOutput(name, slug);
+    forgetDetectorOutputs([name], slug);
+  }, [forgetDetectorOutputs]);
+
   // ── Viz toggles ───────────────────────────────────────────────────────────
   const [showManual, setShowManual]             = useState(() => getCurrentSettings().defaultShowManual);
   const [showAutoGuess, setShowAutoGuess]   = useState(() => getCurrentSettings().defaultShowAutoGuess);
@@ -2663,6 +3017,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const [showEQ, setShowEQ]                 = useState(() => getCurrentSettings().defaultShowEQ);
   const [showSpectrogram, setShowSpectrogram] = useState(() => getCurrentSettings().defaultShowSpectrogram);
   const [showCepstrogram, setShowCepstrogram] = useState(() => getCurrentSettings().defaultShowCepstrogram);
+  const [showVolume, setShowVolume]         = useState(() => getCurrentSettings().defaultShowVolume);
+  const [showDensity, setShowDensity]       = useState(() => getCurrentSettings().defaultShowDensity);
+  const [showBusyness, setShowBusyness]     = useState(() => getCurrentSettings().defaultShowBusyness);
+  const [showBandwidth, setShowBandwidth]   = useState(() => getCurrentSettings().defaultShowBandwidth);
   const [showEnergy, setShowEnergy]         = useState(() => getCurrentSettings().defaultShowEnergy);
   const [showBrightness, setShowBrightness] = useState(() => getCurrentSettings().defaultShowBrightness);
   const [showNovelty, setShowNovelty]       = useState(() => getCurrentSettings().defaultShowNovelty);
@@ -2729,14 +3087,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const id = setTimeout(() => setShowGridLockUndoToast(false), 5000);
     return () => clearTimeout(id);
   }, [showGridLockUndoToast, gridLockUndoLabel]);
-  // One-line, self-dismissing notice for adds that couldn't honor the
-  // selection as-drawn (today: a region added to Cues, which are points).
-  const [annotationNotice, setAnnotationNotice] = useState<string | null>(null);
-  useEffect(() => {
-    if (!annotationNotice) return;
-    const id = setTimeout(() => setAnnotationNotice(null), 6000);
-    return () => clearTimeout(id);
-  }, [annotationNotice]);
   // Global horizontal-scroll capture. When on, any horizontal trackpad/wheel
   // gesture anywhere on the page is redirected to scroll the viz timeline
   // (and the browser swipe-back/forward gesture is suppressed everywhere).
@@ -2800,6 +3150,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setGridThicknessAdaptiveState(v);
     try { window.localStorage.setItem('tc.gridThicknessAdaptive', v ? '1' : '0'); } catch { /* ignore quota */ }
   }, []);
+  // Misc → "Show beat numbers": the player counts every beat (or every
+  // sub-beat on a subdivided grid) instead of bars only. On by default since
+  // 2026-10-24; the key was renamed then so a '0' stored under the old
+  // off-by-default key doesn't keep the beat numbers hidden.
+  const [numberEveryGridLine, setNumberEveryGridLineState] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try { return window.localStorage.getItem('tc.numberEveryGridLine.v2') !== '0'; } catch { return true; }
+  });
+  const setNumberEveryGridLine = useCallback((v: boolean) => {
+    setNumberEveryGridLineState(v);
+    try { window.localStorage.setItem('tc.numberEveryGridLine.v2', v ? '1' : '0'); } catch { /* ignore quota */ }
+  }, []);
   // What every grid-drawing surface actually gets.
   const effectiveGridLineThickness = gridThicknessAdaptive
     ? gridLineThickness * adaptiveGridThicknessScale(vizZoomFactor)
@@ -2815,11 +3177,37 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // effects below) so a reload comes back to the blend you were reading —
   // committing is still what turns a merge into something durable and shared.
   const [mergeMemberIds, setMergeMemberIds] = useState<string[]>([]);
-  const [mergeDropped, setMergeDropped] = useState<number[]>([]);
+  // Members the annotator took off the canvas while they keep feeding the
+  // blend — "show me the merge, not the ingredients". Unticking a member in
+  // the Algorithms sidebar hides it the same way (see `mergeLanes`); this set
+  // is the Merge row's own eye, for a lane that is still ticked.
+  const [mergeHiddenIds, setMergeHiddenIds] = useState<string[]>([]);
+  // Smart merge: one candidate per place instead of the union (smartMerge.ts).
+  // A way of reading the members, so it is remembered per song with them.
+  const [mergeSmart, setMergeSmart] = useState(false);
+  // The annotator's hand work on the blend, as one undoable value so ⌘Z /
+  // ⇧⌘Z walk it back step by step: `dropped` (see above), `edits` — what the
+  // boundary popover set on a merged boundary (label, type, description, a
+  // moved time), carried into the layer on save — and `added`, boundaries
+  // split in from the popover where no lane heard one.
+  const [mergeWork, setMergeWorkRaw, mergeWorkCtl] = useUndoableState<{
+    dropped: number[]; edits: MergeBoundaryEdit[]; added: number[];
+  }>({ dropped: [], edits: [], added: [] });
+  const setMergeWork = useCallback<typeof setMergeWorkRaw>((next, opts) => {
+    if (!opts?.skipHistory) lastUndoSurfaceRef.current = 'merge';
+    setMergeWorkRaw(next, opts);
+  }, [setMergeWorkRaw]);
+  const { dropped: mergeDropped, edits: mergeEdits, added: mergeAdded } = mergeWork;
+  const resetMergeWork = mergeWorkCtl.reset;
+  const mergePopover = useBoundaryEditPopover();
+  const openMergePopover = mergePopover.openAt;
   // Which song the two above describe. The save effect reads this rather than
   // `selectedAudio`, so a song switch can never write the outgoing song's
   // merge under the incoming song's id.
   const mergeSongIdRef = useRef<string | null>(null);
+  // The song whose merge the STATE holds — it lands a render after the ref,
+  // and the save effect waits for the two to agree.
+  const [mergeLoadedFor, setMergeLoadedFor] = useState<string | null>(null);
   // Single-select stem sub-filter for Algorithm Inspect. It composes with the
   // family chips: the chips choose WHICH algorithms are shown, the stem filter
   // then narrows those to one stem's rows. 'mix' (default) = full-mix rows only
@@ -2850,6 +3238,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // every other algo lane, because pointing at a boundary detector is not
   // asking to read words.
   const [selectedLyricsAlgoId, setSelectedLyricsAlgoId] = useState<string | null>(null);
+  // The same, for a lane whose cues are drum hits (kick / snare / hat) or
+  // carry a pitch (basic-pitch's notes): it is what the hit karaoke — and its
+  // piano roll — follows. At most one of the two is ever set.
+  const [selectedDrumAlgoId, setSelectedDrumAlgoId] = useState<string | null>(null);
   // ...and whether its lane is drawn. A boundary source the user turns on like
   // any other, under Algos ▸ Consensus — OFF by default: the canvas starts as
   // whatever the sidebar has checked, and the consensus already draws itself
@@ -2904,9 +3296,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const seekRef    = useRef<((time: number) => void) | null>(null);
   const playRef    = useRef<(() => void) | null>(null);
   const pauseRef   = useRef<(() => void) | null>(null);
-  // The live media clock, straight off WaveSurfer. `playerTime` below is this
-  // same number one rAF + setState + inspector re-render later, which is fine
-  // for drawing and wrong for placing audio — the click track anchors here.
+  // The live media clock, straight off WaveSurfer. The playhead clock is this
+  // same number one rAF later, which is fine for drawing and wrong for
+  // placing audio — the click track anchors here.
   const getTimeRef = useRef<(() => number) | null>(null);
   // Places the player's own cursor while the loop-preview engine — not the
   // media element — is sounding the audio. See `handleLoopPosition`.
@@ -3013,7 +3405,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       if (settings.experimentalCueExtras)     out.push('cues');
       if (settings.experimentalSpanFamily)    out.push('spans');
       if (settings.experimentalLoopFamily)    out.push('loops');
-      if (settings.experimentalLyricsFamily)  out.push('lyrics');
+      out.push('lyrics');
     }
     return out;
   }, [
@@ -3021,7 +3413,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     settings.experimentalCueExtras,
     settings.experimentalSpanFamily,
     settings.experimentalLoopFamily,
-    settings.experimentalLyricsFamily,
   ]);
 
   // Snap the examined kind back to boundaries if it vanishes (flag flipped off
@@ -3124,10 +3515,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // ── Preview window — drag-to-listen region, cursor returns to anchor on end ─
   const [previewRegion, setPreviewRegion] = useState<PreviewRegion | null>(null);
   const previewAnchorRef = useRef<number | null>(null);
-  // Refs mirroring player state — used inside event handlers without re-binding effects
-  const playerTimeRef = useRef(0);
   const playerIsPlayingRef = useRef(false);
-  useEffect(() => { playerTimeRef.current = playerTime; }, [playerTime]);
   useEffect(() => { playerIsPlayingRef.current = playerIsPlaying; }, [playerIsPlaying]);
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
@@ -3329,7 +3717,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
   // ── Which songs are collaborative ─────────────────────────────────────────
   // The song's own shared/per-annotator setting, the one its header offers as
-  // "Make collaborative…". Same lazy shape as the annotator counts above: asked
+  // "Collaborative…". Same lazy shape as the annotator counts above: asked
   // when the grouping that needs it is picked, retried when it is re-picked
   // after a failure.
   const [songCollaboration, setSongCollaboration] = useState<SongCollaborationInfo>({ state: 'loading' });
@@ -3360,11 +3748,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       infos: songInfos,
       layerStatuses: songLayerStatuses,
       autoGuessStatuses: songStatuses,
-      includeLoopsAndPatterns: settings.experimentalLoopsAndPatterns,
       sharing: songSharing,
       collaboration: songCollaboration,
     }),
-    [songGroupMode, audioFiles, songInfos, songLayerStatuses, songStatuses, settings.experimentalLoopsAndPatterns, songSharing, songCollaboration],
+    [songGroupMode, audioFiles, songInfos, songLayerStatuses, songStatuses, songSharing, songCollaboration],
   );
   // Which songs are collaborative, once the answer exists. Rows read it for
   // their SHARED badge; the groupings read the state around it.
@@ -3488,22 +3875,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setFocusedCue(null);
     setFocusedLoop(null);
     setFocusedSpan(null);
-    // Reset signal visibility to configured defaults so every song opens with
-    // the same baseline (3-Band, Spectrogram, Energy on by default).
-    {
-      const s = getCurrentSettings();
-      setShowWaveform(s.defaultShowWaveform);
-      setShowSpectrogram(s.defaultShowSpectrogram);
-      setShowCepstrogram(s.defaultShowCepstrogram);
-      setShowEnergy(s.defaultShowEnergy);
-      setShowBrightness(s.defaultShowBrightness);
-      setShowNovelty(s.defaultShowNovelty);
-      setShowOnsets(s.defaultShowOnsets);
-      setShowFlux(s.defaultShowFlux);
-      setShowChroma(s.defaultShowChroma);
-      setShowTempogram(s.defaultShowTempogram);
-      setShowSsm(s.defaultShowSsm);
-    }
+    // Signal rows are deliberately NOT reset here: the SIGNALS picks carry over
+    // to the next song, so the same signals can be compared across songs. The
+    // Settings defaults seed them once, when the page opens.
     setAutoGuessAnnotation(null);
     // Song change — the previous song's grid history means nothing here.
     songInfoCtl.reset({ info: null, stampShift: 0 });
@@ -3603,15 +3977,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }).catch(() => 0);
 
     loadAutoGuessAnnotation(entry.id).then((ann) => { if (ann) setAutoGuessAnnotation(ann); });
-    loadLayers(entry.id).then(async (doc) => {
+    setLayersSyncProblem(null);
+    loadLayersForEdit(entry.id).then(async (doc) => {
       const deltaBeats = await gridFold;
       if (selectedAudioRef.current?.id !== entry.id) return;
+      layersRevRef.current = { slug: entry.id, rev: doc.rev ?? 0 };
       const shifted = doc && deltaBeats ? withShiftedBeatStamps(doc, deltaBeats) : doc;
       cueLayersJustLoadedRef.current = shifted;
       // Raw setter: loading the document is not an edit, and a reader must be
       // able to see a song they cannot change.
       setCueLayersDocRaw(shifted, { skipHistory: true });
       setLayersDocLoaded(true);
+    }).catch(() => {
+      // No document, no revision: anything this page tries to save for the
+      // song is refused until a load succeeds.
+      if (selectedAudioRef.current?.id === entry.id) setLayersSyncProblem('load-failed');
     });
 
     // BPM detection — first try cache; if empty, kick off a run. The Python
@@ -3687,9 +4067,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         if (selectedAudioRef.current?.id !== entry.id) return;
         if (env) setCustomResults((prev) => ({ ...prev, [det.name]: env }));
       }).catch(() => {});
-      // Annotation-mode detectors also have an editable review file per annotator.
-      // Loaded only for detectors flagged is_annotation — the rest never write one.
-      if (det.is_annotation) {
+      // A `review` detector keeps each annotator's ✓/✗ in a file of its own.
+      // Loaded only for those — the rest never write one.
+      if (det.review) {
         loadCustomAnnotation<{ overrides?: Record<string, CustomAnnotationOverride> }>(det.name, entry.id)
           .then((doc) => {
             if (selectedAudioRef.current?.id !== entry.id) return;
@@ -3777,6 +4157,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // all of them, not just the one that ends up selected.
     const uploadedIds: string[] = [];
     const failures: string[] = [];
+    const conversions: { file: string; note: string }[] = [];
     try {
       for (let fi = 0; fi < files.length; fi += 1) {
         const file = files[fi];
@@ -3802,6 +4183,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             });
           });
           if (entry.id) { lastUploadedId = entry.id; uploadedIds.push(entry.id); }
+          if (entry.converted) conversions.push({ file: file.name, note: entry.converted });
           else {
             console.error('[upload]', file.name, 'no id in response', entry);
             failures.push(`${file.name}: server returned no id`);
@@ -3817,6 +4199,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       if (lastUploadedId) {
         lastEntry = refreshed.find((f) => f.id === lastUploadedId);
         if (lastEntry) selectAudio(lastEntry);
+      }
+      // A converted file is not a failure, but the user should know the file
+      // on the server is no longer byte-for-byte the one they picked.
+      if (conversions.length === 1) {
+        setAnnotationNotice(`"${conversions[0].file}": ${conversions[0].note}`);
+      } else if (conversions.length > 1) {
+        setAnnotationNotice(`${conversions.length} files: ${conversions[0].note}`);
       }
       if (failures.length > 0) {
         alert(`Upload failed for ${failures.length} file(s):\n${failures.join('\n')}\n\nCheck the dev console for details.`);
@@ -3923,6 +4312,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const handleClearSongCaches = useCallback(async (slug: string) => {
     try {
       await clearSongCaches(slug);
+      setSongStems(slug, []);
     } catch (err) {
       console.error('[clear-song-caches]', slug, err);
       alert(`Clear caches failed: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -3943,11 +4333,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       setStemManifest(null);
       setSelectedStemSource('mix');
     }
-  }, [refreshStorageStats]);
+  }, [refreshStorageStats, setSongStems]);
 
   const handleClearAllCaches = useCallback(async () => {
     try {
       await clearAllCaches();
+      setSongStems(null, []);
     } catch (err) {
       console.error('[clear-all-caches]', err);
       alert(`Clear all caches failed: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -3962,7 +4353,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setBpmDetectionStatus('idle');
     setStemManifest(null);
     setSelectedStemSource('mix');
-  }, [refreshStorageStats]);
+  }, [refreshStorageStats, setSongStems]);
 
   // Tri-mode per-song clear. STEM = stems only, ALGOS = all regenerable caches,
   // EVERYTHING = audio + every annotator's annotations + caches (irreversible).
@@ -3972,8 +4363,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     try {
       if (scope === 'STEM') {
         await clearSongStems(slug);
+        setSongStems(slug, []);
       } else if (scope === 'ALGOS') {
         await clearSongCaches(slug);
+        setSongStems(slug, []);
       } else {
         // EVERYTHING — wipes audio + caches + every annotator's annotations.
         await deleteSongEverything(slug);
@@ -4011,7 +4404,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }
 
     refreshStorageStats();
-  }, [refreshStorageStats, selectAudio, isDemo]);
+  }, [refreshStorageStats, selectAudio, isDemo, setSongStems]);
 
   // ── Run algorithms ────────────────────────────────────────────────────────
   // Split the selection into built-ins (handled by /api/run-algorithms) and custom
@@ -4027,19 +4420,126 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return { builtins, custom };
   }, []);
 
-  // Re-run a single detector for the current song, surfacing the 409
+  // Run (or re-run) a single detector for the current song, surfacing the 409
   // edited-output conflict as a confirm dialog. On confirm the run is retried
-  // with `confirm_overwrite=1` and the edited copy-on-write file is wiped.
-  // The marker-config "↻ Re-run" button hits this path.
-  const rerunDetectorForCurrentSong = useCallback(async (name: string, slug: string) => {
+  // with `confirm_overwrite=1` and the edited copy-on-write file is wiped —
+  // here as well as on the server, or the old edited items would keep drawing
+  // over the new run. The Detectors sidebar's rows and the marker-config
+  // "↻ Re-run" button both come through here. `strictness` is the 0-100 of a
+  // detector that offers it: the sidebar passes where its slider is, the
+  // marker-config re-run the lane's own so it never quietly changes it.
+  // A run from the Detectors sidebar writes to the same log panel as an
+  // algorithm job, so a failure shows its traceback where an algorithm's
+  // would. It is not a server job — there is nothing to poll or cancel — so it
+  // carries its own id, the panel offers no Stop for it, and it never replaces
+  // an algorithm job that is still running.
+  const detectorLabelFor = (name: string) => {
+    const d = customDetectorsRef.current.find((x) => x.name === name);
+    return d?.label || name;
+  };
+  const beginDetectorLog = useCallback((names: string[]) => {
+    setRunJob((prev) => (prev?.status === 'running' && prev.jobId !== DETECTOR_LOG_JOB ? prev : {
+      jobId: DETECTOR_LOG_JOB,
+      status: 'running',
+      logs: '',
+      startedAt: Date.now(),
+      sections: names.map((n) => ({ label: detectorLabelFor(n), total: 1, ok: 0, failed: 0, cached: 0 })),
+    }));
+  }, []);
+  const recordDetectorRun = useCallback((name: string, text: string, failed: boolean) => {
+    const label = detectorLabelFor(name);
+    setRunJob((prev) => {
+      if (prev?.jobId !== DETECTOR_LOG_JOB) return prev;
+      const sections = prev.sections ?? [];
+      const hit = sections.some((x) => x.label === label);
+      const done = { label, total: 1, ok: failed ? 0 : 1, failed: failed ? 1 : 0, cached: 0 };
+      return {
+        ...prev,
+        logs: prev.logs + text,
+        sections: hit ? sections.map((x) => (x.label === label ? done : x)) : [...sections, done],
+      };
+    });
+  }, []);
+  const endDetectorLog = useCallback(() => {
+    setRunJob((prev) => {
+      if (prev?.jobId !== DETECTOR_LOG_JOB || prev.status !== 'running') return prev;
+      const secs = prev.sections ?? [];
+      const failed = secs.filter((x) => x.failed > 0).length;
+      const status = failed === 0 ? 'done' : failed === secs.length ? 'error' : 'partial';
+      return { ...prev, status };
+    });
+  }, []);
+  // Set while "Run N ticked" / "Run the N not run yet" is going, so each run
+  // adds to the batch's log instead of starting its own.
+  const detectorBatchRunningRef = useRef(false);
+
+  // The one detector-log entry for a stored result — "· failed" on a sidebar
+  // row opens it, so a failure from an earlier session can still be read.
+  const showDetectorResultLog = useCallback((name: string, env: CustomResultEnvelope) => {
+    beginDetectorLog([name]);
+    recordDetectorRun(name, formatDetectorRun(detectorLabelFor(name), env), !!env.fatal);
+    endDetectorLog();
+  }, [beginDetectorLog, recordDetectorRun, endDetectorLog]);
+
+  // Where each drum-reading detector's source pill was set, for its next run.
+  // Choosing runs nothing; unset = where the lane on screen was read from.
+  const [drumSourceChoice, setDrumSourceChoice] = useState<Record<string, DrumSource>>({});
+  const drumSourceChoiceRef = useRef(drumSourceChoice);
+  useEffect(() => { drumSourceChoiceRef.current = drumSourceChoice; }, [drumSourceChoice]);
+  // The same for a detector that offers where the song's sections come from.
+  const [sectionSourceChoice, setSectionSourceChoice] = useState<Record<string, SectionSource>>({});
+  const sectionSourceChoiceRef = useRef(sectionSourceChoice);
+  useEffect(() => { sectionSourceChoiceRef.current = sectionSourceChoice; }, [sectionSourceChoice]);
+  // The same for a detector's own `sources` picker (Held lyrics: yours, or a
+  // model's lyrics).
+  const [sourceChoice, setSourceChoice] = useState<Record<string, string>>({});
+  const sourceChoiceRef = useRef(sourceChoice);
+  useEffect(() => { sourceChoiceRef.current = sourceChoice; }, [sourceChoice]);
+  // The same for the switches a detector declares, ticked on its row. A
+  // switch is a fact about one song, so an unrun tick is dropped with it.
+  const [switchChoice, setSwitchChoice] = useState<Record<string, Record<string, boolean>>>({});
+  const [switchChoiceSong, setSwitchChoiceSong] = useState(selectedAudio?.id);
+  if (switchChoiceSong !== selectedAudio?.id) {
+    setSwitchChoiceSong(selectedAudio?.id);
+    setSwitchChoice({});
+  }
+  const switchChoiceRef = useRef(switchChoice);
+  useEffect(() => { switchChoiceRef.current = switchChoice; }, [switchChoice]);
+
+  const rerunDetectorForCurrentSong = useCallback(async (
+    name: string,
+    slug: string,
+    strictness?: DetectorStrictness,
+  ) => {
+    const ownLog = !detectorBatchRunningRef.current;
+    if (ownLog) beginDetectorLog([name]);
+    const label = detectorLabelFor(name);
     setCustomRunning((prev) => {
       if (prev.has(name)) return prev;
       const next = new Set(prev);
       next.add(name);
       return next;
     });
+    // A detector that offers a drum source reads from where its pill was set,
+    // else from where its lane was read — never quietly back to Auto.
+    const drumSource = customDetectorsRef.current.find((d) => d.name === name)?.drum_source
+      ? drumSourceChoiceRef.current[name] ?? customResultsRef.current[name]?.drum_source ?? 'auto'
+      : undefined;
+    const sectionSource = customDetectorsRef.current.find((d) => d.name === name)?.section_source
+      ? sectionSourceChoiceRef.current[name] ?? customResultsRef.current[name]?.section_source ?? 'auto'
+      : undefined;
+    const offered = customDetectorsRef.current.find((d) => d.name === name)?.sources;
+    const source = offered?.length
+      ? sourceChoiceRef.current[name] ?? customResultsRef.current[name]?.source ?? offered[0].name
+      : undefined;
+    const declared = customDetectorsRef.current.find((d) => d.name === name)?.switches;
+    const switches = declared
+      ? Object.fromEntries(Object.keys(declared).map((k) => [k,
+        switchChoiceRef.current[name]?.[k] ?? customResultsRef.current[name]?.switches?.[k] ?? false]))
+      : undefined;
     try {
-      let result = await runDetectorWithConflictCheck(name, slug, { force: true });
+      let result = await runDetectorWithConflictCheck(name, slug, { force: true, strictness, drumSource, sectionSource, switches, source });
+      let overwrote = false;
       if (result.status === 'conflict') {
         const c = result.conflict;
         const ok = window.confirm(
@@ -4048,17 +4548,38 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           `Consider renaming the detector (e.g. ${c.detector}_v01, ${c.detector}_v02) ` +
           `instead. Continue and overwrite?`,
         );
-        if (!ok) return;
+        if (!ok) {
+          recordDetectorRun(name, `▶ ${label}\n  skipped — your edited output was kept\n`, false);
+          return;
+        }
         result = await runDetectorWithConflictCheck(name, slug, {
           force: true,
           confirmOverwrite: true,
+          strictness,
+          drumSource,
+          sectionSource,
+          switches,
+          source,
         });
+        overwrote = true;
       }
       if (result.status === 'ok' && selectedAudioRef.current?.id === slug) {
-        setCustomResults((prev) => ({ ...prev, [name]: result.envelope }));
+        const envelope = result.envelope;
+        setCustomResults((prev) => ({ ...prev, [name]: envelope }));
+        if (overwrote) setDetectorOutputDocs((prev) => ({ ...prev, [name]: null }));
+        // A first run's lane is born hidden; the annotator just asked for it.
+        if (!envelope.fatal) revealDetectorsPendingRef.current.add(name);
+      }
+      if (result.status === 'ok') {
+        const copied = autoCopyDetectorRun(name, slug, result.envelope);
+        recordDetectorRun(name, formatDetectorRun(label, result.envelope) + copied, !!result.envelope.fatal);
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Detector re-run failed.');
+      recordDetectorRun(
+        name,
+        `▶ ${label}\n  ✗ the request failed — ${err instanceof Error ? err.message : String(err)}\n`,
+        true,
+      );
     } finally {
       setCustomRunning((prev) => {
         if (!prev.has(name)) return prev;
@@ -4066,8 +4587,49 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         next.delete(name);
         return next;
       });
+      if (ownLog) endDetectorLog();
     }
-  }, []);
+  }, [beginDetectorLog, recordDetectorRun, endDetectorLog, autoCopyDetectorRun]);
+
+  // The Detectors sidebar's "Run the N not run yet": one detector after
+  // another, so a small server is never handed a dozen at once. Stops when the
+  // song changes under it.
+  const [detectorBatch, setDetectorBatch] = useState<{ done: number; total: number } | null>(null);
+  // Where each detector's strictness slider was set, for the next run of it.
+  // Moving a slider runs nothing; the row's Run, and "Run N ticked", read it.
+  // Unset = the setting the lane on screen was read at.
+  const [strictnessChoice, setStrictnessChoice] = useState<Record<string, DetectorStrictness>>({});
+  // Detectors the annotator wants, for one "▶ Run N ticked" on every song that
+  // lacks their output. Kept across songs and reloads, and in step with the
+  // lanes' visibility (`setDetectorsWanted`), so a detector checked on one
+  // song is checked on the next — shown where it has run, ticked where not.
+  const [detectorRunTicks, setDetectorRunTicks] = useState<Set<string>>(
+    () => new Set(readStoredNames(DETECTOR_TICKS_KEY) ?? []));
+  useEffect(() => { writeStoredNames(DETECTOR_TICKS_KEY, detectorRunTicks); }, [detectorRunTicks]);
+  // `strictness`: the setting each one runs at, where it offers one.
+  const runDetectorsInTurn = useCallback(async (
+    requested: string[],
+    slug: string,
+    strictness: Partial<Record<string, DetectorStrictness>> = {},
+  ) => {
+    // The kit split first, or everything that reads drums before it goes
+    // out of date the moment it finishes.
+    const names = kitFirst(requested);
+    setDetectorBatch({ done: 0, total: names.length });
+    beginDetectorLog(names);
+    detectorBatchRunningRef.current = true;
+    try {
+      for (const [i, n] of names.entries()) {
+        if (selectedAudioRef.current?.id !== slug) return;
+        await rerunDetectorForCurrentSong(n, slug, strictness[n]);
+        setDetectorBatch({ done: i + 1, total: names.length });
+      }
+    } finally {
+      detectorBatchRunningRef.current = false;
+      setDetectorBatch(null);
+      endDetectorLog();
+    }
+  }, [rerunDetectorForCurrentSong, beginDetectorLog, endDetectorLog]);
 
   // Run the currently selected algorithms (built-ins + custom) for one song.
   // Shared by the dataset-wide batch button and the per-song "Run for this song"
@@ -4096,7 +4658,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const res = await fetch(`/api/run-algorithms/${encodeURIComponent(audio.id)}`, {
       method: 'POST',
       headers: annotatorHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ demucsModel, algorithms: builtins, customDetectors: custom, lyricsLanguage: lyricsLanguage || undefined, forceAlgos: opts?.forceAlgos ?? [] }),
+      body: JSON.stringify({ demucsModel, algorithms: builtins, customDetectors: custom, lyricsLanguage: lyricsLanguage || undefined, grid: algoGrid, forceAlgos: opts?.forceAlgos ?? [] }),
     });
     const data = await res.json().catch(() => ({}));
     const jobId: string | undefined = data.jobId;
@@ -4126,12 +4688,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           if (env && selectedAudioRef.current?.id === audio.id) {
             setCustomResults((prev) => ({ ...prev, [name]: env }));
             if (!env.fatal) revealDetectorsPendingRef.current.add(name);
+            autoCopyDetectorRun(name, audio.id, env);
           }
         } catch { /* leave the stale result; the Playground page surfaces detail */ }
       }));
       setCustomRunning((prev) => { const next = new Set(prev); custom.forEach((n) => next.delete(n)); return next; });
     }
-  }, [selectedAlgorithms, demucsModel, lyricsLanguage, splitAlgorithmSelection]);
+  }, [selectedAlgorithms, demucsModel, lyricsLanguage, algoGrid, splitAlgorithmSelection, autoCopyDetectorRun]);
 
   // Batch: fire the same per-song run sequentially across the entire dataset.
   // Reuses /api/run-algorithms/<slug> from the inspect path; each song's job
@@ -4164,6 +4727,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // launched to change a detector's parameters (the Whisper language, say)
   // silently returned the old result. Mirrors seedMissingForStem's `isDone`,
   // including its ruptures / custom special cases.
+  // Has this algorithm a saved result for the song — and, for one that cuts
+  // its features per beat (MSAF / ruptures / LoCoMotif), one made on the grid
+  // chosen for the next run? A result on the other grid is missing.
+  const savedResultOf = useCallback((id: string): unknown => {
+    const base = baseAlgoId(id);
+    return base.startsWith('ruptures-')
+      ? rupturesResults[base.slice('ruptures-'.length)]
+      : toolStates[id]?.status === 'done' ? toolStates[id]?.result?.result : undefined;
+  }, [toolStates, rupturesResults]);
+  const doneOnGrid = useCallback((id: string): boolean => {
+    const saved = savedResultOf(id);
+    if (!saved) return false;
+    return !isGridCutAlgo(id) || savedAlgoGrid(saved) === algoGrid;
+  }, [savedResultOf, algoGrid]);
+
   const cachedIdsIn = useCallback((sel: Set<string>): string[] => {
     const isCached = (id: string) => {
       if (id.startsWith('custom:')) return !!customResults[id.slice('custom:'.length)];
@@ -4182,7 +4760,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (!selectedAudio) return;
     if (runJob?.status === 'running') return;
     if (selectedAlgorithms.size === 0) {
-      alert('Pick at least one algorithm in Dataset Prep → ⚙ Batch algorithm options first.');
+      alert('Pick at least one algorithm in Prepare → ⚙ Batch algorithm options first.');
       return;
     }
     // Stem-capable detectors target runStemSource; boundary/custom stay on the
@@ -4229,7 +4807,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         return allStems.every((s) => toolStates[`${id}__${s}`]?.status === 'done');
       }
       const key = stemMode && STEM_CAPABLE_TOOL_IDS.has(id) ? `${id}__${stem}` : id;
-      return toolStates[key]?.status === 'done';
+      return doneOnGrid(key);
     };
     const addIfMissing = (id: string) => { if (!isDone(id)) missing.add(id); };
     // Only pre-select missing algos for families the run picker is actually
@@ -4241,11 +4819,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (!stemMode) {
       if (open.has('msaf')) ['msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda'].forEach(addIfMissing);
       if (open.has('allin1') && gpuCaps.allin1) ['allin1', ...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => `allin1-fold${n}`)].forEach(addIfMissing);
-      if (open.has('ruptures')) RUPTURES_METHODS.forEach((m) => { if (!rupturesResults[m.suffix]) missing.add(`ruptures-${m.suffix}`); });
+      if (open.has('ruptures')) RUPTURES_METHODS.forEach((m) => { if (!doneOnGrid(`ruptures-${m.suffix}`)) missing.add(`ruptures-${m.suffix}`); });
     }
     if (open.has('span') && settings.experimentalSpanFamily && expAvail.spanFamily) ['silero-vad', 'jdcnet-voicing', 'panns-cnn14', 'hpss-percussive'].forEach(addIfMissing);
-    if (open.has('cue-extras') && settings.experimentalCueExtras && expAvail.cueExtras) ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients'].forEach(addIfMissing);
-    if (open.has('lyrics') && settings.experimentalLyricsFamily && expAvail.lyricsFamily) ['whisper-base', 'ctc-forced-aligner'].forEach(addIfMissing);
+    if (open.has('cue-extras') && settings.experimentalCueExtras && expAvail.cueExtras) ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'].forEach(addIfMissing);
+    if (open.has('lyrics') && expAvail.lyricsFamily) ['whisper-base', 'ctc-forced-aligner'].forEach(addIfMissing);
     if (open.has('pattern') && settings.experimentalPatternFamily && expAvail.patternFamily) ['locomotif'].forEach(addIfMissing);
     // Custom detectors read their own declared stem, so a single-stem target
     // narrows them to that stem (as the picker lists them) rather than
@@ -4253,15 +4831,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (open.has('custom')) {
       const target = stem !== 'mix' && stem !== 'all' ? stem : null;
       for (const d of customDetectors) {
-        if (d.status !== 'ok' || !(d.is_algorithm || d.is_annotation)) continue;
+        if (d.status !== 'ok') continue;
         if (target && d.stem !== target) continue;
-        if (d.stem && d.stem !== 'mix' && !stemManifest?.stems?.[d.stem]) continue;
+        const need = requiredStem(d.stem);
+        if (need && !stemManifest?.stems?.[need as DemucsStem]) continue;
         const env = customResults[d.name];
         if (!env || env.fatal) missing.add(`custom:${d.name}`);
       }
     }
     setSelectedAlgorithms(missing);
-  }, [toolStates, gpuCaps, rupturesResults, settings, expAvail, stemManifest, expandedAlgoTypes, customDetectors, customResults]);
+  }, [toolStates, gpuCaps, rupturesResults, settings, expAvail, stemManifest, expandedAlgoTypes, customDetectors, customResults, doneOnGrid]);
 
   // Availability gate shared by the run-picker seeders: can this detector be
   // computed at all right now? Mirrors the per-family conditions
@@ -4275,7 +4854,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (PITCH_TOOL_IDS.has(id) || CUE_EXTRAS_TOOL_IDS.has(id)) {
       return !!(settings.experimentalCueExtras && expAvail.cueExtras);
     }
-    if (LYRICS_TOOL_IDS.has(id)) return !!(settings.experimentalLyricsFamily && expAvail.lyricsFamily);
+    if (LYRICS_TOOL_IDS.has(id)) return expAvail.lyricsFamily;
     if (PATTERN_TOOL_IDS.has(id)) return !!(settings.experimentalPatternFamily && expAvail.patternFamily);
     return true;
   }, [gpuCaps, settings, expAvail]);
@@ -4314,6 +4893,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         if (runnable) setRunStemSource(inspectStemFilter);
       }
     }
+    setRunPickerScrimOff(false);
     setRunPickerOpen(true);
   }, [seedFromVisibleOverlays, inspectStemFilter, stemManifest]);
 
@@ -4378,6 +4958,25 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const id = setInterval(() => setElapsedTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, [runJob?.status, demucsJob?.status]);
+
+  // When a run leaves 'running' (done, partial, error, stopped), bring its box
+  // into view and flash it. Keyed on the transition, not the status, so
+  // re-renders of a finished job don't re-trigger it.
+  const prevRunStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevRunStatusRef.current;
+    const status = runJob?.status;
+    prevRunStatusRef.current = status;
+    if (prev !== 'running' || !status || status === 'running') return;
+    // A sidebar detector run is started from the sidebar, and the annotator
+    // is still there: pull them to the log only when there is a failure to read.
+    if (runJob?.jobId !== DETECTOR_LOG_JOB || status !== 'done') {
+      runJobBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    setRunJobFlash(status);
+    const id = setTimeout(() => setRunJobFlash(null), 2200);
+    return () => clearTimeout(id);
+  }, [runJob?.status, runJob?.jobId]);
 
   // Auto-scroll log pane to bottom when new output arrives
   useEffect(() => {
@@ -4501,61 +5100,58 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       return;
     }
     let cancelled = false;
+    const eqAbort = new AbortController();
     setMirComputing(true);
     computeMIRFeatures(audioBuffer, () => {}).then((mir) => {
       if (cancelled) return;
-      setMirCurves({
-        energy:   Array.from(mir.energy),
-        spectral: Array.from(mir.centroid),
-        novelty:  Array.from(mir.novelty),
-        onsets:   Array.from(mir.onsets),
-        flux:     Array.from(mir.flux),
-        rms:      Array.from(mir.rms),
-        lowBand:  Array.from(mir.lowBand),
-        midBand:  Array.from(mir.midBand),
-        highBand: Array.from(mir.highBand),
-        frameDuration: mir.hopSize / mir.sampleRate,
-        mfcc: mir.mfcc,
-        nMfcc: mir.nMfcc,
-        chroma: mir.chroma,
-        nChroma: mir.nChroma,
-        tempogram: mir.tempogram,
-        nTempo: mir.nTempo,
-        tempogramFrameCount: mir.tempogramFrameCount,
-        tempoBpm: mir.tempoBpm,
-        ssm: mir.ssm,
-        ssmFrameCount: mir.ssmFrameCount,
-        frameCount: mir.frameCount,
-        hopSize: mir.hopSize,
-        fftSize: mir.fftSize,
-        sampleRate: mir.sampleRate,
-      });
+      setMirCurves(mirFeaturesToCurves(mir));
       setMirComputing(false);
+      // The EQ lane's bands, re-measured at full quality. The buffer above is
+      // WaveSurfer's 8 kHz decode, which cannot hold anything over 4 kHz — the
+      // whole of the High band. See utils/fullRateBands.ts.
+      const url = playerUrlRef.current;
+      if (!url) return;
+      computeFullRateBands(url, eqAbort.signal).then((bands) => {
+        if (cancelled) return;
+        setMirCurves((c) => c && {
+          ...c,
+          lowBand:  Array.from(bands.low),
+          midBand:  Array.from(bands.mid),
+          highBand: Array.from(bands.high),
+        });
+      }).catch((err) => {
+        if (cancelled) return;
+        console.warn('[mir] full-quality EQ bands failed; keeping the 8 kHz ones', err);
+      });
     }).catch((err) => {
       if (cancelled) return;
       console.error('[mir] computeMIRFeatures failed', err);
       setMirComputing(false);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; eqAbort.abort(); };
   }, [audioBuffer]);
 
   // ── Auto-stop at section end ─────────────────────────────────────────────
-  // The preview region's own end is NOT handled here any more. `playerTime` is
-  // a re-render behind the media clock, and on a 157 ms preview that lag was
+  // The preview region's own end is NOT handled here any more. The playhead
+  // clock is a rAF behind the media clock, and on a 157 ms preview that lag was
   // enough to play past the region and leak the next onset — see the
   // `audioprocess` handler in PlayerPanel, which now wraps/pauses the preview
   // against the media clock and calls back through `onPreviewEnd`.
   //
   // Section stop is left on this path deliberately: sections are seconds long,
-  // so a render of overshoot is inaudible, and the stop time is owned here.
+  // so a frame of overshoot is inaudible, and the stop time is owned here.
   useEffect(() => {
     if (!playerIsPlaying) return;
     if (previewRegion) return;
-    if (sectionStopAtRef.current !== null && playerTime >= sectionStopAtRef.current) {
-      pauseRef.current?.();
-      sectionStopAtRef.current = null;
-    }
-  }, [playerTime, playerIsPlaying, previewRegion]);
+    const check = () => {
+      if (sectionStopAtRef.current !== null && playheadClock.get() >= sectionStopAtRef.current) {
+        pauseRef.current?.();
+        sectionStopAtRef.current = null;
+      }
+    };
+    check();
+    return playheadClock.subscribe(check);
+  }, [playheadClock, playerIsPlaying, previewRegion]);
 
   // Non-looping preview finished (PlayerPanel already paused at the exact
   // frame). Restore the cursor to wherever the user was before it opened.
@@ -4686,6 +5282,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   useEffect(() => { openPreviewRegionRef.current = openPreviewRegion; }, [openPreviewRegion]);
   useEffect(() => { handlePreviewDismissRef.current = handlePreviewDismiss; }, [handlePreviewDismiss]);
   useEffect(() => { previewRegionRef.current = previewRegion; }, [previewRegion]);
+
+  // Opening a riff instance or node for editing hands the timeline to that
+  // card — it plays its own stretch — so the teal replay region goes away
+  // rather than sitting on screen as a second, unrelated selection.
+  const riffEditOpen = riffPatternPopover.open ?? nodePopover.open;
+  useEffect(() => {
+    if (riffEditOpen && previewRegionRef.current) handlePreviewDismiss();
+  }, [riffEditOpen, handlePreviewDismiss]);
 
   // ── Viz scroll sync ───────────────────────────────────────────────────────
   // The player pushes its scroll offset here; the rows are moved to match in
@@ -4828,10 +5432,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     wsScrollRef.current?.(el.scrollLeft);
   }, []);
 
-  /** Pixel width of the full timeline as the viz draws it (see
-   *  handleViewChange). 0 until the player reports its first layout. */
-  const vizContentPxRef = useRef(0);
-
   // Re-apply a clamped scroll target the moment the viz rows grow to the new
   // zoom width (vizSignalWidth is what sizes them).
   useLayoutEffect(() => {
@@ -4850,11 +5450,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // here — baking in a fixed 72 px gutter made the viz rows' content column a
   // few px off from the player's waveform, drifting the cursor/highlight.
   const handleViewChange = useCallback((zoomFactor: number, containerWidth: number, atMaxZoom: boolean) => {
-    // How wide the whole timeline is drawn, at any zoom — vizSignalWidth is
-    // zeroed at 1x (the rows size themselves from flex there), but the snap
-    // still has to know how many pixels a beat is getting. In a ref: it is
-    // read inside drag handlers, never rendered.
-    vizContentPxRef.current = containerWidth * zoomFactor;
     setVizSignalWidth(zoomFactor > 1 ? containerWidth * zoomFactor : 0);
     setVizZoomFactor(zoomFactor);
     setVizAtMaxZoom(atMaxZoom);
@@ -4869,14 +5464,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // time readout — just reads the already-snapped cursor. Also reused directly
   // by the boundary-drag handler. Returns the time unchanged when Snap is off
   // or the song has no usable BPM.
-  const snapToGridIfEnabled = useCallback((
-    t: number,
-    /** Set by the gestures that DRAG an annotation across the canvas. Widens
-     *  the snap to the finest unit still worth aiming at on screen — see
-     *  `coarsenSnapDivision`. Placement by time (the + Add drops, a typed
-     *  value, the playhead) keeps the exact unit asked for. */
-    pixelAware = false,
-  ): number => {
+  const snapToGridIfEnabled = useCallback((t: number): number => {
     const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
     const effectivelyOn = snapToGrid || gridLock;
     if (!effectivelyOn || bpmVal <= 0) return t;
@@ -4886,134 +5474,81 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // One unit for the whole song: whatever the Grid selector is showing. The
     // annotation types used to carry a granularity each, so what a drag landed
     // on depended on which tab was open rather than on the grid in front of
-    // you. Lyrics keep their opt-out, and reach the grid by a different door
-    // (`snapTimeByLayerMode`) — a sung word is timed to the voice.
-    const asked = showBeatGrid && beatGridUnit ? beatGridUnitToSnapDivision(beatGridUnit) : 'beat';
-    const division = pixelAware
-      ? coarsenSnapDivision(asked, bpmVal, beatsPerBarVal, duration > 0 ? vizContentPxRef.current / duration : 0)
-      : asked;
+    // you. Lyrics never come through here at all — a sung word is timed to the
+    // voice, not the grid.
+    const division = showBeatGrid && beatGridUnit ? beatGridUnitToSnapDivision(beatGridUnit) : 'beat';
     return snapTimeToGrid(t, bpmVal, offset, beatsPerBarVal, division, overridesForSnap, undefined, resolveGridSegments(songInfo));
-  }, [songInfo, snapToGrid, gridLock, showBeatGrid, beatGridUnit, duration]);
+  }, [songInfo, snapToGrid, gridLock, showBeatGrid, beatGridUnit]);
 
-  // Snap driven purely by a layer's own SnapMode, ignoring the global Snap /
-  // Grid Lock switches. Lyrics use this: their timings describe a sung
-  // performance rather than the song's grid, so a global "align everything"
-  // must not touch them — but a layer the annotator explicitly set to Magnetic
-  // or 1/16 should behave that way immediately, without also flipping a
-  // page-wide toggle that would drag every other layer along.
-  const snapTimeByLayerMode = useCallback((t: number, mode: import('../types/annotationLayer').SnapMode): number => {
-    const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
-    if (mode === 'off' || bpmVal <= 0) return t;
-    const offset = songInfo?.gridOffset ?? 0;
-    const beatsPerBarVal = beatsPerBarFromTimeSignature(songInfo?.timeSignature);
-    const overridesForSnap = effectiveGridMode(songInfo) === 'manual' ? songInfo?.beatOverrides : undefined;
-    const tolerance = mode === 'magnetic' ? magneticToleranceSec(bpmVal) : undefined;
-    return snapTimeToGrid(t, bpmVal, offset, beatsPerBarVal, snapModeToDivision(mode), overridesForSnap, tolerance, resolveGridSegments(songInfo));
-  }, [songInfo]);
-
-  /** The SnapMode a lyrics layer is set to. `layerId` null means "whichever
-   *  lyrics layer the editor currently has open" — the one an add-at-playhead
-   *  would land in. Layers written before the picker existed carry no `snap`
-   *  on disk, which reads as 'off', the same default a new one gets. */
-  const lyricsSnapMode = useCallback((layerId: string | null): import('../types/annotationLayer').SnapMode => {
-    const layers = cueLayersDocRef.current?.layers ?? [];
-    const layer = layerId
-      ? layers.find((l) => l.id === layerId)
-      : (layers.find((l) => l.id === selectedLyricsLayerId) ?? layers.find((l) => l.type === 'lyrics'));
-    return layer?.type === 'lyrics' ? (layer.snap ?? 'off') : 'off';
-  }, [selectedLyricsLayerId]);
-
-  // ── Count annotations that would be moved by a bulk-snap ─────────────────────
-  const countSnappable = useCallback((): { boundaries: number; cues: number; spans: number; loops: number; riffPatterns: number } => {
-    const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
-    if (bpmVal <= 0) return { boundaries: 0, cues: 0, spans: 0, loops: 0, riffPatterns: 0 };
-    const layers = cueLayersDoc?.layers ?? [];
-    const count = (type: AnnotationLayer['type']) =>
-      layers.filter((l) => l.type === type).reduce((s, l) => s + l.items.length, 0);
-    return {
-      boundaries: count('boundaries'),
-      cues:     count('cues'),
-      spans:    count('spans'),
-      loops:    count('loops'),
-      riffPatterns: count('riff-patterns'),
-    };
-  }, [songInfo, cueLayersDoc]);
-
-  // ── Bulk-snap every layer to the visible grid unit (called on Grid Lock ON) ──
+  // Boundaries, spans, loops and riff-pattern instances always snap —
+  // whatever Snap, Grid Lock or the zoom say — to the finest grid line on
+  // offer: the GRID unit when it divides the beat (1/2, 1/3, 1/4, 1/6, 1/8),
+  // the beat otherwise. They are claims about the song's structure, so a time
+  // between grid lines is never what was meant, and a grid drawn finer than
+  // the beat is the annotator saying the beat is too coarse here. A coarser
+  // GRID (bars, phrases) still lands on beats. Cues keep the Snap toggle (a
+  // hit can sit between beats); lyrics never snap. A song with no usable BPM
+  // has no grid to land on, so the time stands.
   //
-  // One unit for the whole song, the one the toolbar is showing. Layers used to
-  // carry a granularity each — boundaries to the bar, cues to the beat — which
-  // meant Grid Lock re-quantised five layers five different ways, none of them
-  // the grid on screen, and a set of marks placed against a 1/3-beat grid came
-  // back rounded to bars. Lyrics are still skipped below: a sung word is timed
-  // to the voice, not the grid.
-  const bulkSnapAllLayers = useCallback(() => {
+  // The result is rounded to the millisecond, the storage resolution, so a
+  // drag, an add, a lane snap and Grid Lock all store the same number for
+  // the same grid line. They used to differ in the last digit — adds rounded,
+  // drags didn't — and Grid Lock then "moved" items that were already on it.
+  const snapToBeatOrFiner = useCallback((t: number): number => {
     const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
-    if (bpmVal <= 0) return;
+    if (bpmVal <= 0) return t;
+    const overridesForSnap = effectiveGridMode(songInfo) === 'manual' ? songInfo?.beatOverrides : undefined;
+    const shown = showBeatGrid && beatGridUnit ? beatGridUnitToSnapDivision(beatGridUnit) : 'beat';
+    const division = SUB_BEAT_DIVISIONS.has(shown) ? shown : 'beat';
+    return roundTime(snapTimeToGrid(t, bpmVal, songInfo?.gridOffset ?? 0, beatsPerBarFromTimeSignature(songInfo?.timeSignature),
+      division, overridesForSnap, undefined, resolveGridSegments(songInfo)));
+  }, [songInfo, showBeatGrid, beatGridUnit]);
+
+  // ── Grid Lock's bulk snap ─────────────────────────────────────────────────
+  //
+  // One unit for the whole song. The Grid Lock
+  // dialog asks which types to move — boundaries and loops ticked, spans and
+  // riff patterns opt-in — and lists every item that would move, from where to
+  // where. Cues and lyrics are never moved by it: a hit can sit between beats
+  // on purpose, and a sung word is timed to the voice. Null without a tempo.
+  //
+  // It IS live snapping: snapToBeatOrFiner, the function every boundary/span/
+  // loop/riff add and drag calls, so an item placed with Snap on is never
+  // moved by the lock.
+  const gridLockSnapT = useMemo(() => {
+    const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
+    return bpmVal > 0 ? snapToBeatOrFiner : null;
+  }, [songInfo, snapToBeatOrFiner]);
+
+  /** The unit Grid Lock lands on, worded as the Grid selector words it. */
+  const gridLockUnit = showBeatGrid && beatGridUnit
+    && SUB_BEAT_DIVISIONS.has(beatGridUnitToSnapDivision(beatGridUnit)) ? beatGridUnit : 'beat';
+
+  /** Every item each type would move, for the dialog's lists. Computed only
+   *  while the dialog is open. */
+  const gridLockMoves = useMemo(() => {
+    if (!showGridLockModal || !gridLockSnapT) return null;
+    return planGridLockSnap(cueLayersDoc?.layers ?? [], GRID_LOCK_SNAP_TYPES, gridLockSnapT).moves;
+  }, [showGridLockModal, gridLockSnapT, cueLayersDoc]);
+
+  const bulkSnapStructureLayers = useCallback((types: GridLockSnapType[]) => {
+    if (!gridLockSnapT) return;
+    setCueLayersDoc((doc) => doc && { ...doc, layers: planGridLockSnap(doc.layers, types, gridLockSnapT).layers });
+  }, [gridLockSnapT, setCueLayersDoc]);
+
+  /** The nearest beat, or bar line, of the song's grid, whatever the GRID unit
+   *  on screen — what a lane's "Snap to beats" / "Snap to bars" lands its
+   *  items on. Null without a tempo. */
+  const laneSnapTo = useMemo(() => {
+    const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
+    if (bpmVal <= 0) return null;
     const offset = songInfo?.gridOffset ?? 0;
     const beatsPerBarVal = beatsPerBarFromTimeSignature(songInfo?.timeSignature);
     const overrides = effectiveGridMode(songInfo) === 'manual' ? songInfo?.beatOverrides : undefined;
-    const division = showBeatGrid && beatGridUnit ? beatGridUnitToSnapDivision(beatGridUnit) : 'beat';
-
-    function snapT(t: number): number {
-      return snapTimeToGrid(t, bpmVal, offset, beatsPerBarVal, division, overrides, undefined, resolveGridSegments(songInfo));
-    }
-
-    setCueLayersDoc((doc) => {
-      if (!doc) return doc;
-      const snapped: AnnotationLayer[] = doc.layers.map((layer) => {
-        if (layer.type === 'lyrics') return layer;
-        if (layer.type === 'boundaries' || layer.type === 'cues') {
-          return {
-            ...layer,
-            items: (layer.items as { time: number; candidates?: number[] }[]).map((item) => ({
-              ...item,
-              time: snapT(item.time),
-              candidates: item.candidates?.map((c) => snapT(c)),
-            })),
-          } as AnnotationLayer;
-        }
-        if (layer.type === 'spans') {
-          return {
-            ...layer,
-            items: (layer.items as import('../types/annotationLayer').SpanItem[]).map((item) => ({
-              ...item,
-              start: snapT(item.start),
-              end:   snapT(item.end),
-              candidates: item.candidates?.map(([s, e]) => [snapT(s), snapT(e)] as [number, number]),
-            })),
-          } as AnnotationLayer;
-        }
-        if (layer.type === 'loops') {
-          return {
-            ...layer,
-            items: (layer.items as import('../types/annotationLayer').LoopItem[]).map((item) => ({
-              ...item,
-              start: snapT(item.start),
-              end:   snapT(item.end),
-              candidates: item.candidates?.map(([s, e]) => [snapT(s), snapT(e)] as [number, number]),
-            })),
-          } as AnnotationLayer;
-        }
-        if (layer.type === 'riff-patterns') {
-          // A riff instance's length is musical content — its sequence of nodes
-          // times its repeat count — not two independent edges. Snapping `end`
-          // on its own would stretch or squash the pattern, so move the whole
-          // instance: snap the start and carry the duration, exactly what
-          // dragging one on the canvas does (see handleRiffPatternMove).
-          return {
-            ...layer,
-            items: (layer.items as import('../types/annotationLayer').RiffPatternItem[]).map((item) => {
-              const start = snapT(item.start);
-              return { ...item, start, end: start + (item.end - item.start) };
-            }),
-          } as AnnotationLayer;
-        }
-        return layer;
-      });
-      return { ...doc, layers: snapped };
-    });
-  }, [songInfo, setCueLayersDoc, showBeatGrid, beatGridUnit]);
+    const segments = resolveGridSegments(songInfo);
+    return (unit: LaneSnapUnit) => (t: number) =>
+      roundTime(snapTimeToGrid(t, bpmVal, offset, beatsPerBarVal, unit, overrides, undefined, segments));
+  }, [songInfo]);
 
   // ── Song info change handler (debounced save) ────────────────────────────
   /** Renumber every stamped beat in the document — the companion half of a
@@ -5361,8 +5896,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setShowGridLockModal(true);
   }, [songInfo, handleSongInfoChange]);
 
-  /** Turn Grid Lock on and pull every existing annotation onto the grid. */
-  const confirmGridLock = useCallback(() => {
+  /** Turn Grid Lock on and pull the picked layer types onto the grid. */
+  const confirmGridLock = useCallback((types: GridLockSnapType[]) => {
     setShowGridLockModal(false);
     // Save undo snapshot before snapping
     const currentLayers = cueLayersDoc?.layers ?? [];
@@ -5370,7 +5905,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setGridLockUndoRelock(false);
     setGridLock(true);
     setSnapToGrid(true);
-    bulkSnapAllLayers();
+    bulkSnapStructureLayers(types);
     // The snap just made the times authoritative for this song; their stamps
     // refresh on the next save. Mark the song as already realigned so the
     // load-time pass doesn't read those stale stamps and undo the snap.
@@ -5380,7 +5915,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setShowGridLockUndoToast(true);
     // Persist so this song always opens in Grid Lock.
     if (songInfo) handleSongInfoChange({ ...songInfo, annotatorGridMode: true }, { skipHistory: true });
-  }, [cueLayersDoc, bulkSnapAllLayers, songInfo, handleSongInfoChange, selectedAudio]);
+  }, [cueLayersDoc, bulkSnapStructureLayers, songInfo, handleSongInfoChange, selectedAudio]);
 
   const undoGridLockSnap = useCallback(() => {
     if (!gridLockUndoLayers) return;
@@ -5406,29 +5941,25 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // the hook returns a fresh object every render, and a handleVizClick that
   // churns with it re-runs every downstream effect keyed on the click handler.
   const stopLoopPlayback = loopPlayback.stop;
+  // How a click or drag on the canvas is snapped, by the type being annotated:
+  // lyrics never, the structural types always to the beat or finer grid, and cues
+  // (and every non-annotation stage) by the Snap toggle.
+  const snapForActiveType = !isAnnotateFeature ? snapToGridIfEnabled
+    : activeAnnotationType === 'lyrics' ? unsnappedTime
+      : activeAnnotationType === 'cues' ? snapToGridIfEnabled
+        : snapToBeatOrFiner;
   // The canvas overlays (3-Band, Spectrogram) snap drag-regions themselves, to
-  // a hardcoded whole beat. Hand them the lyrics rule while the Lyrics editor
-  // is open so a dragged line lands where a dragged word does; every other
-  // type keeps the overlay's own behaviour (undefined = no override).
-  const lyricsSnapOverride = useCallback(
-    (t: number) => snapTimeByLayerMode(t, lyricsSnapMode(null)),
-    [snapTimeByLayerMode, lyricsSnapMode],
-  );
-  const vizSnapOverride = isAnnotateFeature && activeAnnotationType === 'lyrics'
-    ? lyricsSnapOverride
-    : undefined;
+  // a whole beat and only while Snap is on. Hand them the type's own rule
+  // whenever it differs from that; cues and the other stages keep the
+  // overlay's behaviour (undefined = no override).
+  const vizSnapOverride = snapForActiveType === snapToGridIfEnabled ? undefined : snapForActiveType;
 
   const handleVizClick = useCallback((time: number) => {
-    // Snap the cursor to the grid on click when Snap is on, so the playhead
-    // lands on the beat and every add-at-playhead action inherits the snap.
-    // Lyrics are the exception: they opt out of the global Snap / Grid Lock
-    // switches and obey only their layer's own mode, so while the Lyrics
-    // editor is open the cursor follows THAT granularity. Otherwise a
-    // beat-snapped playhead would hand every "+ Add @ playhead" a beat-aligned
-    // time however fine the layer was set — the picker would look ignored.
-    time = isAnnotateFeature && activeAnnotationType === 'lyrics'
-      ? snapTimeByLayerMode(time, lyricsSnapMode(null))
-      : snapToGridIfEnabled(time);
+    // Snap the cursor the way the active type places marks, so every
+    // add-at-playhead action inherits it: on the nearest beat (or finer grid line) for boundaries,
+    // spans, loops and riff patterns; by the Snap toggle for cues; and exactly
+    // where it was clicked for lyrics, which inherit the sung time.
+    time = snapForActiveType(time);
     // Placing the cursor ends a loop preview — the loop drives the playhead
     // while it runs, so leaving it going would sweep the cursor straight back
     // off the spot the user just clicked.
@@ -5454,29 +5985,70 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (supportsClickPending(activeAnnotationType, activeBoundarySource ?? undefined)) {
       setPendingAnnotationSelection({ t1: time, t2: null });
     }
-  }, [isAnnotateFeature, activeAnnotationType, activeBoundarySource, previewRegion, snapToGridIfEnabled, snapTimeByLayerMode, lyricsSnapMode, stopLoopPlayback]);
+  }, [isAnnotateFeature, activeAnnotationType, activeBoundarySource, previewRegion, snapForActiveType, stopLoopPlayback]);
 
   const handleVizRegion = useCallback((t1: number, t2: number) => {
-    const snapEdge = isAnnotateFeature && activeAnnotationType === 'lyrics'
-      ? (t: number) => snapTimeByLayerMode(t, lyricsSnapMode(null))
-      : snapToGridIfEnabled;
-    t1 = snapEdge(t1);
-    t2 = snapEdge(t2);
+    t1 = snapForActiveType(t1);
+    t2 = snapForActiveType(t2);
     const supportsPending = isAnnotateFeature && supportsRangePending(activeAnnotationType, activeBoundarySource ?? undefined);
     if (supportsPending) setPendingAnnotationSelection({ t1, t2 });
     // Loop-annotation mode loops the highlighted selection by default.
     const defaultLoop = isAnnotateFeature && activeAnnotationType === 'loops';
     openPreviewRegion(t1, t2, defaultLoop);
-  }, [isAnnotateFeature, activeAnnotationType, activeBoundarySource, openPreviewRegion, snapToGridIfEnabled, snapTimeByLayerMode, lyricsSnapMode]);
+  }, [isAnnotateFeature, activeAnnotationType, activeBoundarySource, openPreviewRegion, snapForActiveType]);
+
+  // A click on a cue lane / a drag on a span, loop or lyrics lane makes that
+  // item in that lane (see laneCreate.ts). Each type is snapped by the lane's
+  // own type, not the open tab's — the same rule its panel's adds follow.
+  // One snap rule per lane type, shared by the drag preview and the add.
+  const laneCreateSnap = useCallback((type: string) => (
+    type === 'lyrics' ? unsnappedTime
+      : type === 'cues' ? snapToGridIfEnabled
+        : snapToBeatOrFiner
+  ), [snapToGridIfEnabled, snapToBeatOrFiner]);
+  const { openAt: cueOpenAt } = cuePopover;
+  const { openAt: spanOpenAt } = spanPopover;
+  const { openAt: loopOpenAt } = loopPopover;
+  const { openAt: lyricsOpenAt } = lyricsPopover;
+  const handleLaneCreate = useCallback((layerId: string, t1: number, t2: number | null) => {
+    const doc = cueLayersDocRef.current;
+    const type = doc?.layers.find((l) => l.id === layerId)?.type;
+    if (!doc || !type) return;
+    const snap = laneCreateSnap(type);
+    const result = createLaneItem(doc, layerId, snap(t1), t2 === null ? null : snap(t2), durationRef.current);
+    if (result.kind === 'none') return;
+    // The lane gesture replaces the highlight-then-Add flow, so whatever was
+    // highlighted before is done with.
+    setPendingAnnotationSelection(null);
+    if (previewRegionRef.current) handlePreviewDismiss();
+    const at = { layerId: result.layerId, itemId: result.itemId };
+    switch (result.type) {
+      case 'cues':   setFocusedCue(at);    setSelectedCueLayerId(layerId);    break;
+      case 'spans':  setFocusedSpan(at);   setSelectedSpanLayerId(layerId);   break;
+      case 'loops':  setFocusedLoop(at);   setSelectedLoopLayerId(layerId);   break;
+      case 'lyrics': setFocusedLyrics(at); setSelectedLyricsLayerId(layerId); break;
+    }
+    if (result.kind === 'duplicate') { setAnnotationNotice(result.notice); return; }
+    // The new item is an offer: its card opens for a label and the rest, and
+    // only Done keeps it (see the lane-draft block above).
+    setCueLayersDoc(result.doc);
+    setLaneDraft({ type: result.type, layerId, itemId: result.itemId, opened: false });
+    const openAt = result.type === 'cues' ? cueOpenAt
+      : result.type === 'spans' ? spanOpenAt
+        : result.type === 'loops' ? loopOpenAt
+          : lyricsOpenAt;
+    openCardUnderItem(openAt, layerId, result.itemId);
+  }, [laneCreateSnap, setCueLayersDoc, handlePreviewDismiss, setLaneDraft,
+      cueOpenAt, spanOpenAt, loopOpenAt, lyricsOpenAt]);
 
   const handleManualBoundaryChange = useCallback((layerId: string, sectionIndex: number, newTime: number) => {
     updateBoundaryItems(layerId, (prev) => {
       if (sectionIndex < 0 || sectionIndex >= prev.length) return prev;
       const next = [...prev];
-      next[sectionIndex] = { ...next[sectionIndex], time: snapToGridIfEnabled(newTime) };
+      next[sectionIndex] = { ...next[sectionIndex], time: snapToBeatOrFiner(newTime) };
       return next;
     }, { coalesceKey: `boundary-drag:${layerId}` });
-  }, [snapToGridIfEnabled, updateBoundaryItems]);
+  }, [snapToBeatOrFiner, updateBoundaryItems]);
 
   const handleManualSectionDelete = useCallback((layerId: string, sectionIndex: number) => {
     updateBoundaryItems(layerId, (prev) => prev.filter((_, i) => i !== sectionIndex));
@@ -5546,32 +6118,61 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     patchItemById(layerId, itemId, { time: snapToGridIfEnabled(time) });
   }, [patchItemById, snapToGridIfEnabled]);
 
+  // The decay nub. Not snapped: decay is a length, and a ring rarely ends on
+  // the grid. The row has already clamped it to the end of the song.
+  const handleCueDecayDrag = useCallback((layerId: string, itemId: string, decay: number | undefined) => {
+    patchItemById(layerId, itemId, { decay });
+  }, [patchItemById]);
+
+  // A keyboard step of the decay (the focused nub's arrows, or `.` / `,` with
+  // a cue selected). One undo step per keypress; a held key's auto-repeat
+  // joins the step of the press that started it, the way a drag is one step.
+  const decayKeyPressRef = useRef(0);
+  const handleCueDecayKey = useCallback((layerId: string, itemId: string, decay: number | undefined, repeat: boolean) => {
+    if (!repeat) decayKeyPressRef.current += 1;
+    setCueLayersDoc((d) => d && ({
+      ...d,
+      layers: d.layers.map((l) =>
+        l.id === layerId
+          ? { ...l, items: (l.items as readonly { id: string }[]).map((it) =>
+              it.id === itemId ? { ...it, decay } : it,
+            ) } as typeof l
+          : l,
+      ),
+    }), { coalesceKey: `decay-key:${itemId}:${decayKeyPressRef.current}` });
+  }, [setCueLayersDoc]);
+
+  // Moving a word moves its end with it: a timed word keeps its length, the
+  // way a span does. Writing `time` alone stretched the word when dragged
+  // left and turned it inside out when dragged past its own end.
   const handleLyricsDrag = useCallback((layerId: string, itemId: string, time: number) => {
-    patchItemById(layerId, itemId, { time: snapTimeByLayerMode(time, lyricsSnapMode(layerId)) });
-  }, [patchItemById, snapTimeByLayerMode, lyricsSnapMode]);
+    patchItemFnById(layerId, itemId, (item: never) => {
+      const prev = item as LyricsItem;
+      return prev.end != null ? { time, end: prev.end + (time - prev.time) } : { time };
+    });
+  }, [patchItemFnById]);
 
   // Lyrics resize. Unlike spans this can't go through patchStartEdge — that
   // helper writes `start` (and shifts a prominence envelope), neither of which
   // a LyricsItem has. The start edge writes `time` and deliberately leaves
   // `end` alone, so dragging it changes the word's length rather than sliding
   // the whole word.
+  // The row's clamp already keeps the two edges apart.
   const handleLyricsEdgeDrag = useCallback((layerId: string, itemId: string, edge: 'start' | 'end', time: number) => {
-    const t = snapTimeByLayerMode(time, lyricsSnapMode(layerId));
-    if (edge === 'start') patchItemById(layerId, itemId, { time: t });
-    else patchItemById(layerId, itemId, { end: t });
-  }, [patchItemById, snapTimeByLayerMode, lyricsSnapMode]);
+    patchItemById(layerId, itemId, edge === 'start' ? { time } : { end: time });
+  }, [patchItemById]);
 
   const handleLoopEdgeDrag = useCallback((layerId: string, itemId: string, edge: 'start' | 'end', time: number) => {
-    const t = snapToGridIfEnabled(time, true);
+    const t = snapToBeatOrFiner(time);
     if (edge === 'start') patchStartEdge(layerId, itemId, t);
     else patchItemById(layerId, itemId, { end: t });
-  }, [patchItemById, patchStartEdge, snapToGridIfEnabled]);
+  }, [patchItemById, patchStartEdge, snapToBeatOrFiner]);
 
   const handleSpanEdgeDrag = useCallback((layerId: string, itemId: string, edge: 'start' | 'end', time: number) => {
-    const t = snapToGridIfEnabled(time, true);
+    const t = snapToBeatOrFiner(time);
     if (edge === 'start') patchStartEdge(layerId, itemId, t);
     else patchItemById(layerId, itemId, { end: t });
-  }, [patchItemById, patchStartEdge, snapToGridIfEnabled]);
+  }, [patchItemById, patchStartEdge, snapToBeatOrFiner]);
 
   // Prominence (front/back) edits from the canvas breakpoint editors. One per
   // durational kind; all funnel through the same untyped item patch.
@@ -5669,31 +6270,120 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // Body-drag handlers — move the whole interval by shifting start AND end by
   // the same delta. The lane-row helper already clamps the new start into
   // [0, duration - itemDur] before calling these, so no extra bounds work here.
-  // When snap is on, snap the start edge and preserve the duration.
-  //
-  // These snap `pixelAware`: a drag is aimed with a pointer, and a beat is
-  // under 3px at fit zoom on a five-minute song — a snap that fine is one the
-  // hand can neither see nor steer, which reads as "Grid Lock is on and
-  // nothing snaps". The grid the band lands on widens to bars (and on to
-  // phrases) until one step is worth aiming at, and hands the beat back as
-  // soon as zoom makes it targetable again.
+  // A moved span or loop snaps each end on its own (`snapToBeatOrFiner`), so
+  // a band a bar and a bit long lands on the bar line at one end and on the
+  // grid line nearest "a bar and a bit" at the other — its length follows the
+  // grid rather than being carried over from wherever it started. Only when
+  // both ends would round onto the same line does the band keep its length
+  // from the snapped start, so a short band never collapses to nothing.
+  const snapMovedRange = useCallback((newStart: number, newEnd: number) => {
+    const start = snapToBeatOrFiner(newStart);
+    const end = snapToBeatOrFiner(newEnd);
+    return end > start ? { start, end } : { start, end: start + (newEnd - newStart) };
+  }, [snapToBeatOrFiner]);
+
   const handleLoopMove = useCallback((layerId: string, itemId: string, newStart: number, newEnd: number) => {
-    const dur = newEnd - newStart;
-    const snappedStart = snapToGridIfEnabled(newStart, true);
-    patchItemById(layerId, itemId, { start: snappedStart, end: snappedStart + dur });
-  }, [patchItemById, snapToGridIfEnabled]);
+    patchItemById(layerId, itemId, snapMovedRange(newStart, newEnd));
+  }, [patchItemById, snapMovedRange]);
 
   const handleSpanMove = useCallback((layerId: string, itemId: string, newStart: number, newEnd: number) => {
-    const dur = newEnd - newStart;
-    const snappedStart = snapToGridIfEnabled(newStart, true);
-    patchItemById(layerId, itemId, { start: snappedStart, end: snappedStart + dur });
-  }, [patchItemById, snapToGridIfEnabled]);
+    patchItemById(layerId, itemId, snapMovedRange(newStart, newEnd));
+  }, [patchItemById, snapMovedRange]);
 
-  const handleRiffPatternMove = useCallback((layerId: string, itemId: string, newStart: number, newEnd: number) => {
-    const dur = newEnd - newStart;
-    const snappedStart = snapToGridIfEnabled(newStart, true);
-    patchItemById(layerId, itemId, { start: snappedStart, end: snappedStart + dur });
-  }, [patchItemById, snapToGridIfEnabled]);
+  /** Items dragged from one lane and let go over another of the same type,
+   *  copied there (or moved, ⌥) at the times they had when the drag began.
+   *  When a time drag carried a single item there, the drop shares its coalesce
+   *  key, so the nudge and the hand-off are ONE undo step; a group drag ran no
+   *  time drag, so it takes a step of its own. On a move, selection follows the
+   *  item, or its highlight would be left pointing at the lane it just left. */
+  const handleItemLaneMove = useCallback((
+    fromLayerId: string,
+    toLayerId: string,
+    items: { id: string }[],
+    { move, joinsDrag }: { move: boolean; joinsDrag: boolean },
+  ) => {
+    if (!joinsDrag) dragGestureIdRef.current += 1;
+    setCueLayersDoc(
+      (d) => d && transferItems(d, fromLayerId, toLayerId, items, { move }),
+      { coalesceKey: `drag:${items[0]?.id}:${dragGestureIdRef.current}` },
+    );
+    if (!move) return;
+    const ids = new Set(items.map((it) => it.id));
+    const follow = (f: { layerId: string; itemId: string } | null) =>
+      f && f.layerId === fromLayerId && ids.has(f.itemId) ? { layerId: toLayerId, itemId: f.itemId } : f;
+    setFocusedCue(follow);
+    setFocusedSpan(follow);
+    setFocusedLoop(follow);
+    setFocusedLyrics(follow);
+  }, [setCueLayersDoc]);
+
+  /** The open card's lane picker: every other editable lane of the item's
+   *  type it could land on. A Loops lane it would overlap is left out, and so
+   *  is a locked lane at either end — both moves would be refused, and the
+   *  card would follow the item to a lane it never reached. Picking one is the
+   *  same move as dragging the item there with ⌥ — one undo step, focus
+   *  follows — and `retarget` keeps the card open on the item in its new lane. */
+  const cardLaneMove = (
+    layer: AnnotationLayer,
+    item: { id: string },
+    retarget: (layerId: string) => void,
+  ): CardLaneMove | undefined => {
+    if (layer.readOnly || layer.locked || !CROSS_LANE_ITEM_TYPES.has(layer.type)) return undefined;
+    const targets = (cueLayersDoc?.layers ?? []).filter((l) => l.type === layer.type && l.id !== layer.id && !l.readOnly && !l.locked
+      && !(l.type === 'loops' && loopsWouldOverlap(l.items as LoopItem[], [item as LoopItem])));
+    if (targets.length === 0) return undefined;
+    return {
+      targets: targets.map((l) => ({ id: l.id, name: l.name })),
+      onMove: (toLayerId) => {
+        handleItemLaneMove(layer.id, toLayerId, [item], { move: true, joinsDrag: false });
+        retarget(toLayerId);
+      },
+    };
+  };
+
+  /** Delete pressed over a ⇧/⌘-picked group: every picked item goes in one
+   *  edit, so one ⌘Z brings them all back. A focus left on one of them would
+   *  point at nothing, so it is cleared. */
+  const handleDeleteItems = useCallback((layerId: string, itemIds: string[]) => {
+    const ids = new Set(itemIds);
+    setCueLayersDoc((d) => d && ({
+      ...d,
+      layers: d.layers.map((l) =>
+        l.id === layerId
+          ? { ...l, items: (l.items as readonly { id: string }[]).filter((it) => !ids.has(it.id)) } as typeof l
+          : l,
+      ),
+    }));
+    const drop = (f: { layerId: string; itemId: string } | null) =>
+      f && f.layerId === layerId && ids.has(f.itemId) ? null : f;
+    setFocusedCue(drop);
+    setFocusedSpan(drop);
+    setFocusedLoop(drop);
+    setFocusedLyrics(drop);
+  }, [setCueLayersDoc]);
+
+  // A riff-pattern instance is the one band whose length is not the
+  // annotator's to set — it is however long its sequence plays — so only its
+  // start snaps and the length rides along.
+  /** A riff run dragged on the lane: every instance in it moves by one shift,
+   *  the one that snaps the run's first start, so the run keeps its shape.
+   *  One document change per pointer move, coalesced into the gesture's ⌘Z. */
+  const handleRiffPatternMove = useCallback((layerId: string, moves: { id: string; start: number; end: number }[]) => {
+    if (!moves.length) return;
+    const shift = snapToBeatOrFiner(moves[0].start) - moves[0].start;
+    const byId = new Map(moves.map((m) => [m.id, m]));
+    setCueLayersDoc((d) => d && ({
+      ...d,
+      layers: d.layers.map((l) =>
+        l.id === layerId
+          ? { ...l, items: (l.items as readonly { id: string }[]).map((it) => {
+              const m = byId.get(it.id);
+              return m ? { ...it, start: m.start + shift, end: m.end + shift } : it;
+            }) } as typeof l
+          : l,
+      ),
+    }), { coalesceKey: `drag:${moves[0].id}:${dragGestureIdRef.current}` });
+  }, [setCueLayersDoc, snapToBeatOrFiner]);
 
   /** Sets a riff node's own length as a trim — the node's content past the new
    *  end is dropped and every placement of it shrinks by the same ratio, so
@@ -5716,6 +6406,62 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       )),
     }), coalesceKey ? { coalesceKey } : undefined);
   }, [setCueLayersDoc]);
+
+  /** One edit to a riff layer of your own, as a single ⌘Z — the groove
+   *  card's step toggle and its "only this bar" (riffGrooves.ts). An edit that
+   *  can't be made (null) leaves the document as it is. */
+  const editRiffLayer = useCallback((
+    layerId: string,
+    edit: (layer: AnnotationLayer<'riff-patterns'>) => AnnotationLayer<'riff-patterns'> | null,
+    opts?: { coalesceKey?: string },
+  ) => {
+    setCueLayersDoc((d) => {
+      if (!d) return d;
+      let changed = false;
+      const layers = d.layers.map((l) => {
+        if (l.id !== layerId || l.type !== 'riff-patterns' || l.readOnly) return l;
+        const next = edit(l as AnnotationLayer<'riff-patterns'>);
+        if (!next) return l;
+        changed = true;
+        return next as AnnotationLayer;
+      });
+      return changed ? { ...d, layers } : d;
+    }, opts);
+  }, [setCueLayersDoc]);
+
+  // A drag over empty space on a riff lane of your own starts a riff there:
+  // a new instance at the drag's start, playing one new node as long as the
+  // drag (whole beats, at least one), open on the lane as a draft. Needs a
+  // tempo — without one there are no beats to measure the node in.
+  const handleRiffLaneCreate = useCallback((layerId: string, t1: number, t2: number) => {
+    const bpmVal = (songInfoRef.current?.bpm ?? 0) > 20 ? songInfoRef.current!.bpm! : 0;
+    if (!bpmVal) {
+      setAnnotationNotice('Set the song\'s tempo first — a riff is measured in beats.');
+      return;
+    }
+    // Whatever was open closes first: a draft is thrown away, as a click
+    // elsewhere throws away any lane draft.
+    if (riffEditorRef.current) discardRiffEditor();
+    const doc = cueLayersDocRef.current;
+    const layer = doc?.layers.find((l) => l.id === layerId && l.type === 'riff-patterns' && !l.readOnly) as
+      AnnotationLayer<'riff-patterns'> | undefined;
+    if (!doc || !layer) return;
+    const lo = snapToBeatOrFiner(Math.min(t1, t2));
+    const hi = snapToBeatOrFiner(Math.max(t1, t2));
+    const beats = Math.max(1, Math.round((hi - lo) / (60 / bpmVal)));
+    const made = createRiffDraft(layer, lo, beats, bpmVal);
+    setPendingAnnotationSelection(null);
+    if (previewRegionRef.current) handlePreviewDismiss();
+    setCueLayersDoc((d) => d && ({ ...d, layers: d.layers.map((l) => (l.id === layerId ? made.layer as AnnotationLayer : l)) }));
+    setRiffEditor({ layerId, itemId: made.itemId, draftNodeIds: [made.nodeId] });
+  }, [snapToBeatOrFiner, discardRiffEditor, setCueLayersDoc, setRiffEditor, handlePreviewDismiss]);
+  const handleRiffLayerEdit = useCallback((layerId: string, edit: RiffLayerEdit, opts?: { coalesceKey?: string }) => {
+    editRiffLayer(layerId, edit, opts);
+  }, [editRiffLayer]);
+  const handleRiffEditOnLane = useCallback((layerId: string, itemId: string) => {
+    if (riffEditorRef.current?.draftNodeIds) discardRiffEditor();
+    setRiffEditor({ layerId, itemId, draftNodeIds: null });
+  }, [discardRiffEditor, setRiffEditor]);
 
   // ── Unified-sidebar per-row mutation handlers ─────────────────────────────
   // Wire the X delete + critical star toggle that UnifiedAnnotationListPanel
@@ -5778,6 +6524,26 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     setFocusedLyrics((f) => (f?.layerId === layerId ? null : f));
   }, [setCueLayersDoc]);
 
+  // Merge one layer into another of the same type from the sidebar card — one
+  // document edit, so one ⌘Z restores both layers. Whatever pointed at the
+  // source (the ADD+ target, a focused item) now points at the target.
+  const handleUnifiedLayerMerge = useCallback((
+    sourceId: string,
+    targetId: string,
+  ) => {
+    setCueLayersDoc((d) => d && mergeLayers(d, sourceId, targetId, vocalRunGrid));
+    const retarget = (id: string | null) => (id === sourceId ? targetId : id);
+    setSelectedBoundaryLayerId(retarget);
+    setSelectedCueLayerId(retarget);
+    setSelectedSpanLayerId(retarget);
+    setSelectedLoopLayerId(retarget);
+    setSelectedLyricsLayerId(retarget);
+    setFocusedCue((f) => (f?.layerId === sourceId ? null : f));
+    setFocusedSpan((f) => (f?.layerId === sourceId ? null : f));
+    setFocusedLoop((f) => (f?.layerId === sourceId ? null : f));
+    setFocusedLyrics((f) => (f?.layerId === sourceId ? null : f));
+  }, [setCueLayersDoc, vocalRunGrid]);
+
   // Inline rename of a layer from the sidebar card header, boundaries included.
   // Keystrokes coalesce into one undo entry per layer.
   const handleUnifiedLayerRename = useCallback((
@@ -5803,8 +6569,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const handleUnifiedItemLabelChange = useCallback((
     layerId: string,
     itemId: string,
+    sectionType: AnnotationType,
     label: string,
   ) => {
+    // A lyric's words are its `text`; every other kind names itself in `label`.
+    const field = sectionType === 'lyrics' ? 'text' : 'label';
     setCueLayersDoc(
       (d) => d && ({
         ...d,
@@ -5812,8 +6581,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           if (l.id !== layerId) return l;
           return {
             ...l,
-            items: (l.items as readonly { id: string; label: string }[]).map((it) =>
-              it.id === itemId ? { ...it, label } : it,
+            items: (l.items as readonly { id: string }[]).map((it) =>
+              it.id === itemId ? { ...it, [field]: label } : it,
             ),
           } as typeof l;
         }),
@@ -5829,9 +6598,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // specific layer. Two pieces wire this:
   //   1. `selectedLayerIdByType` — the id of whichever UnifiedLayer is the
   //      active target per section, used by the panel to render the "active"
-  //      accent. For boundaries, only one layer per source can exist so we
-  //      synthesize the id from `activeSourceByType.boundaries`. For the
-  //      multi-layer types, a `detector:<name>` source pins the active
+  //      accent. Hand-drawn boundaries can have several layers, so their
+  //      id is the active boundary layer's — the one M / Split / drags
+  //      write to; auto-guess and detector sources keep a synthesized id.
+  //      For the other types, a `detector:<name>` source pins the active
   //      layer to its synthesized detector layer id; otherwise it's the
   //      user's currently-selected user layer id.
   //   2. `handleUnifiedSelectLayer` — runs the actual switch: tab + source
@@ -5840,7 +6610,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const selectedLayerIdByType = useMemo<Partial<Record<AnnotationType, string | null>>>(() => {
     const boundarySrc = activeSourceByType.boundaries;
     const boundaryId: string | null =
-      boundarySrc === 'manual'    ? 'boundaries:Manual'
+      boundarySrc === 'manual'    ? activeBoundaryLayer?.id ?? null
       : boundarySrc === 'autoGuess' ? 'boundaries:autoGuess'
       : boundarySrc.startsWith('detector:')
         ? `boundaries:${boundarySrc}`
@@ -5852,7 +6622,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     ): string | null => {
       const src = activeSourceByType[type];
       if (src.startsWith('detector:')) {
-        return `${detectorPrefix}:${src.slice('detector:'.length)}`;
+        const base = `${detectorPrefix}:${src.slice('detector:'.length)}`;
+        // A `lanes` detector's source names the detector, not the lane, so the
+        // clicked lane (`detector-lyrics:wordless_vocals~voice`) is kept apart;
+        // without it the pick is an id no layer has.
+        const lane = selectedDetectorLaneByType[type];
+        return lane?.startsWith(`${base}${DETECTOR_LANE_SEP}`) ? lane : base;
       }
       return userLayerId;
     };
@@ -5864,7 +6639,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       'riff-patterns':  selectedRiffPatternLayerId,
       lyrics:           pickLayerId('lyrics',        selectedLyricsLayerId,       'detector-lyrics'),
     };
-  }, [activeSourceByType, selectedCueLayerId, selectedSpanLayerId, selectedLoopLayerId, selectedRiffPatternLayerId, selectedLyricsLayerId]);
+  }, [activeSourceByType, activeBoundaryLayer, selectedDetectorLaneByType, selectedCueLayerId, selectedSpanLayerId, selectedLoopLayerId, selectedRiffPatternLayerId, selectedLyricsLayerId]);
 
   const handleUnifiedSelectLayer = useCallback((
     type: AnnotationType,
@@ -5872,15 +6647,20 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   ) => {
     setActiveAnnotationType(type);
     setActiveSourceByType((prev) => ({ ...prev, [type]: selection.sourceId }));
+    if (selection.sourceId.startsWith('detector:')) {
+      setSelectedDetectorLaneByType((prev) => ({ ...prev, [type]: selection.id }));
+    }
     // Picking a layer is the newer, more specific click, so a lyrics detector
     // lane the karaoke was following stops being the thing the user means.
     setSelectedLyricsAlgoId(null);
+    setSelectedDrumAlgoId(null);
     // For multi-layer types, pin the ADD+ panel's layer picker to the chosen
     // user layer. Detector layers are read-only and don't appear in the
     // picker's options, so we leave the per-type selectedXxxLayerId alone in
     // that case (the source switch above is what surfaces the detector view).
     if (selection.sourceId === 'manual') {
-      if (type === 'cues')          setSelectedCueLayerId(selection.id);
+      if (type === 'boundaries')    setSelectedBoundaryLayerId(selection.id);
+      else if (type === 'cues')     setSelectedCueLayerId(selection.id);
       else if (type === 'spans')    setSelectedSpanLayerId(selection.id);
       else if (type === 'loops')    setSelectedLoopLayerId(selection.id);
       else if (type === 'riff-patterns') setSelectedRiffPatternLayerId(selection.id);
@@ -5932,8 +6712,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // to the item doesn't re-fire this and drag the sidebar back after the
     // user has switched tabs with the card still up.
     const layer = cueLayersDocRef.current?.layers.find((l) => l.id === layerId);
+    // A part lane (`detector-span:pulse~kick`) and a `lanes` detector's lane
+    // (`detector-cue:instrument_layers~kick_notes`) both belong to the
+    // detector before the `~`.
     const detectorName = !layer && layerId.startsWith('detector-')
-      ? layerId.slice(layerId.indexOf(':') + 1)
+      ? laneDetectorName(layerId.slice(layerId.indexOf(':') + 1))
       : null;
     handleUnifiedSelectLayer(type, {
       id: layerId,
@@ -6124,6 +6907,72 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     seekRef.current(next);
   }, []);
 
+  // Step the playhead one line of the beat grid (the arrow keys). `unit`
+  // 'grid' is the finest line structural marks land on — the GRID unit when it
+  // divides the beat, the beat otherwise — so the arrows walk exactly the
+  // places a boundary can go. 'bar' jumps a bar. Returns false when the song
+  // has no tempo, so the caller can fall back to seeking by seconds.
+  const handleSeekGridStep = useCallback((dir: 1 | -1, unit: 'grid' | 'bar'): boolean => {
+    if (!seekRef.current) return false;
+    const bpmVal = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm! : 0;
+    if (bpmVal <= 0) return false;
+    const shown = showBeatGrid && beatGridUnit ? beatGridUnitToSnapDivision(beatGridUnit) : 'beat';
+    const division = unit === 'bar' ? 'bar' : SUB_BEAT_DIVISIONS.has(shown) ? shown : 'beat';
+    const overrides = effectiveGridMode(songInfo) === 'manual' ? songInfo?.beatOverrides : undefined;
+    const dur = durationRef.current;
+    const next = stepTimeOnGrid(playerTimeRef.current, dir, bpmVal, songInfo?.gridOffset ?? 0,
+      beatsPerBarFromTimeSignature(songInfo?.timeSignature), division, overrides, resolveGridSegments(songInfo));
+    seekRef.current(Math.max(0, Math.min(dur || Infinity, next)));
+    return true;
+  }, [songInfo, showBeatGrid, beatGridUnit]);
+
+  // E: open the edit card of the item the playhead is at, on the active tab —
+  // the card a click on it opens. Boundaries: the boundary nearest the
+  // playhead on the active layer (the one Delete would remove). Cues: the
+  // nearest cue. Spans, loops, lyrics: the item under the playhead, else the
+  // nearest one. Visible layers only, so it never opens a card for something
+  // the annotator can't see. Returns false when there is nothing to open.
+  const handleOpenItemAtPlayhead = useCallback((): boolean => {
+    const type = activeAnnotationTypeRef.current;
+    const t = playerTimeRef.current;
+    if (type === 'boundaries') {
+      if (activeBoundarySourceRef.current !== 'manual') return false;
+      const layer = activeBoundaryLayerRef.current;
+      const open = openManualEditorRef.current;
+      if (!layer?.items.length || !open) return false;
+      let idx = 0;
+      for (let i = 1; i < layer.items.length; i++) {
+        if (Math.abs(layer.items[i].time - t) < Math.abs(layer.items[idx].time - t)) idx = i;
+      }
+      const el = document.querySelector<HTMLElement>(
+        `[data-boundary-layer="${CSS.escape(layer.id)}"] [data-section-index="${idx}"]`,
+      );
+      const r = el?.getBoundingClientRect();
+      const onScreen = r && r.width > 0 && r.right > 0 && r.left < window.innerWidth;
+      open(idx, onScreen ? { x: Math.max(r.left, 0), y: r.bottom } : undefined);
+      return true;
+    }
+    if (type !== 'cues' && type !== 'spans' && type !== 'loops' && type !== 'lyrics') return false;
+    const doc = cueLayersDocRef.current;
+    let best: { layerId: string; itemId: string; d: number } | null = null;
+    for (const l of doc?.layers ?? []) {
+      if (l.type !== type || !l.visible) continue;
+      for (const it of l.items as readonly { id: string; time?: number; start?: number; end?: number }[]) {
+        const start = it.start ?? it.time ?? 0;
+        const end = type === 'cues' ? start : (it.end ?? start);
+        const d = t < start ? start - t : t > end ? t - end : 0;
+        if (!best || d < best.d) best = { layerId: l.id, itemId: it.id, d };
+      }
+    }
+    if (!best) return false;
+    const openAt = type === 'cues' ? cueOpenAt
+      : type === 'spans' ? spanOpenAt
+        : type === 'loops' ? loopOpenAt
+          : lyricsOpenAt;
+    openCardUnderItem(openAt, best.layerId, best.itemId);
+    return true;
+  }, [cueOpenAt, spanOpenAt, loopOpenAt, lyricsOpenAt]);
+
   const handleSeekToStart = useCallback(() => {
     seekRef.current?.(0);
   }, []);
@@ -6172,11 +7021,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   useEffect(() => { loopPlaybackRef.current = loopPlayback; }, [loopPlayback]);
 
   // ── The live playhead, for anything that PLACES a mark ────────────────────
-  // `playerTime` is fine for drawing and wrong for marking: it is the media
-  // clock after a rAF coalesce, a setState and a re-render of this (very
-  // large) page, so a cue committed against it lands where the playhead was,
-  // not where the annotator heard the thing they pressed M for. Every add
-  // path reads this instead — the same rule PlayerPanel's audioprocess
+  // The playhead clock is fine for drawing and wrong for marking: it is the
+  // media clock after a rAF coalesce, so a cue committed against it lands
+  // where the playhead was a frame ago, not where the annotator heard the
+  // thing they pressed M for. Every add path reads this instead — the same
+  // rule PlayerPanel's audioprocess
   // handler already follows for ending a preview region.
   //
   // `eventTs` is the originating DOM event's `timeStamp` (same timebase as
@@ -6208,19 +7057,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // zoom level is left untouched — the new item draws on the layer + viz at
   // the user's current viewport. Mark Out is a no-op when there is no Mark In
   // stash — the toolbar / hotkey disabled state advertises that to the user.
+  // Both ends land the way the active type places marks — on the nearest
+  // beat for spans and loops — like a range dragged on the canvas.
   const handleMarkIn = useCallback((eventTs?: number) => {
-    const t = liveSongTimeRef.current?.(eventTs) ?? playerTimeRef.current;
+    const t = snapForActiveType(liveSongTimeRef.current?.(eventTs) ?? playerTimeRef.current);
     setPendingAnnotationSelection({ t1: t, t2: null });
-  }, []);
+  }, [snapForActiveType]);
 
   const handleMarkOut = useCallback((eventTs?: number) => {
     const pending = pendingAnnotationSelectionRef.current;
     if (!pending || pending.t2 !== null) return;
     const start = pending.t1;
-    const end = liveSongTimeRef.current?.(eventTs) ?? playerTimeRef.current;
+    const end = snapForActiveType(liveSongTimeRef.current?.(eventTs) ?? playerTimeRef.current);
     activePanelRef()?.commitItemRange?.(start, end);
     setPendingAnnotationSelection(null);
-  }, [activePanelRef]);
+  }, [activePanelRef, snapForActiveType]);
 
   // Whether Mark Out is currently meaningful — drives both the button's
   // enabled state and the I / O hotkey gating. True when a Mark In has been
@@ -6239,18 +7090,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const seekMedium = Math.max(0.1, Number(settings.seekStepMediumSeconds) || 5);
   const seekLarge  = Math.max(0.1, Number(settings.seekStepLargeSeconds)  || 10);
   // Annotation-type chips the editor currently exposes, in display order.
-  // Number keys 1-N below jump straight to the matching chip; loops and riff
-  // patterns only appear when the experimental flag is on.
-  const visibleAnnotationTypes = useMemo<AnnotationType[]>(
-    () => TAB_CONFIG
-      .filter((t) => {
-        if (t.experimental === 'loopsAndPatterns') return settings.experimentalLoopsAndPatterns;
-        if (t.experimental === 'lyrics') return settings.experimentalLyricsFamily;
-        return true;
-      })
-      .map((t) => t.id),
-    [settings.experimentalLoopsAndPatterns, settings.experimentalLyricsFamily],
-  );
+  // Number keys 1-N below jump straight to the matching chip.
+  const visibleAnnotationTypes = useMemo<AnnotationType[]>(() => TAB_CONFIG.map((t) => t.id), []);
   const selectAnnotationTypeChip = useCallback((type: AnnotationType) => {
     setActiveAnnotationType(type);
     // Mirror the chip's onSelectType: drop the pending pill when the new type
@@ -6258,6 +7099,28 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     if (!supportsPending(type, activeBoundarySourceRef.current ?? undefined)) {
       setPendingAnnotationSelection(null);
     }
+  }, []);
+  // The selected cue's decay from the keyboard. Only a cue in the layers
+  // document — the annotator's own, editable — qualifies; a detector's cue
+  // is never there. Returns false when there is nothing to step, so the key
+  // falls through to whatever else it means.
+  const stepFocusedCueDecay = useCallback((delta: number | null, repeat: boolean): boolean => {
+    const focused = focusedCueRef.current;
+    const layer = focused && cueLayersDocRef.current?.layers.find(
+      (l): l is AnnotationLayer<'cues'> => l.type === 'cues' && l.id === focused.layerId && !l.readOnly,
+    );
+    const cue = focused && layer?.items.find((it) => it.id === focused.itemId);
+    if (!focused || !cue) return false;
+    const next = delta === null ? undefined : stepCueDecay(cue.decay, delta, durationRef.current - cue.time);
+    if (next !== cue.decay) handleCueDecayKey(focused.layerId, cue.id, next, repeat);
+    return true;
+  }, [handleCueDecayKey]);
+  const hasFocusedEditableCue = useCallback(() => {
+    const focused = focusedCueRef.current;
+    return !!focused && !!cueLayersDocRef.current?.layers.some(
+      (l) => l.type === 'cues' && l.id === focused.layerId && !l.readOnly
+        && (l.items as readonly { id: string }[]).some((it) => it.id === focused.itemId),
+    );
   }, []);
   const shortcuts = useMemo<ShortcutDef[]>(() => [
     // Playback
@@ -6271,30 +7134,30 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Playback',
       display: '→',
-      description: `Skip forward ${seekSmall}s`,
+      description: `Forward one grid line (${seekSmall}s without a tempo)`,
       match: (e) => e.key === 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey,
-      run:   (e) => { e.preventDefault(); handleSeekRelative(seekSmall); },
+      run:   (e) => { e.preventDefault(); if (!handleSeekGridStep(1, 'grid')) handleSeekRelative(seekSmall); },
     },
     {
       group: 'Playback',
       display: '←',
-      description: `Skip back ${seekSmall}s`,
+      description: `Back one grid line (${seekSmall}s without a tempo)`,
       match: (e) => e.key === 'ArrowLeft' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey,
-      run:   (e) => { e.preventDefault(); handleSeekRelative(-seekSmall); },
+      run:   (e) => { e.preventDefault(); if (!handleSeekGridStep(-1, 'grid')) handleSeekRelative(-seekSmall); },
     },
     {
       group: 'Playback',
       display: 'Shift + →',
-      description: `Skip forward ${seekMedium}s`,
+      description: `Forward one bar (${seekMedium}s without a tempo)`,
       match: (e) => e.key === 'ArrowRight' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey,
-      run:   (e) => { e.preventDefault(); handleSeekRelative(seekMedium); },
+      run:   (e) => { e.preventDefault(); if (!handleSeekGridStep(1, 'bar')) handleSeekRelative(seekMedium); },
     },
     {
       group: 'Playback',
       display: 'Shift + ←',
-      description: `Skip back ${seekMedium}s`,
+      description: `Back one bar (${seekMedium}s without a tempo)`,
       match: (e) => e.key === 'ArrowLeft' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey,
-      run:   (e) => { e.preventDefault(); handleSeekRelative(-seekMedium); },
+      run:   (e) => { e.preventDefault(); if (!handleSeekGridStep(-1, 'bar')) handleSeekRelative(-seekMedium); },
     },
     {
       group: 'Playback',
@@ -6327,7 +7190,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Playback',
       display: 'L',
-      description: 'Play / stop focused loop — or preview 6s window when no loop is focused',
+      description: 'Play loop / preview',
       match: (e) => (e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run: (e) => {
         const dur = durationRef.current;
@@ -6380,6 +7243,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       match: (e) => e.key === '0' && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); zoomResetRef.current?.(); },
     },
+    // Page size (− / +). uiScale.ts handles these keys on every page; listed
+    // here only so the help drawer shows them.
+    ...([['+', 'Bigger text and buttons'], ['−', 'Smaller text and buttons'], ['0', 'Default text size']] as const)
+      .map(([k, description]): ShortcutDef => ({
+        group: 'Zoom', display: `Ctrl/⌘ + ${k}`, description, match: () => false, run: () => {},
+      })),
 
     // Annotation — context-aware verbs dispatch to whichever tab is active
     // (Manual, Cues, Spans, Loops). Auto-guess is algorithm-driven
@@ -6387,15 +7256,23 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Annotation',
       display: 'M',
-      description: 'Mark at playhead (section · point · cue · 1-bar span · '
-        + 'quick-add loop depending on active tab)',
+      description: 'Add at playhead',
       match: (e) => (e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); handleMarkCueAtPlayhead(e.timeStamp); },
     },
     {
       group: 'Annotation',
+      display: 'Enter',
+      description: 'Add highlight',
+      match: (e) => e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+        && !!effectiveAnnotationSelectionRef.current
+        && effectiveAnnotationSelectionRef.current.t2 !== null,
+      run:   (e) => { e.preventDefault(); activePanelRef()?.confirmPending?.(); },
+    },
+    {
+      group: 'Annotation',
       display: 'S',
-      description: 'Split focused item at playhead (Manual sections, Spans, Loops)',
+      description: 'Split',
       match: (e) => (e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => {
         e.preventDefault();
@@ -6405,51 +7282,92 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         else activePanelRef()?.split?.();
       },
     },
+    // Cue decay — `.` / `,` like the Loops tab's length keys, so they stand
+    // aside there; arrows were taken (every arrow combo seeks). Shift+Delete
+    // sits ahead of Delete so, on the Cues tab, it only ever clears the
+    // selected cue's ring — never removes a cue, even with none selected. On
+    // the other tabs it stays a Delete of that tab's own item.
+    {
+      group: 'Cues',
+      display: '.',
+      description: `Longer ring (+${DECAY_STEP_FINE_SEC * 1000} ms)`,
+      match: (e) => e.key === '.' && !e.ctrlKey && !e.metaKey && !e.altKey
+        && activeAnnotationTypeRef.current !== 'loops' && hasFocusedEditableCue(),
+      run:   (e) => { e.preventDefault(); stepFocusedCueDecay(DECAY_STEP_FINE_SEC, e.repeat); },
+    },
+    {
+      group: 'Cues',
+      display: ',',
+      description: `Shorter ring (−${DECAY_STEP_FINE_SEC * 1000} ms)`,
+      match: (e) => e.key === ',' && !e.ctrlKey && !e.metaKey && !e.altKey
+        && activeAnnotationTypeRef.current !== 'loops' && hasFocusedEditableCue(),
+      run:   (e) => { e.preventDefault(); stepFocusedCueDecay(-DECAY_STEP_FINE_SEC, e.repeat); },
+    },
+    {
+      group: 'Cues',
+      display: 'Shift + .',
+      description: `Longer ring (+${DECAY_STEP_COARSE_SEC * 1000} ms)`,
+      match: (e) => e.key === '>' && !e.ctrlKey && !e.metaKey && !e.altKey
+        && activeAnnotationTypeRef.current !== 'loops' && hasFocusedEditableCue(),
+      run:   (e) => { e.preventDefault(); stepFocusedCueDecay(DECAY_STEP_COARSE_SEC, e.repeat); },
+    },
+    {
+      group: 'Cues',
+      display: 'Shift + ,',
+      description: `Shorter ring (−${DECAY_STEP_COARSE_SEC * 1000} ms)`,
+      match: (e) => e.key === '<' && !e.ctrlKey && !e.metaKey && !e.altKey
+        && activeAnnotationTypeRef.current !== 'loops' && hasFocusedEditableCue(),
+      run:   (e) => { e.preventDefault(); stepFocusedCueDecay(-DECAY_STEP_COARSE_SEC, e.repeat); },
+    },
+    {
+      group: 'Cues',
+      display: 'Shift + Delete',
+      description: 'Clear ring',
+      match: (e) => (e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+        && activeAnnotationTypeRef.current === 'cues',
+      run:   (e) => { e.preventDefault(); stepFocusedCueDecay(null, e.repeat); },
+    },
     {
       group: 'Annotation',
       display: 'Delete',
-      description: 'Delete focused / nearest item (Manual, Cues, Spans, Loops)',
+      description: 'Delete',
       match: (e) => (e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); handleDeleteNearestCue(); },
     },
     {
       group: 'Annotation',
+      display: 'E',
+      description: 'Edit the item at the playhead',
+      match: (e) => (e.key === 'e' || e.key === 'E') && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey,
+      run:   (e) => { if (handleOpenItemAtPlayhead()) e.preventDefault(); },
+    },
+    {
+      group: 'Annotation',
       display: 'Y',
-      description: 'Accept the detector suggestion at the playhead (active tab\u2019s detector layer)',
+      description: 'Accept suggestion',
       match: (e) => (e.key === 'y' || e.key === 'Y') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { if (reviewDetectorAtPlayheadRef.current('accepted')) e.preventDefault(); },
     },
     {
       group: 'Annotation',
       display: 'N',
-      description: 'Reject the detector suggestion at the playhead (active tab\u2019s detector layer)',
+      description: 'Reject suggestion',
       match: (e) => (e.key === 'n' || e.key === 'N') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { if (reviewDetectorAtPlayheadRef.current('rejected')) e.preventDefault(); },
     },
     {
       group: 'Annotation',
       display: '[',
-      description: 'Jump to previous item (Manual sections, Cues, Spans, Loops)',
+      description: 'Previous item',
       match: (e) => e.key === '[' && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); handleJumpToPrevCue(); },
     },
     {
       group: 'Annotation',
       display: ']',
-      description: 'Jump to next item (Manual sections, Cues, Spans, Loops)',
+      description: 'Next item',
       match: (e) => e.key === ']' && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); handleJumpToNextCue(); },
-    },
-    {
-      group: 'Annotation',
-      display: 'Enter',
-      description: 'Confirm the highlighted selection on every tab '
-        + '(Manual boundaries, Cues, Spans, Loops) — turns '
-        + 'the highlight into a new item (Cues get one point at its start).',
-      match: (e) => e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
-        && !!effectiveAnnotationSelectionRef.current
-        && effectiveAnnotationSelectionRef.current.t2 !== null,
-      run:   (e) => { e.preventDefault(); activePanelRef()?.confirmPending?.(); },
     },
     // I / O follow the DAW + NLE convention for "In" and "Out" markers, mapped
     // here to the two-step ADD flow: I stashes the playhead as the start of a
@@ -6463,7 +7381,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Annotation',
       display: 'I',
-      description: 'Mark In — stash the playhead as the start of a brand-new Span / Loop. Draws a flag on the visualization at the cursor; press O next to commit the new item.',
+      description: 'Start here (Spans, Loops)',
       match: (e) => (e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey && !e.altKey
         && (activeAnnotationTypeRef.current === 'spans'
           || activeAnnotationTypeRef.current === 'loops'),
@@ -6472,7 +7390,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Annotation',
       display: 'O',
-      description: 'Mark Out — commit a brand-new Span / Loop with [Mark In, playhead], then zoom the waveform to fit the new item. No-op until Mark In is stashed.',
+      description: 'End here (Spans, Loops)',
       match: (e) => (e.key === 'o' || e.key === 'O') && !e.ctrlKey && !e.metaKey && !e.altKey
         && (activeAnnotationTypeRef.current === 'spans'
           || activeAnnotationTypeRef.current === 'loops'),
@@ -6481,29 +7399,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Annotation',
       display: 'Ctrl + Z',
-      description: 'Undo last edit. In DataPrep this walks back the grid — BPM, '
-        + 'meter, downbeat, pinned beats and grid segments all '
-        + 'share one history. Everywhere else it walks back the annotations: '
-        + 'Boundaries·Manual and Cues / Spans / Loops / Patterns / Riff Patterns '
-        + 'share one history too, so it always undoes whichever was actually '
-        + 'edited last, regardless of the active tab. You undo where you edited: '
-        + 'neither history can reach the other.',
+      description: 'Undo',
       match: (e) => (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey,
       run:   (e) => {
         e.preventDefault();
         if (feature === 'prep') undoGridEdit();
+        else if (feature === 'inspect-song' && lastUndoSurfaceRef.current === 'merge' && mergeWorkCtl.canUndo) mergeWorkCtl.undo();
         else annotationDocsCtl.undo();
       },
     },
     {
       group: 'Annotation',
       display: 'Shift + Ctrl + Z',
-      description: 'Redo last undone edit — same histories as Ctrl+Z (the grid in '
-        + 'DataPrep, the annotations everywhere else).',
+      description: 'Redo',
       match: (e) => (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey,
       run:   (e) => {
         e.preventDefault();
         if (feature === 'prep') redoGridEdit();
+        else if (feature === 'inspect-song' && lastUndoSurfaceRef.current === 'merge' && mergeWorkCtl.canRedo) mergeWorkCtl.redo();
         else annotationDocsCtl.redo();
       },
     },
@@ -6513,7 +7426,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Loops',
       display: ',',
-      description: 'Halve focused loop length (÷2)',
+      description: 'Halve loop',
       match: (e) => activeAnnotationTypeRef.current === 'loops'
         && (e.key === ',' || e.key === '<') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); loopsPanelRef.current?.halveFocused?.(); },
@@ -6521,7 +7434,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Loops',
       display: '.',
-      description: 'Double focused loop length (×2)',
+      description: 'Double loop',
       match: (e) => activeAnnotationTypeRef.current === 'loops'
         && (e.key === '.' || e.key === '>') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); loopsPanelRef.current?.doubleFocused?.(); },
@@ -6529,7 +7442,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Loops',
       display: 'P',
-      description: 'Play / stop focused loop',
+      description: 'Play loop',
       match: (e) => activeAnnotationTypeRef.current === 'loops'
         && (e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey,
       run:   (e) => { e.preventDefault(); loopsPanelRef.current?.togglePlayFocused?.(); },
@@ -6582,7 +7495,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     {
       group: 'Selection',
       display: 'Esc',
-      description: 'Dismiss preview region',
+      description: 'Clear highlight',
       match: (e) => e.key === 'Escape' && !!previewRegionRef.current,
       run:   (e) => { e.preventDefault(); handlePreviewDismissRef.current(); },
     },
@@ -6593,14 +7506,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       {
         group: 'Metronome',
         display: 'T',
-        description: 'Tap tempo (tap along; BPM streams to the song from the 2nd tap)',
+        description: 'Tap tempo',
         // Guard against `repeat` — holding the key would otherwise flood the
         // reducer with sub-debounce taps and lock the readout at the auto-repeat rate.
         match: (e: KeyboardEvent) => (e.key === 't' || e.key === 'T') && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey,
         run:   (e: KeyboardEvent) => { e.preventDefault(); metronomeTapRef.current?.(); },
       } as ShortcutDef,
     ] : []),
-  ], [handleTogglePlay, handleSeekRelative, handleSeekToStart, handleSeekToEnd, handleMarkCueAtPlayhead, handleSplitCueAtPlayhead, handleDeleteNearestCue, handleJumpToPrevCue, handleJumpToNextCue, activePanelRef, feature, annotationDocsCtl, undoGridEdit, redoGridEdit, handleMarkIn, handleMarkOut, seekSmall, seekMedium, seekLarge, visibleAnnotationTypes, selectAnnotationTypeChip]);
+  ], [handleTogglePlay, handleSeekRelative, handleSeekGridStep, handleOpenItemAtPlayhead, handleSeekToStart, handleSeekToEnd, handleMarkCueAtPlayhead, handleSplitCueAtPlayhead, handleDeleteNearestCue, handleJumpToPrevCue, handleJumpToNextCue, activePanelRef, feature, annotationDocsCtl, mergeWorkCtl, undoGridEdit, redoGridEdit, handleMarkIn, handleMarkOut, seekSmall, seekMedium, seekLarge, visibleAnnotationTypes, selectAnnotationTypeChip, stepFocusedCueDecay, hasFocusedEditableCue]);
 
   useAnnotationShortcuts({
     shortcuts,
@@ -6622,6 +7535,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           id: `ruptures-${m.suffix}`,
           label: res.algoName,
           sections: res.sections.map((s) => ({ time: s.time, endTime: s.endTime, label: s.label, type: s.type, raw: s })),
+          gridSource: algoGridBadge(savedAlgoGrid(res)),
         };
       });
     // Custom detectors are curators, not algorithm-family rows. Every one
@@ -6637,14 +7551,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // librosa-key's global key and whisper-base's detected language. Whisper still
   // renders its word-level lyrics as a timeline row; only the language is global.
   const singleInfoDetections = useMemo(() => {
-    const out: { id: string; label: string; value: string; color: string }[] = [];
+    const out: { id: string; label: string; short?: string; value: string; color: string }[] = [];
     const keySt = toolStates['librosa-key'];
     if (keySt?.status === 'done' && keySt.result?.toolId === 'librosa-key' && keySt.result.result.key) {
-      out.push({ id: 'librosa-key', label: 'Key', value: keySt.result.result.key, color: '#2dd4bf' });
+      out.push({ id: 'librosa-key', label: 'Key', short: 'Key', value: keySt.result.result.key, color: '#2dd4bf' });
     }
     const lyrSt = toolStates['whisper-base'];
     if (lyrSt?.status === 'done' && lyrSt.result?.toolId === 'whisper-base' && lyrSt.result.result.language) {
-      out.push({ id: 'whisper-base', label: 'Language', value: lyrSt.result.result.language, color: '#fb7185' });
+      out.push({ id: 'whisper-base', label: 'Language', short: 'Lang', value: lyrSt.result.result.language, color: '#fb7185' });
     }
     return out;
   }, [toolStates]);
@@ -6654,7 +7568,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   const customAlgoColors = useMemo(() => {
     const m: Record<string, string> = {};
     customDetectors
-      .filter((d) => d.status === 'ok' && d.is_algorithm && !d.is_annotation && d.output_kind === 'boundary')
+      .filter((d) => d.status === 'ok' && d.output_kind === 'boundary')
       .forEach((d, i) => { m[d.name] = CUSTOM_ANNOTATION_PALETTE[i % CUSTOM_ANNOTATION_PALETTE.length]; });
     return m;
   }, [customDetectors]);
@@ -6663,15 +7577,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // any kind (boundary/cue/span/loop/lyrics). Indexing globally (sorted
   // by name for stability) keeps a span layer and a cue layer from colliding on
   // the same hue — without it each kind restarts the palette at rose.
-  const detectorColorByName = useMemo(() => {
-    const m: Record<string, string> = {};
-    customDetectors
-      .filter((d) => d.status === 'ok' && d.is_annotation)
-      .map((d) => d.name)
-      .sort((a, b) => a.localeCompare(b))
-      .forEach((name, i) => { m[name] = CUSTOM_ANNOTATION_PALETTE[i % CUSTOM_ANNOTATION_PALETTE.length]; });
-    return m;
-  }, [customDetectors]);
+  const detectorColorByName = useMemo(() => detectorColors(customDetectors), [customDetectors]);
 
   // Resolve a label color for an algo row (mirrors the AlgoInspectStage grouping).
   const algoLabelColor = useCallback((id: string): string => {
@@ -6689,19 +7595,19 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     [annotationRows],
   );
 
-  // ── Custom annotation rows (is_annotation detectors → AutoGuess-style review) ────
-  // Each ok+is_annotation detector with a cached run becomes its own canvas row
+  // ── Boundary review rows (`review` boundary detectors → AutoGuess-style) ──────
+  // Each ok `review` boundary detector with a cached run becomes its own canvas row
   // with ✓/✗/@ cards over each predicted boundary, mirroring the AutoGuess panel.
   // Each row gets a distinct color from CUSTOM_ANNOTATION_PALETTE so the strips
   // are visually distinguishable across detectors.
   const customAnnotationRows = useMemo(() => {
-    // Pure-annotation boundary detectors (is_annotation, NOT is_algorithm) get
-    // the ✓/✗ review strip. is_algorithm boundary curators (e.g. phrases-msaf)
-    // are read-only curated layers instead — see detectorBoundaryLayers.
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && !d.is_algorithm && d.output_kind === 'boundary');
+    // Boundary detectors that ask for `review` get the ✓/✗ review strip. Every
+    // other boundary detector is a read-only lane instead — see
+    // detectorBoundaryLayers.
+    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.review && d.output_kind === 'boundary');
     return eligible.flatMap((d, paletteIdx) => {
       const env = customResults[d.name];
-      if (!env || env.fatal) return [];
+      if (!env || env.fatal || env.items.length === 0) return [];
       const items = env.items as CustomBoundaryItem[];
       const overrides = customAnnotationOverrides[d.name] ?? {};
       const points: AutoGuessPoint[] = items.map((it, i) => {
@@ -6723,214 +7629,150 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, [customDetectors, customResults, customAnnotationOverrides]);
 
-  // ── Detector-sourced Cue layers (output_kind='cue' + is_annotation=true) ────
-  // Each cue-output annotation detector becomes a synthetic AnnotationLayer
+  // ── A `lanes` detector, one entry per lane ─────────────────────────────────
+  // The lane builders below each draw one kind from one detector's envelope. A
+  // detector with output_kind 'lanes' (Instrument layers: each instrument's
+  // notes and its loop) returns several lanes of different kinds, so it is
+  // expanded here into one single-kind entry per lane (`<name>~<lane>`), and
+  // every memo below reads `laneDetectors` / `laneResults` instead of the
+  // registry. `asDetectorLane` hands each built lane back to its detector.
+  const { detectors: laneDetectors, results: laneResults } = useMemo(
+    () => expandDetectorLanes(customDetectors, customResults),
+    [customDetectors, customResults]);
+  /** A lane's colour: its detector's, so a lanes detector's lanes match. */
+  const laneColor = useCallback((name: string, paletteIdx: number) =>
+    detectorColorByName[laneDetectorName(name)] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length],
+  [detectorColorByName]);
+
+  // ── Detector-sourced Cue layers (output_kind='cue') ─────────────────────────
+  // Each cue-output detector becomes a synthetic AnnotationLayer
   // marked readOnly so the editor / popover disable their controls. These
   // layers are re-derived each render from the detector's cached envelope —
   // they are NOT persisted to /api/annotation-layers (which only holds
   // user-authored layers).
   const detectorCueLayers = useMemo<AnnotationLayer<'cues'>[]>(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'cue');
+    const eligible = laneDetectors.filter((d) => d.status === 'ok' && d.output_kind === 'cue');
     return eligible.flatMap((d, paletteIdx) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      const items = env.items as CustomCueItem[];
-      const cueItems: CueItem[] = items.map((it, i) => ({
-        id: `${d.name}:${i}:${it.time_ms}`,
-        time: it.time_ms / 1000,
-        label: it.label ?? '',
-        description: it.description ?? undefined,
-        candidates: it.candidates && it.candidates.length > 0
-          ? it.candidates.map((ms) => ms / 1000)
-          : undefined,
-        ...struckHitFields(it),
-      }));
-      return [{
-        id: `detector-cue:${d.name}`,
-        name: detectorLaneName(d.label || d.name, d.stem),
-        sourceStem: d.stem ?? undefined,
-        sourceDescription: d.description || undefined,
-        sourceNotes: (env.notes && env.notes.length) ? env.notes : undefined,
-        type: 'cues' as const,
-        visible: true,
-        color,
-        snap: 'beat' as const,
-        items: cueItems,
-        readOnly: true,
-        source: `detector:${d.name}` as const,
-      }];
+      const color = laneColor(d.name, paletteIdx);
+      const layer = detectorCueLayer(d, laneResults[d.name], color);
+      return layer ? [asDetectorLane(layer)] : [];
     }).sort(byStemRank);
-  }, [customDetectors, customResults]);
+  }, [laneDetectors, laneResults, laneColor]);
 
   // ── Detector-sourced Span/Loop layers ─────────────────────────────────────
   // Mirror detectorCueLayers for the remaining annotation kinds so a custom
   // detector that emits spans/loops surfaces alongside the user's
   // own layers under the Annotations dropdown's matching subgroup. Same
   // readOnly + source: 'detector:<name>' contract.
-  const detectorSpanLayers = useMemo<AnnotationLayer<'spans'>[]>(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'span');
+  // One per detector — what the Detectors sidebar lists.
+  const detectorSpanLayersWhole = useMemo<AnnotationLayer<'spans'>[]>(() => {
+    const eligible = laneDetectors.filter((d) => d.status === 'ok' && d.output_kind === 'span');
     return eligible.flatMap((d, paletteIdx) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      const items = env.items as CustomSpanItem[];
-      const spanItems: SpanItem[] = items.map((it, i) => ({
-        id: `${d.name}:${i}:${it.start_ms}`,
-        start: it.start_ms / 1000,
-        end: (it.start_ms + it.duration_ms) / 1000,
-        label: it.label ?? '',
-      }));
-      return [{
-        id: `detector-span:${d.name}`,
-        name: detectorLaneName(d.label || d.name, d.stem),
-        sourceStem: d.stem ?? undefined,
-        sourceDescription: d.description || undefined,
-        sourceNotes: (env.notes && env.notes.length) ? env.notes : undefined,
-        type: 'spans' as const,
-        visible: true,
-        color,
-        snap: 'beat' as const,
-        items: spanItems,
-        readOnly: true,
-        source: `detector:${d.name}` as const,
-      }];
+      const color = laneColor(d.name, paletteIdx);
+      const layer = detectorSpanLayer(d, laneResults[d.name], color);
+      return layer ? [asDetectorLane(layer)] : [];
     }).sort(byStemRank);
-  }, [customDetectors, customResults]);
+  }, [laneDetectors, laneResults, laneColor]);
+
+  // What the canvas draws: a detector whose lane holds several parts (Pulse:
+  // kick, snare, hat, bass …) gets a lane per part, banded under its group,
+  // instead of every part stacked in one lane.
+  const detectorSpanLayers = useMemo<AnnotationLayer<'spans'>[]>(() => {
+    return detectorSpanLayersWhole.flatMap((l) => {
+      const d = customDetectors.find((x) => `detector:${x.name}` === l.source);
+      return d?.stem_parts ? splitLaneByPart(l, d.stem_parts) : [l];
+    });
+  }, [detectorSpanLayersWhole, customDetectors]);
 
   const detectorLoopLayers = useMemo<AnnotationLayer<'loops'>[]>(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'loop');
+    const eligible = laneDetectors.filter((d) => d.status === 'ok' && d.output_kind === 'loop');
     return eligible.flatMap((d, paletteIdx) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      const items = env.items as CustomLoopItem[];
-      const loopItems: LoopItem[] = items.map((it, i) => ({
-        id: `${d.name}:${i}:${it.start_ms}`,
-        start: it.start_ms / 1000,
-        end: (it.start_ms + it.duration_ms) / 1000,
-        label: it.label ?? '',
-        snapZeroCross: it.snap_zero_cross ?? undefined,
-      }));
-      return [{
-        id: `detector-loop:${d.name}`,
-        name: detectorLaneName(d.label || d.name, d.stem),
-        sourceStem: d.stem ?? undefined,
-        sourceDescription: d.description || undefined,
-        sourceNotes: (env.notes && env.notes.length) ? env.notes : undefined,
-        type: 'loops' as const,
-        visible: true,
-        color,
-        snap: 'beat' as const,
-        items: loopItems,
-        readOnly: true,
-        source: `detector:${d.name}` as const,
-      }];
+      const color = laneColor(d.name, paletteIdx);
+      const layer = detectorLoopLayer(d, laneResults[d.name], color);
+      return layer ? [asDetectorLane(layer)] : [];
     }).sort(byStemRank);
-  }, [customDetectors, customResults]);
+  }, [laneDetectors, laneResults, laneColor]);
 
   const detectorLyricsLayers = useMemo<AnnotationLayer<'lyrics'>[]>(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'lyrics');
+    const eligible = laneDetectors.filter((d) => d.status === 'ok' && d.output_kind === 'lyrics');
     return eligible.flatMap((d, paletteIdx) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      const items = env.items as CustomLyricsItem[];
-      const lyricsItems: LyricsItem[] = items.map((it, i) => ({
-        id: `${d.name}:${i}:${it.time_ms}`,
-        time: it.time_ms / 1000,
-        text: it.text ?? '',
-        kind: it.kind,
-        ...(it.end_ms != null ? { end: it.end_ms / 1000 } : {}),
-      }));
-      return [{
-        id: `detector-lyrics:${d.name}`,
-        name: detectorLaneName(d.label || d.name, d.stem),
-        sourceStem: d.stem ?? undefined,
-        sourceDescription: d.description || undefined,
-        sourceNotes: (env.notes && env.notes.length) ? env.notes : undefined,
-        type: 'lyrics' as const,
-        visible: true,
-        color,
-        snap: 'off' as const,
-        items: lyricsItems,
-        readOnly: true,
-        source: `detector:${d.name}` as const,
-      }];
+      const color = laneColor(d.name, paletteIdx);
+      const layer = detectorLyricsLayer(d, laneResults[d.name], color);
+      return layer ? [asDetectorLane(layer)] : [];
     }).sort(byStemRank);
-  }, [customDetectors, customResults]);
+  }, [laneDetectors, laneResults, laneColor]);
 
-  // ── Detector-sourced riff-pattern layers (output_kind='pattern') ──────────
-  // A pattern detector says "this figure recurs, here and here" — the riff
-  // model's node/instance split. riffLayerFromDrumGrooves builds the nodes and
-  // instances; a multi-row groove (drum_kit_pattern) gives one node per drum,
-  // all placed over the same bars, which the lane stacks into the three-line
-  // drum staff. Needs a bpm, since a node's length is measured in beats — a
-  // song without a grid yields no layer rather than zero-length nodes.
+  // ── Detector-sourced riff lanes (output_kind='riff') ──────────────────────
+  // A riff detector's output IS a riff-patterns layer — its nodes, instances
+  // and occurrences — so it is drawn and copied as one, with nothing to
+  // convert (detectorLayers.ts `detectorRiffLayer`).
   const detectorRiffLayers = useMemo<AnnotationLayer<'riff-patterns'>[]>(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_annotation && d.output_kind === 'pattern');
+    const eligible = laneDetectors.filter((d) => d.status === 'ok' && d.output_kind === 'riff');
     return eligible.flatMap((d, paletteIdx) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      // The canonical `bpm` is derived in the Derived block further down, which
-      // this memo sits above — same rule, applied here rather than reordering
-      // a dozen unrelated declarations.
-      const songBpm = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm : undefined;
-      const layer = riffLayerFromDrumGrooves(
-        env.items as unknown as GrooveItem[],
-        songBpm,
-        { name: detectorLaneName(d.label || d.name, d.stem), layerColor: color, importedFrom: d.label || d.name },
-      );
-      if (!layer) return [];
-      return [{
-        ...layer,
-        id: `detector-riff:${d.name}`,
-        sourceStem: d.stem ?? undefined,
-        sourceDescription: d.description || undefined,
-        sourceNotes: (env.notes && env.notes.length) ? env.notes : undefined,
-        visible: true,
-        readOnly: true,
-        source: `detector:${d.name}` as const,
-      }];
+      const color = laneColor(d.name, paletteIdx);
+      const layer = detectorRiffLayer(d, laneResults[d.name], color);
+      return layer ? [asDetectorLane(layer)] : [];
     }).sort(byStemRank);
-  }, [customDetectors, customResults, songInfo]);
+  }, [laneDetectors, laneResults, laneColor]);
 
   // Which custom-annotation rows are currently hidden in the Annotations
   // dropdown. Custom detectors are hidden by default — a sync effect below
   // pre-adds every newly discovered detectorName so it stays off the canvas
   // until the user opts in by checking it in the dropdown. Declared here (ahead
   // of the detector-layer memos below) because those memos read it during render.
-  const [hiddenCustomAnnotations, setHiddenCustomAnnotations] = useState<Set<string>>(() => new Set());
+  // Remembered per browser, across songs (DETECTOR_HIDDEN_KEY).
+  const [hiddenDetectorRows, setHiddenCustomAnnotations] = useState<Set<string>>(
+    () => new Set(readStoredNames(DETECTOR_HIDDEN_KEY) ?? []));
+  useEffect(() => { writeStoredNames(DETECTOR_HIDDEN_KEY, hiddenDetectorRows); }, [hiddenDetectorRows]);
+  // One choice, two sets: a wanted detector's lane is shown where it has run
+  // and it is ticked for Run where it has not, so the choice made on one song
+  // carries to the next whichever of the two it is there.
+  const setDetectorsWanted = useCallback((names: readonly string[], on: boolean) => {
+    if (names.length === 0) return;
+    const apply = (prev: Set<string>, add: boolean) => {
+      const next = new Set(prev);
+      for (const n of names) { if (add) next.add(n); else next.delete(n); }
+      return next;
+    };
+    setHiddenCustomAnnotations((prev) => apply(prev, !on));
+    setDetectorRunTicks((prev) => apply(prev, on));
+  }, []);
+  // The Detectors sidebar's stem filter: the stems whose lanes are listed and
+  // drawn (null = every stem). It sits on top of the rows' own checkboxes
+  // rather than rewriting them, so narrowing to Drums and back to All leaves
+  // every row as it was checked. Every consumer reads the union below.
+  const [detectorStemFilter, setDetectorStemFilter] = useState<ReadonlySet<string> | null>(() => {
+    const stored = readStoredNames(DETECTOR_STEM_FILTER_KEY);
+    return stored && stored.length > 0 ? new Set(stored) : null;
+  });
+  useEffect(() => { writeStoredNames(DETECTOR_STEM_FILTER_KEY, detectorStemFilter); }, [detectorStemFilter]);
+  const hiddenCustomAnnotations = useMemo(() => {
+    if (!detectorStemFilter) return hiddenDetectorRows;
+    const n = new Set(hiddenDetectorRows);
+    for (const d of customDetectors) {
+      if (!detectorStemFilter.has(d.stem ?? 'mix')) n.add(d.name);
+    }
+    return n;
+  }, [hiddenDetectorRows, detectorStemFilter, customDetectors]);
 
-  // ── Detector-sourced Boundary layers (is_algorithm boundary curators) ──────
-  // Boundaries have no AnnotationLayer abstraction, so a boundary curator
+  // ── Detector-sourced Boundary layers ───────────────────────────────────────
+  // Boundaries have no AnnotationLayer abstraction, so a boundary detector
   // (a phrase curator, say) renders as a read-only section-block overlay
-  // — but it is listed and toggled in the Curated sidebar via the shared
-  // `hiddenCustomAnnotations` set, exactly like every other curator. The
-  // is_algorithm flag is what makes it a boundary-overlay curator; the
-  // is_annotation flag is what lists it among the Annotator's curated layers.
+  // — but it is listed and toggled in the Detectors sidebar via the shared
+  // `hiddenCustomAnnotations` set, exactly like every other detector.
   const detectorBoundaryLayers = useMemo(() => {
-    const eligible = customDetectors.filter((d) => d.status === 'ok' && d.is_algorithm && d.output_kind === 'boundary');
+    // The complement of customAnnotationRows: a `review` boundary detector
+    // draws there, with its ✓/✗; every other one draws here, plainly.
+    const eligible = laneDetectors.filter((d) => d.status === 'ok' && !d.review && d.output_kind === 'boundary');
     return eligible.flatMap((d, paletteIdx) => {
-      const env = customResults[d.name];
-      if (!env || env.fatal) return [];
-      const color = detectorColorByName[d.name] ?? CUSTOM_ANNOTATION_PALETTE[paletteIdx % CUSTOM_ANNOTATION_PALETTE.length];
-      return [{
-        id: `detector-boundary:${d.name}`,
-        detectorName: d.name,
-        name: detectorLaneName(d.label || d.name, d.stem),
-        stem: (d.stem ?? 'mix') as string,
-        color,
-        sections: customEnvelopeToSections(env, duration, color),
-      }];
+      const color = laneColor(d.name, paletteIdx);
+      const layer = detectorBoundaryLayer(d, laneResults[d.name], color, duration);
+      return layer ? [{ ...layer, detectorName: laneDetectorName(layer.detectorName) }] : [];
     });
-  }, [customDetectors, customResults, duration]);
+  }, [laneDetectors, laneResults, laneColor, duration]);
 
-  // Boundary curators as algo-overlay-shaped section blocks, filtered by the
-  // shared visibility set. Passed to SharedVizPanel in BOTH workspaces so a
-  // boundary curator draws once per view (Inspect = its is_algorithm surface,
-  // Annotator = its is_annotation surface), never twice.
+  // Boundary detectors as algo-overlay-shaped section blocks, filtered by the
+  // shared visibility set.
   const detectorBoundaryOverlays = useMemo(() => {
     return detectorBoundaryLayers
       .filter((l) => !hiddenCustomAnnotations.has(l.detectorName))
@@ -6944,7 +7786,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // propagates to both the canvas and the annotation list.
   const curatedLayersByStem = useMemo(() => {
     const all = [
-      ...detectorCueLayers, ...detectorSpanLayers, ...detectorLoopLayers,
+      ...detectorCueLayers, ...detectorSpanLayersWhole, ...detectorLoopLayers,
       ...detectorLyricsLayers, ...detectorRiffLayers,
     ];
     const rows = all.map((l) => {
@@ -6974,7 +7816,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         type: 'boundary' as const,
       };
     });
-    const allRows = [...boundaryRows, ...rows];
+    // A `lanes` detector draws several lanes but is ONE detector: one row,
+    // under its own label and stem (its lanes carry none of their own).
+    const seenLanesDetector = new Set<string>();
+    const allRows = [...boundaryRows, ...rows].flatMap((r) => {
+      const det = customDetectors.find((d) => d.name === r.detectorName);
+      if (det?.output_kind !== 'lanes') return [r];
+      if (seenLanesDetector.has(det.name)) return [];
+      seenLanesDetector.add(det.name);
+      return [{ ...r, name: detectorLaneName(det.label || det.name, det.stem), stem: det.stem ?? 'mix' }];
+    });
     const splitByStem = (list: typeof allRows) => {
       const byStem = new Map<string, typeof allRows>();
       for (const r of list) {
@@ -6989,7 +7840,41 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const origins = groupByDetectorOrigin(allRows, (r) => r.isDefault)
       .map((g) => ({ origin: g.origin, title: g.title, ...splitByStem(g.items) }));
     return { rows: allRows, ...splitByStem(allRows), origins };
-  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, detectorBoundaryLayers, customDetectors]);
+  }, [detectorCueLayers, detectorSpanLayersWhole, detectorLoopLayers, detectorLyricsLayers, detectorRiffLayers, detectorBoundaryLayers, customDetectors]);
+
+  // What the Detectors sidebar lists: every layer row above, and a row for
+  // each registered detector with no layer on this song — not run yet,
+  // failed, found nothing, or waiting on a stem — in the same Custom/Default
+  // → stem → group nesting, after the ones that have output. The sidebar is
+  // where detectors are run, so one that has not run must still be there.
+  const detectorSidebar = useMemo(() => {
+    const withLayer = new Set(curatedLayersByStem.rows.map((r) => r.detectorName));
+    const bare = customDetectors
+      .filter((d) => d.status === 'ok' && !withLayer.has(d.name))
+      .map((d) => ({
+        id: `detector-bare:${d.name}`,
+        name: d.label || d.name,
+        color: null as string | null,
+        detectorName: d.name,
+        stem: d.stem ?? 'mix',
+        group: d.group ?? null,
+        isDefault: d.is_default,
+        type: 'bare' as const,
+      }));
+    const all = [...curatedLayersByStem.rows, ...bare];
+    const splitByStem = (list: typeof all) => {
+      const byStem = new Map<string, typeof all>();
+      for (const r of list) {
+        if (!byStem.has(r.stem)) byStem.set(r.stem, []);
+        byStem.get(r.stem)!.push(r);
+      }
+      const stems = [...byStem.keys()].sort((a, b) => stemRank(a) - stemRank(b));
+      return { byStem, stems };
+    };
+    const origins = groupByDetectorOrigin(all, (r) => r.isDefault)
+      .map((g) => ({ origin: g.origin, title: g.title, ...splitByStem(g.items) }));
+    return { rows: all, origins };
+  }, [curatedLayersByStem, customDetectors]);
 
   // Stem rank for every detector-sourced layer, keyed by the viz row id
   // (`<kind>-layer:<id>`). Drives the default stacking order of the lanes so
@@ -6998,7 +7883,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // own positions; only detector lanes are reordered.
   const layerStemRank = useMemo<Map<string, number>>(() => {
     const m = new Map<string, number>();
-    const add = (layers: AnnotationLayer[], prefix: string) => {
+    const add = (layers: readonly { id: string; sourceStem?: string }[], prefix: string) => {
       for (const l of layers) m.set(`${prefix}:${l.id}`, stemRank(l.sourceStem));
     };
     add(detectorCueLayers, 'cue-layer');
@@ -7021,11 +7906,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         const src = l.source;
         if (!src || !src.startsWith('detector:')) continue;
         const detName = src.slice('detector:'.length);
+        // Only a detector that sets `review = True` gets ✓/✗ at all. The rest
+        // stay out of this map, so their rows draw their items plainly.
+        if (!customDetectors.find((d) => d.name === detName)?.review) continue;
         const review = detectorOutputDocs[detName]?.review;
-        // Detector layers are review-only, so every row enters review mode from
-        // the start — an empty map means "all items pending", which still turns
-        // on the inline ✓/✗ controls. (A missing entry would leave the row with
-        // no controls until a decision was first seeded from the side panel.)
+        // A reviewed layer enters review mode from the start — an empty map
+        // means "all items pending", which still turns on the inline ✓/✗
+        // controls. (A missing entry would leave the row with no controls until
+        // a decision was first seeded from the side panel.)
         const m: Record<string, DetectorReviewStatus> = {};
         if (review) {
           for (const it of l.items as Array<{ id: string }>) {
@@ -7044,7 +7932,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     wire(detectorLoopLayers);
     wire(detectorLyricsLayers);
     return out;
-  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, detectorOutputDocs]);
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, detectorOutputDocs, customDetectors]);
 
   // Count of already-imported copies per detector layer id. Passed to
   // SharedVizPanel so LayerRowLabel can show the amber duplicate badge without
@@ -7061,56 +7949,116 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       if (!src?.startsWith('detector:')) continue;
       const detName = src.slice('detector:'.length);
       const det = customDetectors.find((d) => d.name === detName);
-      const detLabel = det?.label ?? layer.name;
+      // A part lane's copy is named for the part (see handleCopyDetectorVizLayer).
+      const isPart = partLaneBaseId(layer.id) !== layer.id;
+      // A `lanes` detector's riff lane copies under the lane's own name
+      // (copyDetectorVizLayer).
+      const isLaneRiff = layer.type === 'riff-patterns' && layer.id.includes(DETECTOR_LANE_SEP);
+      const detLabel = isPart ? `${det?.label ?? detName} · ${layer.name}`
+        : isLaneRiff ? layer.name
+        : (det?.label ?? layer.name);
       counts[layer.id] = cueLayersDoc.layers.filter(
-        (l) => l.importedFrom === detLabel || l.importedFrom === `${detLabel} (✓ accepted)`,
+        (l) => (l.importedFrom === detLabel || l.importedFrom === `${detLabel} (✓ accepted)`)
+          && (layer.type !== 'riff-patterns' || l.type === 'riff-patterns'),
       ).length;
     }
     return counts;
-  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, customDetectors, cueLayersDoc]);
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, detectorRiffLayers, customDetectors, cueLayersDoc]);
 
   // Copy a detector-sourced viz lane layer into a new editable manual layer.
-  // Wired to SharedVizPanel's onCopyDetectorLayer so the lane-label ⓘ popup
-  // and the inline ⬇ button both call the same logic.
-  const handleCopyDetectorVizLayer = useCallback((layer: AnnotationLayer) => {
-    if (!selectedAudio || !layer.source?.startsWith('detector:')) return;
+  // Behind SharedVizPanel's onCopyDetectorLayer — the lane-label ⓘ popup and
+  // the inline ⬇ — and its band's ⬇, which copies every lane at once. Says
+  // what it made, so whichever called it can offer the undo.
+  const copyDetectorVizLayer = useCallback((layer: AnnotationLayer): CopyUndo | null => {
+    if (!selectedAudio || !layer.source?.startsWith('detector:')) return null;
     const detName = layer.source.slice('detector:'.length);
     const det = customDetectors.find((d) => d.name === detName);
     const envelope = customResults[detName];
     const doc = detectorOutputDocs[detName];
-    const items = (doc ?? envelope)?.items ?? [];
-    const review = doc?.review ?? {};
-    const detLabel = det?.label ?? layer.name;
+    // A `lanes` detector's lane holds its own items (its envelope's `items` is
+    // empty): read them from the lane's expanded entry, named in the lane id.
+    const laneName = layer.id.slice(layer.id.indexOf(':') + 1);
+    const ownLane = det?.output_kind === 'lanes' ? laneResults[laneName] : undefined;
+    if (layer.type === 'riff-patterns') {
+      // A riff lane is a layer already: copied as it is. One lane of a
+      // `lanes` detector (Percussion layers' Snare pattern) is named for that
+      // lane and lands in its lane group's group ("Percussion layers · Snare"),
+      // beside a copy of the same drum's notes.
+      const laneGroup = ownLane ? laneDetectors.find((d) => d.name === laneName)?.group : null;
+      const label = ownLane ? layer.name : (det?.label ?? layer.name);
+      const group = laneGroup ? `${det?.label ?? detName} · ${laneGroup}` : detectorCopyGroup(detName, customDetectors);
+      const made = copyRiffToNewLayer(layer as AnnotationLayer<'riff-patterns'>, label, group);
+      return made
+        ? { layerId: made, label, prevSource: activeSourceByType['riff-patterns'], type: 'riff-patterns' }
+        : null;
+    }
+    const items = ownLane ? ownLane.items : ((doc ?? envelope)?.items ?? []);
+    // Rejections from before a detector turned `review` off are not shown
+    // anywhere any more, so they must not silently thin the copy either.
+    const review = det?.review ? (doc?.review ?? {}) : {};
+    // One part of a split lane (Pulse's Kick lane) copies that part alone, as
+    // "Pulse · Kick", into the detector's group — so copying Kick and then
+    // Snare lands both in one "Pulse" group.
+    const isPart = partLaneBaseId(layer.id) !== layer.id;
+    const detLabel = isPart ? `${det?.label ?? detName} · ${layer.name}` : (det?.label ?? layer.name);
+    const inLane = isPart && !ownLane
+      ? new Set((layer.items as Array<{ id: string }>).map((it) => it.id.slice(detName.length + 1)))
+      : null;
     const layerType = layer.type as 'cues' | 'spans' | 'loops' | 'lyrics';
     const primaryMs = (it: { time_ms?: number; start_ms?: number }) =>
       (layerType === 'cues' || layerType === 'lyrics')
         ? (it.time_ms ?? 0) : (it.start_ms ?? 0);
-    const keep = items.filter((it, i) =>
-      review[`${i}:${primaryMs(it as { time_ms?: number; start_ms?: number })}`] !== 'rejected',
-    );
-    if (keep.length === 0) return;
-    const converted = convertDetectorItems(layerType, keep as Parameters<typeof convertDetectorItems>[1]);
-    if (!converted) return;
-    const newLayerId = newId();
-    const prevSrc = activeSourceByType[layerType as AnnotationCategory];
-    setCueLayersDoc((d) => {
-      if (!d) return d;
-      const color = pickDefaultLayerColor(d.layers);
-      const newLayer: AnnotationLayer = {
-        id: newLayerId,
-        name: detLabel,
-        type: layerType,
-        visible: true,
-        color,
-        snap: layerType === 'loops' ? 'bar' : 'beat',
-        items: converted as never,
-        source: 'user',
-        importedFrom: detLabel,
-      };
-      return { ...d, layers: [...d.layers, newLayer] };
+    const keep = items.filter((it, i) => {
+      const key = `${i}:${primaryMs(it as { time_ms?: number; start_ms?: number })}`;
+      return review[key] !== 'rejected' && (!inLane || inLane.has(key));
     });
-    setLastCopyUndo({ layerId: newLayerId, label: detLabel, prevSource: prevSrc, type: layerType as AnnotationCategory });
-  }, [selectedAudio, customDetectors, customResults, detectorOutputDocs, activeSourceByType, setCueLayersDoc, setLastCopyUndo]);
+    const prevSrc = activeSourceByType[layerType as AnnotationCategory];
+    // A lanes detector's lane lands in its own lane group's group ("Instrument
+    // layers · Kick"), so a kick's notes and its loop copied stay together.
+    const laneGroup = ownLane ? laneDetectors.find((d) => d.name === laneName)?.group : null;
+    const copyGroup = laneGroup
+      ? `${det?.label ?? detName} · ${laneGroup}`
+      : isPart
+        ? (det?.group ?? det?.label ?? detName)
+        : detectorCopyGroup(detName, customDetectors);
+    const newLayerId = copyDetectorItemsToNewLayer(
+      layerType, keep as ReviewableItem[], detLabel, copyGroup,
+    );
+    if (!newLayerId) return null;
+    return { layerId: newLayerId, label: detLabel, prevSource: prevSrc, type: layerType as AnnotationCategory };
+  }, [selectedAudio, customDetectors, customResults, laneDetectors, laneResults, detectorOutputDocs, activeSourceByType, copyDetectorItemsToNewLayer, copyRiffToNewLayer]);
+  const handleCopyDetectorVizLayer = useCallback((layer: AnnotationLayer) => {
+    const made = copyDetectorVizLayer(layer);
+    if (made) setLastCopyUndo(made);
+  }, [copyDetectorVizLayer, setLastCopyUndo]);
+
+  // A detector band's ⬇: each lane it shows copied as its own ⬇ would, so
+  // they land in the same group, named and converted the same — and one undo
+  // takes them all back.
+  const handleCopyDetectorGroup = useCallback((groupName: string, rowIds: string[]) => {
+    const byRow = new Map<string, () => CopyUndo | null>();
+    const index = (prefix: string, layers: AnnotationLayer[]) => {
+      for (const l of layers) byRow.set(`${prefix}:${l.id}`, () => copyDetectorVizLayer(l));
+    };
+    index('cue-layer', detectorCueLayers);
+    index('span-layer', detectorSpanLayers);
+    index('loop-layer', detectorLoopLayers);
+    index('lyrics-layer', detectorLyricsLayers);
+    index('riff-layer', detectorRiffLayers);
+    // A band with a riff in it copies the riff alone: the drum's notes lane
+    // beside it is the hits the riff was read from, and copied too it was a
+    // second lane of the same drum saying the same thing less clearly.
+    const riffRows = rowIds.filter((r) => r.startsWith('riff-layer:'));
+    const made = (riffRows.length ? riffRows : rowIds)
+      .map((r) => byRow.get(r)?.() ?? null).filter((m): m is CopyUndo => m != null);
+    if (made.length === 0) return;
+    setLastCopyUndo({
+      ...made[0],
+      label: made.length === 1 ? made[0].label : groupName,
+      alsoLayerIds: made.flatMap((m, i) => [...(i === 0 ? [] : [m.layerId]), ...(m.alsoLayerIds ?? [])]),
+    });
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, detectorRiffLayers,
+      copyDetectorVizLayer, setLastCopyUndo]);
 
   const handleCopyAlgoOverlay = useCallback((overlay: AlgoOverlay) => {
     if (!selectedAudio || overlay.sections.length === 0) return;
@@ -7118,8 +8066,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     // PATTERN family (LoCoMotif) copies into a RIFF layer, not spans: its
     // output is "the same figure, recurring", and only the riff model can say
     // that — one node per motif, one instance per occurrence. Needs a beat
-    // grid, since a riff node's length is measured in beats; without one we
-    // fall through to the ordinary span copy below.
+    // grid, since a riff node's length is measured in beats; without one there
+    // is no copy at all, rather than a span layer that says something else.
     const songBpm = (songInfo?.bpm ?? 0) > 20 ? songInfo!.bpm : undefined;
     if (PATTERN_TOOL_IDS.has(baseAlgoId(overlay.id))) {
       const riffLayer = riffLayerFromMotifs(overlay.sections, songBpm, {
@@ -7127,6 +8075,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         layerColor: pickDefaultLayerColor(cueLayersDocRef.current?.layers ?? []),
         importedFrom: overlay.id,
       });
+      if (riffLayer && sameCopy(riffLayer, cueLayersDocRef.current?.layers ?? [])) {
+        announceCopyUnchanged();
+        return;
+      }
       if (riffLayer) {
         const prevRiffSrc = activeSourceByType['riff-patterns'];
         setCueLayersDoc((d) => (d ? { ...d, layers: [...d.layers, riffLayer] } : d));
@@ -7138,6 +8090,44 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         });
         return;
       }
+      alert(songBpm
+        ? `"${overlay.label}" found no recurring figure to copy.`
+        : `"${overlay.label}" copies into a Riff Patterns layer, whose nodes are measured in beats. Set this song's tempo first.`);
+      return;
+    }
+
+    // A custom boundary detector draws as an algo row too, but it is a
+    // detector: its copy goes through the same conversion as every other
+    // detector copy — section type read from its label, importance and
+    // candidates kept, named and grouped like its sidebar row's ⬇.
+    if (overlay.id.startsWith('detector-boundary:')) {
+      const lane = detectorBoundaryLayers.find((l) => l.id === overlay.id);
+      if (!lane) return;
+      const det = customDetectors.find((d) => d.name === lane.detectorName);
+      const label = det?.label ?? overlay.label;
+      const raw = overlay.sections.map((s) => s.raw).filter((r): r is CustomBoundaryItem => !!r);
+      const prevBoundarySrc = activeSourceByType.boundaries;
+      const layerId = copyDetectorItemsToNewLayer('boundaries', raw, label,
+        detectorCopyGroup(lane.detectorName, customDetectors));
+      if (layerId) setLastCopyUndo({ layerId, label, prevSource: prevBoundarySrc, type: 'boundaries' });
+      return;
+    }
+
+    // A structure algorithm (MSAF, All-In-One, ruptures, band-gradient) — any
+    // row drawn as section blocks — says where the song's sections begin, so
+    // it copies into a BOUNDARY layer, never spans. Each block's start is a
+    // boundary; its end is just the next block's start.
+    if ((overlay.renderKind ?? 'boundary') === 'boundary') {
+      const prevBoundarySrc = activeSourceByType.boundaries;
+      const layerId = copyBoundaryItemsToNewLayer(
+        overlay.sections.map((s) => sectionToBoundaryItem({ time: s.time, type: s.type, label: s.label })),
+        overlay.label,
+        overlay.id,
+      );
+      if (layerId) {
+        setLastCopyUndo({ layerId, label: overlay.label, prevSource: prevBoundarySrc, type: 'boundaries' });
+      }
+      return;
     }
 
     const isLyrics = new Set<string>(LYRICS_ALGO_IDS).has(baseAlgoId(overlay.id));
@@ -7149,13 +8139,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       const color = pickDefaultLayerColor(d.layers);
       let items: CueItem[] | SpanItem[] | LyricsItem[];
       if (layerType === 'lyrics') {
-        items = overlay.sections.map((s) => ({
+        items = withLyricSpans(overlay.sections.map((s) => ({
           id: newId(),
           time: s.time,
           end: s.endTime,
           text: s.label || s.type,
           kind: (s.type === 'word' ? 'word' : 'line') as 'word' | 'line',
-        })) as LyricsItem[];
+        })) as LyricsItem[]);
       } else if (layerType === 'cues') {
         items = overlay.sections.map((s) => ({ id: newId(), time: s.time, label: s.label || s.type, ...struckHitFields(s) })) as CueItem[];
       } else {
@@ -7167,7 +8157,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         type: layerType,
         visible: true,
         color,
-        snap: 'beat',
+        snap: layerType === 'lyrics' ? 'off' : 'beat',
         items: items as never,
         source: 'user',
         importedFrom: overlay.id,
@@ -7175,7 +8165,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       return { ...d, layers: [...d.layers, newLayer] };
     });
     setLastCopyUndo({ layerId: newLayerId, label: overlay.label, prevSource: prevSrc, type: layerType as AnnotationCategory });
-  }, [selectedAudio, songInfo, activeSourceByType, setCueLayersDoc, setLastCopyUndo]);
+  }, [selectedAudio, songInfo, activeSourceByType, setCueLayersDoc, setLastCopyUndo, copyBoundaryItemsToNewLayer,
+      copyDetectorItemsToNewLayer, detectorBoundaryLayers, customDetectors]);
 
   // ── Repairing one window of a transcription ───────────────────────────────
   // Algo Inspect's section re-run hands its words to one of two places. The
@@ -7209,7 +8200,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           const added: LyricsItem[] = words.map((w) => ({
             id: newId(), time: w.time, end: w.end, text: w.text, kind: 'word',
           }));
-          const next = [...kept, ...added].sort(
+          const next = withLyricSpans([...kept, ...added]).sort(
             (a, b) => a.time - b.time || ((a.end ?? a.time) - (b.end ?? b.time)),
           );
           return { ...l, items: next } as AnnotationLayer;
@@ -7233,6 +8224,258 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }));
     });
   }, []);
+
+  // A section run was merged into / replaced over a detector's output. The
+  // server returns the new output and, when the annotator has one, their edited
+  // copy with its ✓/✗ re-keyed — take both, and show the lane so the change is
+  // where they will look.
+  const handleDetectorWindowApplied = useCallback((name: string, applied: DetectorWindowApplied) => {
+    setCustomResults((prev) => ({ ...prev, [name]: applied.envelope }));
+    if (applied.edited) {
+      setDetectorOutputDocs((prev) => ({ ...prev, [name]: applied.edited }));
+    }
+    setHiddenCustomAnnotations((prev) => {
+      if (!prev.has(name)) return prev;
+      const n = new Set(prev);
+      n.delete(name);
+      return n;
+    });
+  }, []);
+
+  // The last item of a detector lane's ⋮ menu: what deleting that lane
+  // deletes. A lane of a detector that draws several (the Voice lane of
+  // Sounds, on a song whose singer sings real words) goes alone and its other
+  // lanes stay. A part lane (Pulse's Kick) is some of one list's items, so
+  // its items go and the other parts stay. Anything else — a detector's only
+  // lane, a boundary detector's review row — is the detector's whole output
+  // for the song, deleted as the Detectors sidebar's × deletes it.
+  const deleteDetectorLaneFor = useCallback((lane: { id: string; items?: readonly { id: string }[] }): LaneRemove | undefined => {
+    const slug = selectedAudio?.id;
+    if (!slug) return undefined;
+    const name = lane.id.slice(lane.id.indexOf(':') + 1);
+    const detector = laneDetectorName(name);
+    if (lane.id.startsWith('custom-annotation:')) {
+      return { kind: 'delete', scope: 'detector', run: () => clearDetectorOutputForSong(name) };
+    }
+    if (!customResults[detector]) return undefined;
+    const laneId = name.slice(detector.length + 1);
+    const isLanes = customDetectors.find((d) => d.name === detector)?.output_kind === 'lanes';
+    if (isLanes && customResults[detector].lanes?.some((l) => l.id === laneId)) {
+      return {
+        kind: 'delete', scope: 'lane',
+        run: async () => {
+          const env = await deleteDetectorLane(detector, slug, laneId);
+          setCustomResults((prev) => ({ ...prev, [detector]: env }));
+        },
+      };
+    }
+    if (detector !== name && !isLanes) {
+      // Item ids are `<detector>:<index in the run>:<ms>`.
+      const indices = (lane.items ?? []).map((it) => Number(it.id.split(':').at(-2)));
+      if (indices.length === 0 || indices.some((i) => !Number.isInteger(i))) return undefined;
+      return {
+        kind: 'delete', scope: 'part',
+        run: async () => {
+          const { envelope, edited } = await dropDetectorItems(detector, slug, indices);
+          setCustomResults((prev) => ({ ...prev, [detector]: envelope }));
+          if (edited) setDetectorOutputDocs((prev) => ({ ...prev, [detector]: edited }));
+        },
+      };
+    }
+    return { kind: 'delete', scope: 'detector', run: () => clearDetectorOutputForSong(detector) };
+  }, [selectedAudio?.id, customDetectors, customResults, clearDetectorOutputForSong]);
+
+  // Delete an algorithm's saved result for this song: its lane goes, and its
+  // sidebar row reads missing until it is run again.
+  const deleteAlgoOverlayFor = useCallback((overlayId: string): LaneRemove | undefined => {
+    const slug = selectedAudio?.id;
+    const source = algoResultSource(overlayId);
+    if (!slug || !source || toolStates[overlayId]?.status !== 'done') return undefined;
+    return {
+      kind: 'delete', scope: 'algo',
+      run: async () => {
+        const res = await fetch(
+          `/api/algo-result/${source.family}/${encodeURIComponent(slug)}/${encodeURIComponent(source.id)}`,
+          { method: 'DELETE', headers: annotatorHeaders() },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body?.error ?? `delete failed: ${res.status}`);
+        setToolStates((prev) => {
+          const n = { ...prev };
+          delete n[overlayId];
+          return n;
+        });
+      },
+    };
+  }, [selectedAudio?.id, toolStates]);
+
+  // A layer of yours, deleted from its lane's ⋮ menu: the same delete as the
+  // sidebar card's, so ⌘Z brings it back.
+  const deleteUserLayerFromLane = useCallback((layer: AnnotationLayer) => {
+    handleUnifiedLayerDelete(layer.id, layer.type);
+  }, [handleUnifiedLayerDelete]);
+
+  // The ⋮ actions on a layer of yours — each one document edit, so ⌘Z takes
+  // it back whole. Merge is the sidebar card's merge.
+  // The lanes they make open right below the source (see the effect after the
+  // row syncs).
+  const placeLanesAfterRef = useRef<{ after: string; ids: string[] }[]>([]);
+  // Extract ADSR — a span or lyrics lane's ⋮, or one item's card: each item
+  // sent comes back with its envelope or without one. A lyrics lane reads the
+  // vocals stem, through the measuring detector where it is installed; every
+  // other read is made here in the browser, off the vocals stem for lyrics and
+  // the mix for spans. Items retimed while it ran are left as the retime left
+  // them. One edit, so ⌘Z. Busy ids are layer ids (a lane run) and item ids.
+  const [extractingAdsrIds, setExtractingAdsrIds] = useState<ReadonlySet<string>>(() => new Set());
+  const lyricEnvelopesInstalled = customDetectors.some(
+    (d) => d.name === LYRIC_ENVELOPES_DETECTOR && d.status === 'ok');
+  // The last decoded source, so extracting item after item does not re-decode
+  // the song each time. One at a time: a decoded song is tens of MB.
+  const adsrAudioRef = useRef<{ url: string; buffer: Promise<AudioBuffer> } | null>(null);
+  const extractAdsr = useCallback(async (layer: AnnotationLayer<EnvelopeLayerType>, itemId: string | undefined, source: EnvelopeSource) => {
+    const audio = selectedAudioRef.current;
+    if (!audio) return;
+    const slug = audio.id;
+    const targets = envelopeTargets(layer, itemId);
+    const item = itemId ? (layer.items as (LyricsItem | SpanItem)[]).find((it) => it.id === itemId) : undefined;
+    const what = `"${item ? ('text' in item ? item.text : item.label) || 'this item' : layer.name}"`;
+    if (targets.length === 0) { setAnnotationNotice(`Nothing to extract in ${what}: it has no timed items.`); return; }
+    const busy = itemId ?? layer.id;
+    setExtractingAdsrIds((ids) => new Set(ids).add(busy));
+    try {
+      let envelopes: Record<string, SoundEnvelope | null>;
+      let note: string;
+      if (layer.type === 'lyrics' && source === 'vocals' && lyricEnvelopesInstalled) {
+        const res = await measureWithDetector<LyricEnvelopesMeasure>(LYRIC_ENVELOPES_DETECTOR, slug, {
+          words: targets, strictness: strictnessChoice[LYRIC_ENVELOPES_DETECTOR] ?? strictnessLevel('normal'),
+        });
+        envelopes = Object.fromEntries(
+          Object.entries(res.envelopes).map(([id, e]) => [id, e ? { ...detectorEnvelope(e), source } : null]));
+        const held = Object.values(res.envelopes).filter(Boolean).length;
+        const left = res.left_out.quiet + res.left_out.unheld;
+        note = held === 0
+          ? (res.long === 0
+            ? `Nothing to extract in ${what}: no word is ${res.min_held_s} s or longer.`
+            : `None of the ${res.long} words in ${what} at least ${res.min_held_s} s long is held on the vocals stem.`)
+          : `${what}: ${held} held sound${held === 1 ? '' : 's'} given an envelope (${res.min_held_s} s or longer)`
+            + (left ? `; ${left} left out — the voice doesn't stay up across ${left === 1 ? 'it' : 'them'}.` : '.');
+      } else {
+        const url = source === 'mix' ? audio.url : stemManifest?.stems[source];
+        if (!url) throw new Error(`this song has no ${source} stem`);
+        if (adsrAudioRef.current?.url !== url) adsrAudioRef.current = { url, buffer: getAudioBuffer(url) };
+        const buffer = await adsrAudioRef.current.buffer.catch((e) => { adsrAudioRef.current = null; throw e; });
+        envelopes = extractEnvelopes(buffer, targets, source);
+        const read = Object.values(envelopes).filter((e): e is SoundEnvelope => !!e);
+        const none = targets.length - read.length;
+        const runs = read.filter((e) => e.peaks).length;
+        const from = source === 'mix' ? 'the mix' : `the ${source} stem`;
+        note = `${what}: ${read.length} of ${targets.length} given an envelope, read off ${from}`
+          + (runs ? ` — ${runs === read.length && runs === 1 ? 'it holds' : `${runs} hold`} several pulses, so ${runs === 1 ? 'its envelope is their' : 'theirs is the'} outer shape taken together` : '')
+          + (none ? `; ${none} silent there.` : '.');
+      }
+      if (selectedAudioRef.current?.id !== slug) return;
+      setCueLayersDoc((d) => {
+        if (!d) return d;
+        let changed = false;
+        const layers = d.layers.map((l) => {
+          if (l.id !== layer.id || !isEnvelopeLayer(l)) return l;
+          const after = applyMeasuredEnvelopes(l, targets, envelopes, source);
+          changed = after !== l;
+          return after;
+        });
+        return changed ? { ...d, layers } : d;
+      });
+      setAnnotationNotice(note);
+    } catch (e) {
+      setAnnotationNotice(`Could not extract ADSR for ${what}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExtractingAdsrIds((ids) => { const rest = new Set(ids); rest.delete(busy); return rest; });
+    }
+  }, [setCueLayersDoc, strictnessChoice, lyricEnvelopesInstalled, stemManifest]);
+  // What an envelope can be read off: the mix, and each stem the song has.
+  const adsrSources = useMemo<EnvelopeSource[]>(
+    () => ['mix', ...ALL_DEMUCS_STEMS.filter((s) => !!stemManifest?.stems[s])], [stemManifest]);
+  // One item's card → Extract ADSR. None on a lane that cannot be edited.
+  const itemAdsr = (layer: AnnotationLayer<EnvelopeLayerType>, itemId: string) => (layer.readOnly || layer.locked ? undefined : {
+    sources: adsrSources,
+    onExtract: (source: EnvelopeSource) => { void extractAdsr(layer, itemId, source); },
+    extracting: extractingAdsrIds.has(itemId) || extractingAdsrIds.has(layer.id),
+  });
+  // A retime clears the item's envelope (it measured the old span); once the
+  // item has stopped moving it is read again, off the source it was read from.
+  // A drag retimes on every pointer move, so the read waits until two checks
+  // in a row find the item where it was.
+  const extractAdsrRef = useRef(extractAdsr);
+  extractAdsrRef.current = extractAdsr;
+  const reextractTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const pending = reextractRef.current;
+    const seen = new Map<string, string>();
+    const check = () => {
+      reextractTimerRef.current = null;
+      let moving = false;
+      for (const [itemId, d] of [...pending]) {
+        const layer = cueLayersDocRef.current?.layers.find((l) => l.id === d.layerId);
+        const item = layer && isEnvelopeLayer(layer) ? envelopeTargets(layer, itemId)[0] : undefined;
+        if (!layer || !item || !isEnvelopeLayer(layer)) { pending.delete(itemId); continue; }
+        const at = `${item.time}:${item.end}`;
+        if (seen.get(itemId) !== at) { seen.set(itemId, at); moving = true; continue; }
+        pending.delete(itemId);
+        seen.delete(itemId);
+        const fallback: EnvelopeSource = layer.type === 'lyrics' && stemManifest?.stems.vocals ? 'vocals' : 'mix';
+        void extractAdsrRef.current(layer, itemId, d.source ?? fallback);
+      }
+      if (moving || pending.size) reextractTimerRef.current = setTimeout(check, 500);
+    };
+    reextractWakeRef.current = () => { if (!reextractTimerRef.current) reextractTimerRef.current = setTimeout(check, 500); };
+    return () => { if (reextractTimerRef.current) clearTimeout(reextractTimerRef.current); reextractTimerRef.current = null; };
+  }, [stemManifest]);
+  const userLaneOps = useMemo<UserLaneOps>(() => ({
+    duplicate: (layer) => {
+      const id = newId();
+      placeLanesAfterRef.current.push({ after: layer.id, ids: [id] });
+      setCueLayersDoc((d) => d && duplicateLayer(d, layer.id, id));
+    },
+    copyRegion: (layer, lo, hi) => {
+      const id = newId();
+      placeLanesAfterRef.current.push({ after: layer.id, ids: [id] });
+      setCueLayersDoc((d) => d && copyLayerRegion(d, layer.id, lo, hi, id));
+    },
+    split: (layer) => {
+      const ids: string[] = [];
+      setCueLayersDoc((d) => d && splitLayerByKind(d, layer.id, () => { const id = newId(); ids.push(id); return id; }));
+      if (ids.length) placeLanesAfterRef.current.push({ after: layer.id, ids });
+    },
+    setLocked: (layer, locked) => setCueLayersDoc((d) => d && updateLayer(d, layer.id, { locked: locked || undefined })),
+    snap: laneSnapTo
+      ? {
+          count: (layer, unit) => snapLayerItems(layer, laneSnapTo(unit)).moved,
+          run: (layer, unit) => setCueLayersDoc((d) => d && {
+            ...d,
+            layers: d.layers.map((l) => (l.id === layer.id ? snapLayerItems(l, laneSnapTo(unit)).layer : l)),
+          }),
+        }
+      : null,
+    mergeTargets: (layer) => (cueLayersDoc ? mergeTargets(cueLayersDoc, layer.id) : [])
+      .map(({ id, name, color }) => ({ id, name, color })),
+    merge: (layer, targetId) => handleUnifiedLayerMerge(layer.id, targetId),
+    extractAdsr: (layer, source) => { void extractAdsr(layer, undefined, source); },
+    adsrSources,
+  }), [setCueLayersDoc, cueLayersDoc, handleUnifiedLayerMerge, laneSnapTo, extractAdsr, adsrSources]);
+
+  // The Auto-guess lane's ⋮ → Delete: the song's Auto-guess annotation, ✓/✗
+  // included, and the sidebar badge back to "Not started".
+  const deleteAutoGuessFromLane = useCallback(async () => {
+    const id = selectedAudio?.id;
+    if (!id) return;
+    if (!(await deleteAutoGuessAnnotation(id))) throw new Error('Could not delete the Auto-guess annotation.');
+    setAutoGuessAnnotation(null);
+    setSongStatuses((prev) => {
+      const existing = prev[id];
+      if (!existing) return prev;
+      return { ...prev, [id]: { ...existing, auto_guess_status: undefined } };
+    });
+  }, [selectedAudio?.id]);
 
   // Translate a (layerId, itemId) click on a detector layer back to the
   // (detectorName, reviewKey) pair that applyDetectorReview expects. layer.id
@@ -7305,13 +8548,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }, [handleReviewDetectorAtPlayhead]);
 
   const toggleCustomAnnotationVisible = useCallback((detectorName: string) => {
-    setHiddenCustomAnnotations((prev) => {
-      const next = new Set(prev);
-      if (next.has(detectorName)) next.delete(detectorName);
-      else next.add(detectorName);
-      return next;
-    });
-  }, []);
+    setDetectorsWanted([detectorName], hiddenDetectorRows.has(detectorName));
+  }, [hiddenDetectorRows, setDetectorsWanted]);
 
   const updateCustomAnnotationOverride = useCallback((
     detectorName: string,
@@ -7428,17 +8666,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, []);
 
-  // If a loops top-level tab is active while its experimental flag is
-  // off (e.g. user disabled the flag or restored session state from before the
-  // flag existed), bounce back to Boundaries so we never render a hidden tab.
-  useEffect(() => {
-    const loopsGatedOff = activeAnnotationType === 'loops'
-      && !settings.experimentalLoopsAndPatterns;
-    if (loopsGatedOff) setActiveAnnotationType('boundaries');
-  }, [activeAnnotationType, settings.experimentalLoopsAndPatterns]);
-
   // Snap gridOffset to the current playhead. Used by the SongInfoBar button
-  // and by the Shift+G shortcut. Reads playerTime via ref so it can be bound
+  // and by the Shift+G shortcut. Reads the playhead via ref so it can be bound
   // once into the shortcut config without re-binding on every tick.
   // ── Grid segments ─────────────────────────────────────────────────────────
   //
@@ -7676,8 +8905,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // a document write this viewer never asked for, and the save effect below
   // would answer it by raising the lock bar on a song they only opened to read.
   useEffect(() => {
-    if (!cueLayersDoc || !bpm || !annotationLock.canEdit) return;
-    const fitted = withFittedRiffInstances(cueLayersDoc, bpm);
+    if (!cueLayersDoc || !annotationLock.canEdit) return;
+    // A node deleted from under an instance leaves the instance nothing to
+    // play: its dangling entries go, and an instance with none left goes too.
+    const cleaned = withoutDanglingRiffInstances(cueLayersDoc);
+    const fitted = bpm ? withFittedRiffInstances(cleaned, bpm) : cleaned;
     if (fitted !== cueLayersDoc) setCueLayersDoc(fitted, { skipHistory: true });
   }, [cueLayersDoc, bpm, annotationLock.canEdit, setCueLayersDoc]);
 
@@ -7799,52 +9031,145 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   }, [cueLayersDoc?.layers, algoOverlays]);
 
   // ── Boundary merge ─────────────────────────────────────────────────────
-  // Members are named by overlay id, so a lane that stops being visible (its
-  // family chip switched off, the stem filter narrowed) silently drops out of
-  // the blend and rejoins when it comes back — the merge can never be fed by a
-  // lane the annotator can't see next to it.
+  // Members are named by overlay id and read from every computed row, not only
+  // the drawn ones: a member unticked in the Algorithms sidebar (or narrowed
+  // away by the stem filter) leaves the canvas but keeps feeding the blend, so
+  // unticking the ingredients is how you read the merge on its own. Only the
+  // Merge row's × takes a lane out of the blend.
   const mergeLanes = useMemo<MergeSourceLane[]>(() => {
-    const byId = new Map(algoOverlays.map((o) => [o.id, o]));
+    const byId = new Map(annotationRows.map((r) => [r.id, r]));
     return mergeMemberIds.flatMap((id) => {
-      const o = byId.get(id);
-      if (!o || (o.renderKind ?? 'boundary') !== 'boundary') return [];
+      const r = byId.get(id);
+      if (!r || algoRenderKind(id) !== 'boundary') return [];
+      const drawn = gateAlgoOverlay(id, selectedAlgoOverlays, inspectStemFilter) === 'shown';
       return [{
-        id: o.id,
-        label: o.label,
-        color: o.labelColor ?? '#94a3b8',
-        times: o.sections.map((s) => s.time),
+        id,
+        label: r.label,
+        color: algoLabelColor(id) ?? '#94a3b8',
+        times: r.sections.map((s) => s.time),
+        hidden: !drawn || mergeHiddenIds.includes(id),
       }];
     });
-  }, [algoOverlays, mergeMemberIds]);
+  }, [annotationRows, selectedAlgoOverlays, inspectStemFilter, algoLabelColor, mergeMemberIds, mergeHiddenIds]);
+
+  // What the canvas draws: every shown overlay but the hidden merge members.
+  const drawnAlgoOverlays = useMemo(() => {
+    const hidden = new Set(mergeLanes.filter((l) => l.hidden).map((l) => l.id));
+    return hidden.size ? algoOverlays.filter((o) => !hidden.has(o.id)) : algoOverlays;
+  }, [algoOverlays, mergeLanes]);
+
+  // What smart merge places candidates on. Built only while it is on.
+  //  · the grid, bar lines as the Grid selector draws them (pinned beats and
+  //    tempo segments included);
+  //  · the rhythmic figures: every cue of a detector in the figures group
+  //    (drops, hits, arrangement changes), and both edges of its breakdown /
+  //    build / kick-out spans — not roll stages, which move inside a section;
+  //  · level steps in Volume, Bass, Mids and Highs, a bar either side.
+  const smartMergeGridSec = useMemo(() => {
+    if (!mergeSmart || !isGridReady(songInfo)) return null;
+    const beatSec = 60 / songInfo!.bpm!;
+    return { beatSec, barSec: beatSec * beatsPerBarFromTimeSignature(songInfo?.timeSignature) };
+  }, [mergeSmart, songInfo]);
+  const smartMergeLevels = useMemo(() => {
+    if (!mergeSmart || !mirCurves?.rms?.length) return undefined;
+    const rmsAxis = mirCurves.hopSize && mirCurves.fftSize && mirCurves.sampleRate
+      ? frameAxis(mirCurves.hopSize, mirCurves.fftSize, mirCurves.sampleRate, mirCurves.rms.length)
+      : { step: mirCurves.frameDuration, offset: 0, count: mirCurves.rms.length };
+    // The EQ bands are re-measured at full quality on their own frame rate
+    // (utils/fullRateBands.ts), so each is laid over the song by its length.
+    // An older cached MirCurves may lack a band; it just offers no steps.
+    const band = (name: string, values: ArrayLike<number> | undefined) => (values?.length ? [{
+      name, values,
+      axis: values.length === rmsAxis.count || !(duration > 0)
+        ? rmsAxis
+        : { step: duration / values.length, offset: 0, count: values.length },
+    }] : []);
+    return levelStepSignals([
+      { name: 'Volume', values: mirCurves.rms, axis: rmsAxis },
+      ...band('Bass', mirCurves.lowBand),
+      ...band('Mids', mirCurves.midBand),
+      ...band('Highs', mirCurves.highBand),
+    ], smartMergeGridSec?.barSec ?? NO_GRID_REACH_SEC);
+  }, [mergeSmart, mirCurves, duration, smartMergeGridSec]);
+  const smartMergeContext = useMemo<SmartMergeContext | null>(() => {
+    if (!mergeSmart) return null;
+    const isFigureLayer = (source: string | undefined) =>
+      customDetectors.some((d) => `detector:${d.name}` === source && d.group === PHRASE_EDGES_GROUP);
+    const figures: SmartAnchor[] = [
+      ...detectorCueLayers.filter((l) => isFigureLayer(l.source))
+        .flatMap((l) => l.items.map((c) => ({ time: c.time, label: c.label }))),
+      ...detectorSpanLayersWhole.filter((l) => isFigureLayer(l.source))
+        .flatMap((l) => l.items.filter((sp) => /^(breakdown|build|kick out)\b/i.test(sp.label)))
+        .flatMap((sp) => [{ time: sp.start, label: `${sp.label} starts` }, { time: sp.end, label: `${sp.label} ends` }]),
+    ];
+    const grid = smartMergeGridSec && songInfo ? {
+      ...smartMergeGridSec,
+      snapToBar: (t: number) => snapTimeToGrid(
+        t, songInfo.bpm!, songInfo.gridOffset ?? 0, beatsPerBarFromTimeSignature(songInfo.timeSignature), 'bar',
+        effectiveGridMode(songInfo) === 'manual' ? songInfo.beatOverrides : undefined,
+        undefined, resolveGridSegments(songInfo),
+      ),
+    } : undefined;
+    return { grid, figures, levels: smartMergeLevels };
+  }, [mergeSmart, customDetectors, detectorCueLayers, detectorSpanLayersWhole, smartMergeGridSec, smartMergeLevels, songInfo]);
 
   const mergeBoundaries = useMemo(
-    () => mergeBoundaryLanes(mergeLanes, mergeDropped),
-    [mergeLanes, mergeDropped],
+    () => (smartMergeContext
+      ? smartMergeBoundaryLanes(mergeLanes, smartMergeContext, mergeDropped, mergeEdits, mergeAdded)
+      : mergeBoundaryLanes(mergeLanes, mergeDropped, mergeEdits, mergeAdded)),
+    [mergeLanes, smartMergeContext, mergeDropped, mergeEdits, mergeAdded],
   );
 
   const handleMergeAddLane = useCallback((overlayId: string) => {
     setMergeMemberIds((prev) => (prev.includes(overlayId) ? prev : [...prev, overlayId]));
   }, []);
 
+  // Leaving the merge puts a hidden lane back on the canvas — otherwise it
+  // would vanish from everywhere with nothing on screen to bring it back.
   const handleMergeRemoveLane = useCallback((overlayId: string) => {
     setMergeMemberIds((prev) => prev.filter((id) => id !== overlayId));
+    setMergeHiddenIds((prev) => prev.filter((id) => id !== overlayId));
+  }, []);
+
+  // Showing a member the sidebar had unticked ticks it again — the eye is the
+  // one switch for "this lane on the canvas", wherever it was turned off.
+  const handleMergeSetLanesHidden = useCallback((ids: string[], hidden: boolean) => {
+    setMergeHiddenIds((prev) => hidden
+      ? [...prev, ...ids.filter((id) => !prev.includes(id))]
+      : prev.filter((id) => !ids.includes(id)));
+    if (!hidden) {
+      setSelectedAlgoOverlays((prev) => {
+        const missing = ids.filter((id) => !prev.has(id) && !prev.has(baseAlgoId(id)));
+        return missing.length ? new Set([...prev, ...missing]) : prev;
+      });
+    }
   }, []);
 
   const handleMergeClear = useCallback(() => {
     setMergeMemberIds([]);
-    setMergeDropped([]);
-  }, []);
+    setMergeHiddenIds([]);
+    setMergeWork({ dropped: [], edits: [], added: [] });
+  }, [setMergeWork]);
 
   const handleMergeToggleBoundary = useCallback((b: MergedBoundary) => {
-    setMergeDropped((prev) => toggleMergeDropped(prev, b));
-  }, []);
+    setMergeWork((w) => ({ ...w, dropped: toggleMergeDropped(w.dropped, b) }));
+  }, [setMergeWork]);
+
+  // The popover names the boundary by the time the lanes reported, which is
+  // also what its edit and its drop are keyed by.
+  const handleMergeEditBoundary = useCallback((b: MergedBoundary, anchor: { x: number; y: number }) => {
+    openMergePopover('merge', String(b.time), anchor);
+  }, [openMergePopover]);
 
   // Removing a lane can leave a drop pointing at a boundary that no longer
   // exists. Harmless — a drop with nothing at that instant simply never
   // applies — but it would quietly bite again if that lane rejoined, so the
   // bar's "N dropped" counter only ever counts drops that are currently
   // taking a boundary off the lane.
-  const handleMergeRestoreDropped = useCallback(() => setMergeDropped([]), []);
+  const handleMergeRestoreDropped = useCallback(
+    () => setMergeWork((w) => ({ ...w, dropped: [] })),
+    [setMergeWork],
+  );
 
   // ── Remembering the merge across reloads ───────────────────────────────
   // Load first: this effect is declared before the save effect, so on a song
@@ -7857,27 +9182,39 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     mergeSongIdRef.current = id;
     const stored = id ? readMergeState(id) : null;
     setMergeMemberIds(stored?.memberIds ?? []);
-    setMergeDropped(stored?.dropped ?? []);
-    // Bring the member LANES back on too. The blend is fed by the overlays
-    // currently drawn (see `mergeLanes`), so restoring only the member ids
-    // would restore a merge that renders as nothing until you re-tick the same
-    // detectors by hand — the row would look as empty as if nothing had been
-    // remembered. A lane you deliberately switch off still drops out of the
-    // blend; this is only about putting back what the reload took away.
-    if (stored?.memberIds.length) {
+    // Hidden members come back unticked (below), which is what hides them —
+    // the eye's own set starts empty so ticking one in the sidebar shows it.
+    setMergeHiddenIds([]);
+    setMergeSmart(stored?.smart ?? false);
+    setMergeLoadedFor(id);
+    // A fresh history per song: ⌘Z must never reach into another song's blend.
+    resetMergeWork({ dropped: stored?.dropped ?? [], edits: stored?.edits ?? [], added: stored?.added ?? [] });
+    // Bring the member LANES back on too — the ones that were drawn. The blend
+    // no longer needs them ticked (see `mergeLanes`), but a reload should come
+    // back to the canvas you left: lanes shown, a hidden member still hidden.
+    const shownMembers = (stored?.memberIds ?? []).filter((m) => !stored?.hidden?.includes(m));
+    if (shownMembers.length) {
       setSelectedAlgoOverlays((prev) => {
         const next = new Set(prev);
-        for (const memberId of stored.memberIds) next.add(baseAlgoId(memberId));
+        for (const memberId of shownMembers) next.add(baseAlgoId(memberId));
         return next;
       });
     }
-  }, [selectedAudio?.id]);
+  }, [selectedAudio?.id, resetMergeWork]);
 
   useEffect(() => {
     const id = mergeSongIdRef.current;
-    if (!id) return;
-    writeMergeState(id, { memberIds: mergeMemberIds, dropped: mergeDropped });
-  }, [mergeMemberIds, mergeDropped]);
+    // Until the load above has landed, the merge state in hand is the previous
+    // song's; the sidebar selection changing in that same render must not
+    // write it under the new song's id.
+    if (!id || mergeLoadedFor !== id) return;
+    writeMergeState(id, {
+      memberIds: mergeMemberIds, dropped: mergeDropped, edits: mergeEdits, added: mergeAdded,
+      ...(mergeSmart ? { smart: true } : {}),
+      hidden: mergeMemberIds.filter((m) => mergeHiddenIds.includes(m)
+        || gateAlgoOverlay(m, selectedAlgoOverlays, inspectStemFilter) !== 'shown'),
+    });
+  }, [mergeLoadedFor, mergeMemberIds, mergeDropped, mergeEdits, mergeAdded, mergeHiddenIds, mergeSmart, selectedAlgoOverlays, inspectStemFilter]);
 
   // The merge's name is what marks the layer as coming from this blend, so the
   // "already committed" count is read back off the document rather than
@@ -7896,7 +9233,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const layerId = copyBoundarySectionsToNewLayer(mergedToSectionBlocks(mergeBoundaries), mergeLayerLabel);
     if (!layerId) return;
     setMergeCommitNote(isInspect(feature)
-      ? '⤴ Saved to your annotations — open the Annotator Tool to see it.'
+      ? '⤴ Saved to your annotations — open the Annotate tab to see it.'
       : null);
     // Committing IS the approval: the blend stops being a proposal and becomes
     // a boundary layer in the annotator's own folder — the one the lol agent
@@ -8003,6 +9340,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, [algoOverlays]);
 
+  const draftItemId = laneDraft?.itemId ?? null;
+  const riffDraftKey = riffDraft ? `${riffDraft.itemId}\n${riffDraft.nodeIds.join(',')}` : null;
+  // Read by the autosave below; synced before it runs (layout effects first).
+  const riffDraftRef = useRef(riffDraft);
+  useLayoutEffect(() => { riffDraftRef.current = riffDraft; });
   // Debounced auto-save for the cue-layers document. Skips the just-loaded
   // reference so we don't echo the server response back. Mirrors the implicit
   // save pattern used by ManualEditorPanel for its own annotation.
@@ -8029,19 +9371,40 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       setBlockedByLock(true);
       return;
     }
-    pendingLayersDocRef.current = { slug, doc: cueLayersDoc };
+    // A lane draft whose card is still open is not saved — only its Done
+    // makes it part of the annotation (see the lane-draft block). Clearing
+    // the draft re-runs this effect, which is what saves a kept one.
+    const withoutLaneDraft = draftItemId ? withoutItem(cueLayersDoc, draftItemId) : cueLayersDoc;
+    const toSave = riffDraftRef.current ? withoutRiffDraft(withoutLaneDraft, riffDraftRef.current) : withoutLaneDraft;
+    pendingLayersDocRef.current = { slug, doc: toSave };
     setLayersDocSaveStatus('saving');
     const t = setTimeout(async () => {
-      // Persist both coordinates: seconds (canonical) and the musical position
-      // they fall on. Stamped here rather than in state so the beat never
-      // enters the undo history and can't re-trigger this effect.
-      const ok = await saveLayers(slug, withStampedBeats(cueLayersDoc, gridOf(songInfoRef.current)));
-      if (ok) lastSavedLayersDocRef.current = cueLayersDoc;
+      // Persist the musical position every mark falls on, and the grid it is
+      // counted on. Under Grid Lock the file then stores the beats ALONE
+      // (withSongGrid picks the timebase, saveLayers strips the seconds); off
+      // it, seconds stay canonical and the beat rides beside them. Stamped
+      // here rather than in state so the beat never enters the undo history
+      // and can't re-trigger this effect.
+      const run = layersSaveChainRef.current.then(async () => {
+        const base = layersRevRef.current;
+        const result = await saveLayers(slug, withSongGrid(withStampedBeats(toSave, gridOf(songInfoRef.current)), songInfoRef.current), {
+          baseRev: base?.slug === slug ? base.rev : 0,
+        });
+        if (result.ok) {
+          if (layersRevRef.current?.slug === slug) layersRevRef.current = { slug, rev: result.rev };
+          lastSavedLayersDocRef.current = toSave;
+        } else if (result.conflict) {
+          setLayersSyncProblem('conflict');
+        }
+        return result.ok;
+      });
+      layersSaveChainRef.current = run.catch(() => false);
+      const ok = await run;
       setLayersDocSaveStatus(ok ? 'saved' : 'error');
       setTimeout(() => setLayersDocSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000);
     }, 600);
     return () => clearTimeout(t);
-  }, [cueLayersDoc, selectedAudio, annotationLock.canEdit]);
+  }, [cueLayersDoc, selectedAudio, annotationLock.canEdit, draftItemId, riffDraftKey]);
 
   // Flush a pending layers-doc save synchronously — otherwise an edit made
   // inside the 600ms debounce window above (e.g. copying a detector's output
@@ -8058,10 +9421,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const flush = () => {
       const pending = pendingLayersDocRef.current;
       if (!pending || pending.doc === lastSavedLayersDocRef.current) return;
+      const base = layersRevRef.current;
       void saveLayers(
         pending.slug,
-        withStampedBeats(pending.doc, gridOf(songInfoRef.current)),
-        { keepalive: true },
+        withSongGrid(withStampedBeats(pending.doc, gridOf(songInfoRef.current)), songInfoRef.current),
+        { keepalive: true, baseRev: base?.slug === pending.slug ? base.rev : 0 },
       );
       lastSavedLayersDocRef.current = pending.doc;
     };
@@ -8131,7 +9495,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const live = cueLayersDocRef.current;
     if (selectedAudio?.id === slug && live && live.song === slug) {
       if (!annotationLock.canEdit) {
-        setMarkAllError({ slug, message: 'Read-only — take the edit lock first.' });
+        setMarkAllError({ slug, message: 'Read-only — grab the song first.' });
         return;
       }
       // skipHistory, like the pill in BoundaryEditorPanel: a workflow-status
@@ -8147,7 +9511,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         setMarkAllError({ slug, message: 'No layers document to update.' });
         return;
       }
-      const ok = await saveLayers(slug, flip(doc));
+      const { ok } = await saveLayers(slug, flip(doc));
       if (!ok) {
         setMarkAllError({ slug, message: 'Save refused — the song may be locked by someone else.' });
         // Re-read rather than leave the sidebar showing a state the file
@@ -8193,12 +9557,19 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     () => cueLayersDoc?.layers.filter((l): l is AnnotationLayer<'riff-patterns'> => l.type === 'riff-patterns') ?? [],
     [cueLayersDoc],
   );
+  // The sound palette of the detectors' loops, for Algorithm Inspect. The
+  // Annotator's — the user's own riff nodes — is the Riff Patterns panel's
+  // node list, built there from the layer it edits.
+  // A riff's place in its instance is counted in beats, so both need the
+  // song's tempo; the same "real bpm" rule as detectorRiffLayers above.
+  const paletteBpm = songInfo?.bpm && songInfo.bpm > 20 ? songInfo.bpm : 120;
+  const detectorPaletteGroups = useMemo(
+    () => detectorPalette(detectorRiffLayers, paletteBpm),
+    [detectorRiffLayers, paletteBpm],
+  );
 
   // Sentinel option id for "+ New Riff Layer" in the cross-layer node picker.
   const NEW_RIFF_LAYER_ID = '__new_riff_layer__';
-  // Prefix marking a cross-layer pick as "build a boundary node, not a grid
-  // one" — see handleGenerateRiffNodeFromSelection.
-  const RIFF_BOUNDARY_PICK_PREFIX = 'boundary:';
   // Cues (onset layer) → Riff Patterns escape hatch: turn a dragged selection
   // into a new RiffNode without leaving the Cues tab. Sizes the node from the
   // selection's exact duration in beats — same beats-from-bpm math
@@ -8218,16 +9589,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // as its sole sequence entry — the node is immediately audible/visible on
   // the timeline instead of sitting unplaced in the layer's node library.
   const handleGenerateRiffNodeFromSelection = useCallback((pickedId: string) => {
-    // The menu offers each riff layer twice: once plainly (a grid node, the
-    // original behaviour) and once under a `boundary:` prefix, which builds a
-    // BOUNDARY node instead — same onsets, but kept at their exact fractional
-    // beat positions as `[start, end)` blocks rather than rounded onto an
-    // inferred subdivision. The grid path guesses a subdivision with
-    // `bestFitOnsetSubdivision`, and when that guess is wrong every hit lands
-    // on the wrong step and the node's karaoke sweep visibly drifts from the
-    // audio; the boundary path has no guess to get wrong.
-    const asBlocks = pickedId.startsWith(RIFF_BOUNDARY_PICK_PREFIX);
-    const targetLayerId = asBlocks ? pickedId.slice(RIFF_BOUNDARY_PICK_PREFIX.length) : pickedId;
+    const targetLayerId = pickedId;
     const pending = effectiveAnnotationSelectionRef.current;
     if (!pending || pending.t2 == null) return;
     const selStart = Math.min(pending.t1, pending.t2);
@@ -8255,11 +9617,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       ?? newRiffPatternLayer(`Riff Patterns ${riffPatternLayers.length + 1}`, pickDefaultLayerColor(cueLayersDoc?.layers ?? []));
 
     const allRiffNodes = riffPatternLayers.flatMap((l) => l.nodes ?? []);
-    const nodeName = `${asBlocks ? 'Blocks' : 'Node'} ${(layer.nodes?.length ?? 0) + 1}`;
+    const nodeName = `Node ${(layer.nodes?.length ?? 0) + 1}`;
     const nodeColor = pickRiffNodeColor(allRiffNodes);
-    let node = asBlocks
-      ? newRiffBoundaryNode(nodeName, nodeColor)
-      : newRiffNode(nodeName, nodeColor);
+    let node = newRiffNode(nodeName, nodeColor);
     // Measured on the song's actual beat grid (via beatPositionAt) rather than
     // a flat `durationSec * bpm/60` — a song in Dynamic/Manual grid mode can
     // have a tempo anchor land inside the selection, and a constant-bpm
@@ -8277,39 +9637,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       // selEnd] — anchoredStart/anchoredEnd can sit up to half a beat off
       // the drag because of the nearest-beat snap above. An onset inside the
       // drag but outside the anchored span maps to a beat position <0 or
-      // >beats, which normalizePatternAccents silently drops as out of
-      // range — the onset was detected correctly, it just never made it
-      // into the node.
+      // >beats, which hitsFromOnsets silently drops as out of range — the
+      // onset was detected correctly, it just never made it into the node.
       const onsetBeats = (sourceLayer?.items ?? [])
         .filter((it) => it.time >= anchoredStart && it.time <= anchoredEnd)
         .map((it) => beatPositionAt(it.time, bpm!, beatOffset) - startBeatPos!);
 
-      if (asBlocks) {
-        // No subdivision is inferred at all. Length still lands on the
-        // sequence's own quarter-beat step grid (every placement does), so
-        // the blocks are tiled against that resolved length rather than the
-        // raw fractional selection — otherwise the last block would overrun
-        // or fall short of the node's actual end by up to a sixteenth.
-        node = { ...node, ...resizeBoundaryNodeLength(node, beats) };
-        // Each onset opens a block that lasts as long as the sound does,
-        // measured off the mix's loudness across the same span — not a flat
-        // beat apiece, which is the one thing a node built "as blocks (no
-        // grid)" was asked not to do.
-        const nodeBeats = riffNodeLengthBeats(node);
-        const hits = withMeasuredEnds(
-          onsetBeats.map((beat) => ({ beat })),
-          levelCurveForSpan(anchoredStart, anchoredEnd, nodeBeats),
-          nodeBeats,
-        );
-        node = { ...node, segments: boundarySegmentsFromHits(hits, nodeBeats) };
-      } else {
-        const subbeatsPerBeat = onsetBeats.length > 0 ? bestFitOnsetSubdivision(onsetBeats) : node.subbeatsPerBeat;
-        node = { ...node, subbeatsPerBeat, ...resizeRiffNodeLength({ ...node, subbeatsPerBeat }, beats) };
-
-        if (onsetBeats.length > 0) {
-          const onsetSteps = onsetBeats.map((b) => Math.round(b * subbeatsPerBeat));
-          node = { ...node, ...normalizePatternAccents(onsetSteps, node.spans, node.stepsPerCycle) };
-        }
+      // Written as notes on the pulse the onsets fit (a triplet pulse when
+      // they swing that way).
+      const pulse = pulseOf({ subbeatsPerBeat: onsetBeats.length > 0 ? bestFitOnsetSubdivision(onsetBeats) : node.subbeatsPerBeat });
+      node = { ...node, subbeatsPerBeat: pulse, ...resizeBoundaryNodeLength({ ...node, subbeatsPerBeat: pulse }, beats) };
+      if (onsetBeats.length > 0) {
+        node = { ...node, segments: hitsFromOnsets(node.segments, onsetBeats, riffNodeLengthBeats(node), pulse, 'replace') };
       }
     }
 
@@ -8345,40 +9684,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const pending = effectiveAnnotationSelectionRef.current;
     if (!pending || pending.t2 == null) return;
     setEnergySpanRange({ start: Math.min(pending.t1, pending.t2), end: Math.max(pending.t1, pending.t2) });
-    setEnergySpanTargetLayerId(null);
     energySpanPopover.openAt('energy-span', 'selection', anchor);
   }, [energySpanPopover]);
 
-  // The energies lane's own "+ ADD". That lane exists to hold ⚡ Energy
-  // exports and nothing else, so adding to it has to mean "measure the energy
-  // here" — a blank span filed in it is an item the downstream consumer reads
-  // as an energy export and finds no measurement inside. Same popover the
-  // pill's ⚡ ENERGY opens, over the highlighted region when there is one and
-  // a default-length window at the playhead otherwise, which is the rule
-  // "+ Add span" already follows.
-  const handleOpenEnergySpanExportForLayer = useCallback((
-    layerId: string,
-    anchor: { x: number; y: number },
-  ) => {
-    const pending = effectiveAnnotationSelectionRef.current;
-    let start: number;
-    let end: number;
-    if (pending && pending.t2 != null) {
-      start = Math.min(pending.t1, pending.t2);
-      end = Math.max(pending.t1, pending.t2);
-    } else {
-      start = liveSongTime() ?? 0;
-      end = start + (bpm ? (60 / bpm) * beatsPerBar : 2);
-      if (duration > 0 && end > duration) end = duration;
-    }
-    if (end - start < 0.05) return;
-    setSelectedSpanLayerId(layerId);
-    setEnergySpanRange({ start, end });
-    setEnergySpanTargetLayerId(layerId);
-    energySpanPopover.openAt('energy-span', layerId, anchor);
-  }, [energySpanPopover, liveSongTime, bpm, beatsPerBar, duration]);
-
-  // Saves a computed energy-span export as a new Span item — label carries a
+  // Saves a computed energy-span export as a Span item, replacing any earlier
+  // measurement it overlaps in that lane — label carries a
   // short human tag, description carries the full JSON (curve, trend, etc.)
   // for an external consumer to read via the normal Span export flow.
   const handleSaveEnergySpanToLayer = useCallback((targetLayerId: string, exportData: EnergySpanExport) => {
@@ -8407,7 +9717,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
     setCueLayersDoc((d) => {
       if (!d) return d;
-      const items = [...(layer.items ?? []), item];
+      // Read the lane off the doc being written, not the render's copy — a
+      // re-measure replaces the reading it overlaps rather than stacking on it.
+      const current = d.layers.find((l) => l.id === layer.id)?.items as SpanItem[] | undefined;
+      const items = replaceOverlappingEnergySpans(current ?? layer.items ?? [], item);
       return {
         ...d,
         layers: isNewLayer
@@ -8427,77 +9740,34 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     () => cueLayersDoc?.layers.filter((l): l is AnnotationLayer<'lyrics'> => l.type === 'lyrics') ?? [],
     [cueLayersDoc],
   );
-  // Explicit pick from the Karaoke panel's layer dropdown. It outranks every
-  // implicit rule below, but only until the user clicks a different lyrics
-  // word — clicking a word is the older, just-as-explicit way to steer this
-  // panel, so it lifts the pin rather than being silently ignored.
-  const [karaokeLayerOverride, setKaraokeLayerOverride] = useState<string | null>(null);
-  const karaokeFocusKey = focusedLyrics ? `${focusedLyrics.layerId}:${focusedLyrics.itemId}` : null;
-  const karaokePinFocusRef = useRef<string | null>(null);
-  const handleKaraokeLayerPick = useCallback((layerId: string) => {
-    karaokePinFocusRef.current = karaokeFocusKey;
-    setKaraokeLayerOverride(layerId);
-    // Reading a layer here is only useful if the rest of the workspace agrees:
-    // the picked layer becomes the selected one (timeline row + the editor
-    // below), and a layer that was toggled off the canvas is brought back —
-    // otherwise you'd be singing along to a row you can't see.
-    const layer = [...lyricsLayers, ...detectorLyricsLayers].find((l) => l.id === layerId);
-    if (!layer) return;
-    const source = layer.source?.startsWith('detector:') ? layer.source : null;
-    if (source) {
-      const detectorName = source.slice('detector:'.length);
-      setHiddenCustomAnnotations((prev) => {
-        if (!prev.has(detectorName)) return prev;
-        const next = new Set(prev);
-        next.delete(detectorName);
-        return next;
-      });
-    } else if (isInspect(feature)) {
-      setVisibleAnnotationsInspect((prev) => (prev.has(layerId) ? prev : new Set(prev).add(layerId)));
-    } else if (!layer.visible) {
-      setCueLayersDoc((d) => d && ({
-        ...d,
-        layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: true } : l)),
-      }), { skipHistory: true });
-    }
-    handleUnifiedSelectLayer('lyrics', {
-      id: layerId,
-      sourceId: (source ?? 'manual') as SourceId,
-      name: layer.name,
-      readOnly: layer.readOnly === true,
-    });
-  }, [karaokeFocusKey, feature, lyricsLayers, detectorLyricsLayers, handleUnifiedSelectLayer, setCueLayersDoc]);
-  useEffect(() => {
-    if (karaokeLayerOverride && karaokeFocusKey !== karaokePinFocusRef.current) {
-      setKaraokeLayerOverride(null);
-    }
-  }, [karaokeFocusKey, karaokeLayerOverride]);
-  // The lyrics layer the Karaoke panel follows: the pinned one, else the
-  // focused one, else the selected one, else the first visible layer that
-  // actually has words. `options` feeds the panel's picker, and it lists
-  // layers that are currently hidden too — picking one is how you get it back
-  // on the canvas. The implicit fallbacks stay visibility-aware, so a layer
-  // you toggled off never becomes the karaoke source on its own.
+  // The lyrics the Karaoke panel reads: the focused layer, else the selected
+  // one, else the first shown layer that actually has words — plus every other
+  // layer with words, which the panel merges in when it is shown on the canvas
+  // (a transcription split across stems is one performance) and offers as a
+  // chip when it is not. The implicit fallbacks stay visibility-aware, so a
+  // layer you toggled off never becomes the karaoke's focus on its own.
   const karaokeLyrics = useMemo(() => {
-    if (feature === 'prep' || !settings.experimentalLyricsFamily) return null;
+    if (feature === 'prep') return null;
     const all = [...lyricsLayers, ...detectorLyricsLayers];
     if (!all.length) return null;
-    const shown = all.filter((l) => (l.source?.startsWith('detector:')
+    const isShown = (l: AnnotationLayer<'lyrics'>) => (l.source?.startsWith('detector:')
       ? !hiddenCustomAnnotations.has(l.source.slice('detector:'.length))
-      : l.visible));
+      : l.visible);
     const byId = (id?: string | null) => (id ? all.find((l) => l.id === id) : undefined);
+    // The lyrics layer picked last — a clicked lane or a clicked word both
+    // land there — leads; a lane of a `lanes` detector has no other handle.
     const layer =
-      byId(karaokeLayerOverride) ||
+      byId(activeAnnotationType === 'lyrics' ? selectedLayerIdByType.lyrics : null) ||
       byId(focusedLyrics?.layerId) ||
       byId(selectedLyricsLayerId) ||
-      shown.find((l) => l.items.length) ||
+      all.find((l) => isShown(l) && l.items.length) ||
       all[0];
     if (!layer || !layer.items.length) return null;
-    const options = all
+    const sources = all
       .filter((l) => l.items.length)
-      .map((l) => ({ id: l.id, name: l.name, color: l.color }));
-    return { items: layer.items, title: layer.name, color: layer.color, layerId: layer.id, options };
-  }, [feature, settings.experimentalLyricsFamily, lyricsLayers, detectorLyricsLayers, hiddenCustomAnnotations, karaokeLayerOverride, focusedLyrics, selectedLyricsLayerId]);
+      .map((l) => ({ id: l.id, name: l.name, color: l.color, items: l.items, shown: isShown(l) }));
+    return { sources, focusedId: layer.id };
+  }, [feature, lyricsLayers, detectorLyricsLayers, hiddenCustomAnnotations, activeAnnotationType, selectedLayerIdByType, focusedLyrics, selectedLyricsLayerId]);
   // In Algorithm Inspect, clicking a lyrics layer is a request to READ the
   // words, not to score boundaries — so the karaoke takes over the Consensus
   // stage's slot below the sub-tabs instead of stacking a second panel on top
@@ -8520,19 +9790,52 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       text: sec.label || sec.type,
       kind: (sec.type === 'word' ? 'word' : 'line') as 'word' | 'line',
     }));
-    return { items, title: overlay.label, color: overlay.labelColor ?? '#fb7185', layerId: overlay.id, options: [] };
+    const sources = [{ id: overlay.id, name: overlay.label, color: overlay.labelColor ?? '#fb7185', items, shown: true }];
+    return { sources, focusedId: overlay.id };
   }, [selectedLyricsAlgoId, algoOverlays, feature]);
   // What the karaoke actually reads. A clicked detector lane wins over the
   // layer-derived source because it is the more recent, more specific click —
   // and picking a lyrics LAYER clears it again (see handleUnifiedSelectLayer),
   // so the two never argue about which one the user meant last.
   const karaokeSource = karaokeAlgoLyrics ?? karaokeLyrics;
+  // Hits and notes, read as karaoke. Every cue layer that has something to
+  // light — drum hits named kick / snare / hat, or notes with a pitch — is a
+  // source, a detector's read-only layer and a hand-made copy alike; so is a
+  // clicked algo lane whose cues are drum hits or notes. The focused one opens the
+  // karaoke, and the panel's chips stack any of the others under it.
+  const hitKaraokeSources = useMemo<KaraokeSource[]>(() => {
+    if (feature === 'prep') return [];
+    const out: KaraokeSource[] = [];
+    for (const l of [...(cueLayers ?? []), ...detectorCueLayers]) {
+      const rows = karaokeRowsOf(l.id, l.name, l.color, l.items);
+      // A chip wears the colour its rows are drawn in, so it can be found in them.
+      if (rows.length) out.push({ id: l.id, name: l.name, color: rows.find((r) => r.kind === 'notes')?.color ?? l.color, rows });
+    }
+    if (selectedDrumAlgoId && feature === 'inspect-song') {
+      const overlay = algoOverlays.find((o) => o.id === selectedDrumAlgoId);
+      const rows = overlay ? karaokeRowsOf(overlay.id, overlay.label, overlay.labelColor ?? '#f87171', overlay.sections) : [];
+      if (overlay && rows.length) out.push({ id: overlay.id, name: overlay.label, color: overlay.labelColor ?? '#f87171', rows });
+    }
+    return out;
+  }, [feature, cueLayers, detectorCueLayers, selectedDrumAlgoId, algoOverlays]);
+  /** Which source the karaoke opens on: a clicked hit lane, else the focused
+   *  cue layer when it has something to light. Null → no hit karaoke. */
+  const hitKaraokeFocusId = useMemo(() => {
+    const has = (id: string | null | undefined) => !!id && hitKaraokeSources.some((x) => x.id === id);
+    if (feature === 'inspect-song' && has(selectedDrumAlgoId)) return selectedDrumAlgoId;
+    if (activeAnnotationType === 'cues' && has(selectedLayerIdByType.cues)) return selectedLayerIdByType.cues ?? null;
+    return null;
+  }, [feature, hitKaraokeSources, selectedDrumAlgoId, activeAnnotationType, selectedLayerIdByType]);
+  // A clicked hit lane clears the lyrics lane and vice versa, so when both
+  // sources exist it is the focused cue layer against a lyrics lane click —
+  // and the lane is the newer click.
+  const showHitKaraoke = !!hitKaraokeFocusId && !karaokeAlgoLyrics;
   /** A lyrics layer or a lyrics detector lane is focused, so Algorithm Inspect
    *  offers a Karaoke tab. The karaoke used to take over the Consensus stage's
    *  slot instead, which left the lit tab saying "Consensus Inspect" over a
    *  panel that was nothing of the sort — a tab is the honest home for it. */
   const karaokeTabAvailable = feature === 'inspect-song'
-    && (!!karaokeAlgoLyrics || (activeAnnotationType === 'lyrics' && !!karaokeLyrics));
+    && (!!karaokeAlgoLyrics || (activeAnnotationType === 'lyrics' && !!karaokeLyrics) || showHitKaraoke);
   /** The inspect view actually rendered, after both gates. */
   const inspectStage: InspectSubStage | null =
     feature !== 'inspect-song' ? null
@@ -8583,16 +9886,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
   // One karaoke panel, two possible homes (below the canvas in the Annotator,
   // in the stage slot in Algorithm Inspect) — rendered from one place so the
   // two can't drift apart.
-  const renderKaraokePanel = () => karaokeSource && (
-    <KaraokePanel
-      items={karaokeSource.items}
-      currentTime={playerTime}
+  const renderKaraokePanel = () => showHitKaraoke && hitKaraokeFocusId ? (
+    <HitKaraokePanel
+      sources={hitKaraokeSources}
+      focusedId={hitKaraokeFocusId}
       onSeek={(t) => seekRef.current?.(t)}
-      title={karaokeSource.title}
-      color={karaokeSource.color}
-      layerId={karaokeSource.layerId}
-      layerOptions={karaokeSource.options}
-      onLayerChange={handleKaraokeLayerPick}
+    />
+  ) : karaokeSource && (
+    <KaraokePanel
+      key={karaokeSource.focusedId}
+      sources={karaokeSource.sources}
+      focusedId={karaokeSource.focusedId}
+      onSeek={(t) => seekRef.current?.(t)}
     />
   );
   // Boundary layers get a canvas row each, like every other layer kind. They
@@ -8657,6 +9962,64 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     return out;
   }, [layerGroups, cueLayersDoc]);
 
+  // ── Detector groups ───────────────────────────────────────────────────────
+  // Detectors that declare the same `group` (Phrase edges: its spans lane,
+  // its cues lane, Stutter builds) share one band on the canvas, drawn with
+  // the same header as an annotator's group but read-only: detector lanes are
+  // re-derived every render, so there is nothing to rename or ungroup. Collapse
+  // is remembered per browser; show / hide flips the lanes in the shared
+  // `hiddenCustomAnnotations` set, like the Detectors sidebar does.
+  const DETECTOR_GROUPS_COLLAPSED_KEY = 'tc.detectorGroups.collapsed';
+  const [collapsedDetectorGroups, setCollapsedDetectorGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(DETECTOR_GROUPS_COLLAPSED_KEY);
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(DETECTOR_GROUPS_COLLAPSED_KEY, JSON.stringify([...collapsedDetectorGroups])); } catch { /* private window */ }
+  }, [collapsedDetectorGroups]);
+
+  const detectorBands = useMemo(() => {
+    // A `lanes` detector's lane is in the band its lane group names; the
+    // lane's id ends in its expanded entry's name (`…:instrument_layers~kick_notes`).
+    const laneGroup = new Map(laneDetectors.filter((d) => d.group && d.name.includes(DETECTOR_LANE_SEP))
+      .map((d) => [d.name, d.group] as const));
+    const lane = (prefix: string) => (l: { id: string; color: string; source?: string }) => ({
+      rowId: `${prefix}:${l.id}`,
+      detectorName: (l.source ?? '').slice('detector:'.length),
+      color: l.color,
+      band: laneGroup.get(l.id.slice(l.id.indexOf(':') + 1)) ?? null,
+    });
+    const lanes = [
+      ...detectorCueLayers.map(lane('cue-layer')),
+      ...detectorSpanLayers.map(lane('span-layer')),
+      ...detectorLoopLayers.map(lane('loop-layer')),
+      ...detectorLyricsLayers.map(lane('lyrics-layer')),
+      ...detectorRiffLayers.map(lane('riff-layer')),
+    ];
+    return buildDetectorBands(lanes, customDetectors, hiddenCustomAnnotations, collapsedDetectorGroups);
+  }, [detectorCueLayers, detectorSpanLayers, detectorLoopLayers, detectorLyricsLayers, detectorRiffLayers,
+      customDetectors, laneDetectors, hiddenCustomAnnotations, collapsedDetectorGroups]);
+
+  // What the canvas is handed: the annotator's own groups (Annotator only —
+  // see the note where it is passed) and the detector bands where detector
+  // lanes are drawn, which is Algorithm Inspect only (`proposedLayers`).
+  const showDetectorBands = feature === 'inspect-song';
+  const canvasGroups = useMemo(() => {
+    const own = isAnnotateFeature;
+    const det = showDetectorBands;
+    if (!own && !det) return null;
+    return {
+      layerGroups: [...(own ? layerGroups : []), ...(det ? detectorBands.groups : [])],
+      rowGroupId: { ...(own ? rowGroupId : {}), ...(det ? detectorBands.rowGroupId : {}) },
+      groupState: { ...(own ? groupState : {}), ...(det ? detectorBands.groupState : {}) },
+      readOnlyGroupIds: new Set(det ? detectorBands.groups.map((g) => g.id) : []),
+    };
+  }, [isAnnotateFeature, showDetectorBands, layerGroups, rowGroupId, groupState, detectorBands]);
+
   const editGroups = useCallback((
     edit: (doc: AnnotationLayersDocument) => AnnotationLayersDocument,
   ) => {
@@ -8669,9 +10032,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     }));
   }, [editGroups]);
 
-  const handleGroupSetVisible = useCallback((groupId: string, visible: boolean) => {
-    editGroups((doc) => setGroupVisible(doc, groupId, visible));
-  }, [editGroups]);
+  // A band's collapse chevron, for either kind of band.
+  const handleCanvasGroupToggleCollapsed = useCallback((groupId: string) => {
+    if (!isDetectorGroupId(groupId)) { handleGroupToggleCollapsed(groupId); return; }
+    setCollapsedDetectorGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+      return next;
+    });
+  }, [handleGroupToggleCollapsed]);
 
   const handleGroupRename = useCallback((groupId: string, name: string) => {
     const trimmed = name.trim();
@@ -8740,6 +10109,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     rowId: VizRowId,
     groupId: string | null,
     beforeRowId: VizRowId | null,
+    place?: ReorderPlace,
   ) => {
     editGroups((doc) => {
       let next = setLayerGroup(doc, layerIdFromRowId(rowId), groupId);
@@ -8750,7 +10120,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }
       return next;
     });
-    setRowOrder((prev) => moveRowInOrder(prev, rowId, { groupId, beforeRowId }, rowGroupId));
+    setRowOrder((prev) => moveRowInOrder(prev, rowId, { groupId, beforeRowId, place }, rowGroupId));
     setHasCustomRowOrder(true);
   }, [editGroups, layerIdFromRowId, rowGroupId]);
 
@@ -8817,20 +10187,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     prevSpanLayerIdsRef.current = currentIds;
     if (!added.length && !removed.length) return;
     setRowOrder((order) => {
-      let next = order.filter((id) => !removed.includes(id));
-      for (const id of added) {
-        const anchor = next.indexOf('autoGuess');
-        const insertAt = anchor >= 0 ? anchor + 1 : 0;
-        next.splice(insertAt, 0, id);
-      }
+      const next = order.filter((id) => !removed.includes(id));
+      // As one block, so a split lane's parts keep their order (Kick, Snare …).
+      const anchor = next.indexOf('autoGuess');
+      next.splice(anchor >= 0 ? anchor + 1 : 0, 0, ...added);
       return next;
     });
   }, [spanLayers, detectorSpanLayers]);
 
   // Same row sync for Riff-pattern layers (user + detector-sourced). A
-  // detector layer needs its row in the order like any other, or it is passed
-  // to the canvas, filtered, found visible — and then never drawn, because the
-  // renderer only walks rowOrder.
+  // detector lane needs its row in the order like any other, or it is passed
+  // to the canvas, filtered, found visible — and then never drawn, because
+  // the renderer only walks rowOrder.
   const prevRiffPatternLayerIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const visible = [
@@ -8906,12 +10274,42 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, [rowOrder, layerStemRank, hasCustomRowOrder]);
 
-  // Mirror the algoOverlays sync for custom-annotation rows. Each is_annotation
-  // detector gets its own row inserted just after 'autoGuess' so review surfaces
+  // Lanes made from another lane's ⋮ — Duplicate, Copy region, Split — open
+  // right below it, not at the top where the syncs above put a new layer's
+  // row. Waits until the syncs have given every new lane its row; an entry
+  // whose lane is gone (undone) is dropped.
+  useEffect(() => {
+    const pending = placeLanesAfterRef.current;
+    if (!pending.length || !cueLayersDoc) return;
+    const byId = new Map(cueLayersDoc.layers.map((l) => [l.id, l]));
+    const rowOf = (id: string) => {
+      const l = byId.get(id);
+      return l ? (rowIdForLayer(l) as VizRowId) : null;
+    };
+    const live = pending.filter((e) => byId.has(e.after) && e.ids.every((id) => byId.has(id)));
+    const ready = live.filter((e) => e.ids.every((id) => rowOrder.includes(rowOf(id)!)));
+    placeLanesAfterRef.current = live.filter((e) => !ready.includes(e));
+    if (!ready.length) return;
+    setRowOrder((order) => {
+      let next = order;
+      for (const { after, ids } of ready) {
+        const rows = ids.map((id) => rowOf(id)!);
+        const rest = next.filter((id) => !rows.includes(id));
+        const at = rest.indexOf(rowOf(after)!);
+        if (at >= 0) next = [...rest.slice(0, at + 1), ...rows, ...rest.slice(at + 1)];
+      }
+      return next;
+    });
+  }, [rowOrder, cueLayersDoc, rowIdForLayer]);
+
+  // Mirror the algoOverlays sync for custom-annotation rows. Each `review`
+  // boundary detector gets its own row inserted just after 'autoGuess' so review surfaces
   // stay grouped at the top of the canvas. Newly discovered detectors are also
   // pre-hidden so they don't clutter the canvas until the user opts in via the
-  // Annotations dropdown.
+  // Annotations dropdown — once, the first time this browser meets them; after
+  // that the choice is the annotator's and survives song changes.
   const prevCustomAnnotIdsRef = useRef<Set<string>>(new Set());
+  const seenDetectorRowsRef = useRef<Set<string> | null>(null);
   useEffect(() => {
     const currentIds = new Set(customAnnotationRows.map((r) => r.rowId));
     const prev = prevCustomAnnotIdsRef.current;
@@ -8928,34 +10326,28 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       }
       return next;
     });
+    seenDetectorRowsRef.current ??= new Set(readStoredNames(DETECTOR_SEEN_KEY) ?? []);
+    const seen = seenDetectorRowsRef.current;
+    const met = added.map((r) => r.detectorName).filter((n) => !seen.has(n));
+    if (!met.length) return;
+    for (const n of met) seen.add(n);
+    writeStoredNames(DETECTOR_SEEN_KEY, seen);
     setHiddenCustomAnnotations((prevHidden) => {
-      const removedNames = new Set(
-        removed
-          .map((rowId) => rowId.startsWith('custom-annotation:') ? rowId.slice('custom-annotation:'.length) : null)
-          .filter((n): n is string => !!n),
-      );
       const next = new Set(prevHidden);
-      for (const name of removedNames) next.delete(name);
-      for (const r of added) next.add(r.detectorName);
+      for (const n of met) next.add(n);
       return next;
     });
   }, [customAnnotationRows]);
 
-  // Drag-to-reorder: insert dragged row before target's position.
-  const handleReorderRow = useCallback((draggedId: VizRowId, targetId: VizRowId) => {
+  // Drag-to-reorder. `place` is the side of the target the row lands on; a
+  // band header id moves the whole band. Bands are read from what the canvas
+  // draws (canvasGroups), since that is where the user saw the rows.
+  const canvasRowGroupId = canvasGroups?.rowGroupId;
+  const handleReorderRow = useCallback((draggedId: VizRowId, targetId: VizRowId, place: ReorderPlace = 'before') => {
     if (draggedId === targetId) return;
-    setRowOrder((prev) => {
-      const fromIdx = prev.indexOf(draggedId);
-      const toIdx   = prev.indexOf(targetId);
-      if (fromIdx < 0 || toIdx < 0) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIdx, 1);
-      const insertAt = next.indexOf(targetId);
-      next.splice(insertAt, 0, moved);
-      return next;
-    });
+    setRowOrder((prev) => reorderRow(prev, draggedId, targetId, place, canvasRowGroupId));
     setHasCustomRowOrder(true);
-  }, []);
+  }, [canvasRowGroupId]);
 
   // Row id → that signal's switch. The phone's row sheet swaps and hides rows
   // through it; the SIGNALS menu sets the same switches directly.
@@ -8964,7 +10356,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       waveform: setShowWaveform, eq: setShowEQ, spectrogram: setShowSpectrogram,
       cepstrogram: setShowCepstrogram, chroma: setShowChroma, tempogram: setShowTempogram,
       ssm: setShowSsm, energy: setShowEnergy, brightness: setShowBrightness,
-      novelty: setShowNovelty, onsets: setShowOnsets, flux: setShowFlux,
+      novelty: setShowNovelty, onsets: setShowOnsets, flux: setShowFlux, volume: setShowVolume,
+      density: setShowDensity, busyness: setShowBusyness, bandwidth: setShowBandwidth,
     };
     setters[rowId]?.(shown);
   }, []);
@@ -9052,11 +10445,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       waveform: showWaveform, '3band': showEQ, spectrogram: showSpectrogram,
       cepstrogram: showCepstrogram, energy: showEnergy, brightness: showBrightness,
       novelty: showNovelty, onsets: showOnsets, flux: showFlux, chroma: showChroma,
-      tempogram: showTempogram, ssm: showSsm, beatgrid: showBeatGrid,
+      tempogram: showTempogram, ssm: showSsm, beatgrid: showBeatGrid, volume: showVolume,
+      density: showDensity, busyness: showBusyness, bandwidth: showBandwidth,
     };
     return URL_SIGNALS.filter((k) => on[k]);
   }, [showWaveform, showEQ, showSpectrogram, showCepstrogram, showEnergy, showBrightness,
-      showNovelty, showOnsets, showFlux, showChroma, showTempogram, showSsm, showBeatGrid]);
+      showNovelty, showOnsets, showFlux, showChroma, showTempogram, showSsm, showBeatGrid, showVolume,
+      showDensity, showBusyness, showBandwidth]);
   const shownLayers = useMemo(() => {
     const on: Record<UrlLayer, boolean> = inspecting
       ? {
@@ -9095,8 +10490,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       beatGridUnit, duration, scheduleUrlWrite]);
 
   // The switches that do not depend on the song: applied once, when the first
-  // song has opened — not on mount, because opening a song resets the signal
-  // rows to the Settings defaults and would wipe them. The layer switches are read against the workspace the link was taken in —
+  // song has opened — not on mount, so the song's own load has settled before
+  // the link's picks go on top. The layer switches are read against the workspace the link was taken in —
   // Inspect and the Annotator keep separate ones. The stem lock is applied for
   // this visit only; it is the recipient's saved preference, and a link is
   // not a reason to change their Misc settings behind their back.
@@ -9112,7 +10507,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       setShowEnergy(has('energy')); setShowBrightness(has('brightness'));
       setShowNovelty(has('novelty')); setShowOnsets(has('onsets')); setShowFlux(has('flux'));
       setShowChroma(has('chroma')); setShowTempogram(has('tempogram')); setShowSsm(has('ssm'));
-      setShowBeatGrid(has('beatgrid'));
+      setShowBeatGrid(has('beatgrid')); setShowVolume(has('volume')); setShowDensity(has('density'));
+      setShowBusyness(has('busyness')); setShowBandwidth(has('bandwidth'));
     }
     const lay = urlView.layers;
     if (lay) {
@@ -9192,8 +10588,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     });
   }, [customAnnotationRows, detectorBoundaryLayers]);
 
-  // Same pattern for detectors just run from the Run picker: un-hide each once
-  // its layer exists (after the default-hide effect has had its turn) and open
+  // Same pattern for detectors just run from the Run picker: un-hide each (and
+  // keep it wanted on the next song) once its layer exists (after the default-hide effect has had its turn) and open
   // the Detectors sidebar so the new output is where the user will look.
   useEffect(() => {
     const pending = revealDetectorsPendingRef.current;
@@ -9205,13 +10601,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     const now = [...pending].filter((n) => present.has(n));
     if (!now.length) return;
     for (const n of now) pending.delete(n);
-    setHiddenCustomAnnotations((prev) => {
-      const next = new Set(prev);
-      for (const n of now) next.delete(n);
-      return next;
-    });
+    setDetectorsWanted(now, true);
     setCuratedSidebarCollapsed(false);
-  }, [customAnnotationRows, curatedLayersByStem]);
+  }, [customAnnotationRows, curatedLayersByStem, setCuratedSidebarCollapsed, setDetectorsWanted]);
 
   // The stems a riff boundary node can measure its blocks against, on top of
   // whatever the player itself is loaded with. Whichever stem is already
@@ -9225,12 +10617,44 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       .filter((s) => !!s.url);
   }, [stemManifest, availableStemSources, selectedStemSource]);
 
+  // The drum kit split further, when a separation detector has done it: its
+  // pieces play as a sub-choice of Drums. Re-read whenever the song's stems or
+  // any detector result changes — the split appears on disk when a detector
+  // run finishes, not when the song opens.
+  const [kitManifest, setKitManifest] = useState<KitManifest | null>(null);
+  const [selectedKitPart, setSelectedKitPart] = useState<KitPart | null>(null);
+  const kitParts = useMemo(() => kitPartsFromManifest(kitManifest), [kitManifest]);
+  useEffect(() => {
+    setSelectedKitPart(null);
+  }, [selectedAudio?.id]);
+  useEffect(() => {
+    if (selectedStemSource !== 'drums') setSelectedKitPart(null);
+  }, [selectedStemSource]);
+  useEffect(() => {
+    if (!selectedAudio || !stemManifest?.stems.drums) {
+      setKitManifest(null);
+      return;
+    }
+    let cancelled = false;
+    fetchKitManifest(selectedAudio.url).then((m) => {
+      if (!cancelled) setKitManifest(m);
+    });
+    return () => { cancelled = true; };
+  }, [selectedAudio, stemManifest, customResults]);
+  const playingKitPart = selectedStemSource === 'drums' && selectedKitPart && kitManifest?.parts[selectedKitPart]
+    ? selectedKitPart : null;
+
   const playerUrl = useMemo<string | null>(() => {
     if (!selectedAudio) return null;
     if (selectedStemSource === 'mix') return selectedAudio.url;
+    if (playingKitPart) return kitManifest!.parts[playingKitPart]!;
     const stemUrl = stemManifest?.stems[selectedStemSource];
     return stemUrl ?? selectedAudio.url; // fall back to mix if the chosen stem is missing
-  }, [selectedAudio, selectedStemSource, stemManifest]);
+  }, [selectedAudio, selectedStemSource, stemManifest, playingKitPart, kitManifest]);
+  // Read by the MIR effect (declared far above) to fetch the same audio again
+  // at full quality for the EQ lane; a ref so it needn't be an effect dep.
+  const playerUrlRef = useRef<string | null>(null);
+  playerUrlRef.current = playerUrl;
 
   // ── Render ────────────────────────────────────────────────────────────────
   const pageBg = FEATURE_THEME[feature].pageBg;
@@ -9353,6 +10777,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             title={`Failed: ${error}\n\nFull log in the run panel below the song title.`}
           >
             failed
+          </span>
+        );
+      }
+      if (cached && isGridCutAlgo(id)) {
+        // Say whose beats the saved result was cut at. Picking what to run,
+        // one on the other grid is amber: it will run again on this one.
+        const saved = savedAlgoGrid(savedResultOf(id));
+        const stale = !isVis && saved !== algoGrid;
+        return (
+          <span
+            className={`${stale ? 'text-amber-400/90' : 'text-emerald-500/80'} text-[9px] uppercase tracking-wider whitespace-nowrap`}
+            title={stale
+              ? `Saved on ${saved === 'user' ? 'your grid' : 'its own beats (automatic)'} — runs again on ${algoGrid === 'user' ? 'your grid' : 'its own beats'} if ticked.`
+              : `Saved on ${saved === 'user' ? 'your grid' : 'its own beats (automatic)'}.`}
+          >
+            ✓ {algoGridBadge(saved)}
           </span>
         );
       }
@@ -9580,7 +11020,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         // ── MSAF ──────────────────────────────────────────────────────────
         {
           const ids = ['msaf-sf', 'msaf-foote', 'msaf-cnmf', 'msaf-olda'];
-          const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
+          const missing = ids.filter((id) => !doneOnGrid(id));
           const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
           sections.push({
             key: 'msaf', label: 'MSAF', experimental: false,
@@ -9680,8 +11120,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         // ── Ruptures (CPD) — 19 variants from Truong/Oudre/Vayatis ─────────
         {
           const missing = RUPTURES_METHODS
-            .filter((m) => !rupturesResults[m.suffix])
-            .map((m) => `ruptures-${m.suffix}`);
+            .map((m) => `ruptures-${m.suffix}`)
+            .filter((id) => !doneOnGrid(id));
           const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
           sections.push({
             key: 'ruptures', label: 'Ruptures (CPD)', experimental: false,
@@ -9732,7 +11172,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           extra?: ReactNode,
           desc?: string,
         ) => {
-          const missing = ids.filter((id) => toolStates[id]?.status !== 'done');
+          const missing = ids.filter((id) => !doneOnGrid(id));
           const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
           sections.push({
             key, label: title, experimental: true,
@@ -9797,15 +11237,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         );
         if (settings.experimentalCueExtras && expAvail.cueExtras) pushFamily(
           'cue-extras', 'CUE extras',
-          ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets', 'drum-transients'],
-          { 'basic-pitch': 'basic-pitch', 'librosa-key': 'librosa key', 'autochord-chords': 'autochord', 'librosa-onsets': 'librosa onsets', 'drum-transients': 'drum transients' },
+          ['basic-pitch', 'librosa-key', 'autochord-chords', 'librosa-onsets'],
+          { 'basic-pitch': 'basic-pitch', 'librosa-key': 'librosa key', 'autochord-chords': 'autochord', 'librosa-onsets': 'librosa onsets' },
           undefined,
-          'Musical detail: notes, key, chords, onsets, and drum hits.',
+          'Musical detail: notes, key, chords and onsets.',
         );
-        if (settings.experimentalLyricsFamily && expAvail.lyricsFamily) pushFamily(
+        if (expAvail.lyricsFamily) pushFamily(
           'lyrics', 'LYRICS',
-          ['whisper-base', 'ctc-forced-aligner'],
-          { 'whisper-base': 'Whisper-base', 'ctc-forced-aligner': 'CTC forced aligner' },
+          ['whisper-base', 'ivrit', 'ctc-forced-aligner'],
+          { 'whisper-base': 'Whisper-base', 'ivrit': 'Ivrit', 'ctc-forced-aligner': 'CTC forced aligner' },
           <>
             <div className="flex items-center gap-2 mt-3">
               <label className="text-[11px] text-slate-400 shrink-0">Whisper language</label>
@@ -9906,100 +11346,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           'Discovers recurring melodic / rhythmic patterns (motifs).',
         );
 
-        // ── Custom detectors — Run picker only. Their OUTPUT is shown in the
-        // Detectors sidebar (a detector appears there once it has a result for
-        // this song), never among the visibility families here, so this family
-        // exists solely to compute them. Each detector reads the one stem it
-        // declares, so the "Run on" pill narrows the list to that stem instead
-        // of retargeting it; a detector whose stem this song hasn't had
-        // separated yet is listed but can't be ticked. ────────────────────────
-        if (stacked && !isVis) {
-          const stemTarget = runStemSource !== 'mix' && runStemSource !== 'all' ? runStemSource : null;
-          const dets = customDetectors
-            .filter((d) => d.status === 'ok' && (d.is_algorithm || d.is_annotation))
-            .filter((d) => !stemTarget || d.stem === stemTarget)
-            .sort((a, b) => stemRank(a.stem) - stemRank(b.stem) || (a.label || a.name).localeCompare(b.label || b.name));
-          const needsStem = (d: CustomRegistryEntry) =>
-            d.stem && d.stem !== 'mix' && !stemManifest?.stems?.[d.stem] ? d.stem : null;
-          const isCached = (d: CustomRegistryEntry) => !!customResults[d.name] && !customResults[d.name].fatal;
-          const runnable = dets.filter((d) => !needsStem(d)).map((d) => `custom:${d.name}`);
-          const missing = dets.filter((d) => !needsStem(d) && !isCached(d)).map((d) => `custom:${d.name}`);
-          const canRunMissing = !!selectedAudio && runJob?.status !== 'running' && missing.length > 0;
-          if (dets.length > 0) sections.push({
-            key: 'custom', label: 'Custom', experimental: false,
-            total: dets.length, cached: dets.filter(isCached).length,
-            ids: runnable, visIds: [],
-            render: () => (
-              <>
-                {sectionHeader('Custom', 'text-amber-300/80', null, actionCluster({
-                  missing, canRunMissing, amber: true,
-                  onRun: (toRun) => handleRunMissingForSection(toRun),
-                  onSelectAll: () => updateSelectedAlgorithms((prev) => { const next = new Set(prev); runnable.forEach((id) => next.add(id)); return next; }),
-                  onNone: () => updateSelectedAlgorithms((prev) => { const next = new Set(prev); dets.forEach((d) => next.delete(`custom:${d.name}`)); return next; }),
-                  runTitle: !selectedAudio
-                    ? 'Select a song first.'
-                    : missing.length === 0
-                      ? 'Every custom detector you can run here already has a result for this song.'
-                      : `Run ${missing.length} custom detector${missing.length === 1 ? '' : 's'} that have no result yet for "${selectedAudio.name}".`,
-                }))}
-                <div className="mb-1.5 text-[10px] leading-snug text-slate-500">
-                  Each detector reads its own stem. Results appear in the Detectors sidebar.
-                </div>
-                {groupByDetectorOrigin(dets, (d) => d.is_default).map((group) => (
-                  <div key={group.origin} className="mb-2 last:mb-0">
-                    {group.title && (
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-amber-300/70 font-medium mb-1">{group.title}</div>
-                    )}
-                    {[...new Set(group.items.map((d) => d.stem ?? 'mix'))].map((s) => (
-                      <div key={s} className="mb-1.5 last:mb-0">
-                        <div className="text-[9px] uppercase tracking-[0.16em] text-slate-500 capitalize mb-0.5">{s === 'mix' ? 'Full mix' : s}</div>
-                        <div className={algoRowsCls}>
-                          {group.items.filter((d) => (d.stem ?? 'mix') === s).map((d) => {
-                            const id = `custom:${d.name}`;
-                            const missingStem = needsStem(d);
-                            const cached = isCached(d);
-                            const running = customRunning.has(d.name);
-                            const fatal = customResults[d.name]?.fatal;
-                            const checked = selectedAlgorithms.has(id);
-                            const pill = missingStem ? (
-                              <span className="text-slate-600 text-[9px] uppercase tracking-wider cursor-help" title={`Needs the ${missingStem} stem, which this song hasn't had separated yet. Separate stems (Demucs) first.`}>
-                                needs {missingStem}
-                              </span>
-                            ) : running ? (
-                              <span className="text-amber-300 text-[9px] uppercase tracking-wider animate-pulse">running</span>
-                            ) : fatal ? (
-                              <span className="text-red-400 text-[9px] uppercase tracking-wider cursor-help" title={`Failed: ${fatal.message}`}>failed</span>
-                            ) : renderStatusPill(id, cached);
-                            return (
-                              <label
-                                key={id}
-                                title={d.description || undefined}
-                                className={`flex items-center gap-1.5 select-none ${missingStem ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
-                              >
-                                <input type="checkbox" checked={checked} disabled={!!missingStem} onChange={() => toggleAlgorithm(id)} className={`${accent.checkbox} disabled:cursor-not-allowed`} />
-                                <span className={`min-w-0 truncate ${checked ? 'text-slate-200' : 'text-slate-600'}`}>{d.label || d.name}</span>
-                                {pill}
-                                {cached && !running && runJob?.status !== 'running' && (
-                                  <button
-                                    onClick={(e) => { e.preventDefault(); handleForceRunForSection([id]); }}
-                                    className="shrink-0 text-slate-600 hover:text-amber-300 transition-colors text-[10px] leading-none"
-                                    title={`Re-run ${d.label || d.name} (overrides the cached result)`}
-                                  >
-                                    ↻
-                                  </button>
-                                )}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </>
-            ),
-          });
-        }
+        // Custom detectors are not here: they are listed, run and tuned in the
+        // Detectors sidebar, one row each (see DetectorSidebarRow).
 
         if (sections.length === 0) return null;
         // Every chip the user has toggled open, in panel order. Several can be
@@ -10023,7 +11371,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         };
         return (
           <div className="space-y-1.5">
-            <nav aria-label="Algorithm families" className={stacked ? 'grid grid-cols-2 gap-1' : 'grid grid-cols-4 gap-1'}>
+            <nav aria-label="Algorithm families" className={stacked ? 'grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1' : 'grid grid-cols-4 gap-1'}>
               {sections.map((s) => {
                 const open = expandedAlgoTypes.has(s.key);
                 // Under an active stem filter, the chip's "available" count is
@@ -10038,7 +11386,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   ? (stemCapableFamily
                       ? `${layerCount} of ${s.total} have a ${inspectStemFilter}-stem result — click to ${open ? 'collapse' : 'expand'}`
                       : `${s.label} runs on the full mix only — no ${inspectStemFilter}-stem output`)
-                  : `${s.cached} of ${s.total} cached — click to ${open ? 'collapse + deselect all' : 'expand + select all'}`;
+                  : `${s.label}: ${s.cached} of ${s.total} cached — click to ${open ? 'collapse + deselect all' : 'expand + select all'}`;
                 return (
                   <AnnotationTypeChip
                     key={s.key}
@@ -10122,6 +11470,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       showChroma={showChroma}       onToggleChroma={setShowChroma}
       showTempogram={showTempogram} onToggleTempogram={setShowTempogram}
       showSsm={showSsm}             onToggleSsm={setShowSsm}
+      showVolume={showVolume}       onToggleVolume={setShowVolume}
+      showDensity={showDensity}     onToggleDensity={setShowDensity}
+      showBusyness={showBusyness}   onToggleBusyness={setShowBusyness}
+      showBandwidth={showBandwidth} onToggleBandwidth={setShowBandwidth}
       showEnergy={showEnergy}       onToggleEnergy={setShowEnergy}
       showBrightness={showBrightness} onToggleBrightness={setShowBrightness}
       showNovelty={showNovelty}     onToggleNovelty={setShowNovelty}
@@ -10149,6 +11501,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
       onGridLineThicknessChange={setGridLineThickness}
       gridThicknessAdaptive={gridThicknessAdaptive}
       onGridThicknessAdaptiveChange={setGridThicknessAdaptive}
+      numberEveryGridLine={numberEveryGridLine}
+      onNumberEveryGridLineChange={setNumberEveryGridLine}
       effectiveGridLineThickness={effectiveGridLineThickness}
       zoomFactor={vizZoomFactor}
       atMaxZoom={vizAtMaxZoom}
@@ -10243,7 +11597,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
         }), { skipHistory: true });
       }}
-      loopLayerOptions={settings.experimentalLoopsAndPatterns ? [
+      loopLayerOptions={[
         ...ownWorkspaceLayers(loopLayers).map((l) => ({
           id: l.id, label: l.name, color: l.color,
           visible: l.visible,
@@ -10257,7 +11611,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
           count: l.items.length,
         })) : []),
-      ] : undefined}
+      ]}
       onToggleLoopLayerVisibility={(layerId) => {
         const detector = detectorLoopLayers.find((l) => l.id === layerId);
         if (detector) {
@@ -10269,7 +11623,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
         }), { skipHistory: true });
       }}
-      lyricsLayerOptions={settings.experimentalLyricsFamily ? [
+      lyricsLayerOptions={[
         ...ownWorkspaceLayers(lyricsLayers).map((l) => ({
           id: l.id, label: l.name, color: l.color,
           visible: l.visible,
@@ -10283,7 +11637,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           visible: !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length)),
           count: l.items.length,
         })) : []),
-      ] : undefined}
+      ]}
       onToggleLyricsLayerVisibility={(layerId) => {
         const detector = detectorLyricsLayers.find((l) => l.id === layerId);
         if (detector) {
@@ -10295,11 +11649,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           layers: d.layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l)),
         }), { skipHistory: true });
       }}
-      riffPatternLayerOptions={settings.experimentalLoopsAndPatterns ? ownWorkspaceLayers(riffPatternLayers).map((l) => ({
+      riffPatternLayerOptions={ownWorkspaceLayers(riffPatternLayers).map((l) => ({
         id: l.id, label: l.name, color: l.color,
         visible: l.visible,
         count: l.items.length,
-      })) : undefined}
+      }))}
       onToggleRiffPatternLayerVisibility={(layerId) => {
         setCueLayersDoc((d) => d && ({
           ...d,
@@ -10309,14 +11663,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
     />
   );
 
-  return (
+  // Everything under the page reads the playhead from this clock rather
+  // than a prop, so a tick moves the cursors without re-rendering the page.
+  const page = (
     <div className={`min-h-screen text-slate-200 transition-colors duration-300 ${pageBg}`}>
       {/* ── Grid Lock modals ─────────────────────────────────────────────── */}
       {showNoBpmModal && <NoBpmModal onClose={() => setShowNoBpmModal(false)} />}
       {showGridLockModal && (
         <GridLockModal
-          snapCount={countSnappable()}
-          unitLabel={beatGridUnitLabel(showBeatGrid && beatGridUnit ? beatGridUnit : 'beat')}
+          moves={gridLockMoves ?? { boundaries: [], loops: [], spans: [], 'riff-patterns': [] }}
+          unitLabel={beatGridUnitLabel(gridLockUnit)}
           onConfirm={confirmGridLock}
           onCancel={() => setShowGridLockModal(false)}
         />
@@ -10450,16 +11806,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {(mode === 'song' || mode === 'prep') && sidebarCollapsed && !isMobile && (
           // In-layout rail (not a floating tab): occupies its own slim column
           // at the start of the flex row, so it can never overlap the song title.
-          <aside className="shrink-0 tc-aside self-start border-r border-white/[0.10] bg-[#14171d]/80 backdrop-blur-sm">
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              title="Show songs"
-              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
-            >
-              <span className="text-xl leading-none font-bold">›</span>
-              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Songs</span>
-            </button>
-          </aside>
+          <CollapsedSidebarRail side="left" label="Songs" title="Show songs" onExpand={() => setSidebarCollapsed(false)} />
         )}
         {(mode === 'song' || mode === 'prep') && (!sidebarCollapsed || mobilePanel === 'songs') && (
           <aside
@@ -10492,17 +11839,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               const { files, sawNestedFolder } = await walkDataTransferItems(e.dataTransfer.items);
               void handleUploadFiles(files, { sawNestedFolder });
             }}
-            className={`shrink-0 tc-aside self-start border-r ${sidebarDragActive ? 'border-emerald-400/50 bg-emerald-500/[0.04]' : 'border-white/[0.10] bg-[#14171d]/80'} backdrop-blur-sm flex flex-col relative transition-colors`}
+            className={`shrink-0 tc-aside self-start border-r ${sidebarDragActive ? 'border-emerald-400/50 bg-emerald-500/[0.04]' : 'border-white/[0.10] bg-[#14171d]/80'} flex flex-col relative transition-colors`}
           >
-            <div
-              data-resize-handle
-              onMouseDown={startSidebarResize}
-              onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
-              title="Drag to resize · double-click to reset"
-              className={`absolute top-0 right-0 h-full w-1.5 -mr-0.5 cursor-col-resize z-20 group ${sidebarResizing ? 'bg-sky-500/40' : 'hover:bg-sky-500/30'} transition-colors`}
-            >
-              <div className={`absolute top-0 right-0 h-full w-px ${sidebarResizing ? 'bg-sky-400' : 'bg-transparent group-hover:bg-sky-400/60'}`} />
-            </div>
+            <SidebarResizeHandle sidebar={songSidebar} />
             <>
                 <div className="flex items-center justify-between px-3 h-9 border-b border-white/[0.05] shrink-0">
                   <span className="flex items-baseline gap-2">
@@ -10562,7 +11901,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       <button
                         onClick={() => setImportDatasetOpen(true)}
                         disabled={uploading}
-                        title="Import a full dataset folder — audio, song-info, annotations, and stems are detected and uploaded together."
+                        title="Import a dataset folder — audio, song-info, annotations, and stems are detected and uploaded together. Pick an unpacked server backup to restore all of it exactly."
                         className="w-full px-2 py-1.5 rounded text-[11px] uppercase tracking-wider text-slate-400 hover:text-emerald-200 hover:bg-emerald-500/10 border border-white/[0.04] hover:border-emerald-500/30 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
                       >
                         <span>⤒</span><span>Import dataset</span>
@@ -10683,7 +12022,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                             onClick={() => toggleSongGroup(songGroup.key)}
                             aria-expanded={!groupFolded}
                             title={`${groupFolded ? 'Show' : 'Hide'} the ${songGroup.songs.length} song${songGroup.songs.length === 1 ? '' : 's'} ${songGroupMode === 'artist' ? 'by' : 'under'} ${songGroup.label}`}
-                            className={`sticky top-0 z-10 w-full flex items-center gap-1.5 px-3 py-1 text-left bg-[#14171d]/95 backdrop-blur-sm border-y border-white/[0.05] transition-colors hover:bg-white/[0.05] ${
+                            className={`sticky top-0 z-10 w-full flex items-center gap-1.5 px-3 py-1 text-left bg-[#14171d]/95 border-y border-white/[0.05] transition-colors hover:bg-white/[0.05] ${
                               groupHoldsSelection ? 'text-violet-300/90' : 'text-slate-400'
                             }`}
                           >
@@ -10734,7 +12073,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     const { tracks, manualTracks, autoTracks, manualReviewedCount, overall } = deriveSongTracks({
                       layerSummary: songLayerStatuses[a.id],
                       autoGuess: status,
-                      includeLoopsAndPatterns: settings.experimentalLoopsAndPatterns,
                     });
                     const overallTitle =
                       overall === 'none'
@@ -10754,8 +12092,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     const readyTitle = ready
                       ? 'Ready for annotation: BPM and grid are locked.'
                       : hasBpm
-                        ? 'BPM set but grid is not locked yet — open Dataset Prep to lock it.'
-                        : 'No BPM set — open Dataset Prep to detect or enter one.';
+                        ? 'BPM set but grid is not locked yet — open Prepare to lock it.'
+                        : 'No BPM set — open Prepare to detect or enter one.';
                     const readyColor = ready
                       ? 'text-emerald-400'
                       : hasBpm
@@ -10784,6 +12122,32 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         `  Audio         ${formatBytes(songStorage.audio)}`
                       : a.name;
                     const actionsOpen = actionsOpenSlug === a.id;
+                    // Stems + disk use are reference facts, not something to
+                    // scan the list for, so the row doesn't show them — they
+                    // sit at the foot of the status-dot popover. A running or
+                    // queued job says so there, so it never claims "none" for
+                    // a song that is being stemmed right now.
+                    const stemCount = a.stems?.length ?? 0;
+                    const stemRunning = demucsJob?.slug === a.id && demucsJob.status === 'running';
+                    const stemQueued = !stemRunning && stemQueue.some((q) => q.id === a.id);
+                    const stemSummary = stemRunning
+                      ? `stemming${demucsJob?.progressPct != null ? ` ${Math.round(demucsJob.progressPct)}%` : '…'}`
+                      : stemQueued
+                        ? 'queued'
+                        : stemCount > 0
+                          ? `${stemCount} stems`
+                          : 'none — needs stemming';
+                    const stemSummaryCls = stemRunning || stemQueued
+                      ? 'text-violet-300'
+                      : stemCount > 0 ? 'text-slate-300' : 'text-amber-300';
+                    const showDisk = (mode === 'prep' || feature === 'inspect-song') && !!songStorage;
+                    const diskBytes = songStorage?.totalBytes ?? 0;
+                    const GB = 1024 ** 3;
+                    const diskCls =
+                      diskBytes >= 5 * GB ? 'text-red-400/90' :
+                      diskBytes >= 2 * GB ? 'text-amber-300/90' :
+                      diskBytes >= 1 * GB ? 'text-cyan-300/80' :
+                                            'text-slate-300';
                     const activate = () => {
                       // Annotator Tool requires a BPM-locked grid to snap to.
                       // If the row's song has no BPM yet, surface a warning
@@ -10834,8 +12198,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                               head count, not a status: it says nothing about
                               whether the song is shared — two annotators each
                               keeping their own copy is the ordinary case. */}
+                          {/* Under a "Shared with the team" heading the SHARED
+                              pill is the heading repeated on every row, so it
+                              is dropped, the way the artist is under an artist
+                              heading. (Under "Who else annotated" that heading
+                              only exists once the head counts have loaded.)
+                              The annotator count stays off too: a shared song
+                              is one team document. */}
                           {isCollaborative ? (
-                            <span
+                            !(showSongGroupHeadings && (songGroupMode === 'collaborative' || (songGroupMode === 'sharing' && songSharing.state === 'ready'))) && <span
                               title="Shared song — one team annotation, edited by one person at a time"
                               className={`shrink-0 rounded border border-emerald-400/30 bg-emerald-400/10 px-1 py-[1px] font-mono text-[9px] leading-none tracking-[0.08em] text-emerald-300/90 transition-opacity ${actionsOpen ? 'opacity-40' : ''}`}
                             >
@@ -10907,8 +12278,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                               Dataset Prep included. It used to be dropped there
                               to keep the rows compact, which left the one screen
                               you prepare a corpus on unable to answer "what have
-                              I already annotated?" — so it sits beside the disk
-                              total rather than instead of it. */}
+                              I already annotated?" Its popover also carries the
+                              song's stems and disk use, which used to sit on
+                              the row itself. */}
                           <span className={`relative flex items-center gap-1 transition-opacity ${actionsOpen ? 'opacity-40' : ''}`}>
                             <button
                               type="button"
@@ -11039,39 +12411,31 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                                     </>
                                   );
                                 })()}
+                                <div className="mt-1 border-t border-white/5 pt-1">
+                                  <div className="px-3 pt-1 pb-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-600">
+                                    song
+                                  </div>
+                                  <div
+                                    className="flex items-center gap-2 px-3 py-1"
+                                    title={stemCount > 0 && !stemRunning && !stemQueued
+                                      ? a.stems!.join(', ')
+                                      : stemCount === 0 && !stemRunning && !stemQueued
+                                        ? 'Not separated yet — Prepare → Stem this song'
+                                        : undefined}
+                                  >
+                                    <span className="text-slate-400 flex-1">Stems</span>
+                                    <span className={`text-[10px] ${stemSummaryCls}`}>{stemSummary}</span>
+                                  </div>
+                                  {showDisk && (
+                                    <div className="flex items-center gap-2 px-3 py-1" title={rowTitle}>
+                                      <span className="text-slate-400 flex-1">Disk</span>
+                                      <span className={`text-[10px] tabular-nums ${diskCls}`}>{formatBytes(diskBytes)}</span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             )}
                           </span>
-                          {/* /prep and Algorithm Inspect add a single neutral
-                              disk total — stems + algos + annotations + audio —
-                              beside the status dot. The full breakdown lives
-                              inside the ⌫ dialog. Color tiers
-                              draw attention to rows that are eating disk:
-                                < 1 GB  → slate (KB/MB stay quiet)
-                                ≥ 1 GB  → cyan  (notable; usually means stems)
-                                ≥ 2 GB  → amber (review whether to clear)
-                                ≥ 5 GB  → red   (almost certainly cruft)
-                              Also surfaced in Algorithm Inspect (alongside the
-                              status LEDs), where disk-cost per song matters
-                              for deciding what to re-run vs. evict. */}
-                          {(mode === 'prep' || feature === 'inspect-song') && (() => {
-                            const bytes = songStorage?.totalBytes ?? 0;
-                            const GB = 1024 ** 3;
-                            const tone =
-                              bytes >= 5 * GB ? 'text-red-400/90' :
-                              bytes >= 2 * GB ? 'text-amber-300/90' :
-                              bytes >= 1 * GB ? 'text-cyan-300/80' :
-                                                'text-slate-400';
-                            return (
-                              <span
-                                title={rowTitle}
-                                className={`text-[10px] font-mono tabular-nums ${tone} transition-opacity ${actionsOpen ? 'opacity-40' : ''}`}
-                              >
-                                {formatBytes(bytes)}
-                              </span>
-                            );
-                          })()
-                          }
                           {actionsOpen && mode !== 'prep' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); setPendingCacheClear(a.id); }}
@@ -11191,35 +12555,35 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
              for. Dismissed per-workspace via localStorage (see InfoBanner). */}
         {feature === 'prep' && (
           bpm ? (
-            <InfoBanner id="prep.v4" title="Dataset Prep" accent="emerald">
+            <InfoBanner id="prep.v4" title="Prepare" accent="emerald">
               <strong>This song already has a BPM set</strong> ({Math.round(bpm)} BPM).
               You can fine-tune it or re-align the <strong>grid</strong> in the
               <strong> Song setup sidebar on the right</strong> —
               adjust the BPM, nudge the offset, or switch tempo mode
               (<strong>Steady / Mapped / Hand-placed</strong>). When you're happy with it,
-              move on to the <strong>Annotator Tool</strong> tab above.
+              move on to the <strong>Annotate</strong> tab above.
             </InfoBanner>
           ) : (
-            <InfoBanner id="prep.v4" title="Dataset Prep" accent="emerald">
+            <InfoBanner id="prep.v4" title="Prepare" accent="emerald">
               Set <strong>BPM</strong> and align the <strong>grid</strong> for this
               song in the <strong>Song setup sidebar on the right</strong>. Under
               <strong> Tempo</strong>, pick a mode (<strong>Steady / Mapped / Hand-placed</strong>),
               then apply a <strong>detected</strong> BPM chip,
               type one in manually, or tap along under <strong>Check by ear</strong>. Once every song
-              has a BPM, move on to the <strong>Annotator Tool</strong> tab above.
+              has a BPM, move on to the <strong>Annotate</strong> tab above.
             </InfoBanner>
           )
         )}
         {feature === 'annotate' && (
           !bpm ? (
-            <InfoBanner id="annotate.v4" title="Annotator Tool" accent="cyan">
-              <strong>Set this song's BPM and grid in Dataset Prep first</strong> —
+            <InfoBanner id="annotate.v4" title="Annotate" accent="cyan">
+              <strong>Set this song's BPM and grid in Prepare first</strong> —
               boundaries and cues snap to the grid, so annotating before a tempo
-              is locked won't line up. Open the <strong>Dataset Prep</strong> tab
+              is locked won't line up. Open the <strong>Prepare</strong> tab
               above, then come back here.
             </InfoBanner>
           ) : (
-            <InfoBanner id="annotate.v4" title="Annotator Tool" accent="cyan">
+            <InfoBanner id="annotate.v4" title="Annotate" accent="cyan">
               Mark the song with <strong>boundaries</strong> (non-overlapping
               sections), <strong>cues</strong> (single point events),
               <strong> spans</strong> (ranged regions that may overlap),
@@ -11235,19 +12599,19 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           )
         )}
         {feature === 'inspect-song' && (
-          <InfoBanner id="inspect-song.v2" title="Algorithm Inspect — per song" accent="violet">
+          <InfoBanner id="inspect-song.v2" title="Inspect — per song" accent="violet">
             Tick the algorithms you want in the <strong>right sidebar</strong> and
             hit <strong>Run</strong> — each prediction stacks as a colored timeline
             on the waveform, scored against your <strong>manual annotation</strong>
             (F1 / precision / recall) in the panel <strong>below the
             visualization</strong>. No manual annotation yet? Add one in the
-            <strong> Annotator Tool</strong> first so there's a ground truth to
+            <strong> Annotate</strong> tab first so there's a ground truth to
             compare against. Switch to <strong>All songs</strong> (tab just under
             this banner) for dataset-wide totals.
           </InfoBanner>
         )}
         {feature === 'inspect-all' && (
-          <InfoBanner id="inspect-all.v2" title="Algorithm Inspect — all songs" accent="violet">
+          <InfoBanner id="inspect-all.v2" title="Inspect — all songs" accent="violet">
             Choose algorithms via the <strong>⚙ options</strong> button at the top,
             then <strong>Batch run</strong> to evaluate every song at once. The
             aggregate <strong>F1 / precision / recall</strong> table appears below,
@@ -11402,7 +12766,23 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             null;
 
           return (
-            <div className="rounded-md border border-white/[0.06] bg-[#14171d]/80 p-3 space-y-2">
+            <div
+              ref={runJobBoxRef}
+              data-run-status={runJob.status}
+              className={`rounded-md border bg-[#14171d]/80 p-3 space-y-2 scroll-mt-[calc(var(--tc-header-h)+12px)] transition-colors ${
+                runJobFlash ? 'tc-run-flash' : ''
+              } ${
+                runJobFlash === 'error'   ? 'border-red-400/60' :
+                runJobFlash === 'done'    ? 'border-emerald-400/60' :
+                runJobFlash               ? 'border-amber-400/60' :
+                runJob.status === 'error' ? 'border-red-400/40' :
+                                            'border-white/[0.06]'
+              }`}
+              style={runJobFlash ? { ['--tc-flash' as string]:
+                runJobFlash === 'error' ? 'rgba(248,113,113,0.55)' :
+                runJobFlash === 'done'  ? 'rgba(52,211,153,0.5)' :
+                                          'rgba(251,191,36,0.5)' } : undefined}
+            >
               <div className="flex items-center gap-1.5 flex-wrap">
                 {sections.length > 0
                   ? sections.map((s, idx) => <SectionPill key={idx} section={s} />)
@@ -11413,7 +12793,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 {summary && (
                   <span className={`text-[10px] font-mono ${summary.color} ml-1`}>{summary.text}</span>
                 )}
-                {runJob.status === 'running' && (
+                {runJob.status === 'running' && runJob.jobId !== DETECTOR_LOG_JOB && (
                   <button
                     onClick={handleStopJob}
                     className="ml-auto text-[10px] px-2 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 shrink-0 transition-colors"
@@ -11424,7 +12804,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <button
                   onClick={() => navigator.clipboard.writeText(logs || '(starting…)')}
                   title="Copy output"
-                  className={`text-[10px] text-slate-600 hover:text-slate-300 shrink-0 transition-colors ${runJob.status !== 'running' ? 'ml-auto' : ''}`}
+                  className={`text-[10px] text-slate-600 hover:text-slate-300 shrink-0 transition-colors ${runJob.status !== 'running' || runJob.jobId === DETECTOR_LOG_JOB ? 'ml-auto' : ''}`}
                 >
                   ⎘ Copy
                 </button>
@@ -11454,11 +12834,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {/* Song-specific viz */}
         {selectedAudio && (
           <>
-            <div ref={headerBarRef} data-mobile-timeline className={`sticky top-[var(--tc-header-h)] z-50 ${isMobile ? '-mx-2 px-2' : '-mx-4 px-4'} py-2 bg-[#0a0b0d]/95 backdrop-blur space-y-2`}>
+            {/* data-songbar: the viz panel's time ruler finds this header and
+                pins itself under it (see rulerPinRef in SharedVizPanel). */}
+            <div ref={headerBarRef} data-songbar data-mobile-timeline className={`sticky top-[var(--tc-header-h)] z-50 grid pointer-events-none ${isMobile ? '-mx-2' : '-mx-4'}`}>
               {/* Slim transport — shown once the waveform player scrolls up
                   under the header. One-line title + play/stop + time only;
-                  the waveform and BPM tag fall away for a compact look. */}
-              {headerCollapsed && (() => {
+                  the waveform and BPM tag fall away for a compact look.
+                  Always mounted; `data-off` is toggled on the DOM by
+                  styleForCollapse, never by a render (see there). */}
+              <div ref={slimHeaderRef} data-swap data-off="" className={`self-start ${isMobile ? 'px-2' : 'px-4'} py-2 bg-[#0a0b0d] pointer-events-auto`}>
+              {(() => {
                 const { title, artist } = splitDisplayName(
                   selectedAudio.name ?? '',
                   { title: songInfo?.title ?? selectedAudio.title,
@@ -11470,9 +12855,34 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   const ss = Math.floor(s % 60).toString().padStart(2, '0');
                   return `${m}:${ss}`;
                 };
+                const slimBtn = 'w-7 h-7 rounded flex items-center justify-center transition-colors bg-white/[0.04] hover:bg-white/[0.10] text-slate-300';
+                const skipBy = (dt: number) => {
+                  if (duration <= 0) return;
+                  const now = getTimeRef.current?.() ?? 0;
+                  seekRef.current?.(Math.max(0, Math.min(duration, now + dt)));
+                };
                 return (
                   <div className="flex flex-wrap items-center gap-3 min-w-0">
                     <div className="flex items-center gap-1 shrink-0">
+                      {/* Same order and glyphs as the full player's transport:
+                          jump-to-start · skip back · play/pause · skip forward
+                          · jump-to-end, then stop. */}
+                      <button
+                        onClick={() => seekRef.current?.(0)}
+                        aria-label="Jump to start"
+                        title="Jump to start (Home)"
+                        className={slimBtn}
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="4" width="2" height="16" rx="1" /><polygon points="20,4 20,20 8,12" /></svg>
+                      </button>
+                      <button
+                        onClick={() => skipBy(-2)}
+                        aria-label="Skip back 2 seconds"
+                        title="Skip back 2 s (←)"
+                        className={slimBtn}
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><polygon points="11,5 11,19 2,12" /><polygon points="22,5 22,19 13,12" /></svg>
+                      </button>
                       <button
                         onClick={handleTogglePlay}
                         aria-label={playerIsPlaying ? 'Pause' : 'Play'}
@@ -11486,6 +12896,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         )}
                       </button>
                       <button
+                        onClick={() => skipBy(2)}
+                        aria-label="Skip forward 2 seconds"
+                        title="Skip forward 2 s (→)"
+                        className={slimBtn}
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><polygon points="2,5 2,19 11,12" /><polygon points="13,5 13,19 22,12" /></svg>
+                      </button>
+                      <button
+                        onClick={() => { if (duration > 0) seekRef.current?.(duration); }}
+                        aria-label="Jump to end"
+                        title="Jump to end (End)"
+                        className={slimBtn}
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><polygon points="4,4 4,20 16,12" /><rect x="17" y="4" width="2" height="16" rx="1" /></svg>
+                      </button>
+                      <button
                         onClick={() => { pauseRef.current?.(); seekRef.current?.(0); }}
                         aria-label="Stop"
                         title="Stop (return to start)"
@@ -11494,23 +12920,18 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5" /></svg>
                       </button>
                     </div>
-                    <span className="font-mono text-[11px] text-slate-300 tabular-nums shrink-0 flex flex-col leading-tight">
-                      <span>
-                        {fmt(playerTime)}<span className="text-slate-600 mx-0.5">/</span><span className="text-slate-500">{fmt(duration)}</span>
-                      </span>
-                      {bpm && bpm > 20 && (() => {
+                    <TransportReadout
+                      duration={duration}
+                      format={fmt}
+                      beatLabel={bpm && bpm > 20 ? (t) => {
                         const { bar, beat } = formatBeatPosition(
-                          playerTime, bpm, songInfo?.gridOffset ?? 0,
+                          t, bpm, songInfo?.gridOffset ?? 0,
                           beatsPerBarFromTimeSignature(songInfo?.timeSignature),
                           settings.barBeatOrigin,
                         );
-                        return (
-                          <span className="text-[9px] text-amber-400/80 leading-none mt-0.5">
-                            Bar {bar} · Beat {beat}
-                          </span>
-                        );
-                      })()}
-                    </span>
+                        return `Bar ${bar} · Beat ${beat}`;
+                      } : undefined}
+                    />
                     {/* flex-1 (0 basis): the title soaks up whatever width is
                         left on its line and truncates, instead of pushing the
                         controls out of the column. */}
@@ -11525,13 +12946,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         Not shrink-0: the column is bounded by the Detectors /
                         Annotate sidebars, and an unshrinkable row spills across
                         them instead of staying inside it. */}
-                    <div className="ml-auto min-w-0">
+                    <div className="ml-auto min-w-0 flex items-center gap-2">
+                      <StemSourceSelect
+                        value={selectedStemSource}
+                        available={availableStemSources}
+                        onChange={pickPlayerStem}
+                        kitParts={kitParts}
+                        kitPart={playingKitPart}
+                        onKitPartChange={setSelectedKitPart}
+                      />
                       {renderVizControlBar(true)}
                     </div>
                   </div>
                 );
               })()}
-              {!headerCollapsed && (<>
+              </div>
+              <div ref={fullHeaderRef} data-swap className={`${isMobile ? 'px-2' : 'px-4'} py-2 bg-[#0a0b0d] pointer-events-auto space-y-2`}>
               {/* On a phone the top bar already names the song. */}
               <div className={`flex items-center justify-between gap-3 ${isMobile ? 'hidden' : ''}`}>
                 {/* Material-style title block: the song title reads big and
@@ -11555,8 +12985,56 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     );
                   })()}
                 </div>
+                {/* A per-annotator song only offers the admin a way to turn
+                    collaboration on — one line of text and a button, so it
+                    rides on the title row instead of taking a row of its own
+                    between the title and the viz controls. It shows in every
+                    workspace — whether a song is shared is the song's
+                    setting, not the Annotator's. A shared song's lease bar is
+                    the answer to "why can't I edit?" and keeps its full row
+                    below, in the Annotator where the lock governs edits. */}
+                <div className="shrink-0 flex items-center gap-2">
+                {selectedAudio && !annotationLock.shared && !!adminStatus?.isAdmin && (
+                  <div className="shrink-0">
+                    <AnnotationLockBar
+                      slug={selectedAudio.id}
+                      shared={annotationLock.shared}
+                      isAdmin={!!adminStatus?.isAdmin}
+                      lock={annotationLock.lock}
+                      stance={annotationLock.stance}
+                      busy={annotationLock.busy}
+                      error={annotationLock.error}
+                      youAre={annotationLock.youAre}
+                      hasUnsavedEdits={blockedByLock}
+                      onDocumentReplaced={() => {
+                        void annotationLock.refresh();
+                        if (selectedAudio) selectAudio(selectedAudio);
+                      }}
+                      onTake={() => { void annotationLock.takeLock(); }}
+                      onRelease={() => { void annotationLock.releaseLock(); }}
+                      onTakeOver={() => { void annotationLock.takeOver(); }}
+                    />
+                  </div>
+                )}
+                {/* Deleting a song sits on its title, so nobody has to know
+                    that a sidebar row opens hidden actions. Dataset Prep only,
+                    beside Upload: adding and removing songs live together, and
+                    the annotating workspaces carry no way to lose a song. */}
+                {selectedAudio && mode === 'prep' && !!adminStatus?.isAdmin && !isDemo && (
+                  <button
+                    onClick={() => setPendingSongDelete(selectedAudio)}
+                    title="Permanently delete this song from the dataset (asks you to type DELETE_SONG)"
+                    className="h-8 px-3 inline-flex items-center gap-1.5 text-[12px] font-medium rounded-md border border-red-400/40 text-red-300 hover:bg-red-500/15 hover:border-red-400/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60 transition-colors"
+                  >
+                    <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 6.8v4.4M9.2 6.8v4.4" />
+                    </svg>
+                    Delete song
+                  </button>
+                )}
+                </div>
               </div>
-              {feature === 'annotate' && selectedAudio && (annotationLock.shared || !!adminStatus?.isAdmin) && (
+              {selectedAudio && ((feature === 'annotate' && annotationLock.shared) || (!annotationLock.shared && isMobile && !!adminStatus?.isAdmin)) && (
                 <AnnotationLockBar
                   slug={selectedAudio.id}
                   shared={annotationLock.shared}
@@ -11576,12 +13054,43 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   onTakeOver={() => { void annotationLock.takeOver(); }}
                 />
               )}
+              {selectedAudio && feature === 'annotate' && !annotationLock.shared && (
+                <AfterSharedBar
+                  key={selectedAudio.id}
+                  slug={selectedAudio.id}
+                  onDocumentReplaced={() => { if (selectedAudio) selectAudio(selectedAudio); }}
+                />
+              )}
+              {/* Saving is refused, not silent: a page that kept writing here
+                  would replace the layers another tab saved, or — after a
+                  failed load — every layer in the file. */}
+              {selectedAudio && layersSyncProblem && (
+                <div
+                  role="alert"
+                  className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-100"
+                >
+                  <span className="min-w-0 flex-1">
+                    {layersSyncProblem === 'conflict'
+                      ? 'This song\u2019s layers were saved from another tab or window after you opened them here. Changes on this page are not being saved, so they can\u2019t overwrite those.'
+                      : 'This song\u2019s layers didn\u2019t load, so nothing here is being saved \u2014 saving now could erase them.'}
+                  </span>
+                  <button
+                    onClick={() => selectAudio(selectedAudio)}
+                    title={layersSyncProblem === 'conflict'
+                      ? 'Load the saved layers; changes made on this page since are dropped'
+                      : 'Try loading the layers again'}
+                    className="h-8 px-3 shrink-0 rounded-md border border-amber-300/60 font-medium text-amber-50 hover:bg-amber-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70"
+                  >
+                    {layersSyncProblem === 'conflict' ? 'Load the saved version' : 'Try again'}
+                  </button>
+                </div>
+              )}
               <div className="flex flex-wrap items-start gap-2">
                 <div className="flex-1 min-w-0">
                   {renderVizControlBar(false)}
                 </div>
               </div>
-              </>)}
+              </div>
             </div>
 
             {/* Run options panel — opens below the control bar when ⚙ is on */}
@@ -11589,10 +13098,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             <div ref={playerWrapRef} data-mobile-timeline>
             <SharedVizPanel
               playerUrl={playerUrl}
+              songOverviewAlways={feature === 'annotate'}
               trackName={selectedAudio.name}
               audioBuffer={audioBuffer}
               duration={duration}
-              currentTime={playerTime}
               getTimeRef={getTimeRef}
               externalTimeRef={externalTimeRef}
               bpm={bpm}
@@ -11607,6 +13116,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               // The lane is the DataPrep editing surface; other workspaces
               // read the segmented grid but never reshape it.
               showGridSegmentLane={feature === 'prep' && gridMapActive}
+              gridVisualizable={feature === 'prep'}
               selectedSegmentId={selectedSegmentId}
               // The chip on the cut bar, not the lane highlight: it goes up
               // with the segment's editor and comes down with it. The lane
@@ -11641,6 +13151,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               stemSource={selectedStemSource}
               availableStemSources={availableStemSources}
               onStemSourceChange={pickPlayerStem}
+              kitParts={kitParts}
+              kitPart={playingKitPart}
+              onKitPartChange={setSelectedKitPart}
               onRunStems={feature === 'prep' && selectedAudio && !isDemo ? () => handleStemSong(selectedAudio, { model: stemModel }) : undefined}
               stemModel={stemModel}
               onStemModelChange={setStemModel}
@@ -11670,6 +13183,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 : undefined}
               onGridOffsetChange={handleGridOffsetDrag}
               showBarNumbers={showBeatGrid}
+              numberEveryGridLine={numberEveryGridLine}
               autoGuessPoints={feature === 'prep' ? [] : (refAutoGuessPoints ?? displayAutoGuessPoints)}
               pendingSelection={isAnnotateFeature && supportsPending(activeAnnotationType, activeBoundarySource ?? undefined) ? pendingAnnotationSelection : null}
               boundaryLayers={
@@ -11694,8 +13208,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               showNovelty={showNovelty}
               showOnsets={showOnsets}
               showFlux={showFlux}
+              showVolume={showVolume}
+              showDensity={showDensity}
+              showBusyness={showBusyness}
+              showBandwidth={showBandwidth}
               algoOverlays={feature === 'prep' ? [] : [
-                ...(isInspect(feature) ? algoOverlays : []),
+                ...(isInspect(feature) ? drawnAlgoOverlays : []),
                 ...proposedLayers(detectorBoundaryOverlays),
               ]}
               cueLayers={feature === 'prep' ? [] : [
@@ -11706,7 +13224,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               onCueClick={(layerId, itemId, anchor) => cuePopover.openAt(layerId, itemId, anchor)}
               onCueDrag={feature === 'prep' ? undefined : handleCueDrag}
               onCueDragStart={feature === 'prep' ? undefined : handleDragGestureStart}
-              loopLayers={feature === 'prep' || !settings.experimentalLoopsAndPatterns ? [] : [
+              onCueDecayDrag={feature === 'prep' ? undefined : handleCueDecayDrag}
+              onCueDecayDragStart={feature === 'prep' ? undefined : handleDragGestureStart}
+              onCueDecayKey={feature === 'prep' ? undefined : handleCueDecayKey}
+              loopLayers={feature === 'prep' ? [] : [
                 ...ownWorkspaceLayers(loopLayers),
                 ...proposedLayers(detectorLoopLayers).filter((l) => !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length))),
               ]}
@@ -11723,10 +13244,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               ]}
               focusedSpan={focusedSpan}
               onSpanClick={(layerId, itemId, anchor) => spanPopover.openAt(layerId, itemId, anchor)}
+              onLaneCreate={isAnnotateFeature ? handleLaneCreate : undefined}
+              laneCreateSnap={laneCreateSnap}
+              riffEditor={isAnnotateFeature && riffEditor ? { layerId: riffEditor.layerId, itemId: riffEditor.itemId, draft: !!riffEditor.draftNodeIds } : null}
+              onRiffLaneCreate={isAnnotateFeature ? handleRiffLaneCreate : undefined}
+              onRiffLayerEdit={isAnnotateFeature ? handleRiffLayerEdit : undefined}
+              onRiffNodeCreated={riffNodeCreated}
+              onRiffEditorDone={doneRiffEditor}
+              onRiffEditorDiscard={discardRiffEditor}
+              onRiffEditOnLane={isAnnotateFeature ? handleRiffEditOnLane : undefined}
               onSpanEdgeDrag={feature === 'prep' ? undefined : handleSpanEdgeDrag}
               onSpanEdgeDragStart={feature === 'prep' ? undefined : handleDragGestureStart}
               onSpanMove={feature === 'prep' ? undefined : handleSpanMove}
               onSpanMoveStart={feature === 'prep' ? undefined : handleDragGestureStart}
+              onItemLaneMove={isAnnotateFeature ? handleItemLaneMove : undefined}
+              onDeleteItems={isAnnotateFeature ? handleDeleteItems : undefined}
               onSpanProminenceChange={feature === 'prep' ? undefined : handleProminenceChange}
               spanProminenceEdit={spanPopover.open && prominenceEditing
                 ? { layerId: spanPopover.open.layerId, itemId: spanPopover.open.itemId }
@@ -11744,7 +13276,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               // the same snap the band drags do, and does nothing while Snap
               // to grid and Grid Lock are both off.
               snapProminenceTime={snapToGridIfEnabled}
-              riffPatternLayers={feature === 'prep' || !settings.experimentalLoopsAndPatterns ? [] : [
+              riffPatternLayers={feature === 'prep' ? [] : [
                 ...ownWorkspaceLayers(riffPatternLayers),
                 ...proposedLayers(detectorRiffLayers).filter((l) => !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length))),
               ]}
@@ -11764,7 +13296,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 // it — a nested node's own beats now render inline right
                 // there (see RiffPatternEditPopover), so there's no need to
                 // ask which popup the click meant.
-                const layer = riffPatternLayers.find((l) => l.id === layerId);
+                const layer = riffPatternLayers.find((l) => l.id === layerId)
+                  ?? detectorRiffLayers.find((l) => l.id === layerId);
                 const entry = layer?.items.find((it) => it.id === itemId)?.sequence[entryIndex];
                 const resolved = entry ? resolveRiffId(entry.type, layer?.nodes ?? [], layer?.combos ?? []) : null;
                 if (resolved?.kind === 'node') {
@@ -11776,30 +13309,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 setRiffAutoExpandIndex(entryIndex);
                 riffPatternPopover.openAt(layerId, itemId, anchor);
               }}
-              onRiffPatternEntryResize={(layerId, itemId, entryIndex, newLengthSteps, gestureKey) => {
-                setCueLayersDoc((d) => d && ({
-                  ...d,
-                  layers: d.layers.map((l) => {
-                    if (l.id !== layerId || l.type !== 'riff-patterns') return l;
-                    return {
-                      ...l,
-                      items: l.items.map((it) => {
-                        if (it.id !== itemId) return it;
-                        const item = it as RiffPatternItem;
-                        return {
-                          ...item,
-                          sequence: item.sequence.map((e, i) => (i === entryIndex ? { ...e, lengthSteps: newLengthSteps } : e)),
-                        };
-                      }),
-                    } as AnnotationLayer;
-                  }),
-                // One undo step per drag, not per mousemove — the lane row
-                // hands out a fresh key on each press.
-                }), gestureKey ? { coalesceKey: gestureKey } : undefined);
-              }}
-              onRiffNodeTrim={(layerId, nodeId, lengthBeats, gestureKey) =>
-                handleRiffNodeTrim(layerId, nodeId, lengthBeats, gestureKey)}
-              lyricsLayers={feature === 'prep' || !settings.experimentalLyricsFamily ? [] : [
+              onRiffNodeStepToggle={(layerId, nodeId, step) => editRiffLayer(layerId, (l) => toggleNodeStep(l, nodeId, step))}
+              onRiffBarStepSplit={(layerId, ref, step) => editRiffLayer(layerId, (l) => toggleBarStep(l, ref, step))}
+              lyricsLayers={feature === 'prep' ? [] : [
                 ...ownWorkspaceLayers(lyricsLayers),
                 ...proposedLayers(detectorLyricsLayers).filter((l) => !hiddenCustomAnnotations.has(l.source!.slice('detector:'.length))),
               ]}
@@ -11816,9 +13328,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               activeAnnotationType={activeAnnotationType}
               selectedLayerIdByType={selectedLayerIdByType}
               onSelectLayer={handleUnifiedSelectLayer}
-              onAlgoOverlaySelect={(id) => setSelectedLyricsAlgoId(
-                id && new Set<string>(LYRICS_ALGO_IDS).has(baseAlgoId(id)) ? id : null,
-              )}
+              onAlgoOverlaySelect={(id) => {
+                setSelectedLyricsAlgoId(
+                  id && new Set<string>(LYRICS_ALGO_IDS).has(baseAlgoId(id)) ? id : null,
+                );
+                // A lane opens the hit karaoke when its cues name kit pieces
+                // or carry a pitch — decided from what it drew, so any
+                // algorithm that labels its hits kick / snare / hat, or gives
+                // its notes a MIDI number, gets it, not just one.
+                const overlay = id ? algoOverlays.find((o) => o.id === id) : undefined;
+                setSelectedDrumAlgoId(overlay && overlay.sections.some((sec) => kitPieceOf(sec.label) || typeof sec.note === 'number') ? overlay.id : null);
+              }}
               onRenameLayer={isAnnotateFeature ? handleVizLayerRename : undefined}
               onVizClick={handleVizClick}
               onVizRegion={handleVizRegion}
@@ -11853,19 +13373,32 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               onDetectorLayerAccept={(layerId, itemId) => handleDetectorLayerReview(layerId, itemId, 'accepted')}
               onDetectorLayerReject={(layerId, itemId) => handleDetectorLayerReview(layerId, itemId, 'rejected')}
               onCopyDetectorLayer={handleCopyDetectorVizLayer}
+              onCopyDetectorGroup={handleCopyDetectorGroup}
               detectorLayerCopyCounts={detectorLayerCopyCounts}
               onCopyAlgoOverlay={handleCopyAlgoOverlay}
+              onDeleteAlgoOverlay={deleteAlgoOverlayFor}
+              onDeleteDetectorLane={deleteDetectorLaneFor}
+              onDeleteUserLayer={deleteUserLayerFromLane}
+              userLaneOps={userLaneOps}
+              extractingAdsrIds={extractingAdsrIds}
+              onDeleteAutoGuess={deleteAutoGuessFromLane}
+              onHideProminence={() => setEffShowProminence(false)}
               algoCopyCounts={algoCopyCounts}
               mergeLanes={mergeLanes}
               mergeBoundaries={mergeBoundaries}
               onMergeAddLane={handleMergeAddLane}
               onMergeRemoveLane={handleMergeRemoveLane}
+              onMergeSetLanesHidden={handleMergeSetLanesHidden}
               onMergeClear={handleMergeClear}
               onMergeToggleBoundary={handleMergeToggleBoundary}
+              onMergeEditBoundary={handleMergeEditBoundary}
+              mergeSelectedTime={mergePopover.open ? Number(mergePopover.open.itemId) : undefined}
               onMergeRestoreDropped={handleMergeRestoreDropped}
               onMergeCommit={handleMergeCommit}
               mergeCommittedCount={mergeCommittedCount}
               mergeCommittedNote={mergeCommitNote}
+              mergeSmart={mergeSmart}
+              onMergeSetSmart={setMergeSmart}
               consensusBlocks={showConsensus ? consensusViz?.blocks : undefined}
               consensusRefMisses={consensusViz?.refMisses}
               consensusReferenceLabel={consensusViz?.referenceLabel}
@@ -11913,19 +13446,21 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               rowOrder={rowOrder}
               onReorderRow={handleReorderRow}
               onSetSignalShown={handleSetSignalShown}
-              // Groups belong to the Annotator canvas only. Dataprep draws no
-              // authored lanes at all and Algorithm Inspect keeps them off
-              // until you ask for them, so a band in either place would be a
-              // header over nothing, carrying controls that edit lanes the
-              // workspace is not showing. Withholding rowGroupId is what
-              // suppresses it: buildGroupedRowOrder splices no header without
-              // one, and groupMenuForRow drops the lane-label ⋮ as soon as its
-              // callbacks are gone.
-              layerGroups={isAnnotateFeature ? layerGroups : []}
-              rowGroupId={isAnnotateFeature ? rowGroupId : undefined}
-              groupState={isAnnotateFeature ? groupState : undefined}
-              onGroupToggleCollapsed={isAnnotateFeature ? handleGroupToggleCollapsed : undefined}
-              onGroupSetVisible={isAnnotateFeature ? handleGroupSetVisible : undefined}
+              // The annotator's own groups belong to the Annotator canvas only.
+              // Dataprep draws no authored lanes at all and Algorithm Inspect
+              // keeps them off until you ask for them, so a band there would be
+              // a header over nothing, carrying controls that edit lanes the
+              // workspace is not showing. Detector bands are the exception:
+              // they sit over detector lanes, which Algorithm Inspect is for,
+              // and they are read-only (`readOnlyGroupIds`). Withholding
+              // rowGroupId is what suppresses a band: buildGroupedRowOrder
+              // splices no header without one, and groupMenuForRow drops the
+              // lane-label ⋮ as soon as its callbacks are gone.
+              layerGroups={canvasGroups?.layerGroups ?? []}
+              rowGroupId={canvasGroups?.rowGroupId}
+              groupState={canvasGroups?.groupState}
+              readOnlyGroupIds={canvasGroups?.readOnlyGroupIds}
+              onGroupToggleCollapsed={canvasGroups ? handleCanvasGroupToggleCollapsed : undefined}
               onGroupRename={isAnnotateFeature ? handleGroupRename : undefined}
               onGroupUngroup={isAnnotateFeature ? handleGroupUngroup : undefined}
               onGroupDelete={isAnnotateFeature ? handleGroupDelete : undefined}
@@ -11960,6 +13495,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 {renderKaraokePanel()}
               </div>
             )}
+            {/* Hit karaoke — the same home, for a focused cue layer whose
+                cues are drum hits or pitched notes. */}
+            {activeAnnotationType === 'cues' && showHitKaraoke && feature !== 'inspect-song' && (
+              <div className="mt-2">
+                {renderKaraokePanel()}
+              </div>
+            )}
           </>
         )}
 
@@ -11968,17 +13510,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             view of that, so it goes on top, once, above everything. */}
         {feature === 'inspect-song' && (
           <div className="border-b border-white/[0.05]">
-            {/* Row 1 — the subject. InspectKindDropdown hides itself when only
-                one kind is available, so the default workspace carries no band
-                here at all. */}
-            <InspectKindDropdown
-              value={inspectKind}
-              options={inspectKindOptions}
-              onChange={handleInspectKindChange}
-            />
-            {/* Row 2 — the views. Evaluation is the one that exists for every
-                examined kind, so it anchors the strip and the conditional tabs
-                append after it instead of shuffling it sideways. */}
+            {/* The views. Evaluation is the one that exists for every examined
+                kind, so it anchors the strip and the conditional tabs append
+                after it instead of shuffling it sideways. */}
             <div className="flex items-center gap-4">
               {(([
                 ['eval', 'Evaluation'] as const,
@@ -11988,6 +13522,9 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 // And the karaoke appears only while a lyrics layer is focused,
                 // which is the click that asked for it.
                 ...(karaokeTabAvailable ? [['karaoke', 'Karaoke'] as const] : []),
+                // Butler's sound palette: every loop the detectors found,
+                // once each, with where it plays.
+                ['palette', 'Sound palette'],
               ]) as readonly (readonly [InspectSubStage, string])[]).map(([sub, label]) => (
                 <button
                   key={sub}
@@ -12022,6 +13559,20 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             above it; Consensus Inspect takes it as `leading` and puts it on the
             same line as "Evaluate vs". Nothing renders it on the Karaoke tab —
             there is no reference in reading the words. */}
+        {/* Examine — which annotation kind is scored. It belongs to the scoring
+            views (Evaluation, Consensus Inspect), so it sits under the tabs
+            with them; the Karaoke tab reads a focused lane and has nothing to
+            examine. InspectKindDropdown hides itself when only one kind is
+            available, so the default workspace carries no band here at all. */}
+        {inspectStage !== null && inspectStage !== 'karaoke' && (
+          <div className="pt-2">
+            <InspectKindDropdown
+              value={inspectKind}
+              options={inspectKindOptions}
+              onChange={handleInspectKindChange}
+            />
+          </div>
+        )}
         {inspectStage === 'eval' && referencePicker && (
           <div className="flex items-center pt-2">{referencePicker}</div>
         )}
@@ -12054,7 +13605,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     )}
                   </>
                 ) : (
-                  <>No songs yet — open <span className="text-emerald-300">Dataset Prep</span> to upload</>
+                  <>No songs yet — open <span className="text-emerald-300">Prepare</span> to upload</>
                 )
               ) : feature === 'prep' ? (
                 <>Select a song above, then set <span className="text-emerald-300">BPM</span> and align the <span className="text-emerald-300">grid</span> to start annotating</>
@@ -12154,7 +13705,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                           onSeekAndPlay={handleSeekAndPlay}
                           onPause={handlePause}
                           playerIsPlaying={playerIsPlaying}
-                          playerTime={playerTime}
                           bpm={bpm}
                           gridOffset={songInfo?.gridOffset ?? 0}
                           beatsPerBar={beatsPerBar}
@@ -12180,7 +13730,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                           onCapabilitiesChange={setManualCaps}
                           saveStatus={layersDocSaveStatus}
                           songId={selectedAudio.id}
-                          currentTime={playerTime}
                           duration={duration}
                           songBpm={songInfo?.bpm}
                           songBeatsPerBar={beatsPerBar}
@@ -12206,7 +13755,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                             if (previewRegionRef.current) handlePreviewDismiss();
                           }}
                           onDuplicateSkipped={setAnnotationNotice}
-                          snapTime={snapToGridIfEnabled}
+                          snapTime={snapToBeatOrFiner}
                           onSeekAndPlay={handleSeekAndPlay}
                           onPause={handlePause}
                           isPlaying={playerIsPlaying}
@@ -12220,14 +13769,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       ref={autoGuessPanelRef}
                       onCapabilitiesChange={setAutoGuessCaps}
                       songId={selectedAudio.id}
-                      currentTime={playerTime}
                       algorithmRows={annotationRows}
                       initialAnnotation={autoGuessAnnotation}
                       onAnnotationChange={setAutoGuessAnnotation}
                       onSeekAndPlay={handleSeekAndPlay}
                       manualSections={manualSections}
                       songInfo={songInfo}
-                      onCopyToManualAnnotation={appendBoundarySections}
+                      onCopyToBoundaryLayer={appendBoundarySections}
                       onTuneInConsensus={openConsensusInspect}
                     />
                   )}
@@ -12236,7 +13784,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       ref={cuesPanelRef}
                       onCapabilitiesChange={setCuesCaps}
                       saveStatus={layersDocSaveStatus}
-                      currentTime={playerTime}
                       doc={cueLayersDoc ?? emptyLayersDoc(selectedAudio.id)}
                       onDocChange={setCueLayersDoc}
                       focusedCue={focusedCue}
@@ -12259,18 +13806,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       getSongTime={liveSongTime}
                     />
                   )}
-                  {activeAnnotationType === 'loops' && activeSourceByType.loops === 'manual' && settings.experimentalLoopsAndPatterns && (
+                  {activeAnnotationType === 'loops' && activeSourceByType.loops === 'manual' && (
                     <LoopEditorPanel
                       ref={loopsPanelRef}
                       onCapabilitiesChange={setLoopsCaps}
                       saveStatus={layersDocSaveStatus}
-                      currentTime={playerTime}
                       duration={duration}
                       doc={cueLayersDoc ?? emptyLayersDoc(selectedAudio.id)}
                       onDocChange={setCueLayersDoc}
                       grid={bpm ? { bpm, beatsPerBar, gridOffsetSec: beatOffset ?? 0 } : null}
                       snapToGrid={snapToGrid || gridLock}
-                      snapTime={snapToGridIfEnabled}
+                      snapTime={snapToBeatOrFiner}
                       gridLock={gridLock}
                       focusedLoop={focusedLoop}
                       onFocusLoop={setFocusedLoop}
@@ -12294,13 +13840,12 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       ref={spansPanelRef}
                       onCapabilitiesChange={setSpansCaps}
                       saveStatus={layersDocSaveStatus}
-                      currentTime={playerTime}
                       duration={duration}
                       doc={cueLayersDoc ?? emptyLayersDoc(selectedAudio.id)}
                       onDocChange={setCueLayersDoc}
                       grid={bpm ? { bpm, beatsPerBar, gridOffsetSec: beatOffset ?? 0 } : null}
                       snapToGrid={snapToGrid || gridLock}
-                      snapTime={snapToGridIfEnabled}
+                      snapTime={snapToBeatOrFiner}
                       gridLock={gridLock}
                       focusedSpan={focusedSpan}
                       onFocusSpan={setFocusedSpan}
@@ -12315,18 +13860,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       getSongTime={liveSongTime}
                     />
                   )}
-                  {activeAnnotationType === 'riff-patterns' && activeSourceByType['riff-patterns'] === 'manual' && settings.experimentalLoopsAndPatterns && (
+                  {activeAnnotationType === 'riff-patterns' && activeSourceByType['riff-patterns'] === 'manual' && (
                     <RiffPatternEditorPanel
                       ref={riffPatternsPanelRef}
                       onCapabilitiesChange={setRiffPatternsCaps}
                       saveStatus={layersDocSaveStatus}
-                      currentTime={playerTime}
                       duration={duration}
                       doc={cueLayersDoc ?? emptyLayersDoc(selectedAudio.id)}
                       onDocChange={setCueLayersDoc}
                       grid={bpm ? { bpm, beatsPerBar, gridOffsetSec: beatOffset ?? 0 } : null}
                       snapToGrid={snapToGrid || gridLock}
-                      snapTime={snapToGridIfEnabled}
+                      snapTime={snapToBeatOrFiner}
                       focusedInstance={focusedRiffPattern}
                       onFocusInstance={setFocusedRiffPattern}
                       selectedLayerId={selectedRiffPatternLayerId}
@@ -12341,18 +13885,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         nodePopover.openAt(layerId, nodeId, anchor);
                       }}
                       getSongTime={liveSongTime}
+                      palette={{ beatsPerBar, isPlaying: playerIsPlaying, onPlay: handleSeekAndPlay, onStop: handlePause }}
                     />
                   )}
-                  {activeAnnotationType === 'lyrics' && activeSourceByType.lyrics === 'manual' && settings.experimentalLyricsFamily && (
+                  {activeAnnotationType === 'lyrics' && activeSourceByType.lyrics === 'manual' && (
                     <LyricsEditorPanel
                       ref={lyricsPanelRef}
                       onCapabilitiesChange={setLyricsCaps}
                       saveStatus={layersDocSaveStatus}
-                      currentTime={playerTime}
                       duration={duration}
                       doc={cueLayersDoc ?? emptyLayersDoc(selectedAudio.id)}
                       onDocChange={setCueLayersDoc}
-                      snapTime={snapTimeByLayerMode}
                       focusedLyrics={focusedLyrics}
                       onFocusLyrics={setFocusedLyrics}
                       onDuplicateSkipped={setAnnotationNotice}
@@ -12367,6 +13910,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         if (previewRegionRef.current) handlePreviewDismiss();
                       }}
                       getSongTime={liveSongTime}
+                      onItemAdded={openNewLyricCard}
                     />
                   )}
                   </div>
@@ -12377,6 +13921,24 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               {/* Karaoke stage — reading the words along with playback, rather
                   than scoring anything. Its own tab, so nothing it displaces. */}
               {inspectStage === 'karaoke' && renderKaraokePanel()}
+
+              {/* Sound palette — the detectors' loops, one row per figure,
+                  variants folded. The Annotator draws the same view of the
+                  user's own riff layers. */}
+              {inspectStage === 'palette' && (
+                <div className="mt-3">
+                  <SoundPalette
+                    title="Sound palette · from the detectors"
+                    groups={detectorPaletteGroups}
+                    duration={duration}
+                    beatsPerBar={beatsPerBar}
+                    isPlaying={playerIsPlaying}
+                    onPlay={handleSeekAndPlay}
+                    onStop={handlePause}
+                    emptyText="No loop detector has run on this song yet. Run Drum hits & grooves or Pitched layers from the Detectors list to fill it."
+                  />
+                </div>
+              )}
 
               {/* Algo inspect stage */}
               {inspectStage === 'algo' && (
@@ -12418,10 +13980,8 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
         {/* ── Right sidebar #1 — Curated (detector-sourced) layers ──
              A SECOND right column, sitting LEFT of the Algorithms sidebar. It
-             lists the curated detectors' output — the is_annotation layers
-             grouped by stem, and the is_algorithm boundary curators; a
-             both-flagged curator (a phrase curator, say) appears under
-             each. Visibility is the shared `hiddenCustomAnnotations` set (keyed
+             lists every registered detector's output, grouped by stem, and
+             a row to run each one that has none yet. Visibility is the shared `hiddenCustomAnnotations` set (keyed
              by detector name), so a curator toggles the same way everywhere —
              driving both the timeline canvas and the annotation list. Collapses
              to a hover tab.
@@ -12435,53 +13995,326 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
              shows up over there. */}
         {selectedAudio && feature === 'inspect-song' && (() => {
           const accent = accentFor(feature);
-          const allCuratedNames = curatedLayersByStem.rows.map((r) => r.detectorName);
-          const namesForStem = (s: string) => (curatedLayersByStem.byStem.get(s) ?? []).map((r) => r.detectorName);
-          const isStemShown = (names: string[]) => names.length > 0 && names.every((n) => !hiddenCustomAnnotations.has(n));
-          const allShown = isStemShown(allCuratedNames);
-          // "None" is lit when every curated layer is hidden — the symmetric
-          // one-click clear next to "All", so the user can drop to zero visible
-          // layers without unchecking each box.
-          const noneShown = allCuratedNames.every((n) => hiddenCustomAnnotations.has(n));
-          // Inverse polarity vs the inspect "SHOW PER STEM" block: visibility is
-          // a HIDDEN set, so "show" deletes names and "hide" adds them.
-          const setShown = (names: string[], show: boolean) => setHiddenCustomAnnotations((prev) => {
+          // The stems a registered detector reads, in source order: the
+          // filter's chips. Every one, not only the stems with a lane here —
+          // a detector that found nothing draws no lane, and its stem should
+          // not vanish from the filter with it.
+          const filterStems = [...new Set(customDetectors
+            .filter((d) => d.status === 'ok').map((d) => (d.stem ?? 'mix') as string))]
+            .sort((a, b) => stemRank(a) - stemRank(b));
+          const inFilter = (stem: string) => !detectorStemFilter || detectorStemFilter.has(stem);
+          // From All, a chip picks that stem alone; after that each chip adds
+          // or drops its stem, and dropping the last (or lighting every one)
+          // is All again.
+          const pickStem = (s: string) => setDetectorStemFilter((prev) => {
+            if (!prev) return new Set([s]);
             const n = new Set(prev);
-            if (show) names.forEach((nm) => n.delete(nm)); else names.forEach((nm) => n.add(nm));
-            return n;
+            if (n.has(s)) n.delete(s); else n.add(s);
+            return n.size === 0 || n.size === filterStems.length ? null : n;
           });
+          // The stems the filter narrows to, for the section-run box.
+          const sectionRunStems = detectorStemFilter ? [...detectorStemFilter] : null;
+          // A Detectors-sidebar checkbox means "I want this one": shown when it
+          // has a lane, ticked for "Run N ticked" when it has none — one choice
+          // (`setDetectorsWanted`), remembered across songs. The header
+          // box, a heading, and a detector read on several stems check a whole
+          // set of rows the same way.
+          const canTickDetector = (name: string) => {
+            const det = customDetectors.find((d) => d.name === name);
+            return !isDemo && !detectorBatch
+              && !missingStem(det?.stem);
+          };
+          const checkRows = (rows: ReadonlyArray<{ type: string; detectorName: string }>) => {
+            const lanes = rows.filter((r) => r.type !== 'bare').map((r) => r.detectorName);
+            const ticks = rows.filter((r) => r.type === 'bare').map((r) => r.detectorName).filter(canTickDetector);
+            return {
+              count: lanes.length + ticks.length,
+              allOn: lanes.length + ticks.length > 0
+                && lanes.every((n) => !hiddenDetectorRows.has(n))
+                && ticks.every((n) => detectorRunTicks.has(n)),
+              allOff: lanes.every((n) => hiddenDetectorRows.has(n))
+                && ticks.every((n) => !detectorRunTicks.has(n)),
+              set: (on: boolean) => setDetectorsWanted([...lanes, ...ticks], on),
+            };
+          };
+          // "only" on a row: its lanes shown, every other detector lane hidden.
+          // Pressed again (it reads "all" while soloed) it shows every lane.
+          const laneNames = detectorSidebar.rows.filter((r) => r.type !== 'bare').map((r) => r.detectorName);
+          const soloOf = (names: string[]) => {
+            const own = new Set(names);
+            if (names.length === 0 || laneNames.length < 2) return {};
+            const soloed = names.every((n) => !hiddenDetectorRows.has(n))
+              && laneNames.every((n) => own.has(n) || hiddenDetectorRows.has(n));
+            return {
+              soloed,
+              onSolo: () => {
+                if (soloed) setDetectorsWanted(laneNames, true);
+                else setDetectorsWanted(laneNames.filter((n) => !own.has(n)), false);
+              },
+            };
+          };
+          // A detector that declares several stems is registered once per stem
+          // (`<base_name>__<stem>`). The list shows it once: the stem filter
+          // above says which of its stems are in play, and the row acts on those.
+          type SidebarRow = (typeof detectorSidebar.rows)[number];
+          const familyOf = (name: string) => customDetectors.find((d) => d.name === name)?.base_name ?? name;
+          // Clustered by the detector's `group` (Energy, Hits, Repeats …), one
+          // subtitle each, alphabetical, the ungrouped last; inside a group,
+          // stem order. An origin where nobody declares a group stays flat.
+          const entriesOf = (origin: (typeof detectorSidebar.origins)[number]) => {
+            const stemOrdered: SidebarRow[] = [];
+            for (const s of origin.stems) if (inFilter(s)) stemOrdered.push(...(origin.byStem.get(s) ?? []));
+            const groups = [...new Set(stemOrdered.map((r) => r.group))]
+              .sort((a, b) => (a === null ? 1 : 0) - (b === null ? 1 : 0) || (a ?? '').localeCompare(b ?? ''));
+            const ordered = groups.flatMap((g) => stemOrdered.filter((r) => r.group === g));
+            const byFamily = new Map<string, SidebarRow[]>();
+            for (const r of ordered) {
+              const f = familyOf(r.detectorName);
+              if (!byFamily.has(f)) byFamily.set(f, []);
+              byFamily.get(f)!.push(r);
+            }
+            return [...byFamily.entries()].map(([family, members]) => ({ family, members }));
+          };
+          const clustersOf = (entries: ReturnType<typeof entriesOf>) => {
+            const out: Array<{ group: string | null; entries: typeof entries }> = [];
+            for (const e of entries) {
+              const g = e.members[0].group;
+              if (out.length && out[out.length - 1].group === g) out[out.length - 1].entries.push(e);
+              else out.push({ group: g, entries: [e] });
+            }
+            return out;
+          };
+          const kitInstalled = customDetectors.some((d) => d.name === DRUM_KIT_DETECTOR && d.status === 'ok');
+          const renderDetectorRow = (r: SidebarRow) => {
+            const det = customDetectors.find((d) => d.name === r.detectorName);
+            const env = customResults[r.detectorName];
+            const slug = selectedAudio?.id;
+            const needsStem = missingStem(det?.stem);
+            const level = strictnessLevel(env?.strictness);
+            const chosen = strictnessChoice[r.detectorName] ?? level;
+            const running = customRunning.has(r.detectorName);
+            const runProps = {
+              running,
+              failedMessage: env?.fatal?.message ?? null,
+              onShowLog: env && (env.fatal || detectorItemCount(env) === 0)
+                ? () => showDetectorResultLog(r.detectorName, env) : undefined,
+              needsStem,
+              onRun: !isDemo && slug
+                ? () => rerunDetectorForCurrentSong(r.detectorName, slug, det?.strictness ? chosen : undefined)
+                : undefined,
+              runBlockedReason: detectorBatch ? 'Running the ticked detectors — one at a time.' : null,
+              strictness: det?.strictness && !isDemo && slug ? {
+                value: level,
+                chosen,
+                onChoose: (next: DetectorStrictness) => setStrictnessChoice(
+                  (prev) => ({ ...prev, [r.detectorName]: next })),
+              } : null,
+              // Only where the kit can be split at all: without Drum kit,
+              // separated there is one source and nothing to pick.
+              drumSource: det?.drum_source && kitInstalled && !isDemo && slug ? {
+                value: env?.drum_source ?? 'auto',
+                chosen: drumSourceChoice[r.detectorName] ?? env?.drum_source ?? 'auto',
+                read: env?.drum_read?.source,
+                onChoose: (next: DrumSource) => setDrumSourceChoice(
+                  (prev) => ({ ...prev, [r.detectorName]: next })),
+              } : null,
+              sectionSource: det?.section_source && !isDemo && slug ? {
+                value: env?.section_source ?? 'auto',
+                chosen: sectionSourceChoice[r.detectorName] ?? env?.section_source ?? 'auto',
+                read: env?.section_read?.source,
+                onChoose: (next: SectionSource) => setSectionSourceChoice(
+                  (prev) => ({ ...prev, [r.detectorName]: next })),
+              } : null,
+              source: det?.sources?.length && !isDemo && slug ? {
+                options: withLaneSources(det.sources, det.lane_sources, cueLayersDoc),
+                value: env?.source ?? det.sources[0].name,
+                chosen: sourceChoice[r.detectorName] ?? env?.source ?? det.sources[0].name,
+                read: env?.source_read?.source,
+                onChoose: (next: string) => setSourceChoice((prev) => ({ ...prev, [r.detectorName]: next })),
+              } : null,
+              switches: det?.switches && !isDemo && slug
+                ? Object.entries(det.switches).map(([key, label]) => ({
+                  key,
+                  label,
+                  value: env?.switches?.[key] ?? false,
+                  chosen: switchChoice[r.detectorName]?.[key] ?? env?.switches?.[key] ?? false,
+                  onChoose: (next: boolean) => setSwitchChoice((prev) => ({
+                    ...prev, [r.detectorName]: { ...prev[r.detectorName], [key]: next },
+                  })),
+                }))
+                : null,
+              stale: drumReadStale(env, customResults[DRUM_KIT_DETECTOR]),
+              description: det?.description,
+            };
+            if (r.type === 'bare') {
+              return (
+                <DetectorSidebarRow
+                  key={r.id}
+                  name={r.name}
+                  hasOutput={false}
+                  visible={detectorRunTicks.has(r.detectorName)}
+                  onToggleVisible={runProps.onRun && !needsStem && !detectorBatch
+                    ? () => setDetectorsWanted([r.detectorName], !detectorRunTicks.has(r.detectorName)) : undefined}
+                  checkboxClassName={accent.checkbox}
+                  emptyResult={!!env && !env.fatal && detectorItemCount(env) === 0}
+                  emptyNotes={env?.notes?.map((n) => n.message)}
+                  {...runProps}
+                />
+              );
+            }
+            const rEnvelope = customResults[r.detectorName];
+            const rDoc = detectorOutputDocs[r.detectorName];
+            const rItems = (rDoc ?? rEnvelope)?.items ?? [];
+            const rReview = rDoc?.review ?? {};
+            const rDet = customDetectors.find((d) => d.name === r.detectorName);
+            const rLabel = rDet?.label ?? r.name;
+            const rPrimaryMs = (it: { time_ms?: number; start_ms?: number }) =>
+              (r.type === 'cues' || r.type === 'boundary' || r.type === 'lyrics')
+                ? (it.time_ms ?? 0) : (it.start_ms ?? 0);
+            const rKeepable = rItems.filter((it, i) =>
+              rReview[`${i}:${rPrimaryMs(it as { time_ms?: number; start_ms?: number })}`] !== 'rejected',
+            );
+            const rExisting = (r.type !== 'boundary'
+              ? (cueLayersDoc?.layers.filter(
+                  (l) => l.importedFrom === rLabel || l.importedFrom === `${rLabel} (✓ accepted)`,
+                ).length ?? 0)
+              : 0);
+            const rRiff = (r.type as string) === 'riff-patterns' ? detectorRiffLayers.find((l) => l.id === r.id) : undefined;
+            const rCopyDisabled = !selectedAudio || ((r.type as string) === 'riff-patterns' ? !rRiff
+              : rKeepable.length === 0);
+            const doCopyLayer = () => {
+              if (rCopyDisabled) return;
+              if (rRiff) {
+                // A riff lane copies as the layer it is (copyDetectorVizLayer).
+                const made = copyDetectorVizLayer(rRiff);
+                if (made) setLastCopyUndo(made);
+                return;
+              }
+              const rCategory = r.type === 'boundary' ? 'boundaries' : r.type;
+              const createdId = copyDetectorItemsToNewLayer(
+                rCategory, rKeepable as ReviewableItem[], rLabel,
+                detectorCopyGroup(r.detectorName, customDetectors),
+              );
+              if (createdId) {
+                setLastCopyUndo({ layerId: createdId, label: rLabel, prevSource: activeSourceByType[rCategory], type: rCategory });
+              }
+            };
+            return (
+              <DetectorSidebarRow
+                key={r.id}
+                name={r.name}
+                color={r.color}
+                hasOutput
+                visible={!hiddenCustomAnnotations.has(r.detectorName)}
+                onToggleVisible={() => toggleCustomAnnotationVisible(r.detectorName)}
+                checkboxClassName={accent.checkbox}
+                {...runProps}
+                {...soloOf([r.detectorName])}
+                actions={(
+                  <>
+                <button
+                  type="button"
+                  onClick={doCopyLayer}
+                  disabled={rCopyDisabled}
+                  title={rCopyDisabled
+                    ? `${r.name} has no output yet — run it first`
+                    : rExisting > 0
+                      ? `Copy to a new manual layer — ${rExisting} existing ${rExisting === 1 ? 'copy' : 'copies'} already`
+                      : `Copy "${r.name}" to a new editable manual layer`}
+                  className={`shrink-0 flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] leading-none transition-all disabled:hidden ${
+                    rExisting > 0
+                      ? 'text-amber-300 hover:text-amber-100 hover:bg-amber-500/20'
+                      : 'opacity-0 group-hover/curated-row:opacity-100 focus:opacity-100 text-slate-400 hover:text-white hover:bg-white/[0.10]'
+                  }`}
+                >
+                  ⬇{rExisting > 0 && <span className="font-mono ml-px">{rExisting}</span>}
+                </button>
+                {/* Same gate the server puts on the wipe: researcher/admin, never demo. */}
+                {!isDemo && (adminStatus?.isAdmin || adminStatus?.isResearcher) && (
+                  <button
+                    type="button"
+                    onClick={() => clearDetectorOutputsForSong([{ name: r.detectorName, label: r.name }])}
+                    title={`Delete "${r.name}" output for this song`}
+                    aria-label={`Delete ${r.name} output for this song`}
+                    className="shrink-0 px-1 py-0.5 rounded text-[12px] leading-none opacity-0 group-hover/curated-row:opacity-100 focus:opacity-100 text-slate-500 hover:text-rose-300 hover:bg-rose-500/15 transition-all"
+                  >
+                    ×
+                  </button>
+                )}
+                  </>
+                )}
+              />
+            );
+          };
+          // One row for a detector read on several stems: its box, run and
+          // strictness act on every one of its stems the filter lets through.
+          const renderDetectorFamily = (family: string, members: SidebarRow[]) => {
+            const slug = selectedAudio?.id;
+            const names = members.map((m) => m.detectorName);
+            const dets = names.map((n) => customDetectors.find((d) => d.name === n));
+            const envs = names.map((n) => customResults[n]);
+            const stemOf = (i: number) => (dets[i]?.stem ?? members[i].stem) as string;
+            const waiting = dets.map((d) => missingStem(d?.stem));
+            const runnable = names.filter((_, i) => !waiting[i]);
+            const c = checkRows(members);
+            const hasOutput = members.some((m) => m.type !== 'bare');
+            const failedAt = envs.findIndex((e) => e?.fatal);
+            const level = strictnessLevel(envs.find((e) => e)?.strictness);
+            const chosen = strictnessChoice[names[0]] ?? level;
+            // The lanes were read at one setting unless a stem was run at
+            // another; then the row reports the first that differs.
+            const offLane = envs.find((e) => e && !e.fatal && strictnessLevel(e.strictness) !== chosen);
+            const stemList = members.map((_, i) => stemOf(i)).join(', ');
+            return (
+              <DetectorSidebarRow
+                key={`family:${family}`}
+                name={dets[0]?.label || members[0].name}
+                color={members.find((m) => m.color)?.color ?? null}
+                hasOutput={hasOutput}
+                visible={c.allOn}
+                mixed={!c.allOn && !c.allOff}
+                onToggleVisible={c.count > 0 ? () => c.set(!c.allOn) : undefined}
+                checkboxClassName={accent.checkbox}
+                {...soloOf(members.filter((m) => m.type !== 'bare').map((m) => m.detectorName))}
+                note={`${members.length} stems`}
+                noteTitle={`Read on ${stemList}. The stem filter above picks which of them this row shows and runs.`}
+                emptyResult={!hasOutput && envs.every((e) => e && !e.fatal && detectorItemCount(e) === 0)}
+                emptyNotes={envs.flatMap((e) => e?.notes?.map((n) => n.message) ?? [])}
+                running={names.some((n) => customRunning.has(n))}
+                failedMessage={failedAt >= 0 ? `${stemOf(failedAt)}: ${envs[failedAt]!.fatal!.message}` : null}
+                onShowLog={failedAt >= 0 ? () => showDetectorResultLog(names[failedAt], envs[failedAt]!) : undefined}
+                needsStem={runnable.length === 0 ? waiting.filter(Boolean).join(', ') : null}
+                onRun={!isDemo && slug && runnable.length > 0
+                  ? () => runDetectorsInTurn(runnable, slug, dets[0]?.strictness
+                    ? Object.fromEntries(runnable.map((n) => [n, chosen])) : undefined)
+                  : undefined}
+                runBlockedReason={detectorBatch ? 'Running the ticked detectors — one at a time.' : null}
+                strictness={dets[0]?.strictness && !isDemo && slug ? {
+                  value: offLane ? strictnessLevel(offLane.strictness) : chosen,
+                  chosen,
+                  onChoose: (next: DetectorStrictness) => setStrictnessChoice(
+                    (prev) => ({ ...prev, ...Object.fromEntries(names.map((n) => [n, next])) })),
+                } : null}
+                description={dets[0]?.description}
+              />
+            );
+          };
+
           if (curatedSidebarCollapsed && mobilePanel !== 'detectors') {
             if (isMobile) return null;
             // In-layout rail (not a floating tab): occupies its own slim column
             // in the flex row, so it can never overlap the sibling panel.
             return (
-              <aside className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
-                <button
-                  onClick={() => setCuratedSidebarCollapsed(false)}
-                  title="Show detector layers"
-                  className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
-                >
-                  <span className="text-xl leading-none font-bold">‹</span>
-                  <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Detectors</span>
-                </button>
-              </aside>
+              <CollapsedSidebarRail side="right" label="Detectors" title="Show detector layers" onExpand={() => setCuratedSidebarCollapsed(false)} />
             );
           }
           return (
             <aside
               style={{ width: curatedSidebarWidth }}
               data-mobile-open={mobilePanel === 'detectors' || undefined}
-              className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
+              className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 flex flex-col relative"
             >
-              <div
-                data-resize-handle
-                onMouseDown={startCuratedSidebarResize}
-                onDoubleClick={() => setCuratedSidebarWidth(CURATED_SIDEBAR_DEFAULT_WIDTH)}
-                title="Drag to resize · double-click to reset"
-                className={`absolute top-0 left-0 h-full w-1.5 -ml-0.5 cursor-col-resize z-20 group ${curatedSidebarResizing ? 'bg-sky-500/40' : 'hover:bg-sky-500/30'} transition-colors`}
-              >
-                <div className={`absolute top-0 left-0 h-full w-px ${curatedSidebarResizing ? 'bg-sky-400' : 'bg-transparent group-hover:bg-sky-400/60'}`} />
-              </div>
+              <SidebarResizeHandle sidebar={curatedSidebar} />
               <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.05] shrink-0">
                 <span className="text-[13px] uppercase tracking-[0.18em] text-slate-100 font-bold">Detectors</span>
                 <button
@@ -12493,209 +14326,229 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
-                {/* Empty state: the sidebar always mounts (so it never just
-                    vanishes), but with nothing cached for this song yet —
-                    e.g. detectors were never run against it, or a
-                    stem-dependent one is waiting on a stem this song hasn't
-                    had Demucs run on — say so instead of showing a blank
-                    column. */}
-                {curatedLayersByStem.rows.length === 0 && (() => {
-                  const okDetectors = customDetectors.filter((d) => d.status === 'ok' && (d.is_algorithm || d.is_annotation));
-                  if (okDetectors.length === 0) {
+                {/* A detector run on the highlighted section alone. Only while
+                    something is highlighted: the section IS the highlight. */}
+                {selectedAudio && rerunSelection && (
+                  <DetectorWindowRunPanel
+                    slug={selectedAudio.id}
+                    selection={rerunSelection}
+                    detectors={customDetectors}
+                    results={customResults}
+                    stems={sectionRunStems}
+                    preferred={curatedLayersByStem.rows
+                      .map((r) => r.detectorName)
+                      .find((n) => !hiddenCustomAnnotations.has(n)
+                        && customDetectors.some((d) => d.name === n && d.windowable))}
+                    onApplied={handleDetectorWindowApplied}
+                    onSeek={(t) => seekRef.current?.(t)}
+                  />
+                )}
+                {/* The stem filter: which stems' detectors are listed and
+                    drawn. It sits on top of the rows' checkboxes, so switching
+                    it never unticks anything. */}
+                {filterStems.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Stem filter">
+                    {[null, ...filterStems].map((s) => {
+                      const active = s === null ? !detectorStemFilter : !!detectorStemFilter?.has(s);
+                      const what = s === SEVERAL_STEMS
+                        ? 'detectors that read several stems into one lane, never the full mix'
+                        : `the ${s} stem`;
+                      return (
+                        <button
+                          key={s ?? '__all'}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => (s === null ? setDetectorStemFilter(null) : pickStem(s))}
+                          title={s === null
+                            ? 'Every stem'
+                            : detectorStemFilter
+                              ? `${active ? 'Drop' : 'Add'} ${what}`
+                              : `Only ${what}`}
+                          className={`px-2 h-5 rounded-full text-[10px] capitalize transition-colors ${
+                            active
+                              ? `${accent.pillBg} ${accent.primaryText}`
+                              : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.05]'
+                          }`}
+                        >
+                          {s === null ? 'All' : stemFilingLabel(s)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* What has run on this song, and one click for the rest. Its
+                    box is the whole list's: check or clear every row below. */}
+                {(() => {
+                  const registered = customDetectors.filter((d) => d.status === 'ok');
+                  if (registered.length === 0) {
                     return (
                       <p className="text-[11px] text-slate-400 leading-relaxed">
                         No custom detectors are registered on this server.
                       </p>
                     );
                   }
-                  const missingStems = new Set<string>();
-                  okDetectors.forEach((d) => {
-                    if (d.stem && d.stem !== 'mix' && !stemManifest?.stems?.[d.stem]) missingStems.add(d.stem);
-                  });
+                  // Counted as the list shows them: a detector read on four
+                  // stems is one detector, and has run once any stem has.
+                  const families = new Map<string, boolean>();
+                  for (const d of registered) {
+                    const f = d.base_name ?? d.name;
+                    families.set(f, !!families.get(f) || (!!customResults[d.name] && !customResults[d.name].fatal));
+                  }
+                  const ran = [...families.values()].filter(Boolean).length;
+                  // Every checked row: a lane on screen is re-run (after its
+                  // code changed, say), a ticked row without output runs first
+                  // time. Ticks outlive the song, so a ticked detector that has
+                  // already run here is not a first run.
+                  const shown = registered.filter((d) => customResults[d.name] && !customResults[d.name].fatal
+                    && detectorItemCount(customResults[d.name]) > 0 && !hiddenCustomAnnotations.has(d.name));
+                  const firstRun = registered.filter((d) => detectorRunTicks.has(d.name) && inFilter(d.stem ?? 'mix')
+                    && (!customResults[d.name] || customResults[d.name].fatal) && !missingStem(d.stem));
+                  const ticked = [...shown, ...firstRun];
+                  // Each at its slider: where it was set, else where its lane was read.
+                  const tickedStrictness = Object.fromEntries(ticked
+                    .filter((d) => d.strictness)
+                    .map((d) => [d.name, strictnessChoice[d.name] ?? strictnessLevel(customResults[d.name]?.strictness)]));
+                  const tickedTitle = [
+                    shown.length > 0 ? `Run again: ${shown.map((d) => d.label || d.name).join(', ')}` : '',
+                    firstRun.length > 0 ? `Run for the first time: ${firstRun.map((d) => d.label || d.name).join(', ')}` : '',
+                  ].filter(Boolean).join('\n');
+                  const notRun = registered.filter((d) => !customResults[d.name] && !customRunning.has(d.name)
+                    && inFilter(d.stem ?? 'mix')
+                    && !missingStem(d.stem));
+                  // Every checked detector with something stored for this song —
+                  // a lane, a failure, a "none found" — that the filter shows.
+                  // Not the separated kit: it is the slow run, and Drum hits
+                  // and Pulse read their hits from it, so clearing it
+                  // alongside everything else would quietly drop them to
+                  // the three bands. Its own × still clears it.
+                  // Only the checked rows: a lane row is checked while its lane
+                  // shows, a row without a lane ("none found", failed) while it
+                  // is ticked — the same box the row draws.
+                  const checkedNames = new Set(detectorSidebar.rows
+                    .filter((r) => (r.type === 'bare' ? detectorRunTicks.has(r.detectorName) : !hiddenDetectorRows.has(r.detectorName)))
+                    .map((r) => r.detectorName));
+                  const withOutput = registered.filter((d) => customResults[d.name] && !customRunning.has(d.name)
+                    && d.name !== DRUM_KIT_DETECTOR && inFilter(d.stem ?? 'mix') && checkedNames.has(d.name));
+                  const kitKept = !!customResults[DRUM_KIT_DETECTOR] && inFilter(
+                    registered.find((d) => d.name === DRUM_KIT_DETECTOR)?.stem ?? 'drums');
+                  const canClear = !isDemo && !!(adminStatus?.isAdmin || adminStatus?.isResearcher);
+                  const listed = detectorSidebar.rows.filter((r) => inFilter(r.stem));
+                  const all = checkRows(listed);
                   return (
-                    <div className="text-[11px] text-slate-400 leading-relaxed space-y-2">
-                      <p>No detector output for this song yet.</p>
-                      {missingStems.size > 0 && (
-                        <p>
-                          Some detectors need the{' '}
-                          <span className="text-slate-200">{[...missingStems].sort().join(', ')}</span>{' '}
-                          stem{missingStems.size === 1 ? '' : 's'}, not yet generated for this song.
-                        </p>
-                      )}
-                      <p>
-                        Run detectors from the{' '}
+                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pb-1 border-b border-white/[0.05]">
+                      <DetectorHeadingCheck
+                        label={`${ran} of ${families.size} run on this song`}
+                        allOn={all.allOn}
+                        allOff={all.allOff}
+                        onSet={all.set}
+                        disabled={all.count === 0}
+                        title={all.allOn ? 'Clear every row below' : 'Check every row below: show the lanes, tick the rest for Run'}
+                        className="min-w-0 text-[10px] text-slate-500"
+                        checkboxClassName={accent.checkbox}
+                      />
+                      <div className="flex shrink-0 items-center gap-1.5">
+                      {/* Same gate the server puts on the wipe as the row's ×. */}
+                      {canClear && !detectorBatch && selectedAudio && withOutput.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => navigate('/custom')}
-                          className="text-sky-400 hover:text-sky-300 hover:underline"
+                          onClick={() => {
+                            // A detector run once per stem is named for its stem
+                            // too, where its name alone would come up twice.
+                            const nameOf = (d: typeof withOutput[number]) => d.label || d.name;
+                            const seen = new Map<string, number>();
+                            for (const d of withOutput) seen.set(nameOf(d), (seen.get(nameOf(d)) ?? 0) + 1);
+                            clearDetectorOutputsForSong(withOutput.map((d) => ({
+                              name: d.name,
+                              label: nameOf(d) + ((seen.get(nameOf(d)) ?? 0) > 1 && d.stem ? ` (${stemFilingLabel(d.stem)})` : ''),
+                            })));
+                          }}
+                          title={`Delete this song's output of the ${withOutput.length} checked detector${withOutput.length === 1 ? '' : 's'}`
+                            + (detectorStemFilter ? ' the stem filter shows' : '')
+                            + (kitKept ? ' — except Drum kit, separated: clear that with its own ×' : '')}
+                          className="shrink-0 rounded border border-white/[0.10] px-1.5 py-px text-[10px] leading-4 text-slate-400 hover:text-rose-200 hover:border-rose-400/40 hover:bg-rose-500/15 transition-colors"
                         >
-                          Custom Detectors
-                        </button>{' '}
-                        page, or tick them under <span className="text-slate-200">Custom</span> in the Algorithms sidebar's <span className="text-slate-200">▶ Run…</span> picker.
-                      </p>
+                          × Clear {withOutput.length}
+                        </button>
+                      )}
+                      {detectorBatch ? (
+                        <span className="text-[10px] text-amber-300 animate-pulse" role="status">
+                          Running {Math.min(detectorBatch.done + 1, detectorBatch.total)} of {detectorBatch.total}…
+                        </span>
+                      ) : !isDemo && selectedAudio && ticked.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            runDetectorsInTurn(ticked.map((d) => d.name), selectedAudio.id, tickedStrictness);
+                          }}
+                          title={`One after another —\n${tickedTitle}`}
+                          className="shrink-0 rounded border border-amber-400/35 px-1.5 py-px text-[10px] leading-4 text-amber-200 hover:bg-amber-500/15 transition-colors"
+                        >
+                          ▶ Run {ticked.length} ticked
+                        </button>
+                      ) : !isDemo && selectedAudio && notRun.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => runDetectorsInTurn(notRun.map((d) => d.name), selectedAudio.id)}
+                          title={`Run, one after another: ${notRun.map((d) => d.label || d.name).join(', ')}`}
+                          className="shrink-0 rounded border border-amber-400/35 px-1.5 py-px text-[10px] leading-4 text-amber-200 hover:bg-amber-500/15 transition-colors"
+                        >
+                          ▶ Run the {notRun.length} not run yet
+                        </button>
+                      )}
+                      </div>
                     </div>
                   );
                 })()}
-                {/* One-click per-stem show/hide for every detector layer of a stem. */}
-                {curatedLayersByStem.stems.length > 0 && (
-                  <StemChipGroup
-                    label="Show per stem"
-                    hint="all detectors at once"
-                    accent={accent}
-                    chips={[
-                      { key: '__all', label: 'All', active: allShown, onClick: () => setShown(allCuratedNames, !allShown) },
-                      {
-                        key: '__none',
-                        label: 'None',
-                        active: noneShown,
-                        title: 'Hide every detector layer on the timeline and the annotation list',
-                        onClick: () => setShown(allCuratedNames, false),
-                      },
-                      ...curatedLayersByStem.stems.map((s) => {
-                        const names = namesForStem(s);
-                        const shown = isStemShown(names);
-                        return {
-                          key: s,
-                          label: s,
-                          active: shown,
-                          title: `${shown ? 'Hide' : 'Show'} every detector ${s} layer on the timeline and the annotation list`,
-                          onClick: () => setShown(names, !shown),
-                        };
-                      }),
-                    ]}
-                  />
-                )}
-                {/* Curated layers grouped by stem; each row toggles a single
-                    detector layer via the shared hiddenCustomAnnotations set.
-                    The ⬇ copy button duplicates the layer into a new editable
-                    Manual layer; an amber count badge shows how many copies
-                    already exist so the user can avoid unintentional doubles. */}
-                {curatedLayersByStem.origins.map((origin) => (
-                  <div key={origin.origin} className="space-y-2">
-                    {origin.title && (
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-amber-300/70 font-medium pt-1">{origin.title}</div>
-                    )}
-                    {origin.stems.map((s) => {
-                      const stemRows = origin.byStem.get(s) ?? [];
-                      // Collect ordered unique groups (null = ungrouped, rendered last).
-                      const groupOrder: Array<string | null> = [];
-                      for (const r of stemRows) {
-                        if (!groupOrder.includes(r.group)) groupOrder.push(r.group);
-                      }
-                      const namedGroups = groupOrder.filter((g): g is string => g !== null);
-                      const hasUngrouped = groupOrder.includes(null);
-                      const orderedGroups = [...namedGroups, ...(hasUngrouped ? [null] : [])];
-                      return (
-                      <div key={s} className="space-y-1">
-                        <div className="text-[9px] uppercase tracking-[0.16em] text-slate-500 capitalize">{s}</div>
-                        {orderedGroups.map((g) => {
-                          const groupRows = stemRows.filter((r) => r.group === g);
-                          return (
-                            <div key={g ?? '__ungrouped'} className="space-y-0.5">
-                              {g !== null && (
-                                <div className="text-[9px] text-slate-600 uppercase tracking-[0.12em] pl-0.5 mt-1">{g}</div>
-                              )}
-                              <div className="flex flex-col gap-1">
-                          {groupRows.map((r) => {
-                            const rEnvelope = customResults[r.detectorName];
-                            const rDoc = detectorOutputDocs[r.detectorName];
-                            const rItems = (rDoc ?? rEnvelope)?.items ?? [];
-                            const rReview = rDoc?.review ?? {};
-                            const rDet = customDetectors.find((d) => d.name === r.detectorName);
-                            const rLabel = rDet?.label ?? r.name;
-                            const rPrimaryMs = (it: { time_ms?: number; start_ms?: number }) =>
-                              (r.type === 'cues' || r.type === 'boundary' || r.type === 'lyrics')
-                                ? (it.time_ms ?? 0) : (it.start_ms ?? 0);
-                            const rKeepable = rItems.filter((it, i) =>
-                              rReview[`${i}:${rPrimaryMs(it as { time_ms?: number; start_ms?: number })}`] !== 'rejected',
-                            );
-                            const rExisting = (r.type !== 'boundary'
-                              ? (cueLayersDoc?.layers.filter(
-                                  (l) => l.importedFrom === rLabel || l.importedFrom === `${rLabel} (✓ accepted)`,
-                                ).length ?? 0)
-                              : 0);
-                            const rCopyDisabled = !selectedAudio || rKeepable.length === 0;
-                            const doCopyLayer = () => {
-                              if (rCopyDisabled) return;
-                              if (r.type === 'boundary') {
-                                const sections: SectionBlock[] = (rKeepable as CustomBoundaryItem[]).map((b) => ({
-                                  time: b.time_ms / 1000,
-                                  type: 'section' as const,
-                                  label: b.label ?? '',
-                                  ...(b.importance ? { importance: b.importance } : {}),
-                                  ...((b.candidates && b.candidates.length > 0)
-                                    ? { candidates: b.candidates.map((ms) => ms / 1000) }
-                                    : {}),
-                                }));
-                                const createdId = copyBoundarySectionsToNewLayer(sections, rLabel);
-                                if (createdId) {
-                                  setLastCopyUndo({ layerId: createdId, label: rLabel, prevSource: activeSourceByType.boundaries, type: 'boundaries' });
-                                }
-                              } else {
-                                const converted = convertDetectorItems(r.type, rKeepable as Parameters<typeof convertDetectorItems>[1]);
-                                if (!converted) return;
-                                const newLayerId = newId();
-                                const prevSrc = activeSourceByType[r.type as AnnotationCategory];
-                                setCueLayersDoc((d) => {
-                                  if (!d) return d;
-                                  const color = pickDefaultLayerColor(d.layers);
-                                  const layer: AnnotationLayer = {
-                                    id: newLayerId,
-                                    name: rLabel,
-                                    type: r.type as 'cues' | 'spans' | 'loops' | 'lyrics',
-                                    visible: true,
-                                    color,
-                                    snap: r.type === 'loops' ? 'bar' : 'beat',
-                                    items: converted as never,
-                                    source: 'user',
-                                    importedFrom: rLabel,
-                                  };
-                                  return { ...d, layers: [...d.layers, layer] };
-                                });
-                                setLastCopyUndo({ layerId: newLayerId, label: rLabel, prevSource: prevSrc, type: r.type as AnnotationCategory });
-                              }
-                            };
-                            return (
-                              <div key={r.id} className="flex items-center gap-1 group/curated-row">
-                                <label className="flex items-center gap-1.5 cursor-pointer select-none flex-1 min-w-0">
-                                  <input
-                                    type="checkbox"
-                                    checked={!hiddenCustomAnnotations.has(r.detectorName)}
-                                    onChange={() => toggleCustomAnnotationVisible(r.detectorName)}
-                                    className={accent.checkbox}
-                                  />
-                                  <span className="inline-block w-2 h-2 rounded-sm shrink-0" style={{ background: r.color }} />
-                                  <span className="text-[11px] text-slate-300 truncate">{r.name}</span>
-                                </label>
-                                <button
-                                  type="button"
-                                  onClick={doCopyLayer}
-                                  disabled={rCopyDisabled}
-                                  title={rCopyDisabled
-                                    ? `${r.name} has no output yet — run it first`
-                                    : rExisting > 0
-                                      ? `Copy to a new manual layer — ${rExisting} existing ${rExisting === 1 ? 'copy' : 'copies'} already`
-                                      : `Copy "${r.name}" to a new editable manual layer`}
-                                  className={`shrink-0 flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] leading-none transition-all disabled:hidden ${
-                                    rExisting > 0
-                                      ? 'text-amber-300 hover:text-amber-100 hover:bg-amber-500/20'
-                                      : 'opacity-0 group-hover/curated-row:opacity-100 focus:opacity-100 text-slate-400 hover:text-white hover:bg-white/[0.10]'
-                                  }`}
-                                >
-                                  ⬇{rExisting > 0 && <span className="font-mono ml-px">{rExisting}</span>}
-                                </button>
-                              </div>
-                            );
-                          })}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                {/* Every registered detector, once, whether or not it has run:
+                    a row with output shows/hides its lane and keeps the ⬇ copy
+                    and × delete on hover; every row can run its detector on
+                    this song. Custom first, then Default under its own title
+                    when both are present. */}
+                {detectorSidebar.origins.map((origin) => {
+                  const entries = entriesOf(origin);
+                  if (entries.length === 0) return null;
+                  const originRows = entries.flatMap((e) => e.members);
+                  const c = checkRows(originRows);
+                  return (
+                    <div key={origin.origin} className="flex flex-col gap-0.5">
+                      {origin.title && origin.origin !== 'custom' && (
+                        <DetectorHeadingCheck
+                          label={origin.title}
+                          allOn={c.allOn}
+                          allOff={c.allOff}
+                          onSet={c.set}
+                          disabled={c.count === 0}
+                          className="pt-2 pb-0.5 text-[10px] uppercase tracking-[0.16em] text-amber-300/70 font-medium"
+                          checkboxClassName={accent.checkbox}
+                        />
+                      )}
+                      {clustersOf(entries).map(({ group, entries: inGroup }, i, clusters) => {
+                        const rows = inGroup.flatMap((e) => e.members);
+                        const gc = checkRows(rows);
+                        const titled = clusters.some((cl) => cl.group !== null);
+                        const label = group ?? 'Other';
+                        return (
+                          <div key={group ?? '\u0000other'} role="group" aria-label={titled ? label : undefined} className="flex flex-col gap-0.5">
+                            {titled && (
+                              <DetectorHeadingCheck
+                                label={label}
+                                allOn={gc.allOn}
+                                allOff={gc.allOff}
+                                onSet={gc.set}
+                                disabled={gc.count === 0}
+                                className={`${i === 0 ? 'pt-1' : 'pt-2.5'} pb-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-400 font-medium`}
+                                checkboxClassName={accent.checkbox}
+                              />
+                            )}
+                            {inGroup.map(({ family, members }) => (members.length === 1
+                              ? renderDetectorRow(members[0])
+                              : renderDetectorFamily(family, members)))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
               </div>
             </aside>
           );
@@ -12711,16 +14564,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {feature === 'annotate' && selectedAudio && annotateSidebarCollapsed && !isMobile && (
           // In-layout rail (not a floating tab): its own slim column in the flex
           // row, so it never overlaps the Curated panel when that one is open.
-          <aside className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
-            <button
-              onClick={() => setAnnotateSidebarCollapsed(false)}
-              title="Show annotation tools"
-              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
-            >
-              <span className="text-xl leading-none font-bold">‹</span>
-              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Annotate</span>
-            </button>
-          </aside>
+          <CollapsedSidebarRail side="right" label="Annotate" title="Show annotation tools" onExpand={() => setAnnotateSidebarCollapsed(false)} />
         )}
         {feature === 'annotate' && selectedAudio && (!annotateSidebarCollapsed || mobilePanel === 'tools') && (
           <aside
@@ -12730,7 +14574,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                and draggable above them; the grip below pulls them to full
                height for the long lists (see index.css). */
             data-mobile-open={mobilePanel === 'tools' ? (toolsSheetFull ? 'full' : 'dock') : undefined}
-            className={`shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative ${
+            className={`shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 flex flex-col relative ${
               annotationLock.shared && !annotationLock.canEdit ? 'opacity-60' : ''
             }`}
           >
@@ -12746,15 +14590,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 {toolsSheetFull ? 'Shrink' : 'Expand'}
               </button>
             )}
-            <div
-              data-resize-handle
-              onMouseDown={startAnnotateSidebarResize}
-              onDoubleClick={() => setAnnotateSidebarWidth(ANNOTATE_SIDEBAR_DEFAULT_WIDTH)}
-              title="Drag to resize · double-click to reset"
-              className={`absolute top-0 left-0 h-full w-1.5 -ml-0.5 cursor-col-resize z-20 group ${annotateSidebarResizing ? 'bg-sky-500/40' : 'hover:bg-sky-500/30'} transition-colors`}
-            >
-              <div className={`absolute top-0 left-0 h-full w-px ${annotateSidebarResizing ? 'bg-sky-400' : 'bg-transparent group-hover:bg-sky-400/60'}`} />
-            </div>
+            <SidebarResizeHandle sidebar={annotateSidebar} />
             <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.05] shrink-0">
               <span className="text-[13px] uppercase tracking-[0.18em] text-slate-100 font-bold">Annotate</span>
               {annotationLock.shared && !annotationLock.canEdit && (
@@ -12763,7 +14599,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 // control that looks live and does nothing is worse than one
                 // that says so.
                 <span
-                  title="Someone else holds this song's edit lock. Take it from the bar below the waveform to make changes."
+                  title="Someone else has grabbed this song. Take it over from the bar above the waveform to make changes."
                   className="px-2 py-0.5 rounded-full text-[10px] uppercase tracking-[0.12em] font-semibold border border-amber-400/40 bg-amber-500/15 text-amber-200 whitespace-nowrap"
                 >🔒 Read-only</span>
               )}
@@ -12870,11 +14706,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     onItemToggleImportance={handleUnifiedItemToggleImportance}
                     onDeleteLayer={handleUnifiedLayerDelete}
                     onRenameLayer={handleUnifiedLayerRename}
+                    onMergeLayer={handleUnifiedLayerMerge}
                     onChangeItemLabel={handleUnifiedItemLabelChange}
                     selectedLayerIdByType={selectedLayerIdByType}
                     onSelectLayer={handleUnifiedSelectLayer}
-                    experimentalLoopsAndPatterns={settings.experimentalLoopsAndPatterns}
-                    experimentalLyricsFamily={settings.experimentalLyricsFamily}
                     actionsSlot={actionsSlot}
                     addAtPlayhead={addAtPlayhead}
                   />
@@ -12886,15 +14721,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     && lastCopyUndo.type === activeAnnotationType && (
                     <div className="mb-2 flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-amber-400/30 bg-amber-500/[0.08] text-[12px] text-amber-100">
                       <span className="truncate">
-                        Copied “{lastCopyUndo.label}” into a new layer.
+                        Copied “{lastCopyUndo.label}” into {lastCopyUndo.alsoLayerIds?.length ? `${lastCopyUndo.alsoLayerIds.length + 1} new layers` : 'a new layer'}.
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => {
                             const u = lastCopyUndo;
+                            const gone = new Set([u.layerId, ...(u.alsoLayerIds ?? [])]);
                             setCueLayersDoc((d) => (d
-                              ? { ...d, layers: d.layers.filter((l) => l.id !== u.layerId) }
+                              ? { ...d, layers: d.layers.filter((l) => !gone.has(l.id)) }
                               : d));
                             setActiveSourceByType((m) => ({ ...m, [u.type]: u.prevSource }));
                             setLastCopyUndo(null);
@@ -12960,16 +14796,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       if (keep.length === 0) return;
                       const importedFrom = mode === 'accepted' ? `${detLabel} (✓ accepted)` : detLabel;
                       if (activeAnnotationType === 'boundaries') {
-                        const sections: SectionBlock[] = (keep as CustomBoundaryItem[]).map((b) => ({
-                          time: b.time_ms / 1000,
-                          type: 'section',
-                          label: b.label ?? '',
-                          ...(b.importance ? { importance: b.importance } : {}),
-                          ...(b.candidates && b.candidates.length > 0
-                            ? { candidates: b.candidates.map((ms) => ms / 1000) }
-                            : {}),
-                        }));
-                        const createdId = copyBoundarySectionsToNewLayer(sections, importedFrom);
+                        const items = convertDetectorItems(
+                          'boundaries', keep as ReviewableItem[],
+                        ) as BoundaryItem[] | null;
+                        if (!items) return;
+                        const createdId = copyBoundaryItemsToNewLayer(items, importedFrom);
                         setActiveSourceByType((m) => ({ ...m, boundaries: 'manual' }));
                         if (createdId) {
                           setLastCopyUndo({ layerId: createdId, label: importedFrom, prevSource: src, type: 'boundaries' });
@@ -13089,9 +14920,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
 
                 // Source picker options for the active category — Manual +
                 // Auto-guess (real on boundaries, stub elsewhere) + one entry
-                // per matching custom detector.
+                // per matching custom detector. Picking a detector opens its
+                // item-by-item review, so only one with `review` is offered.
                 const matchingDetectors = customDetectors.filter((det) =>
-                  det.is_annotation
+                  det.review
                   && det.status === 'ok'
                   && customDetectorMatchesCategory(det.output_kind, category),
                 );
@@ -13199,61 +15031,28 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   && (customRunning.has(detectorName) || !!customResults[detectorName]);
                 const pillHasItems = c.hasItems || detectorHasItems;
 
-                // Add-mode hint (how to add to the active type). Travels with
-                // the add controls inside the actions panel under the chip.
-                const hintNode = supportsPending(activeAnnotationType, activeBoundarySource ?? undefined) && !effectiveAnnotationSelection ? (
-                  <span className="text-[10px] text-slate-500">
-                    {activeAnnotationType === 'loops'
-                      ? 'Drag the visualization to select a loop region.'
-                      : activeAnnotationType === 'spans'
-                        ? 'Drag the visualization to select a span region.'
-                        : 'Click the visualization where the section ends — it runs from the last boundary (or 0:00) to your click.'}
-                  </span>
-                ) : null;
-
-                // "+ Add @ playhead" now lives on each layer card in the list
-                // below, not as one big "+" above them — the annotator presses
-                // Add on the card they want the item in, so the target layer is
-                // never a guess. Riff Patterns keeps the toolbar "+" because it
-                // has to ask *what kind* of thing to create first.
-                const perLayerAddType = c.canAddAtPlayhead && activeAnnotationType !== 'riff-patterns'
-                  ? activeAnnotationType
-                  : null;
-                // Editable layers of the active type that could host the add.
-                // With none, there is no card to press, so the toolbar "+"
-                // stays as the bootstrap that creates the first layer/item.
-                const addableLayerCount = (() => {
-                  if (perLayerAddType === null) return 0;
-                  const list =
-                    perLayerAddType === 'boundaries' ? boundaryLayersList
-                    : perLayerAddType === 'cues'     ? (cueLayers ?? [])
-                    : perLayerAddType === 'spans'  ? spanLayers
-                    : perLayerAddType === 'loops'  ? loopLayers
-                    : perLayerAddType === 'lyrics' ? lyricsLayers
-                    : [];
-                  return list.filter((l) => l.readOnly !== true).length;
-                })();
-                // The energies lane answers Add with the ⚡ Energy popover
-                // instead of a blank span — see handleOpenEnergySpanExportForLayer.
-                const isEnergySpanLane = (layerId: string) => perLayerAddType === 'spans'
-                  && spanLayers.some((l) => l.id === layerId && l.name === ENERGY_SPAN_LAYER_NAME);
-                const perLayerAdd = perLayerAddType !== null && addableLayerCount > 0
+                // Cues, spans, loops and lyrics are made on the lane itself (a
+                // click or drag on its empty part), so the sidebar offers no
+                // "+ Add" for them — neither on the layer cards nor as the
+                // toolbar "+" that used to create a layer and drop an item at
+                // the playhead in one press. New layer makes an empty lane to
+                // draw on; ⚡ Energy stays on the drag-region pill.
+                const addsOnLane = activeAnnotationType === 'cues' || activeAnnotationType === 'spans'
+                  || activeAnnotationType === 'loops' || activeAnnotationType === 'lyrics';
+                // Boundaries have no lane gesture yet: their "+ Add @ playhead"
+                // lives on each layer card in the list below, so the target
+                // layer is never a guess. With no card to press, the toolbar
+                // "+" stays as the bootstrap that creates the first section.
+                // Riff Patterns keeps the toolbar "+" because it has to ask
+                // *what kind* of thing to create first.
+                const hasBoundaryCard = boundaryLayersList.some((l) => l.readOnly !== true);
+                const perLayerAdd = c.canAddAtPlayhead && activeAnnotationType === 'boundaries' && hasBoundaryCard
                   ? {
-                    label: (layerId: string) => (isEnergySpanLane(layerId)
-                      ? '⚡ Measure energy'
-                      : c.addLabel),
-                    onAdd: (layerId: string, anchor: { x: number; y: number }) => {
-                      if (isEnergySpanLane(layerId)) {
-                        handleOpenEnergySpanExportForLayer(layerId, anchor);
-                        return;
-                      }
+                    label: c.addLabel,
+                    onAdd: (layerId: string) => {
                       // Adding into a layer also makes it the active target,
                       // matching what the old layer-picker ▾ did.
-                      if (perLayerAddType === 'boundaries')    setSelectedBoundaryLayerId(layerId);
-                      else if (perLayerAddType === 'cues')     setSelectedCueLayerId(layerId);
-                      else if (perLayerAddType === 'spans')    setSelectedSpanLayerId(layerId);
-                      else if (perLayerAddType === 'loops')    setSelectedLoopLayerId(layerId);
-                      else if (perLayerAddType === 'lyrics')   setSelectedLyricsLayerId(layerId);
+                      setSelectedBoundaryLayerId(layerId);
                       const ctl = controllerRef.current;
                       const at = liveSongTime() ?? undefined;
                       if (ctl?.addAtPlayheadInLayer) ctl.addAtPlayheadInLayer(layerId, at);
@@ -13324,7 +15123,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                           if (!sourceValue.startsWith('detector:')) return undefined;
                           const detectorName = sourceValue.slice('detector:'.length);
                           const slug = selectedAudio.id;
-                          return () => rerunDetectorForCurrentSong(detectorName, slug);
+                          return () => rerunDetectorForCurrentSong(
+                            detectorName, slug, customResults[detectorName]?.strictness === undefined
+                              ? undefined : strictnessLevel(customResults[detectorName].strictness),
+                          );
                         })()}
                         rerunBusy={
                           sourceValue.startsWith('detector:')
@@ -13333,7 +15135,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                       />
                       {renderList(
                         <div className="space-y-2">
-                          {hintNode}
                           <MarkerActionsPanel
                         {...c}
                         canUndo={canUndo}
@@ -13359,7 +15160,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                               // Pill and preview are two views of the same span — tear both down together.
                               if (previewRegionRef.current) handlePreviewDismiss();
                             }}
-                            addAtPlayhead={c.canAddAtPlayhead && !perLayerAdd ? {
+                            addAtPlayhead={c.canAddAtPlayhead && !perLayerAdd && !addsOnLane ? {
                               label: c.addLabel,
                               onAdd: () => controllerRef.current?.addAtPlayhead?.(liveSongTime() ?? undefined),
                             } : undefined}
@@ -13417,13 +15218,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                                   name: effectiveAnnotationSelection?.t2 != null ? 'New Node (from selection)' : 'New Node',
                                   color: '#f97316',
                                 },
-                                {
-                                  id: 'boundary-node',
-                                  name: effectiveAnnotationSelection?.t2 != null
-                                    ? 'New Boundary Node (from selection)'
-                                    : 'New Boundary Node',
-                                  color: '#f97316',
-                                },
                                 { id: 'combo', name: 'New Combo', color: '#818cf8' },
                                 {
                                   id: 'instance',
@@ -13436,30 +15230,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                               onPick: (id) => controllerRef.current?.addKind?.(id),
                             } : undefined}
                             crossLayerAction={
-                              activeAnnotationType === 'cues' && settings.experimentalLoopsAndPatterns
+                              activeAnnotationType === 'cues'
                                 ? {
                                   label: '→ Riff Node',
                                   title: 'Generate a riff node from this selection',
-                                  // Each destination appears twice: as a grid
-                                  // node (onsets snapped to an inferred
-                                  // subdivision) and as a boundary node
-                                  // ("blocks" — onsets kept at their exact
-                                  // fractional beat positions, nothing
-                                  // quantised). See
-                                  // handleGenerateRiffNodeFromSelection.
+                                  // The onsets land as hits on the pulse they
+                                  // fit — see handleGenerateRiffNodeFromSelection.
                                   options: [
                                     ...riffPatternLayers.map((l) => ({ id: l.id, name: l.name, color: l.color })),
                                     { id: NEW_RIFF_LAYER_ID, name: '+ New Riff Layer', color: '#f97316' },
-                                    ...riffPatternLayers.map((l) => ({
-                                      id: `${RIFF_BOUNDARY_PICK_PREFIX}${l.id}`,
-                                      name: `${l.name} — as blocks (no grid)`,
-                                      color: l.color,
-                                    })),
-                                    {
-                                      id: `${RIFF_BOUNDARY_PICK_PREFIX}${NEW_RIFF_LAYER_ID}`,
-                                      name: '+ New Riff Layer — as blocks (no grid)',
-                                      color: '#f97316',
-                                    },
                                   ],
                                   onPick: handleGenerateRiffNodeFromSelection,
                                 }
@@ -13554,16 +15333,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {feature === 'inspect-song' && selectedAudio && algoSidebarCollapsed && !isMobile && (
           // In-layout rail (not a floating tab): occupies its own slim column
           // in the flex row, so it can never overlap the sibling panel.
-          <aside className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
-            <button
-              onClick={() => setAlgoSidebarCollapsed(false)}
-              title="Show algorithms panel"
-              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
-            >
-              <span className="text-xl leading-none font-bold">‹</span>
-              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Algorithms</span>
-            </button>
-          </aside>
+          <CollapsedSidebarRail side="right" label="Algorithms" title="Show algorithms panel" onExpand={() => setAlgoSidebarCollapsed(false)} />
         )}
         {feature === 'inspect-song' && selectedAudio && (!algoSidebarCollapsed || mobilePanel === 'algorithms') && (() => {
           const isRunning = runJob?.status === 'running';
@@ -13581,21 +15351,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               ? applyAllStemsToSelection(selectedAlgorithms, runStemsForCount)
               : applyStemToSelection(selectedAlgorithms, runStemSource),
           ).length;
+          // How many ticked algorithms cut their features per beat — the ones
+          // the Beat grid choice applies to; the footer names the grid for them.
+          const gridCutTicked = [...selectedAlgorithms].filter(isGridCutAlgo).length;
+          const songHasGrid = isGridReady(songInfo?.song === selectedAudio.id ? songInfo : songInfos[selectedAudio.id]);
           return (
             <aside
               style={{ width: algoSidebarWidth }}
               data-mobile-open={mobilePanel === 'algorithms' || undefined}
-              className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
+              className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 flex flex-col relative"
             >
-              <div
-                data-resize-handle
-                onMouseDown={startAlgoSidebarResize}
-                onDoubleClick={() => setAlgoSidebarWidth(ALGO_SIDEBAR_DEFAULT_WIDTH)}
-                title="Drag to resize · double-click to reset"
-                className={`absolute top-0 left-0 h-full w-1.5 -ml-0.5 cursor-col-resize z-20 group ${algoSidebarResizing ? 'bg-violet-500/40' : 'hover:bg-violet-500/30'} transition-colors`}
-              >
-                <div className={`absolute top-0 left-0 h-full w-px ${algoSidebarResizing ? 'bg-violet-400' : 'bg-transparent group-hover:bg-violet-400/60'}`} />
-              </div>
+              <SidebarResizeHandle sidebar={algoSidebar} accent="violet" />
               <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.05] shrink-0">
                 <span className="text-[10px] uppercase tracking-[0.18em] text-slate-400 font-semibold">Algorithms</span>
                 <button
@@ -13640,7 +15406,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                   {/* Dimming scrim — signals a distinct "run/compute" mode so it
                       isn't mistaken for the inline visibility sidebar, which uses
                       the same chip panel. Click anywhere to dismiss. */}
-                  {!isRunning && (
+                  {runPickerModal && (
                     <div
                       className="fixed inset-0 z-[999] bg-black/50 backdrop-blur-[1px]"
                       onClick={() => setRunPickerOpen(false)}
@@ -13650,10 +15416,10 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 <div
                   ref={runPickerRef}
                   role="dialog"
-                  aria-modal={!isRunning}
+                  aria-modal={runPickerModal}
                   aria-label="Run algorithms"
                   className="fixed z-[1000] rounded-lg border-2 border-violet-500/60 ring-2 ring-violet-500/20 bg-[#14171d] shadow-2xl shadow-violet-950/50 flex flex-col overflow-hidden"
-                  style={{ top: runPickerPos.top, left: runPickerPos.left, width: runPickerPos.width, maxHeight: `calc(100vh - ${runPickerPos.top}px - 12px)` }}
+                  style={{ top: runPickerPos.top, left: runPickerPos.left, width: runPickerPos.width, maxHeight: `calc(100 * var(--vh-u, 1vh) - ${runPickerPos.top}px - 12px)` }}
                 >
                   <div className="flex items-center justify-between gap-2 px-3 py-2 bg-violet-500/15 border-b-2 border-violet-500/40 shrink-0">
                     <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-violet-200 font-semibold">
@@ -13687,7 +15453,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         Select missing
                       </button>
                     </div>
-                    {availableStemSources.length <= 1 && selectedAudio && !isDemo && (() => {
+                    {availableStemSources.length <= 1 && selectedAudio && !isDemo && gpuCaps.demucs && (() => {
                       // Per-stem runs need separated Demucs stems first. Without a
                       // cached manifest the "Run on" pills below never appear, so the
                       // whole per-stem capability is invisible. Surface it here with a
@@ -13755,9 +15521,33 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                         )}
                       </div>
                     )}
+                    <div className="mb-3 pb-3 border-b border-white/[0.06]">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1.5">
+                        Beat grid
+                      </div>
+                      <AlgoGridChoice
+                        value={algoGrid}
+                        onChange={setAlgoGrid}
+                        songHasGrid={songHasGrid}
+                        onOpenPrep={() => { setRunPickerOpen(false); navigate('/prep'); }}
+                      />
+                      <p className="text-[10px] leading-snug text-slate-500">
+                        Used by <span className="text-slate-300">MSAF</span>, <span className="text-slate-300">Ruptures</span> and{' '}
+                        <span className="text-slate-300">LoCoMotif</span>. All-In-One always finds its own beats.
+                      </p>
+                    </div>
                     {renderRunOptionsPanel(true, 'run')}
                   </div>
                   <div className="shrink-0 border-t border-white/[0.06] p-2.5">
+                    {gridCutTicked > 0 && (
+                      <p className={`mb-1.5 text-[11px] leading-snug ${algoGrid === 'user' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                        {gridCutTicked === selectedAlgorithms.size
+                          ? (gridCutTicked === 1 ? 'Runs on ' : `All ${gridCutTicked} run on `)
+                          : `${gridCutTicked} of the ${selectedAlgorithms.size} run on `}
+                        <span className="font-semibold">{algoGrid === 'user' ? 'your grid' : 'their own beats (automatic)'}</span>
+                        {algoGrid === 'user' && !songHasGrid ? ' — but this song has no grid yet, so they will fail.' : '.'}
+                      </p>
+                    )}
                     <button
                       onClick={() => { handleRunForCurrentSong(); setRunPickerOpen(false); }}
                       disabled={runDisabled}
@@ -13797,32 +15587,15 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         {feature === 'prep' && activeStage === 'annotation' && selectedAudio && prepSidebarCollapsed && !isMobile && (
           // In-layout rail (not a floating tab): occupies its own slim column
           // in the flex row, so it can never overlap the sibling panel.
-          <aside className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm">
-            <button
-              onClick={() => setPrepSidebarCollapsed(false)}
-              title="Show song setup panel"
-              className="h-full w-9 flex flex-col items-center gap-3 pt-3 text-slate-300 hover:text-white hover:bg-white/[0.03] transition-colors"
-            >
-              <span className="text-xl leading-none font-bold">‹</span>
-              <span className="text-[11px] uppercase tracking-[0.18em] font-semibold" style={{ writingMode: 'vertical-rl' }}>Song setup</span>
-            </button>
-          </aside>
+          <CollapsedSidebarRail side="right" label="Song setup" title="Show song setup panel" onExpand={() => setPrepSidebarCollapsed(false)} />
         )}
         {feature === 'prep' && activeStage === 'annotation' && selectedAudio && (!prepSidebarCollapsed || mobilePanel === 'setup') && (
           <aside
             style={{ width: prepSidebarWidth }}
             data-mobile-open={mobilePanel === 'setup' || undefined}
-            className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 backdrop-blur-sm flex flex-col relative"
+            className="shrink-0 tc-aside self-start border-l border-white/[0.06] bg-[#14171d]/80 flex flex-col relative"
           >
-            <div
-              data-resize-handle
-              onMouseDown={startPrepSidebarResize}
-              onDoubleClick={() => setPrepSidebarWidth(PREP_SIDEBAR_DEFAULT_WIDTH)}
-              title="Drag to resize · double-click to reset"
-              className={`absolute top-0 left-0 h-full w-1.5 -ml-0.5 cursor-col-resize z-20 group ${prepSidebarResizing ? 'bg-violet-500/40' : 'hover:bg-violet-500/30'} transition-colors`}
-            >
-              <div className={`absolute top-0 left-0 h-full w-px ${prepSidebarResizing ? 'bg-violet-400' : 'bg-transparent group-hover:bg-violet-400/60'}`} />
-            </div>
+            <SidebarResizeHandle sidebar={prepSidebar} accent="violet" />
             <div className="flex items-center justify-between gap-2 px-3 h-9 border-b border-white/[0.05] shrink-0">
               <span className="text-[10px] uppercase tracking-[0.18em] text-slate-400 font-semibold">Song setup</span>
               {/* Undo covers everything the panel below can change — BPM, meter,
@@ -13868,7 +15641,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 onAlignGridToPlayhead={(adminStatus?.isAdmin || isDemo) ? handleAlignGridToPlayhead : undefined}
                 saveState={songInfoSaveState}
                 onRetrySave={retrySongInfoSave}
-                playerTime={playerTime}
                 playerIsPlaying={playerIsPlaying}
                 getSongTime={liveSongTime}
                 playbackRate={playbackRate}
@@ -13886,7 +15658,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                 segmentsSlot={(
                   <GridSegmentListEditor
                     segments={gridSegments}
-                    playerTime={playerTime}
                     selectedId={selectedSegmentId}
                     locked={!canEditGrid}
                     onSelect={(seg, at) => {
@@ -13895,7 +15666,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
                     }}
                     onSeek={(t) => seekRef.current?.(t)}
                     onDelete={canEditGrid ? handleMergeGridSegment : undefined}
-                    onSplitAtPlayhead={canEditGrid ? () => handleSplitGridAt(playerTime) : undefined}
+                    onSplitAtPlayhead={canEditGrid ? () => handleSplitGridAt(playheadClock.get()) : undefined}
                     showHeader={false}
                   />
                 )}
@@ -14109,27 +15880,31 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ),
           }));
         };
-        const cueIsPlaying = playerIsPlaying && playerTime >= cue.time && playerTime < cue.time + 0.5;
         return (
-          <CueEditPopover
-            layer={layer}
-            cue={cue}
-            readOnly={isReadOnly}
-            rawOutput={isReadOnly ? rawDetectorItem(layer.source, cue.id, customResults) : undefined}
-            popoverRef={cuePopover.popoverRef}
-            positionStyle={cuePopover.positionStyle}
-            onChange={onChange}
-            onDelete={onDelete}
-            onClose={cuePopover.close}
-            onPlay={() => handleSeekAndPlay(cue.time, cue.time + 0.5)}
-            onStop={handlePause}
-            isPlaying={cueIsPlaying}
-            bpm={bpm}
-            gridOffset={songInfo?.gridOffset ?? 0}
-            beatsPerBar={beatsPerBar}
-            segments={gridSegments}
-            currentTime={playerTime}
-          />
+          <PlayheadWithin active={playerIsPlaying} start={cue.time} end={cue.time + 0.5}>
+            {(cueIsPlaying) => (
+              <CueEditPopover
+                layer={layer}
+                cue={cue}
+                readOnly={isReadOnly}
+                rawOutput={isReadOnly ? rawDetectorItem(layer.source, cue.id, customResults) : undefined}
+                laneMove={cardLaneMove(layer, cue, cuePopover.retarget)}
+                popoverRef={cuePopover.popoverRef}
+                positionStyle={cuePopover.positionStyle}
+                onChange={onChange}
+                onDelete={onDelete}
+                onClose={cuePopover.close}
+                onDone={laneDraft?.itemId === cue.id ? keepLaneDraft : undefined}
+                onPlay={() => handleSeekAndPlay(cue.time, cue.time + 0.5)}
+                onStop={handlePause}
+                isPlaying={cueIsPlaying}
+                bpm={bpm}
+                gridOffset={songInfo?.gridOffset ?? 0}
+                beatsPerBar={beatsPerBar}
+                segments={gridSegments}
+              />
+            )}
+          </PlayheadWithin>
         );
       })()}
 
@@ -14159,27 +15934,32 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ),
           }));
         };
-        const spanIsPlaying = playerIsPlaying && playerTime >= span.start && playerTime < span.end;
         return (
-          <SpanEditPopover
-            layer={layer}
-            span={span}
-            readOnly={isReadOnly}
-            rawOutput={isReadOnly ? rawDetectorItem(layer.source, span.id, customResults) : undefined}
-            popoverRef={spanPopover.popoverRef}
-            positionStyle={spanPopover.positionStyle}
-            onChange={onChange}
-            onDelete={onDelete}
-            onClose={spanPopover.close}
-            onPlay={() => handleSeekAndPlay(span.start, span.end)}
-            onStop={handlePause}
-            isPlaying={spanIsPlaying}
-            bpm={bpm}
-            gridOffset={songInfo?.gridOffset ?? 0}
-            beatsPerBar={beatsPerBar}
-            segments={gridSegments}
-            currentTime={playerTime}
-          />
+          <PlayheadWithin active={playerIsPlaying} start={span.start} end={span.end}>
+            {(spanIsPlaying) => (
+              <SpanEditPopover
+                layer={layer}
+                span={span}
+                readOnly={isReadOnly}
+                rawOutput={isReadOnly ? rawDetectorItem(layer.source, span.id, customResults) : undefined}
+                laneMove={cardLaneMove(layer, span, spanPopover.retarget)}
+                popoverRef={spanPopover.popoverRef}
+                positionStyle={spanPopover.positionStyle}
+                onChange={onChange}
+                onDelete={onDelete}
+                onClose={spanPopover.close}
+                onDone={laneDraft?.itemId === span.id ? keepLaneDraft : undefined}
+                onPlay={() => handleSeekAndPlay(span.start, span.end)}
+                onStop={handlePause}
+                isPlaying={spanIsPlaying}
+                bpm={bpm}
+                gridOffset={songInfo?.gridOffset ?? 0}
+                beatsPerBar={beatsPerBar}
+                segments={gridSegments}
+                adsr={itemAdsr(layer, span.id)}
+              />
+            )}
+          </PlayheadWithin>
         );
       })()}
 
@@ -14193,7 +15973,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         const section = idx >= 0 ? layer!.items[idx] : undefined;
         if (!layer || !section) return null;
         const endT = sectionEnd(layer.items, idx, duration);
-        const sectionIsPlaying = playerIsPlaying && playerTime >= section.time && playerTime < endT;
         const onChange = (patch: Partial<SectionBlock>) => {
           updateBoundaryItems(layerId, (prev) => prev.map(
             (it) => (it.id === section.id ? { ...it, ...patch } : it),
@@ -14204,24 +15983,92 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           boundaryPopover.close();
         };
         return (
-          <BoundaryEditPopover
-            index={idx}
-            section={section}
-            endTime={endT}
-            popoverRef={boundaryPopover.popoverRef}
-            positionStyle={boundaryPopover.positionStyle}
-            onChange={onChange}
-            onDelete={onDelete}
-            onClose={boundaryPopover.close}
-            onPlay={() => handleSeekAndPlay(section.time, endT)}
-            onStop={handlePause}
-            isPlaying={sectionIsPlaying}
-            bpm={bpm}
-            gridOffset={songInfo?.gridOffset ?? 0}
-            beatsPerBar={beatsPerBar}
-            segments={gridSegments}
-            currentTime={playerTime}
-          />
+          <PlayheadWithin active={playerIsPlaying} start={section.time} end={endT}>
+            {(sectionIsPlaying) => (
+              <BoundaryEditPopover
+                index={idx}
+                section={section}
+                endTime={endT}
+                popoverRef={boundaryPopover.popoverRef}
+                positionStyle={boundaryPopover.positionStyle}
+                onChange={onChange}
+                onDelete={onDelete}
+                onClose={boundaryPopover.close}
+                onPlay={() => handleSeekAndPlay(section.time, endT)}
+                onStop={handlePause}
+                isPlaying={sectionIsPlaying}
+                bpm={bpm}
+                gridOffset={songInfo?.gridOffset ?? 0}
+                beatsPerBar={beatsPerBar}
+                segments={gridSegments}
+              />
+            )}
+          </PlayheadWithin>
+        );
+      })()}
+
+      {/* Floating Boundary edit popover for a MERGED boundary — click on the
+          Merge row. Same card as a layer's boundary; its edits live with the
+          blend and land in the layer on commit. Drop takes a detector's
+          boundary out of the blend (it stays as a ghost tick to click back);
+          a boundary only the annotator split in is simply removed. Split puts
+          a new boundary at the playhead. */}
+      {mergePopover.open && (() => {
+        const at = Number(mergePopover.open!.itemId);
+        const kept = keptInOrder(mergeBoundaries);
+        const idx = kept.findIndex((b) => b.time === at);
+        const b = idx >= 0 ? kept[idx] : undefined;
+        if (!b) return null;
+        const section = mergedToSection(b);
+        const endT = kept[idx + 1] ? mergedStart(kept[idx + 1]) : duration;
+        // Split needs the playhead clear of both edges, by the same margin
+        // that makes two boundaries "the same one".
+        return (
+          <PlayheadWithin start={section.time + EDGE_EPS} end={endT - EDGE_EPS}>
+            {(canSplit) => (
+          <PlayheadWithin active={playerIsPlaying} start={section.time} end={endT}>
+            {(sectionIsPlaying) => (
+              <BoundaryEditPopover
+                index={idx}
+                section={section}
+                endTime={endT}
+                popoverRef={mergePopover.popoverRef}
+                positionStyle={mergePopover.positionStyle}
+                onChange={(patch) => setMergeWork(
+                  (w) => ({ ...w, edits: patchMergeEdit(w.edits, b, patch) }),
+                  // Typing a label is one undo step, not one per keystroke.
+                  { coalesceKey: `merge-edit:${b.time}:${Object.keys(patch).sort().join(',')}` },
+                )}
+                onDelete={() => {
+                  setMergeWork((w) => (isHandOnly(b)
+                    ? {
+                      ...w,
+                      added: removeMergeBoundary(w.added, b),
+                      edits: w.edits.filter((e) => Math.abs(e.at - b.time) >= EDGE_EPS),
+                    }
+                    : { ...w, dropped: toggleMergeDropped(w.dropped, b) }));
+                  mergePopover.close();
+                }}
+                title={`Merge boundary · starts ${fmtMergeTime(section.time)}`}
+                deleteLabel={isHandOnly(b) ? 'Remove' : 'Drop'}
+                deleteTitle={isHandOnly(b)
+                  ? 'Remove the boundary you split in (⌘Z to undo)'
+                  : 'Drop this boundary from the merge — it stays on the lane as a faint tick; click the tick, or ⌘Z, to put it back'}
+                onSplit={() => setMergeWork((w) => ({ ...w, added: addMergeBoundary(w.added, playheadClock.get()) }))}
+                canSplit={canSplit}
+                onClose={mergePopover.close}
+                onPlay={() => handleSeekAndPlay(section.time, endT)}
+                onStop={handlePause}
+                isPlaying={sectionIsPlaying}
+                bpm={bpm}
+                gridOffset={songInfo?.gridOffset ?? 0}
+                beatsPerBar={beatsPerBar}
+                segments={gridSegments}
+              />
+            )}
+          </PlayheadWithin>
+            )}
+          </PlayheadWithin>
         );
       })()}
 
@@ -14258,11 +16105,13 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             loop={loop}
             readOnly={isReadOnly}
             rawOutput={isReadOnly ? rawDetectorItem(layer.source, loop.id, customResults) : undefined}
+            laneMove={cardLaneMove(layer, loop, loopPopover.retarget)}
             popoverRef={loopPopover.popoverRef}
             positionStyle={loopPopover.positionStyle}
             onChange={onChange}
             onDelete={onDelete}
             onClose={loopPopover.close}
+            onDone={laneDraft?.itemId === loop.id ? keepLaneDraft : undefined}
             onPlay={() => playLoopExclusive(loop.id, loop.start, loop.end, { snapZeroCross: true })}
             onStop={loopPlayback.stop}
             isPlaying={loopIsPlaying}
@@ -14270,7 +16119,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             gridOffset={songInfo?.gridOffset ?? 0}
             beatsPerBar={beatsPerBar}
             segments={gridSegments}
-            currentTime={playerTime}
           />
         );
       })()}
@@ -14283,10 +16131,16 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           chip appears in a sequence builder. See the tree model documented on
           RiffNode/RiffCombo/RiffPatternItem in types/annotationLayer.ts. */}
       {riffPatternPopover.open && (() => {
-        const layer = riffPatternLayers.find((l) => l.id === riffPatternPopover.open!.layerId);
+        // A detector's proposed lane isn't in the doc, so it's looked up on its
+        // own — without this fallback its instances opened a card that never
+        // rendered. Same shape as the span/loop popovers: shown in full,
+        // every write a no-op.
+        const layer = riffPatternLayers.find((l) => l.id === riffPatternPopover.open!.layerId)
+          ?? detectorRiffLayers.find((l) => l.id === riffPatternPopover.open!.layerId);
         const item = layer?.items.find((it) => it.id === riffPatternPopover.open!.itemId) as RiffPatternItem | undefined;
         if (!layer || !item) return null;
-        const onChange = (patch: Partial<RiffPatternItem>) => {
+        const isReadOnly = layer.readOnly === true;
+        const onChange = isReadOnly ? () => {} : (patch: Partial<RiffPatternItem>) => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -14296,7 +16150,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ),
           }));
         };
-        const onDelete = () => {
+        const onDelete = isReadOnly ? () => {} : () => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) => (l.id === layer.id ? { ...l, items: l.items.filter((it) => it.id !== item.id) } : l)),
@@ -14319,7 +16173,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             ...d,
             layers: d.layers.map((l) =>
               l.id === layer.id
-                ? ({ ...l, nodes: (l.nodes ?? []).map((n) => (n.id === nodeId ? { ...n, ...patch } : n)) } as AnnotationLayer)
+                ? ({ ...l, nodes: (l.nodes ?? []).map((n) => (n.id === nodeId ? toNotesNode({ ...n, ...patch }) : n)) } as AnnotationLayer)
                 : l,
             ),
           }));
@@ -14329,7 +16183,7 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           // Pick against every riff-pattern layer's nodes, not just this one's,
           // so two different layers don't both start their palette at index 0.
           const allNodes = riffPatternLayers.flatMap((l) => l.nodes ?? []);
-          const node = newRiffNode(`Node ${existing.length + 1}`, pickRiffNodeColor(allNodes));
+          const node = toNotesNode(newRiffNode(`Node ${existing.length + 1}`, pickRiffNodeColor(allNodes)));
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
@@ -14353,39 +16207,42 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         const cycle = Math.max(0, item.end - item.start);
         const reps  = Math.max(1, Math.floor(item.repeatCount));
         const regionEnd = item.start + reps * cycle;
-        const riffIsPlaying = playerIsPlaying && playerTime >= item.start && playerTime < regionEnd;
         return (
-          <RiffPatternEditPopover
-            layer={layer}
-            item={item}
-            beatsPerBar={beatsPerBar}
-            popoverRef={riffPatternPopover.popoverRef}
-            positionStyle={riffPatternPopover.positionStyle}
-            onChange={onChange}
-            onDelete={onDelete}
-            onClose={riffPatternPopover.close}
-            registerCloseGuard={riffPatternPopover.setCloseGuard}
-            onPatchCombo={onPatchCombo}
-            onPatchNode={onPatchNode}
-            onTrimNode={(nodeId, beats) => handleRiffNodeTrim(layer.id, nodeId, beats, `riff-trim:${layer.id}:${nodeId}`)}
-            onCreateNode={onCreateNode}
-            onCreateCombo={onCreateCombo}
-            onEditNode={(nodeId, e) => {
-              setNodePopoverEntryCtx(null);
-              // Opened from inside this popover — it stays on screen alongside
-              // the Node popup, so opt out of single-popover exclusivity.
-              nodePopover.openAt(layer.id, nodeId, { x: e.clientX, y: e.clientY }, { nested: true });
-            }}
-            onPlay={() => handleSeekAndPlay(item.start, regionEnd)}
-            onStop={handlePause}
-            onSeekAndPlay={handleSeekAndPlay}
-            isPlaying={riffIsPlaying}
-            bpm={bpm}
-            gridOffset={songInfo?.gridOffset ?? 0}
-            segments={gridSegments}
-            currentTime={playerTime}
-            initialExpandedIndex={riffAutoExpandIndex}
-          />
+          <PlayheadWithin active={playerIsPlaying} start={item.start} end={regionEnd}>
+            {(riffIsPlaying) => (
+              <RiffPatternEditPopover
+                layer={layer}
+                item={item}
+                beatsPerBar={beatsPerBar}
+                popoverRef={riffPatternPopover.popoverRef}
+                positionStyle={riffPatternPopover.positionStyle}
+                onChange={onChange}
+                onDelete={onDelete}
+                onClose={riffPatternPopover.close}
+                registerCloseGuard={riffPatternPopover.setCloseGuard}
+                onPatchCombo={onPatchCombo}
+                onPatchNode={onPatchNode}
+                onTrimNode={(nodeId, beats) => handleRiffNodeTrim(layer.id, nodeId, beats, `riff-trim:${layer.id}:${nodeId}`)}
+                onCreateNode={onCreateNode}
+                onCreateCombo={onCreateCombo}
+                onEditNode={(nodeId, e) => {
+                  setNodePopoverEntryCtx(null);
+                  // Opened from inside this popover — it stays on screen alongside
+                  // the Node popup, so opt out of single-popover exclusivity.
+                  nodePopover.openAt(layer.id, nodeId, { x: e.clientX, y: e.clientY }, { nested: true });
+                }}
+                onPlay={() => handleSeekAndPlay(item.start, regionEnd)}
+                onStop={handlePause}
+                onSeekAndPlay={handleSeekAndPlay}
+                isPlaying={riffIsPlaying}
+                bpm={bpm}
+                gridOffset={songInfo?.gridOffset ?? 0}
+                segments={gridSegments}
+                initialExpandedIndex={riffAutoExpandIndex}
+                readOnly={isReadOnly}
+              />
+            )}
+          </PlayheadWithin>
         );
       })()}
 
@@ -14394,20 +16251,22 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           nested inside a combo/instance). Timeless (no start/end), so it's a
           standalone card rather than an AnnotationPointCard adapter. */}
       {nodePopover.open && (() => {
-        const layer = riffPatternLayers.find((l) => l.id === nodePopover.open!.layerId);
+        const layer = riffPatternLayers.find((l) => l.id === nodePopover.open!.layerId)
+          ?? detectorRiffLayers.find((l) => l.id === nodePopover.open!.layerId);
         const node = layer?.nodes?.find((n) => n.id === nodePopover.open!.itemId);
         if (!layer || !node) return null;
-        const onChange = (patch: Partial<RiffNode>) => {
+        const isReadOnly = layer.readOnly === true;
+        const onChange = isReadOnly ? () => {} : (patch: Partial<RiffNode>) => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) =>
               l.id === layer.id
-                ? ({ ...l, nodes: (l.nodes ?? []).map((n) => (n.id === node.id ? { ...n, ...patch } : n)) } as AnnotationLayer)
+                ? ({ ...l, nodes: (l.nodes ?? []).map((n) => (n.id === node.id ? toNotesNode({ ...n, ...patch }) : n)) } as AnnotationLayer)
                 : l,
             ),
           }));
         };
-        const onDelete = () => {
+        const onDelete = isReadOnly ? () => {} : () => {
           setCueLayersDoc((d) => d && ({
             ...d,
             layers: d.layers.map((l) => {
@@ -14440,8 +16299,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         // silently drop an eager first tap — a normal (non-tap-along) play
         // never actually reaches this earlier window since it seeks exactly
         // to `occurrence.start` with no offset.
-        const nodeIsPlaying = !!occurrence && playerIsPlaying &&
-          playerTime >= occurrence.start - TAP_PREROLL_SECONDS && playerTime < occurrence.end;
         // If this popup was opened from a specific placed occurrence (a
         // direct lane click, not the sidebar list), resolve that entry so
         // the LENGTH field can reflect its actual (possibly drag-stretched)
@@ -14485,14 +16342,14 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
         // timestamp is a point tick like an onset. Layers with nothing inside
         // the node's own span aren't offered at all.
         const tickSources: BoundaryTickSource[] = [];
-        if (isBoundaryNode(node) && occurrence && bpm) {
+        if (occurrence && bpm) {
           const startBeatPos = beatPositionAt(occurrence.start, bpm, beatOffset);
           const toBeat = (t: number) => beatPositionAt(t, bpm, beatOffset) - startBeatPos;
           const nodeBeats = riffNodeLengthBeats(node);
           const addSource = (
             kind: BoundaryTickSource['kind'],
             layer: { id: string; name: string },
-            hits: { beat: number; endBeat?: number; label?: string }[],
+            hits: { beat: number; endBeat?: number; label?: string; note?: number }[],
           ) => {
             // Converted up front rather than at click time, so the count in
             // the menu is the number of blocks that will actually land — not
@@ -14511,7 +16368,11 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               levelCurveForSpan(occurrence.start, occurrence.end, nodeBeats),
               nodeBeats,
             );
-            const segments = boundarySegmentsFromHits(inRange, nodeBeats);
+            // A notes lane (Bass notes, Riff notes) knows each mark's pitch:
+            // the hits arrive as those notes, not as bare ticks to name by hand.
+            const pitched = hits.filter((h) => h.note != null);
+            const pulse = pulseOf(node);
+            const segments = nameHits(boundarySegmentsFromHits(inRange, nodeBeats), pitched, pulse);
             const ticks = segments.filter((s) => s.kind === 'tick');
             if (ticks.length === 0) return;
             tickSources.push({
@@ -14524,16 +16385,17 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
               // click time — unlike `apply`, whose result doesn't depend on
               // what's already there.
               applyMerge: () => onChange({
-                segments: mergeBoundaryHits(node.segments ?? [], inRange, nodeBeats),
+                segments: nameHits(mergeBoundaryHits(node.segments ?? [], inRange, nodeBeats), pitched, pulse),
               }),
               // Where this layer's ticks actually land, so the strip can draw
               // and snap to the same positions the menu would seed from.
               tickBeats: ticks.map((s) => s.start),
+              tickNotes: ticks.map((s) => s.note),
             });
           };
           for (const l of [...(cueLayers ?? []), ...detectorCueLayers]) {
             addSource('cues', l, (l.items as CueItem[])
-              .map((it) => ({ beat: toBeat(it.time), label: it.label || undefined })));
+              .map((it) => ({ beat: toBeat(it.time), label: it.label || undefined, note: it.note })));
           }
           for (const l of [...lyricsLayers, ...detectorLyricsLayers]) {
             addSource('lyrics', l, (l.items as LyricsItem[])
@@ -14545,56 +16407,61 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           }
         }
         return (
-          <NodeEditPopover
-            node={node}
-            tickSources={tickSources}
-            // The browser-side spectral-flux curve, with the frame axis that
-            // says when each of its values happened — the boundary editor cuts
-            // its own window out of it and draws the node's blocks against it.
-            // Null until the analysis finishes (or with no audio decoded).
-            onsetEnvelope={mirCurves
-              ? {
-                  values: mirCurves.onsets,
-                  // Loudness on the same frames. The flux says where each hit
-                  // is; this says how long it rings, which is what the block
-                  // seeded from it gets for a length instead of a flat beat.
-                  level: mirCurves.rms,
-                  // Real framing when the run reported it, so each value is
-                  // dated at its window CENTRE. An older cached MirCurves
-                  // carries only the hop, which puts the curve half a window
-                  // early — still worth drawing, just not worth pretending
-                  // about (see utils/frameTime).
-                  axis: mirCurves.hopSize && mirCurves.fftSize && mirCurves.sampleRate
-                    ? frameAxis(mirCurves.hopSize, mirCurves.fftSize, mirCurves.sampleRate, mirCurves.onsets.length)
-                    : { step: mirCurves.frameDuration, offset: 0, count: mirCurves.onsets.length },
-                }
-              : null}
-            // That envelope is whatever the player is loaded with — the mix
-            // unless the user switched the player to a stem — so the picker
-            // names it for what it is rather than always saying "audio".
-            onsetEnvelopeName={selectedStemSource === 'mix' ? 'audio' : `audio · ${selectedStemSource}`}
-            // The other stems, read on demand: a boundary node marking the
-            // kick has no business being scored against a full-mix flux that
-            // also fires on every vocal and cymbal.
-            onsetStems={onsetStemSources}
-            popoverRef={nodePopover.popoverRef}
-            positionStyle={nodePopover.positionStyle}
-            onChange={onChange}
-            onDelete={onDelete}
-            onClose={nodePopover.close}
-            registerCloseGuard={nodePopover.setCloseGuard}
-            bpm={bpm}
-            occurrence={occurrence}
-            isPlaying={nodeIsPlaying}
-            currentTime={playerTime}
-            onPlay={occurrence
-              ? (preRollSec?: number) => handleSeekAndPlay(Math.max(0, occurrence.start - (preRollSec ?? 0)), occurrence.end)
-              : undefined}
-            onStop={handlePause}
-            entryLengthSteps={activeEntry?.lengthSteps ?? null}
-            onResizeEntry={onResizeEntry}
-            onTrimLength={(beats) => handleRiffNodeTrim(layer.id, node.id, beats, `riff-trim:${layer.id}:${node.id}`)}
-          />
+          <PlayheadWithin active={!!occurrence && playerIsPlaying} start={(occurrence?.start ?? 0) - TAP_PREROLL_SECONDS} end={occurrence?.end ?? 0}>
+            {(nodeIsPlaying) => (
+              <NodeEditPopover
+                node={node}
+                beatsPerBar={beatsPerBar}
+                tickSources={tickSources}
+                // The browser-side spectral-flux curve, with the frame axis that
+                // says when each of its values happened — the boundary editor cuts
+                // its own window out of it and draws the node's blocks against it.
+                // Null until the analysis finishes (or with no audio decoded).
+                onsetEnvelope={mirCurves
+                  ? {
+                      values: mirCurves.onsets,
+                      // Loudness on the same frames. The flux says where each hit
+                      // is; this says how long it rings, which is what the block
+                      // seeded from it gets for a length instead of a flat beat.
+                      level: mirCurves.rms,
+                      // Real framing when the run reported it, so each value is
+                      // dated at its window CENTRE. An older cached MirCurves
+                      // carries only the hop, which puts the curve half a window
+                      // early — still worth drawing, just not worth pretending
+                      // about (see utils/frameTime).
+                      axis: mirCurves.hopSize && mirCurves.fftSize && mirCurves.sampleRate
+                        ? frameAxis(mirCurves.hopSize, mirCurves.fftSize, mirCurves.sampleRate, mirCurves.onsets.length)
+                        : { step: mirCurves.frameDuration, offset: 0, count: mirCurves.onsets.length },
+                    }
+                  : null}
+                // That envelope is whatever the player is loaded with — the mix
+                // unless the user switched the player to a stem — so the picker
+                // names it for what it is rather than always saying "audio".
+                onsetEnvelopeName={selectedStemSource === 'mix' ? 'audio' : `audio · ${selectedStemSource}${playingKitPart ? ` · ${playingKitPart}` : ''}`}
+                // The other stems, read on demand: a boundary node marking the
+                // kick has no business being scored against a full-mix flux that
+                // also fires on every vocal and cymbal.
+                onsetStems={onsetStemSources}
+                popoverRef={nodePopover.popoverRef}
+                positionStyle={nodePopover.positionStyle}
+                onChange={onChange}
+                onDelete={onDelete}
+                onClose={nodePopover.close}
+                registerCloseGuard={nodePopover.setCloseGuard}
+                bpm={bpm}
+                occurrence={occurrence}
+                isPlaying={nodeIsPlaying}
+                onPlay={occurrence
+                  ? (preRollSec?: number) => handleSeekAndPlay(Math.max(0, occurrence.start - (preRollSec ?? 0)), occurrence.end)
+                  : undefined}
+                onStop={handlePause}
+                entryLengthSteps={activeEntry?.lengthSteps ?? null}
+                onResizeEntry={onResizeEntry}
+                onTrimLength={(beats) => handleRiffNodeTrim(layer.id, node.id, beats, `riff-trim:${layer.id}:${node.id}`)}
+                readOnly={isReadOnly}
+              />
+            )}
+          </PlayheadWithin>
         );
       })()}
 
@@ -14614,7 +16481,6 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
             spanLayers,
             pickDefaultLayerColor(cueLayersDoc?.layers ?? []),
           )}
-          initialLayerId={energySpanTargetLayerId ?? undefined}
           onSaveToLayer={handleSaveEnergySpanToLayer}
         />
       )}
@@ -14648,29 +16514,39 @@ export function InspectorPageV2(props: { onBack: () => void; initialFeature?: Fe
           }));
         };
         const previewEnd = item.end !== undefined && item.end > item.time ? item.end : item.time + 0.5;
-        const lyricIsPlaying = playerIsPlaying && playerTime >= item.time && playerTime < previewEnd;
         return (
-          <LyricsEditPopover
-            layer={layer}
-            item={item}
-            readOnly={isReadOnly}
-            rawOutput={isReadOnly ? rawDetectorItem(layer.source, item.id, customResults) : undefined}
-            popoverRef={lyricsPopover.popoverRef}
-            positionStyle={lyricsPopover.positionStyle}
-            onChange={onChange}
-            onDelete={onDelete}
-            onClose={lyricsPopover.close}
-            onPlay={() => handleSeekAndPlay(item.time, previewEnd)}
-            onStop={handlePause}
-            isPlaying={lyricIsPlaying}
-            bpm={bpm}
-            gridOffset={songInfo?.gridOffset ?? 0}
-            beatsPerBar={beatsPerBar}
-            segments={gridSegments}
-            currentTime={playerTime}
-          />
+          <PlayheadWithin active={playerIsPlaying} start={item.time} end={previewEnd}>
+            {(lyricIsPlaying) => (
+              <LyricsEditPopover
+                layer={layer}
+                item={item}
+                readOnly={isReadOnly}
+                rawOutput={isReadOnly ? rawDetectorItem(layer.source, item.id, customResults) : undefined}
+                laneMove={cardLaneMove(layer, item, lyricsPopover.retarget)}
+                popoverRef={lyricsPopover.popoverRef}
+                positionStyle={lyricsPopover.positionStyle}
+                onChange={onChange}
+                onDelete={onDelete}
+                onClose={lyricsPopover.close}
+                onDone={laneDraft?.itemId === item.id ? keepLaneDraft : undefined}
+                onPlay={() => handleSeekAndPlay(item.time, previewEnd)}
+                onStop={handlePause}
+                isPlaying={lyricIsPlaying}
+                bpm={bpm}
+                gridOffset={songInfo?.gridOffset ?? 0}
+                beatsPerBar={beatsPerBar}
+                segments={gridSegments}
+                adsr={itemAdsr(layer, item.id)}
+              />
+            )}
+          </PlayheadWithin>
         );
       })()}
     </div>
+  );
+  return (
+    <PlayheadClockContext.Provider value={playheadClock}>
+      {page}
+    </PlayheadClockContext.Provider>
   );
 }

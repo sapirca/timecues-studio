@@ -23,7 +23,7 @@ describe('CueLayerRow struck hits', () => {
   ];
 
   it('paints each tick in its own colour and sizes it by velocity', () => {
-    render(<CueLayerRow items={items} color="#eab308" duration={10} currentTime={0} />);
+    render(<CueLayerRow items={items} color="#eab308" duration={10} />);
     const kick = tickOf(/^kick/);
     expect(kick.bar.style.background).toBe('rgb(248, 113, 113)');
     expect(kick.bar.style.height).toBe('100%');
@@ -33,12 +33,12 @@ describe('CueLayerRow struck hits', () => {
   });
 
   it('puts velocity and level in the hover text', () => {
-    render(<CueLayerRow items={items} color="#eab308" duration={10} currentTime={0} />);
+    render(<CueLayerRow items={items} color="#eab308" duration={10} />);
     expect(tickOf(/^kick/).button.title).toMatch(/^kick · velocity 127 · -1\.5 dB @ /);
   });
 
   it('leaves a plain cue full height in the lane colour', () => {
-    render(<CueLayerRow items={items} color="#eab308" duration={10} currentTime={0} />);
+    render(<CueLayerRow items={items} color="#eab308" duration={10} />);
     const plain = tickOf(/^plain @ /);
     expect(plain.bar.style.background).toBe('rgb(234, 179, 8)');
     expect(plain.bar.style.height).toBe('');
@@ -48,7 +48,7 @@ describe('CueLayerRow struck hits', () => {
 
 describe('CueLayerRow note and decay', () => {
   it('names the note and the decay in the hover, and draws a tail for the decay', () => {
-    render(<CueLayerRow items={[{ id: 't', time: 4, label: 'tom', note: 45, decay: 0.5 }]} color="#eab308" duration={10} currentTime={0} />);
+    render(<CueLayerRow items={[{ id: 't', time: 4, label: 'tom', note: 45, decay: 0.5 }]} color="#eab308" duration={10} />);
     const tom = [...document.querySelectorAll('button')].find((b) => /^tom/.test(b.title))!;
     expect(tom.title).toMatch(/^tom · A2 · rings 500 ms @ /);
     const tail = document.querySelector('[data-testid="cue-decay"]') as HTMLElement;
@@ -57,7 +57,7 @@ describe('CueLayerRow note and decay', () => {
   });
 
   it('draws no tail for a cue without decay', () => {
-    render(<CueLayerRow items={[{ id: 'p', time: 3, label: 'plain' }]} color="#eab308" duration={10} currentTime={0} />);
+    render(<CueLayerRow items={[{ id: 'p', time: 3, label: 'plain' }]} color="#eab308" duration={10} />);
     expect(document.querySelector('[data-testid="cue-decay"]')).toBeNull();
   });
 });

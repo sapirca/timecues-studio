@@ -26,6 +26,7 @@ function bar(over: Partial<React.ComponentProps<typeof VizControlBar>> = {}) {
     showNovelty: false, onToggleNovelty: noop,
     showOnsets: false, onToggleOnsets: noop,
     showFlux: false, onToggleFlux: noop,
+    showVolume: false, onToggleVolume: noop,
     showBeatGrid: false, onToggleBeatGrid: noop,
     beatGridUnit: 'beat' as const, onBeatGridUnitChange: noop,
     snapToGrid: false, onToggleSnapToGrid: noop,

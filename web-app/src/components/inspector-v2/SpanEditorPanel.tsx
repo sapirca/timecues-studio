@@ -25,6 +25,8 @@ import {
 } from '../../types/annotationLayer';
 import { snapToBeat, type BarGrid } from '../../utils/barSnap';
 import { resolvePointAddTime } from './boundaryInsert';
+import { PLAYHEAD_SLOT, usePlayheadClock, usePlayheadValue } from '../../hooks/usePlayhead';
+import { LiveLabel } from '../Playhead';
 import type { PendingSelection } from './AnnotationOverlays';
 import { useSettings } from '../../context/SettingsContext';
 import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
@@ -36,18 +38,17 @@ import { LayerModePicker } from './LayerModePicker';
 import { formatBeatTime } from '../../utils/beatTimeFormat';
 
 interface SpanEditorPanelProps {
-  currentTime: number;
   duration: number;
   doc: AnnotationLayersDocument;
   onDocChange: (next: AnnotationLayersDocument) => void;
   grid: Partial<BarGrid> | null;
   snapToGrid?: boolean;
-  /** The page's grid-aware snapper, used for every add / snap-to-playhead
-   *  time. It honours the GRID unit the user picked (1/2 beat, triplets,
-   *  bars…), per-beat overrides and tempo segments, and returns the time
-   *  untouched while Snap and Grid Lock are both off — the same rule a drag
-   *  on the canvas already followed. Optional: without it these paths fall
-   *  back to whole-beat snapping, which is what they all used to do. */
+  /** The page's snapper (`snapToBeatOrFiner`), used for every add /
+   *  snap-to-playhead time: the nearest beat — or the nearest GRID line when
+   *  the grid divides the beat — whatever Snap and Grid Lock say; the same
+   *  rule a drag on the canvas follows. It honours per-beat
+   *  overrides and tempo segments. Optional: without it these paths fall back
+   *  to whole-beat snapping while Snap is on. */
   snapTime?: (t: number) => number;
   focusedSpan?: { layerId: string; itemId: string } | null;
   onFocusSpan?: (selection: { layerId: string; itemId: string } | null) => void;
@@ -63,14 +64,15 @@ interface SpanEditorPanelProps {
   onDuplicateSkipped?: (message: string) => void;
   gridLock?: boolean;
   /** Reader for the LIVE media clock (the page's `liveSongTime`). Placing a
-   *  span against `currentTime` puts its start where the playhead was a render
-   *  ago; see `markTime`. Optional — falls back to the prop without it. */
+   *  span against the playhead clock puts its start where the playhead was a
+   *  frame ago; see `markTime`. Optional — falls back to the playhead clock
+   *  without it. */
   getSongTime?: () => number | null;
 }
 
 function SpanEditorPanelInner(
   {
-    currentTime, duration, doc, onDocChange, grid,
+    duration, doc, onDocChange, grid,
     snapToGrid = false, snapTime,
     gridLock = false,
     focusedSpan, onFocusSpan,
@@ -84,17 +86,21 @@ function SpanEditorPanelInner(
   controllerRef: ForwardedRef<AnnotationPanelController>,
 ) {
   const { settings } = useSettings();
+  // The playhead is read from the clock, not a prop: handlers call
+  // `playheadClock.get()` when they fire, and the "@ <time>" labels re-render
+  // only when the time they print changes.
+  const playheadClock = usePlayheadClock();
   // Where a span placed *right now* starts. Called at the moment of the add,
-  // never captured: `currentTime` is the media clock one rAF, one setState and
-  // one inspector re-render later, which is a marker dropped behind the beat
-  // the annotator was listening to. `atTime` is the caller's own reading (the
-  // M shortcut's, taken at the keydown) when it has one.
+  // never captured: the playhead clock is the media clock one rAF later, which
+  // is a marker dropped behind the beat the annotator was listening to.
+  // `atTime` is the caller's own reading (the M shortcut's, taken at the
+  // keydown) when it has one.
   const markTime = useCallback(
     (atTime?: number) => resolvePointAddTime({
       live: atTime ?? getSongTime?.(),
-      fallback: currentTime,
+      fallback: playheadClock.get(),
     }),
-    [getSongTime, currentTime],
+    [getSongTime, playheadClock],
   );
 
   // Where an add actually lands. Delegates to the page's `snapTime` so a mark
@@ -259,13 +265,13 @@ function SpanEditorPanelInner(
       l.id === focusedSpan.layerId && l.type === 'spans');
     return layer?.items.find((it) => it.id === focusedSpan.itemId) ?? null;
   }, [focusedSpan, doc.layers]);
-  const canSplitAtPlayhead = !!focusedSpanItem
-    && currentTime > focusedSpanItem.start + 0.01
-    && currentTime < focusedSpanItem.end - 0.01;
+  const canSplitAtPlayhead = usePlayheadValue((t) => !!focusedSpanItem
+    && t > focusedSpanItem.start + 0.01
+    && t < focusedSpanItem.end - 0.01);
 
   const splitFocusedSpan = useCallback(() => {
     if (!focusedSpan || !focusedSpanItem) return;
-    const t = currentTime;
+    const t = playheadClock.get();
     if (t <= focusedSpanItem.start + 0.01 || t >= focusedSpanItem.end - 0.01) return;
     const oldEnd = focusedSpanItem.end;
     onDocChange({
@@ -283,7 +289,7 @@ function SpanEditorPanelInner(
         return { ...l, items } as AnnotationLayer;
       }),
     });
-  }, [focusedSpan, focusedSpanItem, currentTime, doc, onDocChange]);
+  }, [focusedSpan, focusedSpanItem, playheadClock, doc, onDocChange]);
 
   const setSpansStage = useCallback((stage: AnnotationStage) => {
     onDocChange(setLayerStatus(doc, 'spans', stage));
@@ -354,7 +360,7 @@ function SpanEditorPanelInner(
   // playhead while a dragged region is what lands.
   const addLabelSuffix = pendingSpan
     ? `${fmtTime(pendingSpan.start)}\u2192${fmtTime(pendingSpan.end)}`
-    : `@ ${fmtTime(currentTime)}`;
+    : `@ ${PLAYHEAD_SLOT}`;
   const addTitle = pendingSpan
     ? 'Add the highlighted region as a span'
     : 'Add span at playhead \u2014 default length = 1 bar / 2s (M)';
@@ -412,12 +418,12 @@ function SpanEditorPanelInner(
       splitDisabledReason: canSplitAtPlayhead
         ? undefined
         : 'Focus a span whose body contains the playhead to enable Split',
-      splitLabel: `Split at ${fmtTime(currentTime)}`,
+      splitLabel: `Split at ${PLAYHEAD_SLOT}`,
       snapBoundaryVisible: true,
       canMarkIn: true,
       canMarkOut: false,
-      snapStartLabel: `@ ${fmtTime(currentTime)}`,
-      snapEndLabel: `@ ${fmtTime(currentTime)}`,
+      snapStartLabel: `@ ${PLAYHEAD_SLOT}`,
+      snapEndLabel: `@ ${PLAYHEAD_SLOT}`,
       canAddAtPlayhead: true,
       addLabel: `+ Add span ${addLabelSuffix}`,
       canAddLayer: true,
@@ -427,7 +433,7 @@ function SpanEditorPanelInner(
       canExport: totalCount > 0,
       canDeleteAll: spanLayers.length > 0,
     });
-  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, currentTime, pendingSelection, totalCount, spanLayers.length, addLabelSuffix]);
+  }, [onCapabilitiesChange, doc, saveStatus, canSplitAtPlayhead, pendingSelection, totalCount, spanLayers.length, addLabelSuffix]);
 
   const sortedItems = useMemo(
     () => (activeLayer?.items ?? []).slice().sort((a, b) => a.start - b.start),
@@ -475,7 +481,7 @@ function SpanEditorPanelInner(
               key={span.id}
               index={i}
               span={span}
-              color={activeLayer.color}
+              color={span.color ?? activeLayer.color}
               isSelected={focusedSpan?.layerId === activeLayer.id && focusedSpan.itemId === span.id}
               onSelect={() => { onFocusSpan?.({ layerId: activeLayer.id, itemId: span.id }); onSelectLayer?.(activeLayer.id); }}
               onChangeLabel={(label) => patchItem(activeLayer.id, span.id, { label })}
@@ -548,7 +554,7 @@ function SpanLayerToolbar({
         className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 hover:border-emerald-400/50 transition-colors"
         title={addTitle}
       >
-        {addLabel}
+        <LiveLabel text={addLabel} />
       </button>
       <button
         onClick={onToggleVisibility}

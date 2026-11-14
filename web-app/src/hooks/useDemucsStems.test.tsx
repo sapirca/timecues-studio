@@ -83,15 +83,15 @@ describe('useDemucsStems — background queue', () => {
     expect(result.current.job?.status).toBe('done');
   });
 
-  it('defaults to the 6-stem model and reports it on the job', async () => {
+  it('defaults to the 4-stem model and reports it on the job', async () => {
     const { started } = stubFetch();
     const { result } = renderHook(() => useDemucsStems());
 
     act(() => { result.current.enqueueStems([song('a')]); });
     await settle();
 
-    expect(started[0].body.model).toBe('6s');
-    expect(result.current.job?.model).toBe('6s');
+    expect(started[0].body.model).toBe('4s');
+    expect(result.current.job?.model).toBe('4s');
     expect(result.current.job?.auto).toBe(true);
   });
 

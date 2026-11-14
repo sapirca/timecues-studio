@@ -1,11 +1,11 @@
 import { annotatorHeaders } from '../utils/annotatorHeaders';
 
-export interface TeamStatsSourceStats {
+/** Per-layer-type tally for one annotator: `count` songs hold at least one
+ *  item of this type, `reviewedCount` of them are marked reviewed. */
+export interface TeamStatsLayerStats {
   count: number;
   reviewedCount: number;
-  totalTimeSeconds: number;
-  totalBoundaries: number;
-  lastModified: string | null;
+  totalItems: number;
   songs: string[];
 }
 
@@ -17,8 +17,8 @@ export interface TeamStatsCustomStats {
 
 export interface TeamStatsAnnotator {
   id: string;
-  boundaries: TeamStatsSourceStats;
-  autoGuess: TeamStatsSourceStats;
+  songCount: number;
+  layers: Record<string, TeamStatsLayerStats>;
   custom: TeamStatsCustomStats;
   totalTimeSeconds: number;
   totalAnnotations: number;
@@ -26,6 +26,8 @@ export interface TeamStatsAnnotator {
 }
 
 export interface TeamStatsResponse {
+  /** Layer types in display order. */
+  layerTypes: string[];
   annotators: TeamStatsAnnotator[];
   multiAnnotatorSongs: string[];
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { effectiveGridMode, type SongInfo } from '../../types/songInfo';
 import { beatsInRange as gridBeatsInRange } from '../../utils/beatGrid';
 import { resolveGridSegments } from '../../utils/gridSegments';
+import { usePlayheadClock, usePlayheadEffect } from '../../hooks/usePlayhead';
 import { gridSignature } from '../../utils/beatAnchoring';
 import {
   applyTap,
@@ -11,8 +12,6 @@ import {
 
 export interface MetronomePanelProps {
   songInfo: SongInfo | null;
-  /** Current playhead time in seconds — drives the click scheduler. */
-  playerTime: number;
   /** Whether the song is currently playing — clicks only schedule while true.
    *  The Metronome ON/OFF toggle is just a flag; it does NOT start the song. */
   playerIsPlaying: boolean;
@@ -22,11 +21,11 @@ export interface MetronomePanelProps {
   clickEnabled: boolean;
   onClickEnabledChange: (next: boolean) => void;
   /** Reader for the LIVE media clock (PlayerPanel's `getTimeRef`). The click is
-   *  placed against this, never against `playerTime` — that prop is the same
-   *  number after a rAF coalesce, a setState and a full inspector re-render, so
-   *  anchoring on it put the render's lag into the click's phase and the
-   *  woodblock landed tens of milliseconds off the grid it is meant to verify.
-   *  Optional: without it the panel falls back to the prop, as it used to. */
+   *  placed against this, never against the playhead clock — that is the same
+   *  number after a rAF coalesce, so anchoring on it put the frame's lag into
+   *  the click's phase and the woodblock landed tens of milliseconds off the
+   *  grid it is meant to verify. Optional: without it the panel falls back to
+   *  the playhead clock, as it used to. */
   getSongTime?: () => number | null;
   /** Player speed multiplier. Song seconds advance this much per wall second,
    *  so a beat `d` song-seconds away is `d / rate` wall-seconds away on the
@@ -230,7 +229,6 @@ function scheduleClick(ctx: AudioContext, master: GainNode, startAt: number, isD
 
 export function MetronomePanel({
   songInfo,
-  playerTime,
   playerIsPlaying,
   clickEnabled,
   onClickEnabledChange,
@@ -252,10 +250,12 @@ export function MetronomePanel({
   const metroBpm = tappedBpm ?? songBpm;
   const hasGrid = !!metroBpm && metroBpm > 0;
 
+  // The playhead clock, read at the moment it is needed — never held in React
+  // state, so a playing song does not re-render this panel every frame.
+  const playheadClock = usePlayheadClock();
   const songInfoRef = useRef(songInfo);
-  const playerTimeRef = useRef(playerTime);
-  const lastSeenTimeRef = useRef(playerTime);
-  const cursorRef = useRef(playerTime);
+  const lastSeenTimeRef = useRef(playheadClock.get());
+  const cursorRef = useRef(playheadClock.get());
   const ctxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
   // Clicks queued ahead into the audio clock (up to LOOKAHEAD_S). Tracked so a
@@ -266,7 +266,7 @@ export function MetronomePanel({
   // `ctxT` off the AudioContext, and the two share the audio hardware clock, so
   // one anchor holds for a whole playback segment. Every click's placement then
   // reduces to `ctxT + (beat - songT) / rate` — no React value anywhere in it.
-  // That matters twice over: the `playerTime` prop is a render behind the audio
+  // That matters twice over: the playhead clock is a frame behind the audio
   // (its lag became the click's phase error), and it stops arriving altogether
   // in a backgrounded tab, where ctx.currentTime keeps counting and the clicks
   // keep landing. Re-anchored only when the media clock says we have actually
@@ -277,23 +277,22 @@ export function MetronomePanel({
   // that was already scheduled — the audible symptom was a doubled woodblock,
   // read as "the metronome is making more beats than the song has".
   const lastScheduledBeatRef = useRef<number | null>(null);
-  // True while the anchor was taken from the `playerTime` prop because the
+  // True while the anchor was taken from the playhead clock because the
   // player had not yet handed over its clock reader — a remount mid-playback,
-  // a hot reload in dev. Such an anchor carries the prop's lag, and that lag is
+  // a hot reload in dev. Such an anchor carries the clock's lag, and that lag is
   // smaller than REANCHOR_TOLERANCE_S, so nothing else would ever correct it:
   // the first tick that can read the media clock re-anchors unconditionally.
   const anchorIsProvisionalRef = useRef(false);
   const getSongTimeRef = useRef(getSongTime);
   const rateRef = useRef(playbackRate);
   songInfoRef.current = songInfo;
-  playerTimeRef.current = playerTime;
   getSongTimeRef.current = getSongTime;
   rateRef.current = playbackRate > 0 ? playbackRate : 1;
 
   /** The song clock as the media element itself keeps it, or null when the
    *  player hasn't handed us a reader yet. This is the only truthful "where are
-   *  we" in the component: `playerTime` is this same number after a rAF
-   *  coalesce, a setState and a re-render of the whole inspector. */
+   *  we" in the component: the playhead clock is this same number after a
+   *  rAF coalesce. */
   const readMediaTime = useCallback((): number | null => {
     const t = getSongTimeRef.current?.();
     return typeof t === 'number' && Number.isFinite(t) ? t : null;
@@ -305,9 +304,9 @@ export function MetronomePanel({
   const estimateSongTime = useCallback((): number => {
     const ctx = ctxRef.current;
     const anchor = clockAnchorRef.current;
-    if (!ctx || !anchor) return readMediaTime() ?? playerTimeRef.current;
+    if (!ctx || !anchor) return readMediaTime() ?? playheadClock.get();
     return anchor.songT + (ctx.currentTime - anchor.ctxT) * rateRef.current;
-  }, [readMediaTime]);
+  }, [readMediaTime, playheadClock]);
 
   // Silence every queued click that hasn't started yet, and forget the ones
   // that already fired. Called on seek and on stop so a long lookahead never
@@ -334,11 +333,12 @@ export function MetronomePanel({
   // clicks aren't replayed or skipped. Only a fallback: when the player gives
   // us a live clock reader, the scheduler tick spots a discontinuity itself by
   // comparing its own extrapolation against the media clock, which cannot be
-  // fooled by a prop that merely arrived late. This prop-delta test could be —
+  // fooled by a clock update that merely arrived late. This delta test could be —
   // a render that took longer than SEEK_FORWARD_THRESHOLD looks exactly like a
   // forward seek, and "re-anchoring" on one both shifted the click's phase and
   // re-queued a beat that had already sounded.
-  useEffect(() => {
+  // Runs on every playhead update without re-rendering the panel.
+  usePlayheadEffect((playerTime) => {
     if (getSongTimeRef.current) { lastSeenTimeRef.current = playerTime; return; }
     const delta = playerTime - lastSeenTimeRef.current;
     if (delta < SEEK_BACKWARD_THRESHOLD || delta > SEEK_FORWARD_THRESHOLD) {
@@ -348,7 +348,7 @@ export function MetronomePanel({
       // Re-anchor the song↔audio clock map ONLY on a real discontinuity. A
       // click's audio-clock time reduces to `anchor.ctxT + (b.t - anchor.songT)`,
       // so its placement depends solely on this anchor — NOT on the per-beat
-      // clock read. Re-anchoring every frame from the rAF-fed `playerTime` (which
+      // clock read. Re-anchoring every frame from the rAF-fed playhead (which
       // carries ±10ms sampling jitter between when the player time is true and
       // when ctx.currentTime is read) injected that jitter straight into the
       // click spacing, so a steady tempo wobbled audibly. The media element and
@@ -356,12 +356,12 @@ export function MetronomePanel({
       // in sync for the whole playback segment without per-frame correction. A
       // backgrounded tab (rAF frozen) is covered because estimateSongTime()
       // extrapolates from ctx.currentTime; returning to the foreground produces a
-      // large playerTime jump that lands here and re-anchors.
+      // large playhead jump that lands here and re-anchors.
       const ctx = ctxRef.current;
       if (ctx) clockAnchorRef.current = { ctxT: ctx.currentTime, songT: playerTime };
     }
     lastSeenTimeRef.current = playerTime;
-  }, [playerTime, cancelFutureClicks]);
+  });
 
   // Create or reuse the AudioContext + master gain. Chrome's autoplay policy
   // requires resume() to be called inside a user gesture, so we run this from
@@ -431,16 +431,16 @@ export function MetronomePanel({
     const master = masterGainRef.current;
     if (!ctx || !master) return; // ensureAudioContext() wasn't called yet — toggle must be clicked first
     if (ctx.state === 'suspended') void ctx.resume();
-    // Anchor on the media element's own clock, not on `playerTime`. The prop is
-    // the last value that made it through rAF + setState + a render of the whole
-    // inspector, so at the instant playback starts it is already tens of
+    // Anchor on the media element's own clock, not on the playhead clock. That
+    // is the last value the player published from its rAF loop, so at the
+    // instant playback starts it is already tens of
     // milliseconds behind the audio — and because every click's audio-clock time
     // is derived from this one anchor, that lag became the click's permanent
     // phase error. Measured against a 64.75 BPM / 0.406 s grid the woodblock sat
     // 31-55 ms late on every beat: audible as a flam against the drums, which is
     // exactly the drift the click exists to expose.
     const mediaAtStart = readMediaTime();
-    const startT = mediaAtStart ?? playerTimeRef.current;
+    const startT = mediaAtStart ?? playheadClock.get();
     anchorIsProvisionalRef.current = mediaAtStart == null;
     cursorRef.current = startT;
     lastScheduledBeatRef.current = null;
@@ -450,8 +450,8 @@ export function MetronomePanel({
       const info = effectiveMetroInfo(songInfoRef.current, tappedBpmRef.current);
       if (!info || !info.bpm) return;
       const rate = rateRef.current;
-      // Use the extrapolated song time, not the raw prop: in a backgrounded tab
-      // the prop's rAF feed freezes while the song (and ctx.currentTime) play on.
+      // Use the extrapolated song time, not the raw playhead: in a backgrounded
+      // tab its rAF feed freezes while the song (and ctx.currentTime) play on.
       let now = estimateSongTime();
       // Re-anchor only on a REAL discontinuity, and let the media clock be what
       // says so: a seek, a rate change, or the element stalling all show up as
@@ -506,7 +506,7 @@ export function MetronomePanel({
       // Stopping playback (or losing the grid) silences anything still queued.
       cancelFutureClicks();
     };
-  }, [playerIsPlaying, clickEnabled, hasGrid, cancelFutureClicks, estimateSongTime, readMediaTime]);
+  }, [playerIsPlaying, clickEnabled, hasGrid, cancelFutureClicks, estimateSongTime, readMediaTime, playheadClock]);
 
   // Re-tempo the click the instant the grid changes under it.
   //
@@ -547,13 +547,31 @@ export function MetronomePanel({
 
   // ── Tap tempo ─────────────────────────────────────────────────────────────
   // Each tap feeds the pure reducer in ./tapTempo.ts, which maintains the
-  // rolling window, debounces fast taps, and resets when the user shifts
+  // tap sequence and fits its tempo, debounces fast taps, and resets when the user shifts
   // tempos. A ref mirrors the state so the tempo write (tappedBpmRef) sits
   // outside the setState updater — keeps both calls StrictMode-safe.
   const [tapState, setTapState] = useState<TapTempoState>(emptyTapTempoState);
   const tapStateRef = useRef<TapTempoState>(emptyTapTempoState);
 
+  // Tapping mode: T or a click on TAP arms it, and while armed Space taps too —
+  // a key big enough to hit in time — instead of toggling play/pause. Escape
+  // disarms it; the tapped tempo stays. The arming press is not a tap: it is
+  // rarely on the beat, so the sequence starts with the next press, on an
+  // empty buffer.
+  const [tapping, setTappingState] = useState(false);
+  const tappingRef = useRef(false);
+  const setTapping = useCallback((next: boolean) => {
+    tappingRef.current = next;
+    setTappingState(next);
+  }, []);
+
   const handleTap = useCallback(() => {
+    if (!tappingRef.current) {
+      setTapping(true);
+      tapStateRef.current = { ...emptyTapTempoState, currentBpm: tapStateRef.current.currentBpm };
+      setTapState(tapStateRef.current);
+      return;
+    }
     const now = performance.now();
     const prev = tapStateRef.current;
     const next = applyTap(prev, now);
@@ -564,16 +582,37 @@ export function MetronomePanel({
       tappedBpmRef.current = next.currentBpm;
       setTappedBpm(next.currentBpm);
     }
-  }, []);
+  }, [setTapping]);
 
   useEffect(() => {
     if (tapRef) tapRef.current = handleTap;
     return () => { if (tapRef) tapRef.current = null; };
   }, [tapRef, handleTap]);
 
+  // Capture phase + stopImmediatePropagation, as Tap Along does, so the global
+  // Space=play/pause and Escape shortcuts (window, bubble phase) never see
+  // these keys while tapping. Text fields keep their keystrokes.
+  useEffect(() => {
+    if (!tapping) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' && e.key !== 'Escape') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.key === 'Escape') setTapping(false);
+      // Held Space auto-repeats ~20-30/sec; one press is one tap.
+      else if (!e.repeat) handleTap();
+    };
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
+  }, [tapping, handleTap, setTapping]);
+
   // Clear both the tap buffer and the local tempo override, so the metronome
   // falls back to the song's grid BPM.
   const handleClearTap = useCallback(() => {
+    setTapping(false);
     tapStateRef.current = emptyTapTempoState;
     setTapState(emptyTapTempoState);
     tappedBpmRef.current = null;
@@ -700,7 +739,7 @@ export function MetronomePanel({
         <div className="flex items-baseline justify-between gap-2">
           <span
             className="text-xs font-semibold text-slate-300"
-            title="Tap along on every beat and the BPM updates live from the rolling average of your last few taps. Once it locks onto a tempo it stays put: a single off-beat tap is ignored as a slip, and only a sustained change (two off-tempo taps in a row) re-locks onto the new tempo."
+            title="Tap along on every beat and the BPM updates live from a straight line fitted through every tap, so it gets steadier the longer you tap. Once it locks onto a tempo it stays put: a single off-beat tap is ignored as a slip, and only a sustained change (two off-tempo taps in a row) re-locks onto the new tempo."
           >
             Can't place it? Tap along.
           </span>
@@ -713,10 +752,14 @@ export function MetronomePanel({
           <button
             type="button"
             onMouseDown={handleTap}
-            title="Tap on every beat. The click's tempo updates live from the second tap onward and settles once it locks on — a stray tap won't throw it off. (T)"
-            className="shrink-0 px-5 py-2.5 rounded-md text-sm font-semibold tracking-wider border border-white/[0.12] bg-white/[0.04] text-slate-100 hover:bg-white/[0.08] active:bg-emerald-500/30 active:scale-[0.97] select-none transition-all"
+            title="Press T (or click) to start, then tap on every beat with Space, T or a click; Esc stops. The starting press doesn't count, and a pause of over a second starts a fresh sequence. The click's tempo updates live from the second tap onward and settles once it locks on — a stray tap won't throw it off."
+            className={`shrink-0 px-5 py-2.5 rounded-md text-sm font-semibold tracking-wider border text-slate-100 active:bg-emerald-500/30 active:scale-[0.97] select-none transition-all ${
+              tapping
+                ? 'border-emerald-400/60 bg-emerald-500/15 hover:bg-emerald-500/20'
+                : 'border-white/[0.12] bg-white/[0.04] hover:bg-white/[0.08]'
+            }`}
           >
-            TAP · T
+            {tapping ? 'TAP · SPACE' : 'TAP · T'}
           </button>
           <div className="min-w-0 flex flex-col leading-none">
             <span className="font-mono text-lg font-semibold tabular-nums text-slate-100">
@@ -738,6 +781,20 @@ export function MetronomePanel({
             </button>
           )}
         </div>
+
+        {tapping && (
+          <div className="flex items-center justify-between gap-2 text-[11px] text-emerald-300/90">
+            <span>Tapping — Space or T on every beat. Pause over a second to start over. Space won't play/pause until you stop.</span>
+            <button
+              type="button"
+              onClick={() => setTapping(false)}
+              title="Stop tapping. Keeps the tapped tempo; Space goes back to play/pause."
+              className="shrink-0 px-2 py-1 rounded text-[11px] border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/15 transition-colors"
+            >
+              Stop · Esc
+            </button>
+          </div>
+        )}
 
         {adoptable != null && (
           <button

@@ -34,7 +34,7 @@ browser (currently the user's email, e.g. `you@example.com`).
 | `annotators/<id>.json` | n/a | One file per annotator. Saved sign-up profile (displayName, email, role, affiliation, authMethod, invitedBy). Used by the Email login pane to detect returning users and by the Team page's invite flow. |
 | `dataset-config.json` | n/a | Single corpus-wide config file: `peopleByEmail` access tiers (admin/researcher/team/public), `sharedCorpus`, `corpusName`, BPM/grid lock state. Legacy `adminEmails` / `teamEmails` arrays are kept for back-compat. |
 | `annotations/auto-guess/<annotator>/<slug>.json` | yes | AutoGuess output (algorithm clusters with per-point ✓/✗/@ review). |
-| `annotations/layers/<annotator>/<slug>.json` | yes | Every annotation the curator authored for a song — boundaries, Cues, Spans, Loops, Riff Patterns, Lyrics — in one document: ordering, rename, visibility, items. Source of truth for a **solo** song. |
+| `annotations/layers/<annotator>/<slug>.json` | yes | Every annotation the curator authored for a song — boundaries, Cues, Spans, Loops, Riff Patterns, Lyrics — in one document: ordering, rename, visibility, items. Source of truth for a **solo** song. Also records the song's grid (`grid`: BPM, grid offset, time signature, tempo map). Saved under Grid Lock it has `"timebase": "beats"`: every marker except lyrics is stored by its beat alone (`beat`, `startBeat` / `endBeat`), with no seconds — read it through `web-app/src/utils/beatTimebase.ts` or `tools/python/layers_timebase.py`, which put the seconds back. |
 | `annotations/shared/<slug>/layers.json` | **no — one per team** | The single annotation for a **collaborative** song. The folder's existence is what makes the song collaborative; nothing else records it, so nothing can drift out of sync. |
 | `annotations/shared/<slug>/.git/` | no | A real git repo, one commit per hand-off of the edit lease. `git log` reads as who held the song, for how long, and what changed; `git show <sha>:layers.json` is any earlier version. Created with the shared folder. Never rewritten — restoring an old version writes a new commit. |
 | `annotations/shared-archive/<slug>-<ts>/` | no | Where a shared folder goes when a song stops being collaborative. Un-sharing is not a reason to destroy the history. |
@@ -70,6 +70,7 @@ The Vite dev server exposes each folder under a stable URL prefix that does
 | `GET /api/annotation-locks`, `GET/POST /api/annotation-locks/:slug` | `data/annotations/locks/<slug>.json` (`POST` actions: `lock`, `heartbeat`, `unlock`, `takeover`) |
 | `GET/POST /api/annotation-history/:slug` | `git log` / `git show` inside `data/annotations/shared/<slug>/` |
 | `GET /api/shared-annotations`, `POST/DELETE /api/shared-annotations/:slug` | creates or archives `data/annotations/shared/<slug>/` (admin only) |
+| `GET/POST /api/shared-annotations/:slug/after` | after un-sharing: which document (team's or own) the caller's `layers/<annotator>/<slug>.json` holds, and switching it; record in `data/annotations/shared-archive/<slug>.json`, set-aside copies in `shared-archive/<slug>-<stamp>/kept/<annotator>/` |
 | `GET/POST /api/annotation-times/:slug` | embedded `time_spent_seconds` in the above |
 | `GET/POST/DELETE /api/song-info/:slug` | `<root>/song-info/<slug>.json` |
 | `GET/POST /api/dataset-config` | `data/dataset-config.json` |

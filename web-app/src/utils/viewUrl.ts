@@ -36,12 +36,13 @@
 
 import type { AnnotationType, ExaminableType } from '../components/inspector-v2/shared/tabConfig';
 
-export type InspectView = 'algo' | 'eval' | 'karaoke';
+export type InspectView = 'algo' | 'eval' | 'karaoke' | 'palette';
 export type UrlStem = 'mix' | 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano';
 
 export const URL_SIGNALS = [
   'waveform', '3band', 'spectrogram', 'cepstrogram', 'energy', 'brightness', 'novelty',
-  'onsets', 'flux', 'chroma', 'tempogram', 'ssm', 'beatgrid',
+  'onsets', 'flux', 'chroma', 'tempogram', 'ssm', 'beatgrid', 'volume', 'density',
+  'busyness', 'bandwidth',
 ] as const;
 export type UrlSignal = typeof URL_SIGNALS[number];
 
@@ -67,7 +68,7 @@ export interface ViewUrlState {
 }
 
 const ANNOTATION_TYPES: readonly AnnotationType[] = ['boundaries', 'cues', 'spans', 'lyrics', 'loops', 'riff-patterns'];
-const INSPECT_VIEWS: readonly InspectView[] = ['algo', 'eval', 'karaoke'];
+const INSPECT_VIEWS: readonly InspectView[] = ['algo', 'eval', 'karaoke', 'palette'];
 const STEMS: readonly UrlStem[] = ['mix', 'vocals', 'drums', 'bass', 'other', 'guitar', 'piano'];
 const EMPTY_SET = '-';
 

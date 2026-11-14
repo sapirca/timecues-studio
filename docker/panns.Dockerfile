@@ -3,8 +3,9 @@
 #
 # Experimental: only spins up under the `experimental-models` docker compose
 # profile. CPU-only torch wheels (inherited from the base); the CNN14
-# checkpoint (~80 MB) lazy-downloads into /app/.cache/panns_data on first
-# detect. Mount the shared `timecues-model-cache` named volume to persist
+# checkpoint (~330 MB) lazy-downloads into $PANNS_CHECKPOINT_DIR on first
+# detect — panns_server.py fetches it with urllib, since the image has no
+# wget for panns_inference's own downloader. Mount the shared `timecues-model-cache` named volume to persist
 # the download across restarts.
 #
 # Inherits Python 3.11 + CPU torch 2.1.0 + librosa + numpy<2 from
@@ -24,8 +25,8 @@ RUN pip install --no-cache-dir panns_inference
 # (panns_inference/config.py), so `import panns_inference` raises
 # FileNotFoundError unless the AudioSet label map already exists at
 # ~/panns_data/. Bake it in at build (~14 KB, 527 classes) so the import —
-# and the boot-time health probe — succeed. The ~80 MB CNN14 checkpoint
-# still lazy-downloads next to it on first detect.
+# and the boot-time health probe — succeed. The ~330 MB CNN14 checkpoint
+# lazy-downloads into $PANNS_CHECKPOINT_DIR on first detect.
 RUN python -c "import urllib.request, os; os.makedirs('/root/panns_data', exist_ok=True); urllib.request.urlretrieve('https://raw.githubusercontent.com/qiuqiangkong/audioset_tagging_cnn/master/metadata/class_labels_indices.csv', '/root/panns_data/class_labels_indices.csv')"
 
 COPY tools/python/paths.py          /app/tools/python/paths.py

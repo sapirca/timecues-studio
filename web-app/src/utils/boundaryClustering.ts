@@ -14,6 +14,8 @@
 // is the same *idea* over the four MSAF algorithms, but runs in a different
 // runtime on baked caches — it is intentionally NOT unified here.
 
+import type { AutoGuessCentroidMethod, AutoGuessPoint } from '../types/autoGuess';
+
 /** The eight representative-time methods. `AutoGuessCentroidMethod` (in
  *  types/manualAnnotation.ts) is the user-selectable subset; the extra three
  *  (median / trimmed / tightest) are internal candidates that some surfaces
@@ -162,4 +164,28 @@ export function agreementCount(point: {
 }): number {
   if (!point.sources.length) return point.clusterSize;
   return new Set(point.sources.map((s) => s.algorithmId)).size;
+}
+
+/**
+ * One cluster as an unreviewed Auto-guess point. The one shape both surfaces
+ * write: Auto-guess's own Generate, and Consensus Inspect's "Use for
+ * Auto-guess", which hands over the boundaries it scored rather than only the
+ * knobs that produced them. `originalTime` is always the mean — the anchor
+ * "reset to mean" returns to.
+ */
+export function clusterToAutoGuessPoint(
+  members: ClusterPoint[],
+  clusterId: number,
+  method: AutoGuessCentroidMethod,
+): AutoGuessPoint {
+  return {
+    id: Math.random().toString(36).slice(2, 10),
+    time: computeClusterTime(members, method),
+    originalTime: members.reduce((s, m) => s + m.time, 0) / members.length,
+    sources: members.map((m) => ({ algorithmId: m.algorithmId, originalTime: m.time })),
+    clusterId,
+    clusterSize: members.length,
+    status: 'pending',
+    correctionSource: method !== 'mean' ? method : undefined,
+  };
 }

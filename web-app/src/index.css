@@ -2,6 +2,19 @@
 
 /* ─── Design tokens — dark obsidian DAW palette ───────────────────────────── */
 :root {
+  /* Page zoom (src/uiScale.ts sets --uiz). Viewport lengths divided back by it;
+     postcss.config.js points every vh/vw/dvh in the CSS here. Inline styles
+     write calc(N * var(--vh-u)) themselves. */
+  --uiz: 1;
+  --vh-u:  calc(1vh  / var(--uiz));
+  --vw-u:  calc(1vw  / var(--uiz));
+  --dvh-u: calc(1dvh / var(--uiz));
+  --dvw-u: calc(1dvw / var(--uiz));
+  --svh-u: calc(1svh / var(--uiz));
+  --svw-u: calc(1svw / var(--uiz));
+  --lvh-u: calc(1lvh / var(--uiz));
+  --lvw-u: calc(1lvw / var(--uiz));
+
   /* Surfaces */
   --tc-canvas:        #0a0b0d;   /* extreme dark carbon (app background) */
   --tc-canvas-2:      #0d0f12;   /* secondary canvas (insets, log panes) */
@@ -822,6 +835,10 @@ input[type="range"].tc-slider::-moz-range-thumb {
   gap: var(--tc-viz-gap);
   padding: var(--tc-viz-pad-y) var(--tc-viz-pad-x);
 }
+/* The width left over on a wide screen stays at the end of the row. Spreading
+ * it into the gaps (tried 2026-09-26) pulled related controls metres apart —
+ * Zoom drifted away from Speed, Grid from Snap — so the bar packs left at the
+ * tier's own gap, however wide the screen. */
 .tc-viz-bar[data-viz-bar-density='snug'] {
   --tc-viz-gap: 0.5rem;
   --tc-viz-pad-x: 0.625rem;
@@ -957,6 +974,43 @@ input[type="range"].tc-slider::-moz-range-thumb {
 }
 .tc-upload-pulse {
   animation: tc-upload-pulse 1.1s ease-in-out infinite;
+}
+
+/* ─── Run-finished flash ──────────────────────────────────────────────────
+   The algorithm job box pulses a ring in its outcome colour (--tc-flash)
+   when a run ends, after the page scrolls it into view — so a run that
+   finished (or failed) while the user was looking elsewhere is noticed. */
+@keyframes tc-run-flash {
+  0%   { box-shadow: 0 0 0 0 transparent; }
+  15%  { box-shadow: 0 0 0 3px var(--tc-flash), 0 0 18px 2px var(--tc-flash); }
+  45%  { box-shadow: 0 0 0 1px var(--tc-flash); }
+  60%  { box-shadow: 0 0 0 3px var(--tc-flash), 0 0 18px 2px var(--tc-flash); }
+  100% { box-shadow: 0 0 0 1px var(--tc-flash); }
+}
+.tc-run-flash {
+  animation: tc-run-flash 1.6s ease-out both;
+}
+
+/* ─── Copied-to-layer feedback ────────────────────────────────────────────
+   A lane's ⬇ copy lands in the Annotator Tool, off this canvas, so the lane's
+   label cell flashes green and a "Copied" tag fades beside the button
+   (shared/CopyFeedback.tsx). */
+@keyframes tc-copied-flash {
+  0%   { background: rgba(16, 185, 129, 0); }
+  12%  { background: rgba(16, 185, 129, 0.38); }
+  100% { background: rgba(16, 185, 129, 0); }
+}
+.tc-copied-flash {
+  animation: tc-copied-flash 1.8s ease-out both;
+}
+@keyframes tc-copied-tag {
+  0%   { opacity: 0; margin-left: -4px; }
+  10%  { opacity: 1; margin-left: 0; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+.tc-copied-tag {
+  animation: tc-copied-tag 1.8s ease-out both;
 }
 
 /* ─── Phone shell ─────────────────────────────────────────────────────────
@@ -1131,4 +1185,23 @@ html.tc-mobile .tc-aside[data-mobile-open='dock'] {
    sheet below carries the controls in use. */
 html.tc-mobile.tc-mobile-tools .tc-viz-bar {
   display: none;
+}
+
+/* ─── Header swap ─────────────────────────────────────────────────────────
+   The inspector's full header and its slim scroll-away bar share one grid
+   cell and trade places by opacity alone, so the swap moves no geometry (see
+   styleForCollapse). The one going out turns `visibility: hidden` once its
+   fade has ended, so it stops taking clicks and focus. A fast scroll sets
+   `transition: none` inline and the swap is a cut. */
+[data-songbar] > [data-swap] {
+  grid-area: 1 / 1;
+  transition: opacity 160ms ease-out, visibility 0s;
+}
+[data-songbar] > [data-swap][data-off] {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 160ms ease-out, visibility 0s 160ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-songbar] > [data-swap] { transition: none !important; }
 }

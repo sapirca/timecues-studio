@@ -26,7 +26,10 @@ export function pairwiseBoundaryF1(
   for (const est of estSorted) {
     let bestIdx = -1;
     let bestDist = Infinity;
-    for (let i = 0; i < refSorted.length; i++) {
+    // Only the window [est - tol, est + tol] can match; same scan order as a
+    // full sweep, so the greedy pick is unchanged — just O(window) per item.
+    for (let i = lowerBound(refSorted, est - tolerance - WINDOW_SLACK); i < refSorted.length; i++) {
+      if (refSorted[i] > est + tolerance + WINDOW_SLACK) break;
       if (refUsed[i]) continue;
       const d = Math.abs(refSorted[i] - est);
       if (d <= tolerance && d < bestDist) {
@@ -90,7 +93,8 @@ export function pairwiseLabelAgreement(
   for (const e of estSorted) {
     let bestIdx = -1;
     let bestDist = Infinity;
-    for (let i = 0; i < refSorted.length; i++) {
+    for (let i = lowerBoundBy(refSorted, e.time - tolerance - WINDOW_SLACK); i < refSorted.length; i++) {
+      if (refSorted[i].time > e.time + tolerance + WINDOW_SLACK) break;
       if (refUsed[i]) continue;
       const d = Math.abs(refSorted[i].time - e.time);
       if (d <= tolerance && d < bestDist) {
@@ -142,4 +146,28 @@ export function buildAgreementMatrix(
     }
   }
   return { ids, f1, labels, counts };
+}
+
+/** The window search is only a shortcut; `d <= tolerance` stays the real test.
+ *  A little slack keeps float rounding at the edge from narrowing the window
+ *  below what that test would accept. */
+const WINDOW_SLACK = 1e-6;
+
+/** First index whose value is >= x in an ascending array. */
+function lowerBound(sorted: number[], x: number): number {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] < x) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function lowerBoundBy(sorted: { time: number }[], x: number): number {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid].time < x) lo = mid + 1; else hi = mid;
+  }
+  return lo;
 }

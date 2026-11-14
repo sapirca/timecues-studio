@@ -12,7 +12,7 @@ feature, see the [full feature walkthrough](/timecues/video-tour/).
 ## 1. Getting started
 
 A three-minute tour of the whole app: signing in, and the five workspaces —
-**Dataprep**, **Annotator**, **Algorithm Inspect**, **Playground**, and
+**Prepare**, **Annotator**, **Inspect**, **Playground**, and
 **Team** — and where everything lives. Start here.
 
 <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:720px;margin:1rem 0;border-radius:8px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/GccmYNJ7wyA" title="Getting started — a tour of TimeCues Studio" frameborder="0" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>

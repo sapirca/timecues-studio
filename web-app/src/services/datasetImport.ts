@@ -15,7 +15,7 @@
 //        track_a.auto-guess.json
 //        track_a.stems/{vocals,drums,...}.wav
 //   3. Export-bundle layout — what ExportManagerModal writes (one dir per slug):
-//        <slug>/{boundaries,cues,spans,loops}/[<annotator>/]<layer-name>.json
+//        <slug>/{boundaries,cues,spans,lyrics,loops,riff-patterns}/[<annotator>/]<layer-name>.json
 //        <slug>/auto-guess/[<annotator>/]<slug>.json
 //        <slug>/song-info.json
 //        <slug>/audio.<ext>
@@ -67,15 +67,15 @@ export type AnnotationKind = 'auto-guess' | 'layers';
 /** User-created layer kinds the export-bundle layout splits into one file each.
  *  On the server they all live inside a single annotation-layers document, so
  *  the importer reassembles them before POSTing. */
-export type UserLayer = 'boundaries' | 'cues' | 'spans' | 'loops';
+export type UserLayer = 'boundaries' | 'cues' | 'spans' | 'lyrics' | 'loops' | 'riff-patterns';
 export type ScannedSong = {
   slug: string;            // derived from audio basename (server slugify)
   displayName: string;     // raw basename before slugify
   audio: File | null;      // null if a song was inferred from annotations alone
   songInfo: File | null;
   annotations: Partial<Record<AnnotationKind, File>>;
-  /** Per-layer JSON files from the export-bundle layout (cues/spans/loops/
-   *  loops), each a single AnnotationLayer. Folded into one document by the
+  /** Per-layer JSON files from the export-bundle layout (boundaries/cues/
+   *  spans/lyrics/loops/riff-patterns), each a single AnnotationLayer. Folded into one document by the
    *  `layers` import step alongside any whole-document `annotations.layers`. */
   layerFiles: { type: UserLayer; name: string; file: File }[];
   /** Cached algorithm-output JSONs (allin1 folds, MSAF, foote, BPM detector,
@@ -206,8 +206,11 @@ function classifyFlatBundle(parts: string[]): Classified | null {
 }
 
 // Boundaries are an ordinary layer dir now — `<slug>/boundaries/<name>.json`
-// holds one AnnotationLayer, exactly like `<slug>/cues/<name>.json`.
-const USER_LAYER_DIRS = new Set<UserLayer>(['boundaries', 'cues', 'spans', 'loops']);
+// holds one AnnotationLayer, exactly like `<slug>/cues/<name>.json`. Every
+// layer kind the Export Manager writes must be listed here, or its files are
+// dropped on the way back in without a word — riff-patterns were, until
+// 2026-11-14.
+const USER_LAYER_DIRS = new Set<UserLayer>(['boundaries', 'cues', 'spans', 'lyrics', 'loops', 'riff-patterns']);
 // Type dirs the export-bundle layout places directly under `<slug>/`. grid +
 // algos are recognised as part of the layout but have no import endpoint, so
 // they fall through to "unrecognised" honestly rather than silently vanishing.
@@ -215,7 +218,7 @@ const USER_LAYER_DIRS = new Set<UserLayer>(['boundaries', 'cues', 'spans', 'loop
 // bundles exported before it was removed still carry the dir, and recognising
 // it keeps sibling files in that bundle anchored to the right slug.
 const EXPORT_TYPE_DIRS = new Set([
-  'boundaries', 'cues', 'spans', 'loops', 'patterns', 'auto-guess', 'stems', 'grid', 'algos',
+  'boundaries', 'cues', 'spans', 'lyrics', 'loops', 'riff-patterns', 'patterns', 'auto-guess', 'stems', 'grid', 'algos',
 ]);
 
 /** Recognise the export-bundle layout (layout #3 above). The slug always comes
@@ -445,7 +448,7 @@ function uploadErrorText(xhr: XMLHttpRequest, fallback: string): string {
   return raw.slice(0, 400) || fallback;
 }
 
-async function uploadAudioChunked(file: File, slug: string, onProgress?: (frac: number) => void): Promise<{ id: string }> {
+async function uploadAudioChunked(file: File, slug: string, onProgress?: (frac: number) => void): Promise<{ id: string; converted?: string }> {
   const total = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_SIZE));
   // Send `<slug><ext>` as the upload name so the server's slugify lands on the
   // same id the importer already grouped sidecars under. Using `file.name`
@@ -454,13 +457,13 @@ async function uploadAudioChunked(file: File, slug: string, onProgress?: (frac: 
   // audio and song-info into separate slugs.
   const ext = audioExt(file.name) || '.mp3';
   const uploadName = `${slug}${ext}`;
-  let last: { id?: string } = {};
+  let last: { id?: string; converted?: string } = {};
   for (let i = 0; i < total; i += 1) {
     const start = i * UPLOAD_CHUNK_SIZE;
     const end = Math.min(file.size, start + UPLOAD_CHUNK_SIZE);
     const slice = file.slice(start, end);
     const qs = `name=${encodeURIComponent(uploadName)}&chunk=${i}&total=${total}`;
-    last = await new Promise<{ id?: string }>((resolve, reject) => {
+    last = await new Promise<typeof last>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `/api/upload-song?${qs}`);
       for (const [k, v] of Object.entries(annotatorHeaders())) xhr.setRequestHeader(k, v);
@@ -478,11 +481,14 @@ async function uploadAudioChunked(file: File, slug: string, onProgress?: (frac: 
     onProgress?.(end / file.size);
   }
   if (!last.id) throw new Error('upload-song did not return an id');
-  return { id: last.id };
+  return { id: last.id, converted: last.converted };
 }
 
-async function uploadStemChunked(slug: string, stem: StemName, ext: string, file: File): Promise<void> {
+/** Resolves to the server's conversion note when it re-encoded the stem (a VBR
+ *  mp3), otherwise undefined. */
+async function uploadStemChunked(slug: string, stem: StemName, ext: string, file: File): Promise<string | undefined> {
   const total = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_SIZE));
+  let converted: string | undefined;
   for (let i = 0; i < total; i += 1) {
     const start = i * UPLOAD_CHUNK_SIZE;
     const end = Math.min(file.size, start + UPLOAD_CHUNK_SIZE);
@@ -492,11 +498,19 @@ async function uploadStemChunked(slug: string, stem: StemName, ext: string, file
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `/api/upload-stem/${encodeURIComponent(slug)}?${qs}`);
       for (const [k, v] of Object.entries(annotatorHeaders())) xhr.setRequestHeader(k, v);
-      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(uploadErrorText(xhr, `HTTP ${xhr.status}`))));
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(uploadErrorText(xhr, `HTTP ${xhr.status}`)));
+        try {
+          const body = JSON.parse(xhr.responseText) as { converted?: unknown };
+          if (typeof body.converted === 'string') converted = body.converted;
+        } catch { /* an older server answers without a body worth reading */ }
+        resolve();
+      };
       xhr.onerror = () => reject(new Error('network'));
       xhr.send(slice);
     });
   }
+  return converted;
 }
 
 async function finaliseStemsManifest(slug: string): Promise<void> {
@@ -576,10 +590,10 @@ export async function runImport(
     if (include.audio && song.audio) {
       onProgress({ stage: 'step', songIndex: i, totalSongs: plan.length, songSlug: song.slug, step: 'audio', frac: 0 });
       try {
-        await uploadAudioChunked(song.audio, song.slug, (frac) => {
+        const { converted } = await uploadAudioChunked(song.audio, song.slug, (frac) => {
           onProgress({ stage: 'step', songIndex: i, totalSongs: plan.length, songSlug: song.slug, step: 'audio', frac });
         });
-        steps.audio = { status: 'ok' };
+        steps.audio = converted ? { status: 'ok', message: converted } : { status: 'ok' };
       } catch (err) {
         steps.audio = { status: 'error', message: (err as Error).message };
       }
@@ -618,7 +632,7 @@ export async function runImport(
     // 3b. Annotation layers. Two source shapes collapse to one POST:
     //   - a whole-document file (server-mirror / flat `.layers.json`) — POSTed
     //     verbatim so its statusByType / annotated_at survive;
-    //   - the export-bundle's per-layer files (cues/spans/loops), each
+    //   - the export-bundle's per-layer files (cues/spans/lyrics/…), each
     //     a single AnnotationLayer — reassembled into one document. When both
     //     are present (mixed sources) the per-layer files extend the document.
     if (include.layers && (song.annotations.layers || song.layerFiles.length > 0)) {
@@ -667,13 +681,18 @@ export async function runImport(
       const stemKeys = (STEM_NAMES as readonly StemName[]).filter((n) => song.stems[n]);
       if (stemKeys.length > 0) {
         try {
+          const converted: StemName[] = [];
+          let note: string | undefined;
           for (const name of stemKeys) {
             const s = song.stems[name];
             if (!s) continue;
-            await uploadStemChunked(song.slug, name, s.ext, s.file);
+            const c = await uploadStemChunked(song.slug, name, s.ext, s.file);
+            if (c) { converted.push(name); note = c; }
           }
           await finaliseStemsManifest(song.slug);
-          steps.stems = { status: 'ok' };
+          steps.stems = note
+            ? { status: 'ok', message: `${converted.join(', ')}: ${note}` }
+            : { status: 'ok' };
         } catch (err) {
           steps.stems = { status: 'error', message: (err as Error).message };
         }

@@ -44,10 +44,9 @@ describe('riffLayerFromMotifs', () => {
     expect(pointingAt0.map((it) => it.start)).toEqual([0, 10]);
   });
 
-  it('gives each node a boundary body, not an empty chip grid', () => {
+  it('gives each node one sounding note across it', () => {
     const layer = riffLayerFromMotifs(SECTIONS, BPM, OPTS)!;
     const node = (layer.nodes as RiffNode[])[0];
-    expect(node.kind).toBe('boundary');
     // One sounding block covering the node — the model claimed no rests.
     expect(node.segments).toHaveLength(1);
     expect(node.segments![0].kind).toBe('tick');

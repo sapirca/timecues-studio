@@ -9,18 +9,10 @@
 ARG BASE_REPO=timecues
 FROM ${BASE_REPO}/experimental-dsp-base:latest
 
-# autochord pip package — chroma templates + Viterbi smoothing + a small
-# TF-SavedModel BiLSTM-CRF baked into ~/.autochord/. autochord 1.x ships
-# the model in the LEGACY TF SavedModel format that Keras 3 (shipped
-# alongside TensorFlow ≥ 2.16) refuses to load (`File format not
-# supported`). Pinning tensorflow<2.16 (which pins keras<3 transitively)
-# keeps the legacy h5/SavedModel path working. Pin setuptools<81 for
-# the same `pkg_resources` reason run.sh handles on bare-metal: autochord
-# imports pkg_resources at module load and setuptools 81 dropped it.
-RUN pip install --no-cache-dir \
-    "setuptools<81" \
-    "tensorflow<2.16" \
-    autochord
+# autochord is NOT installed in this image: the NNLS-Chroma Vamp plugin it
+# loads is GPL, so it is an opt-in, like Essentia (NOTICE.md says how). The
+# sidecar boots without it and reports autochord-chords as "Deps missing";
+# librosa-key and librosa-onsets are unaffected.
 
 COPY tools/python/paths.py              /app/tools/python/paths.py
 COPY tools/python/server_common.py      /app/tools/python/server_common.py

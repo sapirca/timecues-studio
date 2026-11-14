@@ -144,14 +144,23 @@ def detect_librosa_tempo_dynamic(y, sr) -> dict:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def detect_madmom_rnn_beats(audio_path: Path) -> dict:
+def _beat_activations(audio_path: Path):
+    """RNNBeatProcessor's activations, with its features built in chunks (see
+    madmom_lean) — identical numbers, ~0.5 GB instead of ~1.7 GB."""
+    import madmom_lean
+    from madmom.features.beats import RNNBeatProcessor
+    return madmom_lean.activations(RNNBeatProcessor(), audio_path)
+
+
+def detect_madmom_rnn_beats(audio_path: Path, act=None) -> dict:
     src = "madmom-rnn-beats"
     if not _MADMOM_OK:
         return {"source": src, "ok": False, "error": "madmom not installed"}
     t0 = datetime.now().timestamp() * 1000
     try:
-        from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
-        act = RNNBeatProcessor()(str(audio_path))
+        from madmom.features.beats import DBNBeatTrackingProcessor
+        if act is None:
+            act = _beat_activations(audio_path)
         beats = DBNBeatTrackingProcessor(fps=100)(act)
         beat_times = [float(b) for b in beats]
         if len(beat_times) < 2:
@@ -190,10 +199,14 @@ def detect_madmom_dbn_downbeats(audio_path: Path) -> dict:
         return {"source": src, "ok": False, "error": "madmom not installed"}
     t0 = datetime.now().timestamp() * 1000
     try:
+        import madmom_lean
         from madmom.features.downbeats import (
             RNNDownBeatProcessor, DBNDownBeatTrackingProcessor,
         )
-        act = RNNDownBeatProcessor()(str(audio_path))
+        # Chunked features and a one-byte-pointer Viterbi (see madmom_lean):
+        # the same beats, ~0.9 GB peak instead of ~4.7 GB.
+        madmom_lean.patch_downbeats()
+        act = madmom_lean.activations(RNNDownBeatProcessor(), audio_path)
         # Returns (N, 2): [time_sec, beat_position_in_bar] where position 1
         # is the downbeat.
         out = DBNDownBeatTrackingProcessor(beats_per_bar=[3, 4], fps=100)(act)
@@ -219,15 +232,15 @@ def detect_madmom_dbn_downbeats(audio_path: Path) -> dict:
         return {"source": src, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def detect_madmom_tempo(audio_path: Path) -> dict:
+def detect_madmom_tempo(audio_path: Path, act=None) -> dict:
     src = "madmom-tempo"
     if not _MADMOM_OK:
         return {"source": src, "ok": False, "error": "madmom not installed"}
     t0 = datetime.now().timestamp() * 1000
     try:
-        from madmom.features.beats import RNNBeatProcessor
         from madmom.features.tempo import TempoEstimationProcessor
-        act = RNNBeatProcessor()(str(audio_path))
+        if act is None:
+            act = _beat_activations(audio_path)
         candidates = TempoEstimationProcessor(fps=100)(act)
         # candidates: ndarray of shape (N, 2) — (tempo, strength), sorted by strength desc.
         if len(candidates) == 0:
@@ -289,10 +302,22 @@ def detect_all(slug: str, force: bool = False, span: "tuple[float, float] | None
             detect_librosa_beat_track(y, sr)    if _LIBROSA_OK else _skip("librosa-beat-track"),
             detect_librosa_tempo_static(y, sr)  if _LIBROSA_OK else _skip("librosa-tempo-static"),
             detect_librosa_tempo_dynamic(y, sr) if _LIBROSA_OK else _skip("librosa-tempo-dynamic"),
-            detect_madmom_rnn_beats(detector_path),
-            detect_madmom_dbn_downbeats(detector_path),
-            detect_madmom_tempo(detector_path),
         ]
+        del y  # the madmom detectors load their own audio
+        # rnn-beats and tempo read the same beat activations: compute them
+        # once. Should that fail, each detector retries and reports its own error.
+        beat_act = None
+        if _MADMOM_OK:
+            try:
+                beat_act = _beat_activations(detector_path)
+            except Exception:
+                beat_act = None
+        algorithms += [
+            detect_madmom_rnn_beats(detector_path, beat_act),
+            detect_madmom_dbn_downbeats(detector_path),
+            detect_madmom_tempo(detector_path, beat_act),
+        ]
+        del beat_act
 
     if span:
         # Every detector just answered about a file that starts at zero.

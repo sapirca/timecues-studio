@@ -31,11 +31,12 @@ import {
 } from '../../services/lyricsDetection';
 import { InfoDot } from './InfoDot';
 
-/** The two LYRICS detectors, in the order the curated generator prefers them.
+/** The LYRICS detectors, in the order the curated generator prefers them.
  *  Kept local: this panel drives them directly rather than through the
  *  whole-song tool registry. */
 const ALGOS = [
   { id: 'whisper-base', label: 'Whisper base' },
+  { id: 'ivrit', label: 'Ivrit' },
   { id: 'ctc-forced-aligner', label: 'CTC forced aligner' },
 ] as const;
 type AlgoId = typeof ALGOS[number]['id'];

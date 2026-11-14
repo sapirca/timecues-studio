@@ -1,9 +1,9 @@
 // CUE-family eval table for the all-songs view. Mirrors the SPAN/LOOP/
 // LYRICS table but the prediction side is heterogeneous: cue-
-// emitting algorithms live across five different sidecars (beatnet,
-// pitch, cue-extras, span — for HPSS onsets). Each algorithm's
-// detection result is projected to `{ time, label }[]` before being
-// scored via `evaluateCueLayer` at a kind-specific tolerance.
+// emitting algorithms live across several sidecars (beatnet, pitch,
+// cue-extras), and every installed custom detector that emits cues gets a
+// row of its own. Each prediction is projected to `{ time, label }[]`
+// before being scored via `evaluateCueLayer` at a kind-specific tolerance.
 //
 // Reference: first non-empty `cues` layer in the song's annotation
 // document (loaded via /api/annotation-layers/<slug>). Songs without a
@@ -14,6 +14,8 @@ import { loadCachedBeatnet } from '../../services/beatnetDetection';
 import { loadCachedPitch } from '../../services/pitchDetection';
 import { loadCachedCueExtras } from '../../services/cueExtrasDetection';
 import { loadLayers } from '../../services/annotationLayers';
+import { getDetectorResult, listDetectors } from '../../services/customScripts';
+import type { CustomCueItem } from '../../types/customScript';
 import { evaluateCueLayer, type AlgoEvalResult } from '../../utils/evaluation';
 import type { CueItem, AnnotationLayer } from '../../types/annotationLayer';
 import { InfoDot } from './InfoDot';
@@ -50,8 +52,14 @@ const CUE_ALGOS: Array<{ id: string; label: string; tol: number }> = [
   { id: 'librosa-key',       label: 'librosa key changes', tol: 0.25 },
   { id: 'autochord-chords',  label: 'autochord chord changes', tol: 0.25 },
   { id: 'librosa-onsets',    label: 'librosa onsets',     tol: 0.05 },
-  { id: 'drum-transients',   label: 'drum transients',    tol: 0.05 },
 ];
+
+// Custom cue detectors are scored as point events at the onset tolerance —
+// what a cue detector reports is a moment, the same kind of claim an onset
+// is. Their rows are keyed `custom:<name>` so they can't collide with a
+// built-in id.
+const CUSTOM_CUE_TOL = 0.05;
+const CUSTOM_PREFIX = 'custom:';
 
 function pickCueReference(layers: AnnotationLayer[]): CueItem[] {
   for (const l of layers) {
@@ -77,8 +85,14 @@ async function fetchPredictedCues(slug: string, algoId: string): Promise<CueItem
       id: `basic-pitch:${i}`, time: n.time, label: n.pitch,
     }));
   }
-  if (algoId === 'librosa-key' || algoId === 'autochord-chords' || algoId === 'librosa-onsets'
-      || algoId === 'drum-transients') {
+  if (algoId.startsWith(CUSTOM_PREFIX)) {
+    const env = await getDetectorResult(algoId.slice(CUSTOM_PREFIX.length), slug);
+    if (!env || env.fatal || env.output_kind !== 'cue') return null;
+    return (env.items as CustomCueItem[]).map((c, i) => ({
+      id: `${algoId}:${i}`, time: c.time_ms / 1000, label: c.label ?? '',
+    }));
+  }
+  if (algoId === 'librosa-key' || algoId === 'autochord-chords' || algoId === 'librosa-onsets') {
     const extras = await loadCachedCueExtras(slug, algoId);
     if (!extras || extras.ok === false) return null;
     return extras.cues.map((c, i) => ({
@@ -97,6 +111,23 @@ export function GlobalEvalCueTable({
 }) {
   const [rows, setRows] = useState<PerSongRow[]>([]);
   const [loading, setLoading] = useState(false);
+  // The built-in cue algorithms, then one row per installed custom detector
+  // that emits cues. A registry that can't be reached just leaves the
+  // built-in rows.
+  const [algos, setAlgos] = useState(CUE_ALGOS);
+  useEffect(() => {
+    let cancelled = false;
+    listDetectors()
+      .then((dets) => {
+        if (cancelled) return;
+        const custom = dets
+          .filter((d) => d.status === 'ok' && d.output_kind === 'cue')
+          .map((d) => ({ id: `${CUSTOM_PREFIX}${d.name}`, label: d.label || d.name, tol: CUSTOM_CUE_TOL }));
+        setAlgos([...CUE_ALGOS, ...custom]);
+      })
+      .catch(() => { /* registry unreachable — built-in rows only */ });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +138,7 @@ export function GlobalEvalCueTable({
         const doc = await loadLayers(a.id);
         const ref = pickCueReference(doc.layers);
         const results: Record<string, AlgoEvalResult | null> = {};
-        await Promise.all(CUE_ALGOS.map(async ({ id, tol }) => {
+        await Promise.all(algos.map(async ({ id, tol }) => {
           const pred = await fetchPredictedCues(a.id, id);
           results[id] = (!pred || ref.length === 0) ? null : evaluateCueLayer(ref, pred, trackDurationFallback, tol);
         }));
@@ -119,10 +150,10 @@ export function GlobalEvalCueTable({
       }
     })();
     return () => { cancelled = true; };
-  }, [audioFiles, trackDurationFallback]);
+  }, [audioFiles, trackDurationFallback, algos]);
 
   const aggregates = useMemo<AlgoAggregate[]>(() => {
-    return CUE_ALGOS.map(({ id, label }) => {
+    return algos.map(({ id, label }) => {
       const scored = rows
         .map((r) => r.results[id])
         .filter((r): r is AlgoEvalResult => r !== null);
@@ -137,7 +168,7 @@ export function GlobalEvalCueTable({
         mnbd:      scored.reduce((s, r) => s + r.mnbd,      0) / n,
       };
     });
-  }, [rows]);
+  }, [rows, algos]);
 
   const songsWithRef = rows.filter((r) => r.refCount > 0).length;
 
@@ -177,7 +208,7 @@ export function GlobalEvalCueTable({
             <tr key={a.algo} className="border-b border-white/[0.04]">
               <td className="py-1.5 pr-3 font-mono text-slate-200">{a.label}</td>
               <td className="py-1.5 pr-3 text-slate-400">{a.songs} / {audioFiles.length}</td>
-              <td className="py-1.5 pr-3 text-slate-500 font-mono">{CUE_ALGOS[i].tol.toFixed(2)}s</td>
+              <td className="py-1.5 pr-3 text-slate-500 font-mono">{algos[i].tol.toFixed(2)}s</td>
               <td className="py-1.5 pr-3 text-slate-200">{a.songs > 0 ? a.precision.toFixed(2) : '—'}</td>
               <td className="py-1.5 pr-3 text-slate-200">{a.songs > 0 ? a.recall.toFixed(2)    : '—'}</td>
               <td className="py-1.5 pr-3 text-slate-200">{a.songs > 0 ? a.f1.toFixed(2)        : '—'}</td>

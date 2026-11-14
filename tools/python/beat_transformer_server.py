@@ -64,7 +64,7 @@ import sys
 import urllib.request
 import warnings
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -77,7 +77,7 @@ from paths import (  # noqa: E402
     REPO_ROOT, find_audio, stem_audio,
     BEAT_TRANSFORMER_OUTPUTS_DIR as CACHE_DIR,
 )
-from server_common import cached_result, cors_headers, now_iso, parse_range, time_ms  # noqa: E402
+from server_common import cached_result, write_result, cors_headers, now_iso, parse_range, time_ms, ModelServer, model_used  # noqa: E402
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -159,6 +159,7 @@ def _ensure_weights() -> Path:
 def _ensure_model():
     """Build the model and load the checkpoint on first use."""
     global _model, _mel_filter
+    model_used()
     if _model is not None:
         return
     import torch
@@ -222,8 +223,10 @@ def _decode(beat_act, down_act) -> "tuple[list[float], list[float]]":
     two mutually exclusive columns (non-downbeat beat, downbeat), not the two
     overlapping ones the network emits.
     """
+    import madmom_lean
     from madmom.features.beats import DBNBeatTrackingProcessor
     from madmom.features.downbeats import DBNDownBeatTrackingProcessor
+    madmom_lean.patch_downbeats()   # same path, a quarter of the pointer table
 
     beats = DBNBeatTrackingProcessor(
         min_bpm=MIN_BPM, max_bpm=MAX_BPM, fps=FPS)(beat_act)
@@ -232,6 +235,57 @@ def _decode(beat_act, down_act) -> "tuple[list[float], list[float]]":
     )(np.stack((np.maximum(beat_act - down_act, 0), down_act), axis=-1))
     downbeats = [float(t) for t, pos in combined if int(round(pos)) == 1]
     return [float(b) for b in beats], downbeats
+
+
+# Frames per chunk of the conv front-end, and the context each borrows. Its
+# convolutions reach 2 frames along time (conv1) and 1 (conv3); the pools run
+# along frequency only — so 4 frames of context reproduce it exactly.
+FRONT_CHUNK = 1024
+FRONT_CONTEXT = 4
+
+
+def _forward(x: "torch.Tensor") -> "torch.Tensor":
+    """`_model(x)[0]` — the beat/downbeat logits — with the conv front-end run
+    in time chunks. Over a whole song at once its activations (32 channels ×
+    126 bins per frame per stem, plus conv scratch) took a 5-minute song to
+    9.4 GB; chunked, the same features cost a chunk's worth. The transformer
+    then runs on the whole song exactly as upstream wrote it: windowing it
+    would not reproduce the checkpoint's output, because its dilated heads
+    roll past their padding and wrap around the sequence. The tempo head is
+    skipped — nothing reads it. Upstream's forward() is in
+    vendor/beat_transformer/DilatedTransformer.py; eval mode, so dropout is
+    the identity.
+    """
+    import torch
+    m = _model
+    batch, instr, time, melbin = x.shape
+    flat = x.reshape(-1, 1, time, melbin)
+    feats = torch.empty(batch * instr, m.dmodel, time)
+    for a in range(0, time, FRONT_CHUNK):
+        b = min(time, a + FRONT_CHUNK)
+        lo, hi = max(0, a - FRONT_CONTEXT), min(time, b + FRONT_CONTEXT)
+        h = torch.relu(m.maxpool1(m.conv1(flat[:, :, lo:hi])))
+        h = torch.relu(m.maxpool2(m.conv2(h)))
+        h = torch.relu(m.maxpool3(m.conv3(h)))       # (batch*instr, dmodel, t, 1)
+        feats[:, :, a:b] = h[:, :, a - lo:b - lo, 0]
+    del flat
+    h = feats.transpose(1, 2).contiguous()           # (batch*instr, time, dmodel)
+    del feats
+    for layer in range(m.nlayers):
+        # Time attention reads each stem's sequence on its own (stems are the
+        # batch axis here), so one stem at a time gives the same numbers for a
+        # quarter of the scratch.
+        time_attn = m.Transformer_layers[f"time_attention_{layer}"]
+        h = torch.cat([time_attn(h[i:i + 1], layer=layer)[0] for i in range(h.shape[0])])
+        if 3 <= layer <= 5:
+            # Instrument attention reads one frame's stems at a time, so it
+            # runs in time chunks.
+            instr_attn = m.Transformer_layers[f"instr_attention_{layer}"]
+            h = h.reshape(batch, instr, time, m.dmodel).permute(0, 2, 1, 3).reshape(-1, instr, m.dmodel)
+            h = torch.cat([instr_attn(h[a:a + FRONT_CHUNK]) for a in range(0, h.shape[0], FRONT_CHUNK)])
+            h = h.reshape(batch, time, instr, m.dmodel).permute(0, 2, 1, 3).reshape(-1, time, m.dmodel)
+    h = torch.relu(h).reshape(batch, instr, time, m.dmodel).mean(1)
+    return m.out_linear(h)
 
 
 def detect_beat_transformer(slug: str, span=None) -> dict:
@@ -244,7 +298,7 @@ def detect_beat_transformer(slug: str, span=None) -> dict:
         import torch
         x, used = _stem_spectrograms(slug, span)
         with torch.no_grad():
-            pred, _ = _model(torch.from_numpy(x).unsqueeze(0).float())
+            pred = _forward(torch.from_numpy(x).unsqueeze(0).float())
         beat_act = torch.sigmoid(pred[0, :, 0]).numpy()
         down_act = torch.sigmoid(pred[0, :, 1]).numpy()
         beat_times, downbeats = _decode(beat_act, down_act)
@@ -324,10 +378,7 @@ def detect(slug: str, force: bool = False, span=None) -> dict:
         "result":      result,
         "computed_at": now_iso(),
     }
-    try:
-        cache_path.write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
+    write_result(cache_path, payload, deps_ok=_DEPS_OK)
     return payload
 
 
@@ -427,7 +478,7 @@ def main():
           f"madmom={_MADMOM_OK} weights={WEIGHTS_PATH.exists()} fold={FOLD}",
           file=sys.stderr)
     try:
-        HTTPServer((host, PORT), Handler).serve_forever()
+        ModelServer((host, PORT), Handler).serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)
 

@@ -2,23 +2,23 @@
  * Floating edit popover for a single Lyrics item — thin adapter over the shared
  * AnnotationPointCard. Opened by clicking a word/line on a Lyrics layer row.
  *
- * Lyrics carry `text` (mapped to the card's Label) and a `time`; line-level
- * items also carry an `end`, so they render as a range while word-level items
- * render as a single point (like a cue). Lyrics have no importance or
- * description fields, so both are hidden. Detector-sourced layers open
- * read-only.
+ * Lyrics carry `text` (mapped to the card's Label), a `time` and an `end`:
+ * every lyric is a span, word or line, so the card always shows both ends. Lyrics have no importance
+ * field, so it is hidden; the description is a free-form note like any other
+ * item's. Detector-sourced layers open read-only.
  */
 
 import { type CSSProperties } from 'react';
-import type { AnnotationLayer, LyricsItem } from '../../types/annotationLayer';
-import { AnnotationPointCard } from './shared/AnnotationPointCard';
+import { LYRIC_DEFAULT_SEC, type AnnotationLayer, type LyricsItem } from '../../types/annotationLayer';
+import { AnnotationPointCard, type CardLaneMove } from './shared/AnnotationPointCard';
 import { detectorBadgeLabel } from './shared/detectorBadge';
+import { adsrSection, type AdsrSectionProps } from './shared/adsrSection';
 import { useAnnotationPopover, type PopoverAnchor } from './shared/useAnnotationPopover';
 
 export type LyricsAnchor = PopoverAnchor;
 
 export function useLyricsEditPopover() {
-  return useAnnotationPopover({ width: 320, height: 280 });
+  return useAnnotationPopover({ width: 320, height: 320 });
 }
 
 interface LyricsEditPopoverProps {
@@ -30,11 +30,15 @@ interface LyricsEditPopoverProps {
   /** Raw detector output for this lyric — shown as a collapsible JSON block on
    *  read-only cards. */
   rawOutput?: unknown;
+  /** Other lanes of this type to move the item to, from the header. */
+  laneMove?: CardLaneMove;
   popoverRef: React.RefObject<HTMLDivElement | null>;
   positionStyle: CSSProperties;
   onChange: (patch: Partial<LyricsItem>) => void;
   onDelete: () => void;
   onClose: () => void;
+  /** Done on a draft item — see AnnotationPointCard's `onDone`. */
+  onDone?: () => void;
   /** Play a 0.5s preview at the lyric's time. */
   onPlay?: () => void;
   onStop?: () => void;
@@ -47,42 +51,48 @@ interface LyricsEditPopoverProps {
   /** Resolved grid segments — keeps the bar.beat readout in step with a
    *  split grid, where each segment counts in its own meter from its own bar 1. */
   segments?: readonly import('../../utils/gridSegments').ResolvedSegment[];
-  /** Current playhead — enables the crosshair snap button on the time row. */
-  currentTime?: number;
+  /** Extract ADSR for this lyric — see adsrSection. */
+  adsr?: Omit<AdsrSectionProps, 'envelope'>;
 }
 
 export function LyricsEditPopover({
-  layer, item, readOnly = false, rawOutput, popoverRef, positionStyle,
-  onChange, onDelete, onClose,
+  layer, item, readOnly = false, rawOutput, laneMove, popoverRef, positionStyle,
+  onChange, onDelete, onClose, onDone,
   onPlay, onStop, isPlaying,
-  bpm, gridOffset, beatsPerBar, segments, currentTime,
+  bpm, gridOffset, beatsPerBar, segments, adsr,
 }: LyricsEditPopoverProps) {
   const isLine = item.kind === 'line';
+  // Layers are repaired on load (withLyricSpans), so `end` is always there;
+  // the fallback only guards an item that skipped that path.
+  const end = item.end ?? item.time + LYRIC_DEFAULT_SEC;
   return (
     <AnnotationPointCard
       kind="lyrics"
+      sections={adsr || item.envelope
+        ? [adsrSection({ envelope: item.envelope, sources: [], extracting: false, ...adsr })]
+        : []}
       readOnly={readOnly}
       layerName={layer.name}
+      laneMove={laneMove}
       layerColor={layer.color}
       badge={readOnly ? `${item.kind} · ${detectorBadgeLabel(layer.source)}` : item.kind}
       rawOutput={rawOutput}
       start={item.time}
-      end={isLine ? item.end : undefined}
+      end={end}
       label={item.text}
       labelPlaceholder={isLine ? 'line text' : 'word'}
-      description=""
+      description={item.description ?? ''}
       hideImportance
-      hideDescription
       bpm={bpm}
       gridOffset={gridOffset}
       beatsPerBar={beatsPerBar}
       segments={segments}
-      currentTime={currentTime}
       onChange={(patch) => {
         const out: Partial<LyricsItem> = {};
         if (patch.label !== undefined) out.text = patch.label;
+        if (patch.description !== undefined) out.description = patch.description;
         if (patch.start !== undefined) out.time = patch.start;
-        if (patch.end !== undefined && isLine) out.end = patch.end;
+        if (patch.end !== undefined) out.end = patch.end;
         if (Object.keys(out).length > 0) onChange(out);
       }}
       onDelete={onDelete}
@@ -90,6 +100,7 @@ export function LyricsEditPopover({
       onStop={onStop}
       isPlaying={isPlaying}
       onClose={onClose}
+      onDone={onDone}
       popoverRef={popoverRef}
       positionStyle={positionStyle}
     />

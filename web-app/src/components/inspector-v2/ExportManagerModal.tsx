@@ -6,16 +6,18 @@
  *
  * Behaviour
  *  - Scope: current track | selected tracks (multi-select) | entire dataset
- *  - Layers: manual / auto-guess / cues / spans / loops
- *    (any subset, must pick at least one)
+ *  - Layers: boundaries / auto-guess / cues / spans / lyrics / loops /
+ *    riff patterns (any subset, must pick at least one)
  *  - Formats: any subset of TimeCues JSON | Audacity Label Track |
- *    Sonic Visualiser CSV | JAMS | mir_eval | MIDI markers | REAPER regions.
+ *    Sonic Visualiser CSV | JAMS | mir_eval | MIDI (markers; a pitched cue
+ *    layer's and a riff layer's notes as notes; lyrics as lyric events) |
+ *    REAPER regions.
  *    Picking >1 format duplicates each emitted file across the chosen formats
  *    (forces a .zip).
  *  - Auto-bundle: any time we'd produce >1 file, output is forced into a
  *    single .zip with a per-song directory layout:
  *      <slug>/boundaries/{manual|auto-guess}/<slug>.<ext>
- *      <slug>/{cues|spans|loops}/<layer-name>.<ext>
+ *      <slug>/{cues|spans|lyrics|loops|riff-patterns}/<layer-name>.<ext>
  *      <slug>/{song-info.json, audio.<ext>, algos/…, stems/…}
  *    Multi-annotator corpus dumps (Entire dataset + researcher tier) insert an
  *    <annotator-id> sub-dir inside the type dir per (slug, type) when more
@@ -33,14 +35,16 @@ import type {
   CueItem,
   SpanItem,
   LoopItem,
+  LyricsItem,
 } from '../../types/annotationLayer';
 import { getCurrentAnnotatorId } from '../../context/AnnotatorContext';
-import { useSettings } from '../../context/SettingsContext';
 import { annotatorHeaders } from '../../utils/annotatorHeaders';
 import {
   convertToAudacity,
   convertToJams,
   convertToMidiMarkers,
+  convertToMidiNotes,
+  cueItemsToMidiNotes,
   convertToMirEval,
   convertToReaper,
   convertToSonicVisualiser,
@@ -49,6 +53,10 @@ import {
   cueItemsToExportSections,
   spanItemsToExportSections,
   loopItemsToExportSections,
+  lyricsItemsToExportSections,
+  convertLyricsToMidi,
+  riffLayerToExportSections,
+  riffLayerToMidiNotes,
   gridToExportSections,
 } from '../../utils/exportSerializers';
 import type { ExportSection, JamsLayerKind, GridExportGranularity } from '../../utils/exportSerializers';
@@ -62,8 +70,8 @@ type Scope = 'current' | 'selected' | 'all';
 type ManualLayer = 'autoGuess';
 /** Layer types persisted in annotation-layers documents. A song may hold
  *  several layers of one type, each exported as its own file named after the
- *  layer. `loops` is gated by `experimentalLoopsAndPatterns`. */
-type UserLayer = 'boundaries' | 'cues' | 'spans' | 'loops';
+ *  layer. */
+type UserLayer = 'boundaries' | 'cues' | 'spans' | 'lyrics' | 'loops' | 'riff-patterns';
 type Layer = ManualLayer | UserLayer;
 type Format = 'json' | 'audacity' | 'sonicVis' | 'jams' | 'mirEval' | 'midi' | 'reaper';
 
@@ -85,7 +93,9 @@ const LAYER_DIR: Record<Layer, string> = {
   autoGuess: 'auto-guess',
   cues: 'cues',
   spans: 'spans',
+  lyrics: 'lyrics',
   loops: 'loops',
+  'riff-patterns': 'riff-patterns',
 };
 
 const LAYER_LABEL: Record<Layer, string> = {
@@ -93,13 +103,18 @@ const LAYER_LABEL: Record<Layer, string> = {
   autoGuess: 'Auto-Guess (algorithm clustering)',
   cues: 'Cues (timestamped events)',
   spans: 'Spans (labeled intervals)',
+  lyrics: 'Lyrics (words, lines)',
   loops: 'Loops (bar-quantised regions)',
+  // JSON carries the figures themselves (nodes, sequences, occurrences); the
+  // marker formats carry every play of a node as a labelled region, and MIDI
+  // carries the notes those plays strike.
+  'riff-patterns': 'Riff Patterns (figures, drum grooves)',
 };
 
-const ALL_LAYERS: Layer[] = ['boundaries', 'autoGuess', 'cues', 'spans', 'loops'];
+const ALL_LAYERS: Layer[] = ['boundaries', 'autoGuess', 'cues', 'spans', 'lyrics', 'loops', 'riff-patterns'];
 
 /** The kinds that live in the annotation-layers document, in emit order. */
-const USER_LAYERS: UserLayer[] = ['boundaries', 'cues', 'spans', 'loops'];
+const USER_LAYERS: UserLayer[] = ['boundaries', 'cues', 'spans', 'lyrics', 'loops', 'riff-patterns'];
 
 interface SongEntry {
   id: string;
@@ -312,11 +327,43 @@ function serializeUserLayer(
   ctx: { slug: string; annotatorId: string | null; bpm?: number },
 ): string | Uint8Array | null {
   if (format === 'json') return JSON.stringify(layer, null, 2);
+  // A cue layer that carries pitches (a bass line, a melody) is notes, not
+  // markers: every pitched cue becomes a note a DAW plays back, and the cues
+  // with no pitch ride along as markers.
+  if (format === 'midi' && layer.type === 'cues') {
+    const cues = layer.items as CueItem[];
+    const notes = cueItemsToMidiNotes(cues);
+    if (notes.length) {
+      return convertToMidiNotes(notes, {
+        bpm: ctx.bpm,
+        name: layer.name,
+        markers: cueItemsToExportSections(cues.filter((c) => typeof c.note !== 'number')),
+      });
+    }
+  }
+  // Lyrics in MIDI are lyric events (words, split into syllables where they
+  // were laid on), the lines markers — what a DAW's lyric track reads.
+  if (format === 'midi' && layer.type === 'lyrics') {
+    return convertLyricsToMidi(layer.items as LyricsItem[], { bpm: ctx.bpm, name: layer.name });
+  }
+  // A riff layer in MIDI is the notes it plays — pitched notes at their pitch,
+  // a drum groove's hits on the GM drum channel — with every play of a node
+  // as a marker, so the DAW shows where A and B are as well as what they play.
+  if (format === 'midi' && layer.type === 'riff-patterns') {
+    const riff = layer as AnnotationLayer<'riff-patterns'>;
+    return convertToMidiNotes(riffLayerToMidiNotes(riff, ctx.bpm), {
+      bpm: ctx.bpm,
+      name: layer.name,
+      markers: riffLayerToExportSections(riff, ctx.bpm),
+    });
+  }
   let sections;
   if (layer.type === 'boundaries') sections = boundaryItemsToExportSections(layer.items as BoundaryItem[]);
   else if (layer.type === 'cues') sections = cueItemsToExportSections(layer.items as CueItem[]);
   else if (layer.type === 'spans') sections = spanItemsToExportSections(layer.items as SpanItem[]);
+  else if (layer.type === 'lyrics') sections = lyricsItemsToExportSections(layer.items as LyricsItem[]);
   else if (layer.type === 'loops') sections = loopItemsToExportSections(layer.items as LoopItem[]);
+  else if (layer.type === 'riff-patterns') sections = riffLayerToExportSections(layer as AnnotationLayer<'riff-patterns'>, ctx.bpm);
   else return null;
   return sectionsToMarkerFormat(sections, format, {
     slug: ctx.slug,
@@ -364,8 +411,6 @@ export function ExportManagerModal({
   layersDocument,
   presentation = 'multi',
 }: ExportManagerModalProps) {
-  const { settings } = useSettings();
-  const showLoopsAndPatterns = settings.experimentalLoopsAndPatterns;
 
   // Single-presentation locks scope to the current track. The selectable
   // layer set still allows everything available for the current song.
@@ -377,7 +422,7 @@ export function ExportManagerModal({
   const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(() => new Set());
   const [layers, setLayers] = useState<Record<Layer, boolean>>({
     boundaries: true, autoGuess: false,
-    cues: true, spans: true, loops: true,
+    cues: true, spans: true, lyrics: true, loops: true, 'riff-patterns': true,
   });
   const [selectedFormats, setSelectedFormats] = useState<Set<Format>>(() => new Set(['json']));
   const toggleFormat = (fmt: Format) => {
@@ -488,12 +533,7 @@ export function ExportManagerModal({
     return { bytes, known, unknown };
   }, [audioSizes]);
 
-  // Layer kinds currently surfaced in the UI. Loops are hidden when their
-  // experimental flag is off so we don't tease the UI.
-  const visibleLayerKinds: Layer[] = useMemo(
-    () => ALL_LAYERS.filter((k) => !(k === 'loops' && !showLoopsAndPatterns)),
-    [showLoopsAndPatterns],
-  );
+  const visibleLayerKinds: Layer[] = ALL_LAYERS;
 
   const activeLayers: Layer[] = useMemo(
     () => visibleLayerKinds.filter((k) => layers[k]),
@@ -1100,11 +1140,6 @@ export function ExportManagerModal({
                   partial are exported.
                 </p>
               )}
-              {anyNonJsonFormat && !showLoopsAndPatterns && (
-                <p className="mt-2 text-[10px] leading-snug text-slate-500 italic">
-                  Loops are hidden (experimental — enable in Settings).
-                </p>
-              )}
             </Column>
 
             {/* Column 3: Formats (multi-select — picking >1 forces a .zip) */}
@@ -1137,7 +1172,7 @@ export function ExportManagerModal({
               <FormatCheckRow
                 value="midi" checked={selectedFormats.has('midi')}
                 onChange={() => toggleFormat('midi')}
-                label="MIDI markers (DAW import)" hint=".mid"
+                label="MIDI (DAW import) — markers; notes for pitched cues and riffs; lyrics" hint=".mid"
               />
               <FormatCheckRow
                 value="reaper" checked={selectedFormats.has('reaper')}

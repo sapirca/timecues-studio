@@ -8,10 +8,17 @@ import type { SectionBlock } from '../../types/sectionBlock';
  *  filler sections survive round-trips and remain selectable in dropdowns. */
 export const UNSET_TYPE = 'unset';
 
+/** A visible boundary that claims nothing about musical form — an instruction
+ *  for another tool, a marker, anything that is not an intro/drop/… Unlike
+ *  `unset` it is drawn like a real section, so it is the honest default for a
+ *  freshly added boundary. Always present in `getSectionTypes`, like `unset`,
+ *  so it can never be dropped from the vocabulary. */
+export const OTHER_TYPE = 'other';
+
 export const SECTION_TYPES = [
   'intro', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence',
   'verse', 'prechorus', 'chorus', 'groove',
-  UNSET_TYPE,
+  OTHER_TYPE, UNSET_TYPE,
 ] as const;
 
 /** Curated subset shipped as the dropdown default for new users — the EDM-style
@@ -22,8 +29,8 @@ export const SECTION_TYPES = [
  *  is the same list seen from the genre-card side — the shipped default is
  *  exactly the EDM/House/Mainstage/Bass card's vocabulary, so the Settings
  *  genre cards light up correctly for a user who never touched them.
- *  `unset` is appended by `getSectionTypes`, so it's always present without
- *  needing to live in the user-facing default list. */
+ *  `other` and `unset` are appended by `getSectionTypes`, so they're always
+ *  present without needing to live in the user-facing default list. */
 export const DEFAULT_VOCABULARY: readonly string[] =
   ['intro', 'verse', 'chorus', 'buildup', 'drop', 'breakdown', 'bridge', 'outro', 'silence'];
 
@@ -34,7 +41,7 @@ export function getSectionTypes(vocabulary?: readonly string[]): string[] {
     .map((type) => type.trim().toLowerCase())
     .filter((type) => type.length > 0);
   const base = cleaned.length > 0 ? cleaned : [...SECTION_TYPES];
-  return Array.from(new Set([...base, UNSET_TYPE]));
+  return Array.from(new Set([...base, OTHER_TYPE, UNSET_TYPE]));
 }
 
 export const SECTION_COLORS: Record<string, string> = {
@@ -49,6 +56,8 @@ export const SECTION_COLORS: Record<string, string> = {
   prechorus: '#f59e0b',
   chorus:    '#10b981',
   groove:    '#c084fc',
+  // Sand: the one hue no section type (nor the alternating palette) uses.
+  other:     '#d4a373',
   // Subtle visible gray for card borders/text. The timeline strip in
   // SharedVizPanel/AnnotationOverlays force-renders the bg to transparent
   // for this type, so the strip looks empty even though the card is visible.
@@ -68,6 +77,7 @@ export const SECTION_INFO: Record<string, string> = {
   prechorus: 'Short rise that sets up the chorus — lifts energy and signals the hook.',
   chorus:    'Main hook of the song — most memorable, highest-energy vocal/melodic section.',
   groove:    'Steady-state evolving loop — minimal techno/house section without a clear drop.',
+  other:     'Other — a visible boundary with no musical-form meaning: an instruction for another tool, a marker, anything none of the section types fit. The default for a newly added boundary; rename its label to say what it is.',
   unset:     'Filler — placeholder boundary with no assigned section type. Inserted automatically when ADDing a selection into empty space or into a same-type parent, so the new section ends cleanly. Pick a real type from the dropdown to convert it.',
 };
 
@@ -121,9 +131,9 @@ export function sectionEnd(sections: SectionBlock[], i: number, duration: number
  *  Settings warns before dropping a name in use — see VocabularyRemovalDialog. */
 export function normalizeSectionType(type: string | undefined, sectionTypes: readonly string[] = SECTION_TYPES): string {
   const normalized = (type ?? '').trim().toLowerCase();
-  // `unset` is always valid — filler sections must survive normalization
-  // even when the user's configured vocabulary doesn't list it.
-  if (normalized === UNSET_TYPE) return UNSET_TYPE;
+  // `unset` and `other` are always valid — they must survive normalization
+  // even when the user's configured vocabulary doesn't list them.
+  if (normalized === UNSET_TYPE || normalized === OTHER_TYPE) return normalized;
   const allowed = new Set(sectionTypes);
   return allowed.has(normalized) ? normalized : UNSET_TYPE;
 }

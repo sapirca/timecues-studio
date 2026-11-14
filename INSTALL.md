@@ -202,7 +202,24 @@ sudo apt install ffmpeg libsndfile1 nodejs npm   # Ubuntu
 # 2b. Full — every model family (stems, All-In-One, experimental sidecars).
 #     ~3 GB of pip wheels on first run. Same as `./run.sh --all`.
 ./run_all.sh
+
+# 2c. Reload — restart the servers after editing tools/python/*.py.
+#     No installs, no prompts. See below for why you need it.
+./run.sh --reload
 ```
+
+**After editing a Python sidecar, run `./run.sh --reload`.** Each sidecar
+imports its modules once at startup and holds them for the life of the
+process, so an edit to `tools/python/*.py` changes nothing until the process
+is replaced — and nothing tells you: the old code keeps answering normally.
+A detector can even report `import failed: cannot import name X` while `X` is
+plainly there in the file you just saved. `--reload` kills whatever holds the
+ports without asking, installs nothing, and relaunches. The frontend does not
+need it; Vite already hot-reloads.
+
+It refuses to run beside `--all` or `--torch/--cpu/--gpu`, which ask for the
+opposite. Install once with `./run.sh --all`, then use `./run.sh --reload` for
+every edit after that.
 
 That's it for the happy path. **`./run.sh` is lean**: it installs only the
 core deps (`mir_eval` / `ruptures` / `librosa` / `sklearn` / `soundfile`)
@@ -225,7 +242,7 @@ mirrors that with one `uv`-managed venv per family, created automatically:
 
 | Family | Venv | Why it can't share the main interpreter |
 |---|---|---|
-| `basic-pitch`, `autochord` | `.cache/py311-cue/` (Python 3.11) | `tensorflow<2.15.1` / keras<3 have no wheels for Python 3.12+ |
+| `basic-pitch` (and an opted-in `autochord`) | `.cache/py311-cue/` (Python 3.11) | `tensorflow<2.15.1` / keras<3 have no wheels for Python 3.12+ |
 | `msaf` | `.cache/msaf-venv/` (Python 3.10) | msaf imports `np.int` / `np.float`, removed in numpy 1.24, while `requirements.txt` needs `numpy>=1.24` |
 
 `uv` is fetched automatically if missing (~30 MB static binary, no system
@@ -237,9 +254,8 @@ You do not need to do anything for this — it is what `--all` does. Two notes
 if you are debugging it:
 
 - Each venv installs in **two stages** (build prerequisites, then the payload
-  with `--no-build-isolation`). `vamp`, pulled in by autochord, calls numpy at
-  build time without declaring it, so a single atomic install of the family
-  fails and takes `basic-pitch` down with it.
+  with `--no-build-isolation`), so an sdist that calls numpy at build time
+  without declaring it cannot take the rest of the family down with it.
 - A family is considered usable only when its modules actually **import**, not
   when the installer exits 0. A venv left healthy by an earlier run is reused
   even on a lean `./run.sh`, so you do not have to re-run `--all` to get your
@@ -292,17 +308,14 @@ uv pip install --python .cache/msaf-venv/bin/python --no-build-isolation \
 # then run the server on that interpreter:
 #   .cache/msaf-venv/bin/python tools/python/msaf_server.py
 
-# autochord lives in its own requirements file — it pulls the `vamp` C
-# extension which links against the `vamp-plugin-sdk` system lib. Install
-# the system lib first (`sudo apt-get install -y vamp-plugin-sdk` on
-# Debian/Ubuntu, `brew install vamp-plugin-sdk` on macOS), then:
-pip install --no-build-isolation -r tools/requirements-autochord.txt
+# autochord is opt-in and never installed for you: the NNLS-Chroma Vamp
+# plugin it loads is GPL. NOTICE.md ("Optional, opt-in dependencies") has
+# the install steps and the pins it needs.
 
 # Cherry-pick a single experimental family
 pip install BeatNet                                       # CUE beats / downbeats
 pip install basic-pitch                                   # CUE polyphonic notes (needs Python < 3.12)
 pip install panns_inference                               # SPAN AudioSet tagging
-pip install --no-build-isolation autochord                # CUE chord recognition (needs vamp-plugin-sdk system lib)
 pip install openai-whisper                                # LYRICS transcription
 # Silero-VAD has no pip dep — torch.hub fetches it on first run.
 # JDCNet has no pip dep — pure-PyTorch port, weights pulled at first run.
@@ -390,6 +403,9 @@ single cloud VM, a homelab, or an internal cluster. The standard pattern is:
    Point it at `web:5173` inside the compose network.
 5. Set `VITE_GOOGLE_CLIENT_ID` in `.env` to an OAuth client whose authorized
    origin matches your public hostname (see [Sign-in](#sign-in-google-oauth)).
+   The server verifies every Google sign-in against that client id. Username
+   sign-in has no password, so it is refused behind the proxy; leave
+   `TC_LOCAL_LOGIN` unset on a public host.
 6. `docker compose up -d`.
 
 ## Demucs profiles (stems daemon + allin1 batch)

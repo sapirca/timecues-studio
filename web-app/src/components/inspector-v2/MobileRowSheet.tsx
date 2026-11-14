@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { ROW_SIZES, SIGNAL_ROWS, SIGNAL_ROW_IDS, type RowSheetTarget, type RowSize } from './mobileRows';
+import { SIGNAL_INFO } from './signalInfo';
 
 /**
  * The phone's row sheet — what a tap on a row's name opens.
@@ -33,6 +34,7 @@ export function MobileRowSheet({
   onToggleMark?: (key: string) => void;
 }) {
   const isSignal = !!target.rowId && SIGNAL_ROW_IDS.has(target.rowId);
+  const info = target.rowId ? SIGNAL_INFO[target.rowId] : undefined;
   const btn = 'h-10 px-3 rounded-md border text-[13px] font-medium disabled:opacity-35';
   return createPortal(
     <div className="fixed inset-0 z-[1000]" data-viz-dropdown-popover="">
@@ -51,6 +53,12 @@ export function MobileRowSheet({
           <button type="button" onClick={onClose} className="h-9 px-3 -mr-2 text-[13px] text-slate-200">Done</button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          {info && (
+            <section className="space-y-1.5 text-[13px] leading-snug">
+              <p className="text-slate-200">{info.shows}</p>
+              <p className="text-slate-400"><span className="text-slate-500">How it's computed: </span>{info.computed}</p>
+            </section>
+          )}
           {isSignal && onSwap && (
             <section className="space-y-2">
               <h3 className="text-[11px] uppercase tracking-[0.16em] text-slate-400 font-semibold">Show in this row</h3>

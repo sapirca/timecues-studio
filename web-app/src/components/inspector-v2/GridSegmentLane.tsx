@@ -157,8 +157,8 @@ export function GridSegmentLane({
             onClick={(e) => onSelect?.(seg, { x: e.clientX, y: e.clientY })}
             aria-label={`Grid segment ${seg.index + 1}, ${seg.bpm.toFixed(2)} BPM at ${seg.timeSignature}`}
             aria-pressed={isSelected}
-            className={`absolute top-[3px] bottom-[3px] rounded-[2px] border overflow-hidden flex items-center gap-[7px] pl-[9px] pr-[7px] transition-colors ${tint}`}
-            style={{ left: `${left}%`, width: `calc(${width}% - 2px)` }}
+            className={`absolute top-0 bottom-0 border overflow-hidden flex items-center gap-[7px] pl-[9px] pr-[7px] transition-colors ${tint}`}
+            style={{ left: `${left}%`, width: `${width}%` }}
             title={`Segment ${seg.index + 1} — ${seg.bpm.toFixed(2)} BPM · ${seg.timeSignature} · from ${formatClockTime(seg.start, 3)}`}
           >
             <span className="shrink-0 font-mono text-[11px] font-semibold leading-none text-cyan-200 tabular-nums">

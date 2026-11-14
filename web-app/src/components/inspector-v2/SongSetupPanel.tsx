@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import type { SongInfo } from '../../types/songInfo';
 import { effectiveGridMode, getActiveBeatOverrideCount, isMapMode } from '../../types/songInfo';
 import { formatClockTime } from '../../utils/clockTime';
+import { usePlayheadEffect } from '../../hooks/usePlayhead';
 import { StepSection } from './shared/StepSection';
 import { TempoModePicker, GridResetControl } from './GridModeControls';
 import { MODE_LABEL } from './shared/gridModeLabels';
@@ -64,11 +65,10 @@ export interface SongSetupPanelProps {
   onRerunBpmDetection?: () => void;
   /** Snaps gridOffset to the current playhead time. Hidden when not provided. */
   onAlignGridToPlayhead?: () => void;
-  playerTime?: number;
   playerIsPlaying?: boolean;
   /** Live media-clock reader, forwarded to the click track. See
    *  MetronomePanel's `getSongTime`: the click has to be placed against the
-   *  element's own clock, not against `playerTime`. */
+   *  element's own clock, not against the playhead clock. */
   getSongTime?: () => number | null;
   /** Player speed multiplier, forwarded to the click track so the woodblock
    *  follows the song at half speed instead of clicking twice per beat. */
@@ -178,7 +178,6 @@ export function SongSetupPanel({
   bpmDetectionError,
   onRerunBpmDetection,
   onAlignGridToPlayhead,
-  playerTime = 0,
   playerIsPlaying = false,
   getSongTime,
   playbackRate = 1,
@@ -398,9 +397,9 @@ export function SongSetupPanel({
       type="button"
       onClick={() => setOpenStep(step)}
       title={title}
-      className="flex flex-col gap-1 items-start text-left rounded px-1 -mx-1 py-0.5 hover:bg-white/[0.03] transition-colors"
+      className="min-w-0 flex flex-col gap-1 items-start text-left rounded px-1 -mx-1 py-0.5 hover:bg-white/[0.03] transition-colors"
     >
-      <span className={`font-mono text-2xl font-semibold leading-none tabular-nums truncate max-w-full ${value === '—' ? 'text-slate-600' : 'text-slate-50'}`}>
+      <span className={`font-mono text-[clamp(1rem,7.5cqw,1.5rem)] font-semibold leading-none tabular-nums truncate max-w-full ${value === '—' ? 'text-slate-600' : 'text-slate-50'}`}>
         {value}
       </span>
       <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</span>
@@ -579,7 +578,7 @@ export function SongSetupPanel({
             </span>
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-2.5">
+        <div className="@container grid grid-cols-3 gap-2.5">
           {statusColumn(
             statusBpm,
             mappedMulti ? 'BPM · seg 1' : 'BPM',
@@ -881,7 +880,7 @@ export function SongSetupPanel({
                 >
                   <CrosshairIcon size={15} />
                   <span className="text-[13px] font-semibold">Set bar 1 here</span>
-                  <span className="font-mono text-[13px] tabular-nums text-violet-200">{formatClockTime(playerTime, 3)}</span>
+                  <PlayheadReadout className="font-mono text-[13px] tabular-nums text-violet-200" />
                   <span className="font-mono text-[10px] text-violet-300 border border-violet-400/40 rounded px-1.5 py-px">G</span>
                 </button>
               )}
@@ -971,7 +970,6 @@ export function SongSetupPanel({
         >
           <MetronomePanel
             songInfo={songInfo}
-            playerTime={playerTime}
             playerIsPlaying={playerIsPlaying}
             getSongTime={getSongTime}
             playbackRate={playbackRate}
@@ -1005,4 +1003,14 @@ export function SongSetupPanel({
       </div>
     </div>
   );
+}
+
+/** The playhead as `m:ss.mmm`, written straight into the DOM on every clock
+ *  update so the setup panel doesn't re-render to keep it current. */
+function PlayheadReadout({ className }: { className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  usePlayheadEffect((t) => {
+    if (ref.current) ref.current.textContent = formatClockTime(t, 3);
+  });
+  return <span ref={ref} className={className} />;
 }

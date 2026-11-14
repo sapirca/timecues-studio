@@ -1,6 +1,8 @@
 import { useMemo, useRef } from 'react';
 import type { ShortcutDef } from '../../hooks/useAnnotationShortcuts';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useResizableSidebar } from '../../hooks/useResizableSidebar';
+import { SidebarResizeHandle } from '../SidebarChrome';
 
 interface Props {
   open: boolean;
@@ -20,6 +22,10 @@ export function ShortcutsHelpPanel({ open, onClose, shortcuts, accentText = 'tex
   // pressed rather than to <body>.
   const panelRef = useRef<HTMLElement | null>(null);
   useFocusTrap(panelRef, open);
+  const drawer = useResizableSidebar({
+    storageKey: 'tc:shortcuts-panel', side: 'right',
+    minWidth: 280, maxWidth: 640, defaultWidth: 360,
+  });
 
   // Group shortcuts by their `group` field, preserving the order they appear in the array.
   const groups = useMemo(() => {
@@ -38,10 +44,15 @@ export function ShortcutsHelpPanel({ open, onClose, shortcuts, accentText = 'tex
   return (
     <>
       {/* Backdrop — fades in when open, click-to-close. pointer-events disabled when closed
-          so the drawer doesn't block interactions while invisible. */}
+          so the drawer doesn't block interactions while invisible.
+          The blur is applied only while open. This element stays mounted over the whole
+          viewport, and opacity 0 does not stop a backdrop-filter from being computed: while
+          a song played, every frame re-blurred the entire screen behind the invisible
+          backdrop. That pinned Chrome's GPU process — which every tab shares — at ~100%
+          (~24% without it), so the whole browser slowed down, not just this page. */}
       <div
-        className={`fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] transition-opacity duration-200 ${
-          open ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        className={`fixed inset-0 z-40 bg-black/40 transition-opacity duration-200 ${
+          open ? 'opacity-100 backdrop-blur-[2px]' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
         aria-hidden={!open}
@@ -59,10 +70,12 @@ export function ShortcutsHelpPanel({ open, onClose, shortcuts, accentText = 'tex
            inside an aria-hidden subtree. `inert` drops the whole subtree from
            focus and from the a11y tree in one attribute. */
         inert={!open}
-        className={`fixed top-0 right-0 z-50 h-full w-[360px] max-w-[90vw] bg-[#14171d] border-l border-white/[0.08] shadow-2xl shadow-black/80 transition-transform duration-200 ease-out ${
+        style={{ width: drawer.width }}
+        className={`fixed top-0 right-0 z-50 h-full max-w-[90vw] bg-[#14171d] border-l border-white/[0.08] shadow-2xl shadow-black/80 transition-transform duration-200 ease-out ${
           open ? 'translate-x-0' : 'translate-x-full'
         } flex flex-col`}
       >
+        {open && <SidebarResizeHandle sidebar={drawer} />}
         <header className="flex items-center justify-between px-5 py-4 border-b border-white/[0.05]">
           <div>
             <div className={`text-[11px] font-medium uppercase tracking-wider ${accentText}`}>Keyboard Shortcuts</div>

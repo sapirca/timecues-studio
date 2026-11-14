@@ -2,6 +2,8 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import { useNavigate } from 'react-router-dom';
 import type { Annotator } from '../types/annotator';
 import { getIsDemo, subscribeIsDemo, DEMO_ANNOTATOR_ID } from '../state/demoFlag';
+import { endSession, fetchSession } from '../services/session';
+import { useDemo } from './DemoContext';
 
 const STORAGE_KEY = 'annotator';
 const COOKIE_KEY = 'annotator_id';
@@ -88,6 +90,7 @@ export function AnnotatorProvider({ children }: { children: ReactNode }) {
   const [annotator, setAnnotator] = useState<Annotator | null>(readStored);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const navigate = useNavigate();
+  const { exitDemoKeepWork } = useDemo();
   // Mirror the demo flag into React state so a context value swap re-renders
   // every consumer (badge, admin-status fetchers, etc.) when demo flips.
   const [isDemoState, setIsDemoState] = useState<boolean>(() => getIsDemo());
@@ -98,6 +101,11 @@ export function AnnotatorProvider({ children }: { children: ReactNode }) {
   }, [annotator]);
 
   const signIn = useCallback((a: Annotator) => {
+    // Signing in is leaving the demo. The demo flag outranks every identity
+    // (effectiveAnnotator below), so a Google sign-in from a demo tab used to
+    // succeed on the server and still show the demo user. What was done in
+    // the demo stays, as with the menu's "Exit demo".
+    if (getIsDemo()) exitDemoKeepWork();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(a));
     _currentAnnotatorId = a.id;
     syncAnnotatorCookie();
@@ -111,7 +119,7 @@ export function AnnotatorProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(a),
     }).catch(() => { /* non-fatal */ });
-  }, []);
+  }, [exitDemoKeepWork]);
 
   const signOut = useCallback(() => {
     // Raise the "signing out" flag in the SAME batch as the auth clear, so
@@ -121,6 +129,7 @@ export function AnnotatorProvider({ children }: { children: ReactNode }) {
     // /inspect but annotator is already null → the gate fires <Navigate to
     // "/login?returnTo=/inspect"> before our navigate to '/' commits.
     setIsSigningOut(true);
+    void endSession();
     localStorage.removeItem(STORAGE_KEY);
     _currentAnnotatorId = null;
     syncAnnotatorCookie();
@@ -131,6 +140,34 @@ export function AnnotatorProvider({ children }: { children: ReactNode }) {
     // task and can race with React's commit phase.
     setTimeout(() => setIsSigningOut(false), 0);
   }, [navigate]);
+
+  // The saved sign-in is only a memory of who signed in here; the server's
+  // session is what every request is judged by. When they disagree — a sign-in
+  // from before sessions existed, or a session that expired — drop the saved
+  // one, so the page asks you to sign in instead of acting as someone the
+  // server no longer recognises. A failed lookup (server down) changes nothing.
+  // Checked again whenever the tab comes back into view: a session can end
+  // while the page sits open, and the page must not go on showing a name the
+  // server has stopped accepting.
+  useEffect(() => {
+    let live = true;
+    const reconcile = () => {
+      const stored = readStored();
+      if (!stored) return;
+      void fetchSession().then((s) => {
+        if (!live || !s || s.id === stored.id) return;
+        if (readStored()?.id !== stored.id) return; // signed in again meanwhile
+        localStorage.removeItem(STORAGE_KEY);
+        _currentAnnotatorId = null;
+        syncAnnotatorCookie();
+        setAnnotator(null);
+      });
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') reconcile(); };
+    reconcile();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { live = false; document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
 
   // While in Demo Mode, every consumer sees the synthetic demo annotator
   // (so admin-status checks, X-Annotator-Id headers, badge, etc. all line up).

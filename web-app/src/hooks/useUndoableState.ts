@@ -26,6 +26,13 @@ export interface UndoControls<T> {
   canRedo: boolean;
   /** Replace value AND clear history (use on context switches like song change). */
   reset: (next: T) => void;
+  /** Rewrite the present AND every past/future snapshot through `fn`, as if
+   *  what it removes had never been there — for a draft that was never kept
+   *  (a lane-created item whose card closed without Done). Snapshots that
+   *  `same` finds equal to their successor collapse, so ⌘Z doesn't spend a
+   *  press on an edit that only ever touched the draft. Leaves the coalesce
+   *  key and the redo stack's existence alone. */
+  scrub: (fn: (v: T) => T, same: (a: T, b: T) => boolean) => void;
 }
 
 export function useUndoableState<T>(
@@ -110,5 +117,26 @@ export function useUndoableState<T>(
     commit(next);
   }, [commit]);
 
-  return [value, setValue, { undo, redo, canUndo, canRedo, reset }];
+  const scrub = useCallback((fn: (v: T) => T, same: (a: T, b: T) => boolean) => {
+    const present = fn(valueRef.current);
+    // Walk back from the present: keep a snapshot only when it differs from
+    // the one after it.
+    const history: T[] = [];
+    let after = present;
+    for (const v of historyRef.current.map(fn).reverse()) {
+      if (!same(v, after)) { history.unshift(v); after = v; }
+    }
+    const future: T[] = [];
+    let before = present;
+    for (const v of futureRef.current.map(fn).reverse()) {
+      if (!same(v, before)) { future.unshift(v); before = v; }
+    }
+    historyRef.current = history;
+    futureRef.current = future;
+    setCanUndo(history.length > 0);
+    setCanRedo(future.length > 0);
+    commit(present);
+  }, [commit]);
+
+  return [value, setValue, { undo, redo, canUndo, canRedo, reset, scrub }];
 }

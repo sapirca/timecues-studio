@@ -1,11 +1,9 @@
 /**
- * Single source of truth for annotation tab labels, ordering, and experimental
- * gating. Consumed by the experimental-gating helpers below and by
+ * Single source of truth for annotation tab labels and ordering. Consumed by
  * InspectorPageV2 (state + caps). The type chips themselves now render as the
  * section titles in <UnifiedAnnotationListPanel> via <AnnotationTypeChip>.
  *
- * Adding a new annotation type: add a leaf entry here and (if it lives behind
- * an experimental flag) flip the `experimental` bit. Every entry in TAB_CONFIG
+ * Adding a new annotation type: add a leaf entry here. Every entry in TAB_CONFIG
  * is a flat leaf — the old `boundaries → {manual,autoGuess}` sub-chip
  * grouping moved to <AnnotationSourcePicker>, which switches the boundary
  * source for the `'boundaries'` tab.
@@ -25,26 +23,20 @@ export type AnnotationType = AnnotationLayerType;
  *  the source picker, on-disk file selection, and the per-source viz rows. */
 export type BoundarySource = 'manual' | 'autoGuess';
 
-/** Identifies which Settings experimental flag (if any) gates a tab or source.
- *  - `'loopsAndPatterns'` — `experimentalLoopsAndPatterns` */
-export type ExperimentalFlagKey = 'loopsAndPatterns' | 'lyrics';
-
 export interface TabLeaf {
   id: AnnotationType;
   label: string;
-  /** When set, the tab is hidden unless the matching Settings flag is on. */
-  experimental?: ExperimentalFlagKey;
 }
 
-/** Ordered top-level annotation-type list. Drives experimental gating; the
+/** Ordered top-level annotation-type list. The
  *  matching UI chips render as section titles in the annotation list. */
 export const TAB_CONFIG: TabLeaf[] = [
   { id: 'boundaries',    label: 'Boundaries' },
   { id: 'cues',          label: 'Cues' },
   { id: 'spans',         label: 'Spans' },
-  { id: 'lyrics',        label: 'Lyrics',        experimental: 'lyrics' },
-  { id: 'loops',         label: 'Loops',         experimental: 'loopsAndPatterns' },
-  { id: 'riff-patterns', label: 'Riff Patterns', experimental: 'loopsAndPatterns' },
+  { id: 'lyrics',        label: 'Lyrics' },
+  { id: 'loops',         label: 'Loops' },
+  { id: 'riff-patterns', label: 'Riff Patterns' },
 ];
 
 /** True when the type is the boundaries tab. */
@@ -114,12 +106,3 @@ export function supportsPending(
   return supportsClickPending(type, source) || supportsRangePending(type, source);
 }
 
-/** Returns the experimental flag key that gates a type, or `null`. */
-export function experimentalKeyFor(type: AnnotationType): ExperimentalFlagKey | null {
-  return TAB_CONFIG.find((n) => n.id === type)?.experimental ?? null;
-}
-
-/** True when the type itself is gated by an experimental flag. */
-export function isExperimentalType(type: AnnotationType): boolean {
-  return experimentalKeyFor(type) !== null;
-}

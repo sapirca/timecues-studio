@@ -82,6 +82,13 @@ describe('pulseTickTimes', () => {
     expect(round(ticks)).toEqual([0, 0.5, 1.04, 1.5]);
   });
 
+  it('draws a span no grid line of its rate falls in from its own start', () => {
+    // A bar span from 2.5 s to 3.9 s holds no downbeat (bars at 2 and 4).
+    expect(pulseTickTimes({ rate: 'bar', start: 2.5, end: 3.9, ...GRID })).toEqual([2.5]);
+    // Beats on a grid of 120 BPM fall on every 0.5 s; this window has none.
+    expect(pulseTickTimes({ rate: 'beat', start: 1.1, end: 1.4, ...GRID })).toEqual([1.1]);
+  });
+
   it('returns nothing without a tempo — a pulse needs a grid to mean anything', () => {
     expect(pulseTickTimes({ rate: 'beat', start: 0, end: 10, bpm: undefined })).toEqual([]);
     expect(pulseTickTimes({ rate: 'beat', start: 0, end: 10, bpm: 0 })).toEqual([]);

@@ -23,7 +23,7 @@ from custom_api import Boundary, CustomDetector, DetectionContext
 #   Pattern — short repeating motif that tiles `repeat_count` times across
 #             the track; same experimental gating as Loop
 # See tools/python/custom/CLAUDE.md for the per-field validation rules and
-# example_hardcoded_spans / example_random_loops / example_random_patterns
+# example_random_cues / example_random_loops / example_random_patterns
 # (next to this file, in tools/python/custom-default/) for end-to-end worked
 # examples.
 
@@ -33,14 +33,17 @@ class Template(CustomDetector):
     name = "template"               # ^[a-z][a-z0-9_-]{0,30}$ — also the file stem
     label = "Template (every 30 s)" # 1–80 chars, shown in the UI
     output_kind = "boundary"        # one of: "boundary" | "cue" | "span" |
-                                    # "loop" | "pattern". "loop"/"pattern"
+                                    # "loop" | "riff". "loop"/"riff"
                                     # detectors are hidden from the registry
                                     # when the experimentalLoopsAndPatterns
                                     # Settings flag is off.
 
-    # ── Surfacing (at least one True) ──────────────────────────────────────
-    is_algorithm  = True            # show as a read-only row in the inspector
-    is_annotation = True           # ALSO surface as an editable annotation tab
+    # ── Flags (both optional, both off by default) ─────────────────────────
+    # Every detector shows in Algorithm Inspect as a read-only lane; these
+    # only add to that.
+    is_annotation = False           # True: when an annotator runs it, also copy
+                                    # the output into a new layer of their own
+    review        = False           # True: a ✓/✗ on every item in the lane
 
     # ── Optional metadata ──────────────────────────────────────────────────
     # `description` and `stem` populate the lane's ⓘ info popover in the canvas:
@@ -49,7 +52,14 @@ class Template(CustomDetector):
     # "Template (mix)". Omit `stem` (or leave it None) and the lane shows a
     # generic "(curated)" tag instead and won't light up during stem audition.
     description = "Starter scaffold — emits one boundary every 30 seconds. Copy this file to start your own detector."
-    stem = "mix"                    # "vocals" | "drums" | "bass" | "other" | "mix"
+    stem = "mix"                    # "vocals" | "drums" | "bass" | "other" | "guitar" |
+                                    # "piano" | "mix" | "stems" (one lane read
+                                    # from several stems, never the mix) — or a list, e.g.
+                                    # ["vocals", "other"], to run once per stem;
+                                    # detect() reads the current one in ctx.stem
+    # True when detect() reads only ctx (audio, stems, features, grid, and
+    # ctx.stem_file()) — then it can be run on a highlighted range alone.
+    windowable = True
     version = "0.1"
 
     def detect(self, ctx: DetectionContext) -> list[Boundary]:

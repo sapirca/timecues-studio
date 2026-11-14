@@ -11,7 +11,6 @@
  */
 
 import { useCallback, useEffect, useId, useImperativeHandle, useMemo, forwardRef, type ForwardedRef } from 'react';
-import { formatClockTime as fmtTime } from '../../utils/clockTime';
 import type {
   AnnotationLayer,
   AnnotationLayersDocument,
@@ -28,6 +27,8 @@ import {
 } from '../../types/annotationLayer';
 import { snapToBeat, type BarGrid } from '../../utils/barSnap';
 import { resolvePointAddTime } from './boundaryInsert';
+import { PLAYHEAD_SLOT, usePlayheadClock } from '../../hooks/usePlayhead';
+import { LiveLabel } from '../Playhead';
 import { useSettings } from '../../context/SettingsContext';
 import { duplicateItemNotice, findItemAtSpot } from './shared/duplicateItem';
 import type { AnnotationPanelCapabilities, AnnotationPanelController } from './shared/AnnotationPanelController';
@@ -38,8 +39,6 @@ import { LayerModePicker } from './LayerModePicker';
 import { formatBeatTime } from '../../utils/beatTimeFormat';
 
 interface CueEditorPanelProps {
-  /** Current playhead position in seconds — used when adding a cue at playhead. */
-  currentTime: number;
   /** Layers document for the active song. */
   doc: AnnotationLayersDocument;
   /** Emit a new doc; parent handles persistence. */
@@ -85,17 +84,16 @@ interface CueEditorPanelProps {
   /** When true: snap is locked on, annotation times display in bar·beat format. */
   gridLock?: boolean;
   /** Reader for the LIVE media clock (the page's `liveSongTime`). Every cue
-   *  add is placed against this rather than `currentTime`: that prop is the
-   *  same number one rAF coalesce, one setState and one inspector re-render
-   *  later, so pressing M on a downbeat while the song plays commits the cue
-   *  where the playhead already was. Optional — without it the panel falls
-   *  back to the prop, as it used to. */
+   *  add is placed against this rather than the playhead clock: that is the
+   *  same number one rAF coalesce later, so pressing M on a downbeat while
+   *  the song plays commits the cue where the playhead already was.
+   *  Optional — without it the panel falls back to the playhead clock. */
   getSongTime?: () => number | null;
 }
 
 function CueEditorPanelInner(
   {
-    currentTime, doc, onDocChange, focusedCue, onFocusCue,
+    doc, onDocChange, focusedCue, onFocusCue,
     selectedLayerId = null, onSelectLayer,
     snapToGrid = false, grid = null, snapTime,
     gridLock = false,
@@ -112,6 +110,10 @@ function CueEditorPanelInner(
   const { settings } = useSettings();
   const taxonomyId = useId();
   const showTaxonomy = settings.cueTaxonomyEnabled && settings.cueTaxonomy.length > 0;
+  // The playhead is read from the clock, not a prop: handlers call
+  // `playheadClock.get()` when they fire, and the "@ <time>" labels re-render
+  // only when the time they print changes.
+  const playheadClock = usePlayheadClock();
   const cueLayers = useMemo(
     () => doc.layers.filter((l): l is AnnotationLayer<'cues'> => l.type === 'cues'),
     [doc.layers],
@@ -158,13 +160,13 @@ function CueEditorPanelInner(
   // reads the clock when the add FIRES:
   // the caller's own reading if it has one (the M shortcut takes the media
   // clock at the keydown and backs out the dispatch lag), otherwise the live
-  // clock, and only then the `currentTime` prop.
+  // clock, and only then the playhead clock.
   const markTime = useCallback(
     (atTime?: number) => resolvePointAddTime({
       live: atTime ?? getSongTime?.(),
-      fallback: currentTime,
+      fallback: playheadClock.get(),
     }),
-    [getSongTime, currentTime],
+    [getSongTime, playheadClock],
   );
 
   // Where an add actually lands. Delegates to the page's `snapTime` so a mark
@@ -396,6 +398,7 @@ function CueEditorPanelInner(
     let bestLayerId: string | null = null;
     let bestItemId: string | null = null;
     let bestDist = Infinity;
+    const currentTime = playheadClock.get();
     for (const l of doc.layers) {
       if (l.type !== 'cues' || !l.visible) continue;
       for (const it of l.items) {
@@ -414,7 +417,7 @@ function CueEditorPanelInner(
           : l,
       ),
     });
-  }, [doc, focusedCue, currentTime, onDocChange, onFocusCue]);
+  }, [doc, focusedCue, playheadClock, onDocChange, onFocusCue]);
 
   useImperativeHandle<AnnotationPanelController, AnnotationPanelController>(controllerRef, () => ({
     setStatus: setCuesStage,
@@ -443,7 +446,7 @@ function CueEditorPanelInner(
       splitVisible: false,
       splitLabel: 'Split',
       canAddAtPlayhead: true,
-      addLabel: `+ Add @ ${fmtTime(currentTime)}`,
+      addLabel: `+ Add @ ${PLAYHEAD_SLOT}`,
       canAddLayer: true,
       pending: pendingSelection ?? null,
       pendingRequiresRegion: false,
@@ -451,7 +454,7 @@ function CueEditorPanelInner(
       canExport: totalCount > 0,
       canDeleteAll: doc.layers.some((l) => l.type === 'cues'),
     });
-  }, [onCapabilitiesChange, doc, saveStatus, currentTime, totalCount, pendingSelection]);
+  }, [onCapabilitiesChange, doc, saveStatus, totalCount, pendingSelection]);
 
   const sortedItems = useMemo(
     () => (activeLayer?.items ?? []).slice().sort((a, b) => a.time - b.time),
@@ -476,7 +479,6 @@ function CueEditorPanelInner(
       {activeLayer && (
         <LayerToolbar
           layer={activeLayer}
-          currentTime={currentTime}
           onRename={(name) => patchLayer(activeLayer.id, { name })}
           onToggleVisibility={() => patchLayer(activeLayer.id, { visible: !activeLayer.visible })}
           onChangeMode={(mode) => patchLayer(activeLayer.id, { mode })}
@@ -489,7 +491,7 @@ function CueEditorPanelInner(
         <div className="flex flex-wrap items-start gap-1">
           <AddItemAtEndCard
             onClick={() => addCueViaToolbar()}
-            label={`+ Add cue @ ${fmtTime(currentTime)}`}
+            label={`+ Add cue @ ${PLAYHEAD_SLOT}`}
           />
         </div>
       ) : (
@@ -499,7 +501,7 @@ function CueEditorPanelInner(
               key={cue.id}
               index={i}
               cue={cue}
-              color={activeLayer.color}
+              color={cue.color ?? activeLayer.color}
               isSelected={focusedCue?.layerId === activeLayer.id && focusedCue.itemId === cue.id}
               onSelect={() => { onFocusCue?.({ layerId: activeLayer.id, itemId: cue.id }); onSelectLayer?.(activeLayer.id); }}
               onSnap={() => {
@@ -521,7 +523,7 @@ function CueEditorPanelInner(
           ))}
           <AddItemAtEndCard
             onClick={() => addCueAtPlayhead(activeLayer.id)}
-            label={`+ Add @ ${fmtTime(currentTime)}`}
+            label={`+ Add @ ${PLAYHEAD_SLOT}`}
           />
         </div>
       )}
@@ -540,7 +542,6 @@ function CueEditorPanelInner(
 
 interface LayerToolbarProps {
   layer: AnnotationLayer<'cues'>;
-  currentTime: number;
   onRename: (name: string) => void;
   onToggleVisibility: () => void;
   onChangeMode: (mode: import('../../types/annotationLayer').LayerEvalMode) => void;
@@ -549,7 +550,7 @@ interface LayerToolbarProps {
 }
 
 function LayerToolbar({
-  layer, currentTime,
+  layer,
   onRename, onToggleVisibility, onChangeMode, onDelete, onAddCue,
 }: LayerToolbarProps) {
   return (
@@ -574,7 +575,7 @@ function LayerToolbar({
         className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-cyan-400/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-400/50 transition-colors"
         title="Add cue at playhead (M)"
       >
-        + Add @ {fmtTime(currentTime)}
+        <LiveLabel text={`+ Add @ ${PLAYHEAD_SLOT}`} />
       </button>
       <button
         onClick={onToggleVisibility}

@@ -38,8 +38,13 @@ ENV VITE_COMMIT_SHA=$VITE_COMMIT_SHA \
 # to the binary and its libraries (~35 MB) instead of pulling perl tooling.
 # Without it the server still runs: history falls back to timestamped copies
 # (see hasGit() in web-app/server/sharedAnnotations.ts).
+#
+# ffmpeg — re-encodes an uploaded VBR mp3 (song or stem) to CBR on arrival,
+# since a browser cannot seek VBR in sync with its waveform (isVbrMp3() in
+# vite.config.ts). Run as a separate program, never linked. Without it the
+# upload routes refuse a VBR mp3 instead of converting it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git \
+ && apt-get install -y --no-install-recommends git ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/web-app

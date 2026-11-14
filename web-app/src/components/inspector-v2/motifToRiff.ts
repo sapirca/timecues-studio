@@ -22,7 +22,7 @@
 import {
   PATTERN_SUBBEATS_PER_BEAT,
   fitRiffInstanceEnd,
-  newRiffBoundaryNode,
+  newRiffNode,
   newRiffPatternItem,
   newRiffPatternLayer,
   newRiffSeqEntry,
@@ -32,6 +32,7 @@ import {
   type RiffNode,
   type RiffPatternItem,
 } from '../../types/annotationLayer';
+import { toNotesNode } from '../../utils/pitchedRiff';
 
 /** The shape an AlgoOverlay section carries; `type` is the motif key
  *  (`"motif-3"`), which is what groups occurrences of the same figure. */
@@ -89,14 +90,14 @@ export function riffLayerFromMotifs(
     const lengthsBeats = occurrences.map((s) => (s.endTime - s.time) * beatsPerSec);
     const naturalBeats = Math.max(1 / PATTERN_SUBBEATS_PER_BEAT, median(lengthsBeats));
 
-    const node = newRiffBoundaryNode(name, pickRiffNodeColor(nodes), naturalBeats);
+    const node = newRiffNode(name, pickRiffNodeColor(nodes), naturalBeats);
     // One sounding block across the whole node: the model said a figure runs
     // here, and said nothing about rests inside it.
     const segments = normalizeBoundarySegments(
       [{ start: 0, end: naturalBeats, kind: 'tick', label: name }],
       naturalBeats,
     );
-    nodes.push({ ...node, segments });
+    nodes.push(toNotesNode({ ...node, segments }));
 
     for (const s of occurrences) {
       const beats = (s.endTime - s.time) * beatsPerSec;

@@ -38,11 +38,13 @@ import type {
 } from '../../types/annotationLayer';
 import type { AutoGuessManualAnnotation } from '../../types/autoGuess';
 import { sectionColor, sectionLabel } from './sectionConstants';
-import { isExperimentalType, type AnnotationType } from './shared/tabConfig';
+import type { AnnotationType } from './shared/tabConfig';
 import type { SourceId } from './shared/AnnotationSourcePicker';
 import { ImportanceStar } from './shared/ImportanceStar';
 import { AnnotationTypeChip } from './shared/AnnotationTypeChip';
 import { InlineEditableName } from './InlineEditableName';
+import { usePlayheadTitle } from '../../hooks/usePlayhead';
+import { canMergeLayers } from '../../services/annotationLayers';
 
 // Each row in a unified layer card. Either a single point (cue / boundary) or
 // an interval (span / loop / riff instance).
@@ -62,6 +64,8 @@ interface UnifiedItem {
   importance?: 'critical' | 'optional';
   /** Optional sub-label rendered after the main label (e.g. section type). */
   sublabel?: string;
+  /** Shown in place of an empty label, and as the rename field's hint. */
+  placeholder?: string;
 }
 
 interface UnifiedLayer {
@@ -93,7 +97,7 @@ export interface UnifiedLayerSelection {
  *  These store ONE cycle in `[start, end]` and tile it `repeatCount` times, so
  *  the stretch the item actually covers on the canvas — and the stretch a row
  *  should audition — runs to here, not to `end`. Mirrors the tiling in
- *  `PatternLaneRow` / `RiffPatternLaneRow`. Degenerate cycles fall back to
+ *  `RiffGrooveLaneRow`. Degenerate cycles fall back to
  *  `end`. */
 function repeatedRegionEnd(item: { start: number; end: number; repeatCount: number }): number {
   const cycle = item.end - item.start;
@@ -194,7 +198,10 @@ function lyricsLayerToUnified(layer: AnnotationLayer<'lyrics'>): UnifiedLayer {
       id: l.id,
       time: l.time,
       end: l.end ?? null,
-      label: l.text || `(${l.kind})`,
+      // An empty lyric shows its kind as the hint, not as its text — the
+      // rename field opens on the real text, so there is nothing to clear.
+      label: l.text,
+      placeholder: `(${l.kind})`,
       color: layer.color,
     })),
   };
@@ -285,6 +292,11 @@ interface UnifiedAnnotationListPanelProps {
   /** Rename a layer inline from the card header. Wired for every editable
    *  layer, boundaries included; read-only layers stay non-editable. */
   onRenameLayer?: (layerId: string, sectionType: AnnotationType, name: string) => void;
+  /** Move every item of `sourceId` into `targetId` (same type) and drop the
+   *  source layer. Offered on editable layers that have another editable layer
+   *  of their type to go into; riff patterns are never offered (see
+   *  canMergeLayers). */
+  onMergeLayer?: (sourceId: string, targetId: string, sectionType: AnnotationType) => void;
   /** Edit a single item's label inline from its row. Wired for every editable
    *  (non-read-only) layer, boundary items included. */
   onChangeItemLabel?: (layerId: string, itemId: string, sectionType: AnnotationType, label: string) => void;
@@ -297,9 +309,6 @@ interface UnifiedAnnotationListPanelProps {
    *  panel at the chosen layer. The parent owns active-tab + active-source
    *  state; this callback just hands back the user's pick. */
   onSelectLayer?: (type: AnnotationType, selection: UnifiedLayerSelection) => void;
-  /** Experimental gates — mirror the page-level settings flags. */
-  experimentalLoopsAndPatterns: boolean;
-  experimentalLyricsFamily: boolean;
   /** Per-type marker controls (the Info + Actions panels). Rendered inside the
    *  currently-active section, directly under its chip-title header, so every
    *  edit button (Mark In/Out, + Add, Add layer, Fill defaults, Undo/Redo…)
@@ -337,11 +346,10 @@ export function UnifiedAnnotationListPanel({
   onItemToggleImportance,
   onDeleteLayer,
   onRenameLayer,
+  onMergeLayer,
   onChangeItemLabel,
   selectedLayerIdByType,
   onSelectLayer,
-  experimentalLoopsAndPatterns,
-  experimentalLyricsFamily,
   actionsSlot,
   addAtPlayhead,
 }: UnifiedAnnotationListPanelProps) {
@@ -373,25 +381,22 @@ export function UnifiedAnnotationListPanel({
   }, [cueLayersDoc]);
 
   const loopLayersUnified = useMemo<UnifiedLayer[]>(() => {
-    if (!experimentalLoopsAndPatterns) return [];
     return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'loops'> => l.type === 'loops')
       .map(loopLayerToUnified);
-  }, [cueLayersDoc, experimentalLoopsAndPatterns]);
+  }, [cueLayersDoc]);
 
   const riffPatternLayersUnified = useMemo<UnifiedLayer[]>(() => {
-    if (!experimentalLoopsAndPatterns) return [];
     return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'riff-patterns'> => l.type === 'riff-patterns')
       .map(riffPatternLayerToUnified);
-  }, [cueLayersDoc, experimentalLoopsAndPatterns]);
+  }, [cueLayersDoc]);
 
   const lyricsLayersUnified = useMemo<UnifiedLayer[]>(() => {
-    if (!experimentalLyricsFamily) return [];
     return (cueLayersDoc?.layers ?? [])
       .filter((l): l is AnnotationLayer<'lyrics'> => l.type === 'lyrics')
       .map(lyricsLayerToUnified);
-  }, [cueLayersDoc, experimentalLyricsFamily]);
+  }, [cueLayersDoc]);
 
   const sections: Array<{ type: AnnotationType; title: string; layers: UnifiedLayer[]; description: string; emptyHint: string }> = [
     { type: 'boundaries', title: 'Boundaries', layers: boundaryLayers,
@@ -403,19 +408,18 @@ export function UnifiedAnnotationListPanel({
     { type: 'spans',      title: 'Spans',       layers: spanLayersUnified,
       description: 'Ranged regions with a start and end; multiple spans may overlap.',
       emptyHint: 'No span layers yet — drag a region on the visualization to add one.' },
-    ...(experimentalLoopsAndPatterns ? [{ type: 'loops' as AnnotationType, title: 'Loops', layers: loopLayersUnified,
+    { type: 'loops',      title: 'Loops',       layers: loopLayersUnified,
       description: 'Repeating segments — a region plus the cycle length that repeats inside it.',
-      emptyHint: 'No loop layers yet.' }] : []),
-    ...(experimentalLoopsAndPatterns ? [{ type: 'riff-patterns' as AnnotationType, title: 'Riff Patterns', layers: riffPatternLayersUnified,
+      emptyHint: 'No loop layers yet.' },
+    { type: 'riff-patterns', title: 'Riff Patterns', layers: riffPatternLayersUnified,
       description: 'Hierarchical riff composer: nodes → combos → timeline instances.',
-      emptyHint: 'No riff-pattern layers yet — add a layer to start building riffs.' }] : []),
-    ...(experimentalLyricsFamily ? [{ type: 'lyrics' as AnnotationType, title: 'Lyrics', layers: lyricsLayersUnified,
+      emptyHint: 'No riff-pattern layers yet — add a layer to start building riffs.' },
+    { type: 'lyrics',     title: 'Lyrics',      layers: lyricsLayersUnified,
       description: 'Word- and line-level lyric timestamps (vocal transcription).',
-      emptyHint: 'No lyrics layers yet — run the Lyrics detector or add a layer above.' }] : []),
+      emptyHint: 'No lyrics layers yet — run the Lyrics detector or add a layer above.' },
   ];
 
   const activeSection = sections.find((s) => s.type === activeAnnotationType);
-  const activeExperimental = isExperimentalType(activeAnnotationType);
 
   return (
     <div className="pt-3 mt-3 border-t border-white/[0.10]">
@@ -435,7 +439,6 @@ export function UnifiedAnnotationListPanel({
               key={type}
               label={title}
               active={activeAnnotationType === type}
-              experimental={isExperimentalType(type)}
               count={layers.reduce((acc, l) => acc + l.items.length, 0)}
               layerCount={layers.length}
               title={description}
@@ -445,16 +448,9 @@ export function UnifiedAnnotationListPanel({
         </nav>
 
         {/* Active-type frame — the tab above + the edit controls (actionsSlot)
-            grouped in one accent-tinted frame (cyan, or fuchsia for
-            experimental types) so they read as a single panel. The layer
-            cards render below, outside the frame. */}
-        <div
-          className={`min-w-0 rounded-lg border p-2 ${
-            activeExperimental
-              ? 'border-fuchsia-400/35 bg-fuchsia-500/[0.04] shadow-[0_0_18px_-7px_rgba(232,121,249,0.55)]'
-              : 'border-cyan-400/35 bg-cyan-500/[0.04] shadow-[0_0_18px_-7px_rgba(34,211,238,0.55)]'
-          }`}
-        >
+            grouped in one accent-tinted frame so they read as a single panel.
+            The layer cards render below, outside the frame. */}
+        <div className="min-w-0 rounded-lg border p-2 border-cyan-400/35 bg-cyan-500/[0.04] shadow-[0_0_18px_-7px_rgba(34,211,238,0.55)]">
           {actionsSlot}
         </div>
 
@@ -468,6 +464,11 @@ export function UnifiedAnnotationListPanel({
               <div className="space-y-2">
                 {activeSection.layers.map((layer) => {
                   const type = activeSection.type;
+                  const mergeTargets = onMergeLayer && cueLayersDoc
+                    ? cueLayersDoc.layers
+                        .filter((t) => canMergeLayers(cueLayersDoc, layer.id, t.id))
+                        .map((t) => ({ id: t.id, name: t.name, color: t.color, count: t.items.length }))
+                    : [];
                   return (
                     <UnifiedLayerCard
                       key={layer.id}
@@ -534,6 +535,10 @@ export function UnifiedAnnotationListPanel({
                       onRenameLayer={onRenameLayer && !layer.readOnly && type !== 'boundaries'
                         ? (name) => onRenameLayer(layer.id, type, name)
                         : undefined}
+                      mergeTargets={mergeTargets}
+                      onMergeInto={onMergeLayer && mergeTargets.length > 0
+                        ? (targetId) => onMergeLayer(layer.id, targetId, type)
+                        : undefined}
                       onChangeItemLabel={onChangeItemLabel && !layer.readOnly
                         ? (item, label) => onChangeItemLabel(layer.id, item.id, type, label)
                         : undefined}
@@ -578,6 +583,10 @@ interface UnifiedLayerCardProps {
   onDeleteLayer?: () => void;
   /** Rename the layer. When absent the name renders as static text. */
   onRenameLayer?: (name: string) => void;
+  /** Layers this one can be merged into, listed in the Merge menu. */
+  mergeTargets?: { id: string; name: string; color: string; count: number }[];
+  /** Merge this layer into the picked target. Hidden when absent. */
+  onMergeInto?: (targetId: string) => void;
   /** Edit a row's label. When absent the label renders as static text. */
   onChangeItemLabel?: (item: UnifiedItem, label: string) => void;
   /** Add a new item at the playhead into *this* layer. Rendered in the card
@@ -600,11 +609,16 @@ function UnifiedLayerCard({
   onToggleItemImportance,
   onDeleteLayer,
   onRenameLayer,
+  mergeTargets,
+  onMergeInto,
   onChangeItemLabel,
   onAddAtPlayhead,
   addAtPlayheadLabel,
 }: UnifiedLayerCardProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const addTitle = `${addAtPlayheadLabel ?? '+ Add'} \u2192 ${layer.name}`;
+  const addTitleRef = usePlayheadTitle<HTMLButtonElement>(addTitle);
   // Selecting a layer always expands it: the user clicked to *use* this
   // layer, so showing its items matches intent. The caret button is still
   // available for a manual collapse afterwards.
@@ -646,6 +660,25 @@ function UnifiedLayerCard({
             here rather than under the item list so it stays reachable when a
             layer holds hundreds of items and the list scrolls far past it. */}
         <div className="flex items-center gap-1.5 min-w-0">
+        {/* Collapse sits first on the title row, beside the name it folds, so
+            a long layer can be tucked away to reach the layers below it. */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCollapsed((c) => !c);
+          }}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `Expand ${layer.name}` : `Collapse ${layer.name}`}
+          title={collapsed
+            ? `Expand layer — show its ${layer.items.length} ${layer.items.length === 1 ? 'item' : 'items'}`
+            : 'Collapse layer — hide its items to see the layers below'}
+          className="shrink-0 -ml-0.5 w-8 h-8 flex items-center justify-center rounded-md border border-white/[0.18] bg-white/[0.06] text-slate-100 hover:text-white hover:bg-white/[0.14] hover:border-white/[0.30] focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+        >
+          <svg viewBox="0 0 12 12" className={`w-5 h-5 transition-transform ${collapsed ? '' : 'rotate-90'}`} aria-hidden>
+            <path d="M4 2.5l5 3.5-5 3.5z" fill="currentColor" />
+          </svg>
+        </button>
         {onRenameLayer ? (
           // Nested inside the card's role=button header, so swallow click/key
           // events that would otherwise seek/select the card while editing.
@@ -672,9 +705,10 @@ function UnifiedLayerCard({
         )}
         {onAddAtPlayhead && (
           <button
+            ref={addTitleRef}
             type="button"
             onClick={(e) => { e.stopPropagation(); onAddAtPlayhead({ x: e.clientX, y: e.clientY }); }}
-            title={`${addAtPlayheadLabel ?? '+ Add'} \u2192 ${layer.name}`}
+            title={addTitle}
             className="ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 rounded border border-white/[0.12] bg-white/[0.04] hover:bg-white/[0.10] text-[11px] font-semibold uppercase tracking-wider text-slate-100 transition-colors"
           >
             <span className="text-[13px] leading-none" style={{ color: layer.color }}>+</span>
@@ -682,21 +716,9 @@ function UnifiedLayerCard({
           </button>
         )}
         </div>
-        {/* Controls row: disclosure + color swatch + ACTIVE on the left; the
-            count and × delete are pushed to the right (ml-auto on the count). */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setCollapsed((c) => !c);
-            }}
-            aria-expanded={!collapsed}
-            title={collapsed ? 'Expand layer' : 'Collapse layer'}
-            className="shrink-0 w-6 h-6 flex items-center justify-center text-[16px] font-mono text-slate-200 hover:text-white rounded leading-none"
-          >
-            {collapsed ? '▸' : '▾'}
-          </button>
+        {/* Controls row: color swatch + ACTIVE on the left; the count and
+            × delete are pushed to the right (ml-auto on the count). */}
+        <div className="flex items-center gap-2 pl-1.5">
           <span
             className="inline-block w-3 h-3 rounded-sm shrink-0"
             style={{ background: layer.color, boxShadow: `0 0 6px ${layer.color}aa` }}
@@ -709,6 +731,19 @@ function UnifiedLayerCard({
           <span className="ml-auto text-[12px] font-mono text-slate-200 tabular-nums text-right min-w-[1.5rem]">
             {layer.items.length}
           </span>
+          {onMergeInto && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setMergeOpen((o) => !o); }}
+              aria-expanded={mergeOpen}
+              title="Merge this layer into another one — its items move there and this layer is removed (⌘Z to undo)"
+              className={`shrink-0 px-1.5 h-6 flex items-center rounded text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+                mergeOpen ? 'text-white bg-white/[0.12]' : 'text-slate-300 hover:text-white hover:bg-white/[0.10]'
+              }`}
+            >
+              Merge
+            </button>
+          )}
           {onDeleteLayer && (
             <button
               type="button"
@@ -720,6 +755,35 @@ function UnifiedLayerCard({
             </button>
           )}
         </div>
+        {mergeOpen && onMergeInto && mergeTargets && mergeTargets.length > 0 && (
+          // Inside the role=button header, so stop clicks selecting the card.
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="mt-1 rounded border border-white/[0.12] bg-[#0b0d11] p-1.5 space-y-1 cursor-default"
+          >
+            <div className="px-1 text-[11px] text-slate-300">
+              Move all {layer.items.length} {layer.items.length === 1 ? 'item' : 'items'} of
+              {' '}<span className="font-semibold text-slate-100">{layer.name}</span> into:
+            </div>
+            {mergeTargets.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => { setMergeOpen(false); onMergeInto(t.id); }}
+                title={`Merge "${layer.name}" into "${t.name}" and remove "${layer.name}" (⌘Z to undo)`}
+                className="w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[12px] text-slate-100 hover:bg-white/[0.08]"
+              >
+                <span className="inline-block w-3 h-3 rounded-sm shrink-0" style={{ background: t.color }} />
+                <span className="min-w-0 truncate">{t.name}</span>
+                <span className="ml-auto font-mono text-slate-400 tabular-nums">{t.count}</span>
+              </button>
+            ))}
+            <div className="px-1 text-[10.5px] text-slate-400">
+              Exact duplicates are kept once. The target keeps its name and colour.
+            </div>
+          </div>
+        )}
       </div>
       {collapsed ? null : layer.items.length === 0 ? (
         <div className="px-3 py-2 text-[12px] text-slate-300 italic">
@@ -784,7 +848,7 @@ function UnifiedLayerCard({
                     <InlineEditableName
                       value={item.label}
                       onChange={(label) => onChangeItemLabel(item, label)}
-                      placeholder="label"
+                      placeholder={item.placeholder ?? 'label'}
                       editLabel="Rename"
                       stopPropagation
                       className="flex-auto min-w-0 flex items-center gap-1"
@@ -794,7 +858,7 @@ function UnifiedLayerCard({
                     />
                   ) : (
                     <span className="flex-auto min-w-0 truncate text-[12px] text-slate-100">
-                      {item.label || <span className="text-slate-400 italic">label</span>}
+                      {item.label || <span className="text-slate-400 italic">{item.placeholder ?? 'label'}</span>}
                     </span>
                   )}
                   {item.sublabel && item.sublabel !== item.label && (

@@ -37,4 +37,6 @@ export interface SectionBlock {
   /** Alternative valid start times. During evaluation, any candidate within
    *  tolerance counts as a hit. */
   candidates?: number[];
+  /** "#rrggbb" for this one section, overriding its type's colour. Optional. */
+  color?: string;
 }

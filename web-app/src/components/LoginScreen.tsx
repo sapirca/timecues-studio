@@ -11,6 +11,7 @@ import {
 import type { Annotator } from '../types/annotator';
 import { fetchProfileById } from '../services/annotatorProfile';
 import { checkAccess } from '../services/datasetConfig';
+import { fetchSession, startGoogleSession, startLocalSession } from '../services/session';
 import { AppPageHeader } from './AppPageHeader';
 import { gsiButtonOptions, gsiButtonWidth } from './gsiButton';
 
@@ -158,6 +159,16 @@ function AccessDeniedPanel({
   );
 }
 
+/** Whether this page's origin is one Google will accept as an authorized
+ *  JavaScript origin at all: https anywhere, or http on localhost /
+ *  127.0.0.1. Anything else (an http LAN address, or `m.localhost`, the
+ *  phone shell's dev host) is refused by Google before the client ID is
+ *  even considered. */
+function googleOriginUsable(loc: { protocol: string; hostname: string } = window.location): boolean {
+  if (loc.protocol === 'https:') return true;
+  return loc.hostname === 'localhost' || loc.hostname === '127.0.0.1' || loc.hostname === '[::1]';
+}
+
 export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
   const btnRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -194,23 +205,21 @@ export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
         window.google.accounts.id.initialize({
           client_id: GOOGLE_CLIENT_ID,
           callback: (resp) => {
-            try {
-              const middle = resp.credential.split('.')[1];
-              const json = atob(middle.replace(/-/g, '+').replace(/_/g, '/'));
-              const payload = JSON.parse(json) as { email?: string; name?: string };
-              const email = (payload.email ?? '').toLowerCase();
-              const name = payload.name || email;
-              if (!email) throw new Error('No email in Google response');
-              onSignIn({
-                id: buildAnnotatorId({ method: 'google', email }),
-                displayName: name,
-                email,
-                authMethod: 'google',
-                createdAt: new Date().toISOString(),
-              });
-            } catch (e) {
-              setError(e instanceof Error ? e.message : 'Google sign-in failed');
-            }
+            // The server checks Google's signature on the token and opens the
+            // session; the address is the one it verified, not one decoded
+            // here — a page can be made to say anything.
+            startGoogleSession(resp.credential)
+              .then(({ id, email, name }) => {
+                setError(null);
+                onSignIn({
+                  id,
+                  displayName: name,
+                  email,
+                  authMethod: 'google',
+                  createdAt: new Date().toISOString(),
+                });
+              })
+              .catch((e) => setError(e instanceof Error ? e.message : 'Google sign-in failed'));
           },
         });
         setGsiInit((n) => n + 1);
@@ -270,6 +279,19 @@ export function GooglePane({ onSignIn }: { onSignIn: (a: Annotator) => void }) {
     <div className="space-y-2">
       <div ref={btnRef} className="w-full min-w-0 flex justify-center min-h-[40px]" />
       {error && <p className="text-[12px] sm:text-[11px] text-red-400 font-mono">{error}</p>}
+      {!googleOriginUsable() && (
+        // Google refuses an http origin unless it is literally localhost or
+        // 127.0.0.1, and the button it draws anyway does nothing — it answers
+        // 403 "origin is not allowed" out of sight in the console. The phone
+        // shell's dev address (m.localhost) is exactly this case, so say it
+        // here rather than leaving a button that quietly fails.
+        <p className="text-[12px] sm:text-[11px] text-amber-300/90 leading-relaxed">
+          Google sign-in does not work on <code className="font-mono">{window.location.origin}</code> —
+          Google only allows <code className="font-mono">http://</code> for <code className="font-mono">localhost</code> and{' '}
+          <code className="font-mono">127.0.0.1</code>. Use <strong>Username or email</strong> here, or sign in
+          over https (or on <code className="font-mono">localhost</code>).
+        </p>
+      )}
     </div>
   );
 }
@@ -351,6 +373,24 @@ export function IdentityPane({ onSignIn }: { onSignIn: (a: Annotator) => void })
     return [`${base}-2`, `${base}-${new Date().getFullYear() % 100}`, `${base}-${rand}`];
   }, [trimmed, validForSubmit, existing, available]);
 
+  // Username sign-in proves nothing, so the server opens a session for one
+  // only on the machine running TimeCues (server/auth.mjs). Elsewhere the
+  // form would only fail, so it says so instead of offering itself.
+  const [localLogin, setLocalLogin] = useState<boolean | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void fetchSession().then((s) => { if (live) setLocalLogin(s?.localLogin ?? false); });
+    return () => { live = false; };
+  }, []);
+
+  const submit = (a: Annotator) => {
+    setSubmitError(null);
+    startLocalSession(a.id)
+      .then(() => onSignIn(a))
+      .catch((e) => setSubmitError(e instanceof Error ? e.message : 'Sign-in failed'));
+  };
+
   const buildNewAnnotator = (): Annotator => ({
     id: buildAnnotatorId({ method: 'identity', identity: trimmed }),
     displayName: trimmed,
@@ -364,11 +404,19 @@ export function IdentityPane({ onSignIn }: { onSignIn: (a: Annotator) => void })
       onSubmit={(e) => {
         e.preventDefault();
         if (!validForSubmit) return;
-        if (existing) onSignIn(existing);
-        else if (available === true) onSignIn(buildNewAnnotator());
+        if (existing) submit(existing);
+        else if (available === true) submit(buildNewAnnotator());
       }}
       className="space-y-3"
     >
+      {localLogin === false && (
+        <p className="text-[12px] sm:text-[11px] text-amber-300/90 leading-relaxed">
+          Username sign-in works only on the machine running TimeCues. Here, sign in with Google.
+        </p>
+      )}
+      {submitError && (
+        <p className="text-[12px] sm:text-[11px] text-red-400 font-mono">{submitError}</p>
+      )}
       <Field
         label="Username or email"
         value={value}

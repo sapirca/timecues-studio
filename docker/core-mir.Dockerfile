@@ -75,8 +75,10 @@ RUN pip install --no-cache-dir supervisor
 
 # Shared package + per-server scripts.
 COPY tools/python/paths.py            /app/tools/python/paths.py
+COPY tools/python/layers_timebase.py  /app/tools/python/layers_timebase.py
 COPY tools/python/server_common.py    /app/tools/python/server_common.py
 COPY tools/python/bpm_server.py       /app/tools/python/bpm_server.py
+COPY tools/python/madmom_lean.py      /app/tools/python/madmom_lean.py
 COPY tools/python/mir_server.py       /app/tools/python/mir_server.py
 COPY tools/python/ruptures_server.py  /app/tools/python/ruptures_server.py
 # dsp_server.py multiplexes ruptures + mir onto one port; it imports the two
@@ -86,22 +88,26 @@ COPY tools/python/custom_server.py    /app/tools/python/custom_server.py
 COPY tools/python/custom_loader.py    /app/tools/python/custom_loader.py
 COPY tools/python/custom_runner.py    /app/tools/python/custom_runner.py
 COPY tools/python/custom_api.py       /app/tools/python/custom_api.py
+COPY tools/python/custom_packages.py  /app/tools/python/custom_packages.py
+COPY tools/python/grid_truth.py       /app/tools/python/grid_truth.py
 COPY tools/python/shared/             /app/tools/python/shared/
 # The first-party curated detectors are thin stubs over tools/python/generators/
 # (e.g. curated_lyrics → generators.lyrics). Without this package the custom
 # sandbox's scan() fails to import them ("No module named 'generators'") and
 # they degrade to load_error/boundary, so their cached outputs never render.
 COPY tools/python/generators/         /app/tools/python/generators/
+# instrument_layers reads the loop colours from the web app's loopStyle.json,
+# so the notes lane and the groove lane cannot drift apart.
+COPY web-app/src/components/inspector-v2/loopStyle.json /app/web-app/src/components/inspector-v2/loopStyle.json
 
 # Shipped example detectors + template. Read in place by custom_loader (never
 # written), so they track the image instead of freezing in the volume.
 COPY tools/python/custom-default/     /app/tools/python/custom-default/
 
 # Seed detectors at a sibling path so a runtime bind mount on
-# tools/python/custom/ doesn't hide them. The entrypoint promotes any
-# missing files into the live dir on start (idempotent — never clobbers
-# user uploads). custom/ is gitignored apart from its docs, so a build from
-# git seeds nothing here; detectors reach a deployment through its volume.
+# tools/python/custom/ doesn't hide them. The entrypoint syncs them into the
+# live dir on start: it overwrites the ones it seeded, deletes the ones that
+# stopped shipping, and leaves user uploads alone (see core-mir-entrypoint.sh).
 COPY tools/python/custom/             /app/tools/python/custom-seed/
 
 # Read-only CC0 default dataset so every server can detect on the shipped

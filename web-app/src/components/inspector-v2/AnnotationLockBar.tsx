@@ -15,8 +15,8 @@
 
 import { useState } from 'react';
 import {
-  describeLock, fetchHistory, fetchSongAnnotators, makeSongShared, makeSongSolo,
-  restoreVersion, type HistoryEntry, type LockStance, type LockView,
+  describeLock, fetchHistory, fetchSongAnnotators, fetchSongArchives, makeSongShared, makeSongSolo,
+  restoreVersion, type HistoryEntry, type LockStance, type LockView, type SongArchive,
 } from '../../services/annotationLocks';
 
 function fmtWhen(iso: string): string {
@@ -26,12 +26,14 @@ function fmtWhen(iso: string): string {
   });
 }
 
+const ARCHIVE_PREFIX = 'archive:';
+
 const EVENT_LABEL: Record<string, string> = {
   seed: 'started',
-  unlock: 'handed back',
+  unlock: 'let go',
   takeover: 'taken over',
   'stale-claim': 'claimed',
-  acquire: 'locked',
+  acquire: 'grabbed',
   restore: 'restored',
 };
 
@@ -73,6 +75,7 @@ export function AnnotationLockBar({
   const [seedOpen, setSeedOpen] = useState(false);
   const [seedFrom, setSeedFrom] = useState('');
   const [candidates, setCandidates] = useState<string[] | null>(null);
+  const [archives, setArchives] = useState<SongArchive[] | null>(null);
   const [working, setWorking] = useState(false);
   const [adminError, setAdminError] = useState<string | null>(null);
 
@@ -91,13 +94,19 @@ export function AnnotationLockBar({
     setSeedOpen(true);
     setAdminError(null);
     if (candidates === null) void fetchSongAnnotators(slug).then(setCandidates);
+    if (archives === null) void fetchSongArchives(slug).then(setArchives);
   }
 
   async function convert(toShared: boolean) {
     setWorking(true);
     setAdminError(null);
+    // The picker's value is an annotator id, or `archive:<folder>` for a team
+    // copy an earlier "stop collaborating" archived.
+    const from = seedFrom.startsWith(ARCHIVE_PREFIX)
+      ? { restoreArchive: seedFrom.slice(ARCHIVE_PREFIX.length) }
+      : seedFrom ? { seedFrom } : undefined;
     const r = toShared
-      ? await makeSongShared(slug, seedFrom || undefined)
+      ? await makeSongShared(slug, from)
       : { ok: await makeSongSolo(slug) };
     setWorking(false);
     // The document under this song changes identity — the team's copy replaces
@@ -109,18 +118,18 @@ export function AnnotationLockBar({
 
   // A solo song shows nothing at all to a normal annotator: collaboration is
   // opt-in per song, and a corpus of ordinary songs should not grow a bar
-  // explaining a mode nobody turned on. Admins get one quiet line, in the
-  // exact place the lease bar would appear if they did turn it on.
+  // explaining a mode nobody turned on. Admins get a single button, its
+  // explanation in the tooltip.
   if (!shared) {
     if (!isAdmin) return null;
     return (
       <div className="flex items-center gap-2.5 flex-wrap text-[12px] text-slate-400 px-0.5">
-        <span>Per-annotator song — everyone keeps their own annotation.</span>
         {!seedOpen ? (
           <button
             onClick={openSeedPicker}
-            className="px-3 py-1.5 text-[12px] font-medium rounded-md border border-white/15 bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 transition-colors"
-          >Make collaborative…</button>
+            title="This song is per-annotator — everyone keeps their own annotation. Make it one shared team annotation, edited by one person at a time."
+            className="px-2 py-1 text-[11px] font-medium rounded-md border border-white/15 bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 transition-colors"
+          >Collaborative…</button>
         ) : (
           <span className="flex items-center gap-1.5 flex-wrap">
             <span className="text-slate-400">Seed the team's annotation from</span>
@@ -130,6 +139,12 @@ export function AnnotationLockBar({
               className="bg-[#0e1015] border border-white/10 rounded px-1.5 py-0.5 text-[11px] text-slate-200"
             >
               <option value="">an empty annotation</option>
+              {(archives ?? []).map((a) => (
+                <option key={a.name} value={`${ARCHIVE_PREFIX}${a.name}`}>
+                  the team's annotation archived {fmtWhen(a.archivedAt)}
+                  {a.rev != null ? ` · rev ${a.rev}` : ''} · {a.items} items
+                </option>
+              ))}
               {(candidates ?? []).map((id) => (
                 <option key={id} value={id}>{id}</option>
               ))}
@@ -187,18 +202,18 @@ export function AnnotationLockBar({
           <button
             onClick={onTake}
             disabled={busy}
-            title="Take the edit lock. Everyone else stays read-only until you unlock."
+            title="Grab the song to edit it. Everyone else stays read-only until you let go."
             className="px-2.5 py-1 text-[12px] font-semibold rounded border border-sky-400/70 bg-sky-500/30 hover:bg-sky-500/45 text-white disabled:opacity-40 transition-colors"
-          >🔓 Lock to edit</button>
+          >Grab</button>
         )}
 
         {stance === 'yours' && (
           <button
             onClick={onRelease}
             disabled={busy}
-            title="Hand the song back. You become read-only and anyone else can take it."
+            title="Let go of the song. You become read-only and anyone else can grab it."
             className="px-2.5 py-1 text-[12px] font-semibold rounded border border-emerald-400/70 bg-emerald-500/25 hover:bg-emerald-500/40 text-white disabled:opacity-40 transition-colors"
-          >🔒 Unlock</button>
+          >Let go</button>
         )}
 
         {readOnly && stance !== 'free' && (
@@ -223,7 +238,7 @@ export function AnnotationLockBar({
             <button
               onClick={() => setConfirmingFor(situation)}
               disabled={busy}
-              title="Take the lock from the current holder. Their work so far is saved as a version first."
+              title="Take the song from whoever has grabbed it. Their work so far is saved as a version first."
               className="px-2.5 py-1 text-[12px] font-semibold rounded border border-amber-400/60 bg-amber-500/20 hover:bg-amber-500/35 text-white disabled:opacity-40 transition-colors"
             >Take over</button>
           )
@@ -239,7 +254,7 @@ export function AnnotationLockBar({
           <button
             onClick={() => void convert(false)}
             disabled={working}
-            title="Return this song to per-annotator editing. The shared annotation and its versions are archived, not deleted."
+            title="Return this song to per-annotator editing. Each annotator gets whichever is newer — the team's version or their own — and can switch to the other. The shared annotation and its versions are archived, not deleted."
             className="px-2 py-1 text-[11px] rounded text-slate-500 hover:text-slate-300 hover:bg-white/[0.05] disabled:opacity-40 transition-colors"
           >{working ? '…' : 'Stop collaborating'}</button>
         )}
@@ -248,8 +263,8 @@ export function AnnotationLockBar({
       {readOnly && (
         <p className={`mt-1.5 text-[12px] ${hasUnsavedEdits ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>
           {hasUnsavedEdits
-            ? '⚠ You don’t hold the lock, so nothing you change here is being saved. Take over to keep working — your edits stay on screen until you reload.'
-            : 'Read-only. You can play, inspect and export; take the lock to change anything.'}
+            ? '⚠ You haven’t grabbed this song, so nothing you change here is being saved. Take over to keep working — your edits stay on screen until you reload.'
+            : 'Read-only. You can play, inspect and export; grab the song to change anything.'}
         </p>
       )}
 
@@ -289,7 +304,7 @@ export function AnnotationLockBar({
             </ul>
           )}
           {readOnly && history && history.length > 0 && (
-            <p className="mt-1 text-[11px] text-slate-500">Take the lock to restore a version.</p>
+            <p className="mt-1 text-[11px] text-slate-500">Grab the song to restore a version.</p>
           )}
         </div>
       )}

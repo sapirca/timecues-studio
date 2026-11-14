@@ -21,22 +21,14 @@
  *  - `spans`  — labeled intervals that may overlap (shipped).
  *  - `lyrics` — word/line lyric timestamps (deferred — needs Whisper/WhisperX).
  *  - `loops`  — grid-aware seamless-playback regions for auditioning N-bar
- *    phrases. Gated by `experimentalLoopsAndPatterns` Settings flag.
+ *    phrases.
  */
 export type AnnotationLayerType = 'boundaries' | 'cues' | 'spans' | 'lyrics' | 'loops' | 'riff-patterns';
 
-/** Beat-grid snap granularity for a **lyrics** layer.
- *
- *  Every other type snaps to the grid unit shown in the toolbar — one unit for
- *  the whole song, so what a drag lands on is the grid you can see rather than
- *  a per-layer setting you have to remember. Lyrics are the deliberate
- *  exception, and this is their setting:
- *
- *  'off' = no snap, and the default — a sung word landing on a beat is a
- *  coincidence, not a rule. 'magnetic' is the middle ground: it pulls a time
- *  onto the nearest 1/16 line only when it is already within a few tens of
- *  milliseconds, so a hand-tapped word gets tidied while deliberate phrasing —
- *  a laid-back or pushed vocal — keeps the offset that makes it sound human. */
+/** The per-layer snap value stored on disk. Nothing reads it any more: every
+ *  type but lyrics snaps to the grid unit shown in the toolbar, and lyrics are
+ *  never snapped at all — a sung word is timed to the voice, and its offset
+ *  from the beat is the phrasing. Kept so existing files round-trip unchanged. */
 export type SnapMode = 'off' | 'magnetic' | 'bar' | 'beat' | '1/2beat' | '1/4beat';
 
 /** Workflow status shown in the shared annotation toolbar pill.
@@ -337,6 +329,9 @@ export interface BoundaryItem {
   /** Alternative valid start times. Under `multiple-candidates` eval mode any
    *  candidate within tolerance counts as a hit. */
   candidates?: number[];
+  /** "#rrggbb" for this one item, overriding the section-type colour — set in the
+   *  item's card, by a detector, or kept by Copy to manual layer. Optional. */
+  color?: string;
 }
 
 /** A single timestamped event (kick hit, FX trigger, clap, lyric word). */
@@ -362,8 +357,8 @@ export interface CueItem {
   candidates?: number[];
   /** How hard this hit was struck, 1-127, against the same instrument's
    *  hardest hit — the tick draws this tall. One field for every cue, however
-   *  it got here: a detector fills it (a custom Cue's `velocity`, the built-in
-   *  drum-transients), Copy to manual layer keeps it, and the cue card's Hit
+   *  it got here: a detector fills it (a custom Cue's `velocity`), Copy to
+   *  manual layer keeps it, and the cue card's Hit
    *  section sets it by hand. */
   velocity?: number;
   /** The hit's level against the loudest hit in the track, dB (<= 0). Unlike
@@ -443,34 +438,35 @@ export const PULSE_RATE_INFO: Record<PulseRate, {
   /** Beats in one period. `null` for silence, which has no period. */
   beats: number | 'bar' | null;
   description: string;
-  /** Prefix for badges and tooltips, so a silent span never reads as a rate
-   *  with a note glyph in front of it. */
-  glyph: string;
+  /** Standalone text for badges and the zoomed-out band chip. Spoken in
+   *  beats, never note values: "1/4" beside a note glyph reads as a quarter
+   *  note, which is one whole beat in 4/4 — four times slower than meant. */
+  badge: string;
 }> = {
   '32nd':         { label: '1/8 beat',           short: '1/8',  beats: 1 / 8,
                     description: 'Eight hits per beat — a 32nd-note roll or a fast tremolo.',
-                    glyph: '♪' },
+                    badge: '1/8 beat' },
   '16th-triplet': { label: '1/6 beat · triplet', short: '1/6T', beats: 1 / 6,
                     description: 'Six per beat — 16th triplets.',
-                    glyph: '♪' },
+                    badge: '1/6 beat' },
   '16th':         { label: '1/4 beat',           short: '1/4',  beats: 1 / 4,
                     description: 'Four per beat — 16ths in 4/4. The usual hi-hat/shaker rate.',
-                    glyph: '♪' },
+                    badge: '1/4 beat' },
   '8th-triplet':  { label: '1/3 beat · triplet', short: '1/3T', beats: 1 / 3,
                     description: 'Three per beat — 8th triplets, a shuffle or swung feel.',
-                    glyph: '♪' },
+                    badge: '1/3 beat' },
   '8th':          { label: '1/2 beat',           short: '1/2',  beats: 1 / 2,
                     description: 'Twice per beat — 8ths in 4/4.',
-                    glyph: '♪' },
+                    badge: '1/2 beat' },
   beat:           { label: 'Beat',               short: 'Beat', beats: 1,
                     description: 'Once per beat — the pulse you would tap along to.',
-                    glyph: '♪' },
+                    badge: '1 beat' },
   bar:            { label: 'Bar',                short: 'Bar',  beats: 'bar',
                     description: 'Once per bar — a downbeat stab or a whole-bar chord.',
-                    glyph: '♪' },
+                    badge: '1 bar' },
   silent:         { label: 'Silent',             short: 'Silent', beats: null,
                     description: 'Nothing hits here — a drop, a cut, a bar of air. Different from leaving the pulse unset, which only says nobody has listened yet.',
-                    glyph: '∅' },
+                    badge: 'Silent' },
 };
 
 /** How many beats one period of `rate` lasts. `'bar'` resolves against the
@@ -520,16 +516,66 @@ export interface SpanItem {
    *  (so no loader migration is needed) and is NOT the same claim as
    *  `'silent'`. See PulseRate. */
   pulse?: PulseRate;
+  /** "#rrggbb" for this one item, overriding the layer colour — set in the
+   *  item's card, by a detector, or kept by Copy to manual layer. Optional. */
+  color?: string;
+  /** The span's sound as attack, decay, sustain and release — Extract ADSR on
+   *  the span's card or its lane's ⋮. The same shape and rules as
+   *  LyricsItem.envelope: pinned to the audio, deleted when the span is
+   *  retimed (utils/soundEnvelopes.ts). */
+  envelope?: SoundEnvelope;
 }
 
 /** Word- or line-level lyric timestamp. */
 export interface LyricsItem {
   id: string;
   time: number;
-  /** Only set when kind === 'line'; absent for word-level. */
+  /** Where the lyric stops. Every lyric is a span — see withLyricSpans,
+   *  which repairs one stored without a usable end when the layers load. */
   end?: number;
   text: string;
   kind: 'word' | 'line';
+  /** Longer free-form note about this lyric — what it means, how it is sung,
+   *  a translation. Shown in the lyric's edit popover; the text stays the
+   *  label. */
+  description?: string;
+  /** Where each sound inside a word begins (seconds, song time), with the
+   *  syllable sung there — none on an attack no syllable was laid on. A word
+   *  holds one time; a sung `a-la-ta` begins three times. Pinned to the
+   *  audio: moving or trimming the word does not move them, and only those
+   *  inside [time, end] are drawn or exported. */
+  onsets?: LyricsOnset[];
+  /** The word's sound as attack, decay, sustain and release — Extract ADSR,
+   *  read off the vocals stem. May start before `time` and ring on after
+   *  `end`: the word is cut 20 dB under its peak, this is the whole sound.
+   *  Pinned to the audio like `onsets`. */
+  envelope?: SoundEnvelope;
+}
+
+export interface LyricsOnset {
+  time: number;
+  text?: string;
+}
+
+/** One sound's envelope, on a lyric or a span. Seconds, song time:
+ *  start ≤ peak ≤ decayEnd ≤ release ≤ end. */
+export interface SoundEnvelope {
+  start: number;
+  peak: number;
+  decayEnd: number;
+  release: number;
+  end: number;
+  /** The peak's level on the stem, dBFS. */
+  peakDb: number;
+  /** The sustain's level under the peak (dB, ≤ 0); absent on a sound that
+   *  decays straight into its release. */
+  sustainDb?: number;
+  /** What it was read off — the mix or one stem. Absent on an envelope
+   *  measured before the source was recorded. */
+  source?: 'mix' | 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano';
+  /** Set when the item holds several pulses (a gobble, a trill): how many.
+   *  The envelope is then their outer shape taken together, not one hit's. */
+  peaks?: number;
 }
 
 // A LoopItem is a labeled INTERVAL with grid-aware seamless-playback
@@ -537,12 +583,6 @@ export interface LyricsItem {
 // boundary is clean, an annotator hears how an N-bar phrase loops back on
 // itself — boundaries snap to bars and to zero-crossings so the rhythmic
 // signature can be verified without manual slicing.
-//
-// The full paradigm lives behind the `experimentalLoopsAndPatterns`
-// Settings flag: the editor (LoopEditorPanel), the canvas row
-// (LoopLayerRow), the playback engine (useLoopPlayback) and the L / P
-// hotkeys are all gated by it. Loop-output custom detectors are likewise
-// hidden from the registry when the flag is off.
 //
 // The bars field is a UX convenience — store start/end in seconds (the
 // canonical coordinate). bars is recomputed from the active BPM whenever
@@ -568,6 +608,9 @@ export interface LoopItem {
   /** Alternative valid `[start, end]` intervals. Same semantics as
    *  `SpanItem.candidates`. */
   candidates?: [number, number][];
+  /** "#rrggbb" for this one item, overriding the layer colour — set in the
+   *  item's card, by a detector, or kept by Copy to manual layer. Optional. */
+  color?: string;
   /** Prominence envelope over the loop's own duration. See ProminencePoint. */
   prominence?: ProminenceEnvelope;
 }
@@ -577,64 +620,8 @@ export interface LoopItem {
  *  beats-per-bar × this constant (16 for 4/4, 12 for 3/4, 20 for 5/4 …). */
 export const PATTERN_SUBBEATS_PER_BEAT = 4;
 
-/** Enforce the pattern-accent invariant: ticks and spans are disjoint, spans
- *  are non-overlapping runs of length ≥ 2, and everything sits inside
- *  `[0, steps)`. Clamps/drops anything malformed. The single source of truth
- *  for the invariant — call it on every edit, on detector conversion, and
- *  defensively on load. Spans win ties: a step claimed by a span is removed
- *  from the lone-tick set. */
-export function normalizePatternAccents(
-  highlightedBeats: readonly number[] | undefined,
-  spans: readonly (readonly [number, number])[] | undefined,
-  steps: number,
-): { highlightedBeats: number[]; spans: [number, number][] } {
-  const limit = Math.max(1, Math.floor(steps || PATTERN_SUBBEATS_PER_BEAT));
-  const claimed = new Set<number>(); // steps owned by an accepted span
-  const outSpans: [number, number][] = [];
-  // Sort by start so earlier spans win the overlap; drop any that collide.
-  const sorted = [...(spans ?? [])]
-    .map(([s, l]) => [Math.floor(s), Math.floor(l)] as [number, number])
-    .filter(([s, l]) => l >= 2 && s >= 0 && s + l <= limit)
-    .sort((a, b) => a[0] - b[0]);
-  for (const [s, l] of sorted) {
-    let clash = false;
-    for (let i = s; i < s + l; i++) if (claimed.has(i)) { clash = true; break; }
-    if (clash) continue;
-    for (let i = s; i < s + l; i++) claimed.add(i);
-    outSpans.push([s, l]);
-  }
-  const ticks = Array.from(
-    new Set((highlightedBeats ?? []).map((b) => Math.floor(b))),
-  )
-    .filter((b) => b >= 0 && b < limit && !claimed.has(b))
-    .sort((a, b) => a - b);
-  return { highlightedBeats: ticks, spans: outSpans };
-}
-
 /** Velocity a step draws at when it carries no accent — full strength. */
 export const ACCENT_FULL = 127;
-
-/** Drop accents that name a step outside the grid and clamp the rest into
- *  1..127. Cheap to call on every write; returns undefined when nothing
- *  survives, so a node without accents carries no empty object. */
-export function normalizeStepAccents(
-  accents: Record<number, number> | undefined,
-  steps: number,
-): Record<number, number> | undefined {
-  if (!accents) return undefined;
-  const limit = Math.max(1, Math.floor(steps || PATTERN_SUBBEATS_PER_BEAT));
-  const out: Record<number, number> = {};
-  let any = false;
-  for (const [key, value] of Object.entries(accents)) {
-    const step = Math.floor(Number(key));
-    const v = Math.round(Number(value));
-    if (!Number.isFinite(step) || step < 0 || step >= limit) continue;
-    if (!Number.isFinite(v)) continue;
-    out[step] = Math.max(1, Math.min(ACCENT_FULL, v));
-    any = true;
-  }
-  return any ? out : undefined;
-}
 
 /** How opaque a struck step draws, 0..1. A ghost note has to stay clearly
  *  louder-looking than an EMPTY chip (which draws at 0.2), or the grid would
@@ -718,73 +705,42 @@ export function pickRiffComboColor(existingCombos: RiffCombo[]): string {
   return pickFromPalette(RIFF_COMBO_COLORS, used, existingCombos.length);
 }
 
-/** A named riff motif with its own beat-chip grid. Leaf of the hierarchy — a
- *  pure library primitive with no timeline position of its own. Every place
- *  a node is *used* (in a Combo's or Riff's `sequence`) carries its own
- *  `lengthSteps`, so the same node can occupy a different duration in every
- *  occurrence without the node itself needing a position. */
+/** A named riff figure: a line of notes on the node's own pulse. Leaf of the
+ *  hierarchy — a pure library primitive with no timeline position of its own.
+ *  Every place a node is *used* (in a Combo's or Riff's `sequence`) carries
+ *  its own `lengthSteps`, so the same node can occupy a different duration in
+ *  every occurrence without the node itself needing a position.
+ *
+ *  This is the only form a repeated figure takes — drawn by hand, copied from
+ *  a detector, or returned by one. A play that differs from the node (a
+ *  dropped hit, a fill) is not another node: it is an occurrence on the item
+ *  that plays it (`RiffPatternItem.occurrences`). */
 export interface RiffNode {
   id: string;
   name: string;
   color: string;
-  /** Lone-tick sub-steps: 0-based step indices inside the node's cycle. */
-  highlightedBeats: number[];
-  /** Held runs `[startStep, lengthSteps]` (lengthSteps >= 2) — one
-   *  sustained accent. A step is either a lone tick or inside one span. */
-  spans: [number, number][];
-  /** Sub-step grid resolution, always `lengthBeats × subbeatsPerBeat` — a
-   *  1-beat node at the default 4-per-beat resolution → 4 steps, a 1-bar/
-   *  4-beat node → 16, a half-beat node → 2. Defaults to 16 (one bar at the
-   *  default resolution). Also doubles as this node's *natural* length when
-   *  first placed in a sequence — see `defaultRiffEntryLength`. Set via
-   *  `resizeRiffNodeLength`/`resizeRiffNodeSubdivision`, never edited
-   *  directly, so `highlightedBeats`/`spans` stay in bounds. */
+  /** Steps in the whole node at its own pulse: its length is
+   *  `stepsPerCycle / subbeatsPerBeat` beats (`riffNodeLengthBeats`). Also
+   *  this node's *natural* length when first placed in a sequence — see
+   *  `defaultRiffEntryLength`. */
   stepsPerCycle: number;
-  /** How many grid steps each beat divides into for THIS node. Defaults to
-   *  `PATTERN_SUBBEATS_PER_BEAT` (4 — sixteenth notes) but is user-choosable
-   *  per node: 2 (eighths) or 1 (quarters) for a coarser grid, 3 (eighth
-   *  triplets) or 6 (sixteenth triplets) for a compound-meter feel. Changing
-   *  it goes through `resizeRiffNodeSubdivision`, which rescales the grid and
-   *  remaps existing ticks/spans rather than resetting them. Legacy nodes
-   *  missing this field are migrated to 4 — see `migrateRiffSequences`. */
+  /** The node's pulse: steps per beat. 4 (sixteenths) by default; any whole
+   *  number from 1 to 16 (1/64 notes) — see MAX_PULSE. Every note starts and ends on it. */
   subbeatsPerBeat: number;
-  /** How hard each step is struck, `step -> 1..127` (MIDI's range), for the
-   *  steps that are worth distinguishing. Purely ADVISORY, and deliberately so:
-   *  it is read only for steps that are actually on, and a step with no entry
-   *  draws at full strength. That is what keeps it from becoming a second
-   *  source of truth about which steps exist — every existing edit path
-   *  (painting, Tap Along, resize) keeps working untouched, and a stale entry
-   *  for a step that has since been cleared is invisible rather than wrong.
-   *
-   *  Set by a detector that measured the hits (see drumGrooveToRiff.ts);
-   *  absent on hand-drawn nodes, which are all one strength. */
-  accents?: Record<number, number>;
-  /** Which content model this node uses. `'grid'` (the default, and what
-   *  every pre-2026-09-03 node is) reads `highlightedBeats`/`spans` against
-   *  the `stepsPerCycle` × `subbeatsPerBeat` chip grid. `'boundary'` ignores
-   *  that grid entirely and reads `segments` instead — see
-   *  `RiffBoundarySegment`. Both kinds still carry a length (`stepsPerCycle`
-   *  / `subbeatsPerBeat`), so placement, occurrence and entry-resize math is
-   *  identical for both and needs no special-casing. */
-  kind?: RiffNodeKind;
-  /** Boundary-node content: the ordered, gapless list of blocks covering
-   *  `[0, riffNodeLengthBeats(node))`. Only meaningful when
-   *  `kind === 'boundary'`; absent on grid nodes. */
-  segments?: RiffBoundarySegment[];
+  /** The notes: an ordered, gapless list of blocks covering
+   *  `[0, riffNodeLengthBeats(node))` — a `tick` block is a note, an `empty`
+   *  one a rest. See `RiffBoundarySegment`. */
+  segments: RiffBoundarySegment[];
+  /** What a musician would call the figure ("four on the floor"), when it has
+   *  a name — set by a detector that recognised it. Usually absent. */
+  names?: string[];
 }
 
-/** Grid nodes quantise their content to a sub-beat chip grid; boundary nodes
- *  don't quantise at all. See `RiffNode.kind`. */
-export type RiffNodeKind = 'grid' | 'boundary';
-
-/** One block of a boundary node — a half-open `[start, end)` interval in
- *  beats measured from the node's own start, plus what's happening in it.
- *
- *  This is the deliberate opposite of the grid model: nothing here is
- *  rounded to a subdivision, so a hit that lands 0.37 beats in stays at
- *  0.37 beats. A boundary node's `segments` always tile its whole length
- *  end-to-end with no gaps and no overlaps (`normalizeBoundarySegments`
- *  enforces that), so the list reads exactly like the user's own notation:
+/** One block of a node — a half-open `[start, end)` interval in beats
+ *  measured from the node's own start: a note (`tick`) or a rest (`empty`).
+ *  A node's `segments` always tile its whole length end-to-end with no gaps
+ *  and no overlaps (`normalizeBoundarySegments` enforces that), and every
+ *  edge sits on the node's pulse:
  *
  *      [0   – 2  ] empty
  *      [2   – 2.5] tick
@@ -802,19 +758,18 @@ export interface RiffBoundarySegment {
   kind: 'tick' | 'empty';
   /** Optional free-text note for this block (e.g. "snare", "ghost"). */
   label?: string;
+  /** MIDI pitch of the note this block plays, 0-127 (60 = middle C) — set
+   *  when the block is a pitched note (a detector's bass riff), so the pitch
+   *  is a number to read and not only the "C1" written in `label`. */
+  note?: number;
+  /** How hard the note is struck, 1..127 (MIDI velocity) — measured by a
+   *  detector, or set by hand. Absent = full strength, which is every note
+   *  nobody measured. */
+  accent?: number;
 }
 
-/** True when `node` uses the boundary/segment content model rather than the
- *  sub-beat chip grid. Nodes with no `kind` are grid nodes (every node
- *  written before boundary nodes existed). */
-export function isBoundaryNode(
-  node: Pick<RiffNode, 'kind'> | null | undefined,
-): boolean {
-  return node?.kind === 'boundary';
-}
-
-/** A node's own length in beats — the single length notion both node kinds
- *  share, derived from the grid fields so nothing has to be kept in sync. */
+/** A node's own length in beats, derived from its step count and pulse so
+ *  nothing has to be kept in sync. */
 export function riffNodeLengthBeats(
   node: Pick<RiffNode, 'stepsPerCycle' | 'subbeatsPerBeat'>,
 ): number {
@@ -1315,21 +1270,17 @@ export function boundarySegmentIndexAt(
   return -1;
 }
 
-/** Resizes a boundary node to `lengthBeats`, re-tiling its segments to the
- *  new length (blocks past the new end are trimmed or dropped; a longer node
- *  gains a trailing `empty`). The boundary-node counterpart to
- *  `resizeRiffNodeLength`, which it delegates the grid arithmetic to so both
- *  kinds keep reporting length the same way. */
+/** Resizes a node to `lengthBeats` (rounded to whole steps of its pulse),
+ *  re-tiling its notes to the new length: notes past the new end are trimmed
+ *  or dropped, and a longer node gains a trailing rest. The standard place a
+ *  node's length is changed. */
 export function resizeBoundaryNodeLength(
-  node: Pick<RiffNode, 'highlightedBeats' | 'spans' | 'subbeatsPerBeat' | 'segments'>,
+  node: Pick<RiffNode, 'subbeatsPerBeat' | 'segments'>,
   lengthBeats: number,
-): Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans' | 'segments'> {
-  const grid = resizeRiffNodeLength(node, lengthBeats);
+): Pick<RiffNode, 'stepsPerCycle' | 'segments'> {
   const subbeats = Math.max(1, Math.round(node.subbeatsPerBeat) || PATTERN_SUBBEATS_PER_BEAT);
-  return {
-    ...grid,
-    segments: normalizeBoundarySegments(node.segments, grid.stepsPerCycle / subbeats),
-  };
+  const stepsPerCycle = Math.max(1, Math.round(lengthBeats * subbeats));
+  return { stepsPerCycle, segments: normalizeBoundarySegments(node.segments, stepsPerCycle / subbeats) };
 }
 
 /** Splits the segment containing `atBeat` in two at that point, keeping both
@@ -1548,70 +1499,6 @@ export function removeBoundarySegment(
   return normalizeBoundarySegments(rest, lengthBeats);
 }
 
-/** Recomputes a node's `stepsPerCycle` from a length in beats (fractional —
- *  0.5 for a half-beat node, 4 for a 1-bar/4-beat node) at the node's own
- *  `subbeatsPerBeat` resolution, and clamps `highlightedBeats`/`spans` to fit
- *  the new (possibly smaller) grid via `normalizePatternAccents`. The
- *  standard place a node's length should be changed. */
-export function resizeRiffNodeLength(
-  node: Pick<RiffNode, 'highlightedBeats' | 'spans' | 'subbeatsPerBeat'> & Partial<Pick<RiffNode, 'accents'>>,
-  lengthBeats: number,
-): Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans'> & Partial<Pick<RiffNode, 'accents'>> {
-  const subbeats = Math.max(1, Math.round(node.subbeatsPerBeat) || PATTERN_SUBBEATS_PER_BEAT);
-  const steps = Math.max(1, Math.round(lengthBeats * subbeats));
-  const normalized = normalizePatternAccents(node.highlightedBeats, node.spans, steps);
-  // A trim keeps the step numbering it had, so accents past the new end are
-  // simply dropped — the steps they described are gone.
-  const accents = normalizeStepAccents(node.accents, steps);
-  return { stepsPerCycle: steps, ...normalized, ...(accents ? { accents } : {}) };
-}
-
-/** Rescales a node's grid to a new subdivision resolution (steps per beat)
- *  while preserving its length in beats — e.g. switching a 1-beat node from 4
- *  (sixteenth) to 3 (eighth-triplet) parts recomputes `stepsPerCycle` from
- *  beats × the new resolution and remaps existing ticks/spans proportionally
- *  (rounded to the new grid, then reconciled via `normalizePatternAccents`)
- *  rather than discarding them. */
-export function resizeRiffNodeSubdivision(
-  node: Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans' | 'subbeatsPerBeat'> & Partial<Pick<RiffNode, 'accents'>>,
-  newSubbeatsPerBeat: number,
-): Pick<RiffNode, 'stepsPerCycle' | 'highlightedBeats' | 'spans' | 'subbeatsPerBeat'> & Partial<Pick<RiffNode, 'accents'>> {
-  const oldSteps = Math.max(1, Math.floor(node.stepsPerCycle) || 1);
-  const oldSubbeats = Math.max(1, Math.round(node.subbeatsPerBeat) || PATTERN_SUBBEATS_PER_BEAT);
-  const newSubbeats = Math.max(1, Math.round(newSubbeatsPerBeat));
-  if (newSubbeats === oldSubbeats) return { ...node, subbeatsPerBeat: newSubbeats };
-  const beats = oldSteps / oldSubbeats;
-  const newSteps = Math.max(1, Math.round(beats * newSubbeats));
-  const scale = newSteps / oldSteps;
-  const remap = (t: number) => Math.max(0, Math.min(newSteps - 1, Math.round(t * scale)));
-  const ticks = Array.from(new Set(node.highlightedBeats.map(remap))).sort((a, b) => a - b);
-  const spans: [number, number][] = node.spans.map(([s, len]) => {
-    const ns = remap(s);
-    const nlen = Math.max(1, Math.round(len * scale));
-    return [ns, Math.min(nlen, newSteps - ns)];
-  });
-  const normalized = normalizePatternAccents(ticks, spans, newSteps);
-  // Accents follow their step through the SAME remap the ticks take, so a
-  // ghost note stays a ghost note when the grid changes resolution. Two old
-  // steps can land on one new one (coarsening); the louder wins, since an
-  // accent is what the ear keeps.
-  let accents: Record<number, number> | undefined;
-  if (node.accents) {
-    const moved: Record<number, number> = {};
-    for (const [key, value] of Object.entries(node.accents)) {
-      const to = remap(Math.floor(Number(key)));
-      const v = Math.round(Number(value));
-      if (!Number.isFinite(to) || !Number.isFinite(v)) continue;
-      moved[to] = Math.max(moved[to] ?? 0, v);
-    }
-    accents = normalizeStepAccents(moved, newSteps);
-  }
-  return {
-    stepsPerCycle: newSteps, subbeatsPerBeat: newSubbeats, ...normalized,
-    ...(accents ? { accents } : {}),
-  };
-}
-
 /** Resizes a node to `lengthBeats` as a TRIM rather than a rescale: whatever
  *  survives keeps the size it's drawn at today, and only the tail goes.
  *
@@ -1628,9 +1515,8 @@ export function resizeRiffNodeSubdivision(
  *  placement deliberately drag-stretched to 2× stays at 2×. Every reference
  *  moves — combo children included — because a node is a shared library
  *  primitive: trimming it in one place only isn't a thing. Trimming the
- *  content itself is already `resizeRiffNodeLength`'s and
- *  `resizeBoundaryNodeLength`'s job (accents clamp, blocks re-tile); this only
- *  has to keep the timeline in step with them. */
+ *  content itself is `resizeBoundaryNodeLength`'s job (blocks re-tile); this
+ *  only has to keep the timeline in step with it. */
 export function trimRiffNodeLength(
   layer: Pick<AnnotationLayer<'riff-patterns'>, 'nodes' | 'combos' | 'items'>,
   nodeId: string,
@@ -1639,11 +1525,9 @@ export function trimRiffNodeLength(
   const nodes = layer.nodes ?? [];
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) return { nodes: layer.nodes, combos: layer.combos, items: layer.items };
-  const patch = isBoundaryNode(node)
-    ? resizeBoundaryNodeLength(node, lengthBeats)
-    : resizeRiffNodeLength(node, lengthBeats);
+  const patch = resizeBoundaryNodeLength(node, lengthBeats);
   const nextNodes = nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n));
-  // Both resizers leave `subbeatsPerBeat` alone, so the step counts are
+  // The resize leaves `subbeatsPerBeat` alone, so the step counts are
   // directly comparable and the ratio is the node's change in real length.
   const ratio = node.stepsPerCycle > 0 ? patch.stepsPerCycle / node.stepsPerCycle : 1;
   if (ratio === 1) return { nodes: nextNodes, combos: layer.combos, items: layer.items };
@@ -1727,6 +1611,32 @@ export interface RiffCombo {
   sequence: RiffSeqEntry[];
 }
 
+/** What a play did to its node: played it as written (`exact`), added hits
+ *  only (`fill`), left every hit out (`drop`), or anything else
+ *  (`variation`). */
+export type RiffEvent = 'exact' | 'variation' | 'fill' | 'drop';
+
+/** A note one play added over its node: where, in beats from the node's
+ *  start, and as the node writes a note. */
+export type RiffAddedNote = Pick<RiffBoundarySegment, 'start' | 'end' | 'label' | 'note' | 'accent'>;
+
+/** One play of an item that differed from its node — the same node, played
+ *  differently this once. Never a node of its own: "the fourth A drops the
+ *  kick" is A with one note missing, and the lane still reads A.
+ *
+ *  `index` counts plays from 0: repeat `r` of an item whose sequence has `n`
+ *  entries plays entry `e` as index `r × n + e`. An entry that is a combo is
+ *  one play, and is not given occurrences (every placement of the combo
+ *  shares its leaves). */
+export interface RiffOccurrence {
+  index: number;
+  event: RiffEvent;
+  /** Notes the play struck that the node does not have. */
+  added?: RiffAddedNote[];
+  /** The node's notes the play left out, by where they start (beats). */
+  missing?: { start: number }[];
+}
+
 /** A Riff: the tree's root. Structurally identical to a Combo (same ordered
  *  `sequence` of node/combo occurrences) plus a placement — `start`/`end`
  *  position this occurrence's first cycle on the timeline, and the whole
@@ -1768,6 +1678,11 @@ export interface RiffPatternItem {
   /** Critical (default) vs optional, same flag every other interval kind
    *  carries. Omitted ⇒ critical. */
   importance?: ItemImportance;
+  /** The plays that differed from their node: a hit dropped, a fill added.
+   *  A play is one sequence entry in one repeat — see `RiffOccurrence.index`.
+   *  A play with no entry here plays its node exactly. Absent when every play
+   *  does. */
+  occurrences?: RiffOccurrence[];
 }
 
 /** Recomputes `duplicateOfId` for every item in `items` (sorted by `start`,
@@ -1859,6 +1774,48 @@ export function withFittedRiffInstances(
       if (next !== it) layerChanged = true;
       return next;
     });
+    if (!layerChanged) return layer;
+    docChanged = true;
+    return { ...layer, items } as AnnotationLayer;
+  });
+  return docChanged ? { ...doc, layers } : doc;
+}
+
+/** A riff instance can only play what its lane holds. Entries naming a node
+ *  or combo that no longer exists (deleted from under it) are dropped, with
+ *  their plays' occurrences renumbered; an instance left with nothing to
+ *  play is removed — an empty instance draws nothing but its title, and
+ *  there is no node left in it to open. Rests are kept: a deliberate rest
+ *  plays silence. Returns the SAME document when nothing dangles, so the
+ *  effect that enforces it can bail out without writing. */
+export function withoutDanglingRiffInstances(doc: AnnotationLayersDocument): AnnotationLayersDocument {
+  let docChanged = false;
+  const layers = doc.layers.map((layer) => {
+    if (layer.type !== 'riff-patterns' || layer.readOnly) return layer;
+    const known = new Set<string>([
+      RIFF_NODE_SILENCE_ID,
+      ...(layer.nodes ?? []).map((n) => n.id),
+      ...(layer.combos ?? []).map((c) => c.id),
+    ]);
+    let layerChanged = false;
+    const items: RiffPatternItem[] = [];
+    for (const it of layer.items as RiffPatternItem[]) {
+      const keep = it.sequence.map((e) => known.has(e.type));
+      const kept = it.sequence.filter((_, i) => keep[i]);
+      if (!kept.some((e) => e.type !== RIFF_NODE_SILENCE_ID)) { layerChanged = true; continue; }
+      if (kept.length === it.sequence.length) { items.push(it); continue; }
+      layerChanged = true;
+      const oldN = it.sequence.length;
+      const newIndex = new Map<number, number>();
+      keep.reduce((k, on, i) => { if (on) { newIndex.set(i, k); return k + 1; } return k; }, 0);
+      const occurrences = (it.occurrences ?? []).flatMap((o) => {
+        const k = newIndex.get(o.index % oldN);
+        return k == null ? [] : [{ ...o, index: Math.floor(o.index / oldN) * kept.length + k }];
+      });
+      const next: RiffPatternItem = { ...it, sequence: kept, occurrences };
+      if (!occurrences.length) delete next.occurrences;
+      items.push(next);
+    }
     if (!layerChanged) return layer;
     docChanged = true;
     return { ...layer, items } as AnnotationLayer;
@@ -2137,10 +2094,8 @@ export interface AnnotationLayer<T extends AnnotationLayerType = AnnotationLayer
   visible: boolean;
   /** CSS hex color used for ticks/intervals on this layer. */
   color: string;
-  /** Snap mode applied when new items are added. Read for lyrics layers only —
-   *  see SnapMode. On every other type it is inert: the value non-lyrics
-   *  factories still write is kept so files round-trip unchanged, and the grid
-   *  unit selector decides what those layers snap to. */
+  /** Inert — see SnapMode. The grid unit selector decides what a layer snaps
+   *  to, and lyrics never snap. */
   snap: SnapMode;
   items: LayerItem<T>[];
   /** True when the layer is derived from a custom detector run rather than
@@ -2159,11 +2114,12 @@ export interface AnnotationLayer<T extends AnnotationLayerType = AnnotationLayer
    *  output is untouched. UI may show a "from <X>" badge. */
   importedFrom?: string;
   /** Demucs stem a detector-sourced layer was built from ("vocals" | "drums" |
-   *  "bass" | "other" | "guitar" | "piano"), or "mix" for whole-track
-   *  detectors. Drives the lane label's stem tag and the highlight shown while
+   *  "bass" | "other" | "guitar" | "piano"), "mix" for whole-track
+   *  detectors, or "stems" for one lane read from several stems and never the
+   *  mix. Drives the lane label's stem tag and the highlight shown while
    *  that stem is auditioned. Only set on read-only detector layers; undefined
    *  on user-authored ones. */
-  sourceStem?: 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano' | 'mix';
+  sourceStem?: 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano' | 'mix' | 'stems';
   /** The detector's one-line manifest `description` — the algorithm/heuristic
    *  this layer's items came from (e.g. "RMS energy presence of the vocals
    *  Demucs stem"). Surfaced in the lane's ⓘ info popover. Only set on
@@ -2176,6 +2132,16 @@ export interface AnnotationLayer<T extends AnnotationLayerType = AnnotationLayer
    *  so without this the lane's confidence is indistinguishable from its
    *  correctness. Only set on read-only detector layers. */
   sourceNotes?: { code: string; message: string }[];
+  /** The layer's big picture in one line, for a reader of the export who should
+   *  not have to read every item to get it — a copied groove's main loops,
+   *  ranked by how many bars they play (drumGrooves.ts `grooveSummary`). The
+   *  light-show agent sees it under the section heading, above the rows. */
+  summary?: string;
+  /** The drum a riff-patterns layer plays — `hat`, `snare`, `kick` … (the
+   *  groove lane's rows, drumGrooves.ts `GROOVE_ROWS`). Set on a copied drum
+   *  groove, so its hits keep that drum's colour and a reader of the export
+   *  knows which drum the figures are; absent on a riff drawn by hand. */
+  drum?: string;
   /** Per-layer evaluation mode. Default `'full-annotation'` when omitted —
    *  pre-Phase-2 documents on disk don't have this field. See `LayerEvalMode`. */
   mode?: LayerEvalMode;
@@ -2221,6 +2187,12 @@ export interface AnnotationLayer<T extends AnnotationLayerType = AnnotationLayer
    *  lanes are the exception: they are re-derived each render and never
    *  persisted, so they cannot be grouped. */
   groupId?: string;
+  /** Locked from the lane's ⋮ menu: nothing may change what the layer says —
+   *  its items, riff library, vocal runs — until it is unlocked. Name, colour,
+   *  visibility and group stay editable. Enforced at the one funnel every
+   *  document edit goes through (see `lockedLayerEdited`), so no edit path
+   *  needs to know about it. */
+  locked?: boolean;
 }
 
 /** A named, coloured band over lanes that already exist. Grouping is
@@ -2262,6 +2234,51 @@ export interface AnnotationLayersDocument {
    *  groups existed, which is why every reader treats it as optional rather
    *  than defaulting it on load. */
   groups?: AnnotationLayerGroup[];
+  /** The server's write counter for this file — every save bumps it. Read
+   *  back on load and named by the next save, which the server refuses if
+   *  the file has moved on (see saveLayers). Absent until the first save. */
+  rev?: number;
+  /** How the file states WHERE items are. Absent = seconds: every item carries
+   *  `time` / `start` / `end` (and, with a grid, its beat stamp beside them).
+   *  `'beats'` = written under Grid Lock: an item with a beat stamp is stored
+   *  by its musical position ONLY — `beat`, or `startBeat` / `endBeat` — with
+   *  no seconds, and its `candidates` are beats too. Lyrics are never stamped
+   *  (a sung word is timed to the voice), so they keep their seconds either
+   *  way, as do the fields that describe the sound rather than its place
+   *  (a cue's `decay`, an `envelope`, a prominence envelope's item-relative
+   *  `t`). Readers turn beats back into seconds with `grid.tempoMap` — see
+   *  utils/beatTimebase.ts and tools/python/layers_timebase.py. In memory the
+   *  app always holds seconds; the beats form exists only on disk. */
+  timebase?: 'beats';
+  /** The grid the beat positions in this file are counted on, written with
+   *  every save on a song that has one. A beat number means nothing without
+   *  it, so a file that stores beats is never written without this. */
+  grid?: LayersGrid;
+}
+
+/** One stretch of constant tempo: from `beat` (fractional beats from the grid
+ *  origin) at `time` (seconds), `bpm` beats a minute. A beat before the first
+ *  entry is extrapolated at the first entry's tempo. */
+export interface LayersGridTempo {
+  beat: number;
+  time: number;
+  bpm: number;
+}
+
+/** The song's grid as a layers file records it. `bpm` / `gridOffset` /
+ *  `timeSignature` / `gridMode` are the song's own settings, copied so the
+ *  file says what it was counted against; `tempoMap` is the same grid resolved
+ *  into constant-tempo stretches, which is all a reader needs to turn a beat
+ *  into seconds (one entry unless the song is split into grid segments).
+ *  Hand-placed (pinned) beats are not part of it — beats are converted on the
+ *  macro grid, as everywhere else (see utils/beatAnchoring.ts). */
+export interface LayersGrid {
+  bpm: number;
+  gridOffset: number;
+  timeSignature: string;
+  beatsPerBar: number;
+  gridMode: 'static' | 'mapped' | 'manual';
+  tempoMap: LayersGridTempo[];
 }
 
 // ─── Factories ──────────────────────────────────────────────────────────────
@@ -2434,6 +2451,21 @@ export function setLayerGroup(
   return { ...doc, layers };
 }
 
+/** Put one layer in the group called `name`, creating the group when the
+ *  document has none by that name. How a copied detector lane joins the rest
+ *  of its detector group's copies: the first copy makes the group, the next
+ *  ones find it. A group the annotator renamed is no longer found, and the
+ *  next copy starts a fresh one rather than guessing. */
+export function addLayerToGroupNamed(
+  doc: AnnotationLayersDocument,
+  layerId: string,
+  name: string,
+): AnnotationLayersDocument {
+  const existing = (doc.groups ?? []).find((g) => g.name === name);
+  if (existing) return setLayerGroup(doc, layerId, existing.id);
+  return groupLayers(doc, [layerId], name).doc;
+}
+
 /** Dissolve the band and keep every lane — the non-destructive half of the
  *  pair. `deleteGroupAndLayers` is the other one, and they are deliberately
  *  never spelled the same way in the UI. */
@@ -2518,6 +2550,73 @@ export function pruneGroups(doc: AnnotationLayersDocument): AnnotationLayersDocu
   return { ...doc, layers: normalizeGroupOrder(layers), groups };
 }
 
+/** Layer types whose items can be dragged from one lane into another. Only
+ *  between lanes of the SAME type, so an item never changes shape on the way.
+ *  Boundaries stay put on purpose — they tile their lane, so taking one out
+ *  re-cuts two sections — and so do riff placements, which point at their own
+ *  lane's node library. */
+export const CROSS_LANE_ITEM_TYPES: ReadonlySet<AnnotationLayerType> = new Set(['cues', 'spans', 'loops', 'lyrics']);
+
+/** Where an item starts, whichever way its type spells it. */
+export function itemStartTime(item: { time?: number; start?: number }): number {
+  return item.time ?? item.start ?? 0;
+}
+
+/** True when any of `incoming` overlaps a loop already in `existing` — the one
+ *  drop a Loops lane refuses, because loops in a lane must tile. */
+export function loopsWouldOverlap(
+  existing: readonly { start: number; end: number }[],
+  incoming: readonly { start: number; end: number }[],
+): boolean {
+  return incoming.some((a) => existing.some((b) => a.start < b.end && b.start < a.end));
+}
+
+/** Hand items from one layer to another of the same type, at the times in
+ *  `originals` — the items as they were when the drag began, so a nudge along
+ *  time on the way over doesn't count. `move` takes them out of the source and
+ *  keeps their ids; otherwise the source gets its originals back and the target
+ *  gets copies with fresh ids. Returns the same document when the transfer
+ *  isn't allowed: different types, a read-only end, a type not in
+ *  CROSS_LANE_ITEM_TYPES, or loops that would overlap the target's.
+ *
+ *  A lyrics layer's stored `vocalRuns` are left as they are on both ends: a
+ *  target with none derives its runs from the words, and one with stored runs
+ *  is the annotator's own reading, which re-derives only when asked. */
+export function transferItems(
+  doc: AnnotationLayersDocument,
+  fromLayerId: string,
+  toLayerId: string,
+  originals: readonly { id: string }[],
+  { move }: { move: boolean },
+): AnnotationLayersDocument {
+  if (fromLayerId === toLayerId || originals.length === 0) return doc;
+  const from = doc.layers.find((l) => l.id === fromLayerId);
+  const to = doc.layers.find((l) => l.id === toLayerId);
+  if (!from || !to || from.type !== to.type || from.readOnly || to.readOnly) return doc;
+  if (!CROSS_LANE_ITEM_TYPES.has(from.type)) return doc;
+  const byId = new Map(originals.map((it) => [it.id, it]));
+  const sourceItems = from.items as readonly { id: string }[];
+  if (!sourceItems.some((it) => byId.has(it.id))) return doc;
+  const carried = sourceItems.flatMap((it) => byId.get(it.id) ?? []);
+  if (to.type === 'loops' && loopsWouldOverlap(
+    to.items as readonly LoopItem[], carried as unknown as readonly LoopItem[],
+  )) return doc;
+  const arriving = move ? carried : carried.map((it) => ({ ...it, id: newId() }));
+  return {
+    ...doc,
+    layers: doc.layers.map((l) => {
+      if (l.id === fromLayerId) {
+        const items = move
+          ? sourceItems.filter((it) => !byId.has(it.id))
+          : sourceItems.map((it) => byId.get(it.id) ?? it);
+        return { ...l, items } as typeof l;
+      }
+      if (l.id === toLayerId) return { ...l, items: [...l.items, ...arriving] } as typeof l;
+      return l;
+    }),
+  };
+}
+
 /** Palette used by `newCueLayer` when the caller doesn't pass an explicit color. */
 const DEFAULT_LAYER_COLORS = [
   '#34d399', // emerald
@@ -2590,8 +2689,7 @@ export function newLoopLayer(name: string, color: string): AnnotationLayer<'loop
   };
 }
 
-/** Backend-supported, gated by the experimentalLyricsFamily Settings flag.
- *  Lyrics layers default to no snap — word timestamps are sub-beat and should
+/** Lyrics layers default to no snap — word timestamps are sub-beat and should
  *  not be quantized to the grid. */
 export function newLyricsLayer(name: string, color: string): AnnotationLayer<'lyrics'> {
   return {
@@ -2609,18 +2707,49 @@ export function newCueItem(time: number, label = '', description = ''): CueItem 
   return { id: newId(), time, label, description };
 }
 
-/** A new lyric item. `end` is only meaningful for `kind === 'line'`. */
+/** How long a word lasts when nothing said how long: added by hand at the
+ *  playhead, or read from a file that stored only its start. About one sung
+ *  syllable — long enough to see and grab, short enough not to swallow the
+ *  next word. */
+export const LYRIC_DEFAULT_SEC = 0.3;
+/** The shortest a lyric may be: under this its band is too thin to grab. */
+export const LYRIC_MIN_SEC = 0.05;
+
+/** A new lyric item. Every lyric is a span — a word lasts as it is sung, a
+ *  line as long as it runs — so one with no `end` given gets the default. */
 export function newLyricsItem(
   time: number,
   text = '',
   kind: 'word' | 'line' = 'word',
   end?: number,
 ): LyricsItem {
-  return { id: newId(), time, text, kind, ...(end !== undefined ? { end } : {}) };
+  return { id: newId(), time, text, kind, end: end !== undefined && end > time ? end : time + LYRIC_DEFAULT_SEC };
+}
+
+/** Give every lyric a real length. Words used to be allowed to be points: a
+ *  hand-added word had no `end`, an aligner word could come back zero-length,
+ *  and a beat snap could pull both edges of a short word onto one beat. Such a
+ *  word drew as a tick with no band and no edge to drag, and its card had no
+ *  End. One without a usable end gets the default length, stopping short of
+ *  the next lyric where that leaves room. Returns the same array when nothing
+ *  needed fixing. */
+export function withLyricSpans<T extends Pick<LyricsItem, 'time' | 'end'>>(items: readonly T[]): T[] {
+  if (items.every((it) => it.end != null && it.end - it.time >= LYRIC_MIN_SEC)) return items as T[];
+  const starts = items.map((it) => it.time).sort((a, b) => a - b);
+  return items.map((it) => {
+    if (it.end != null && it.end - it.time >= LYRIC_MIN_SEC) return it;
+    const next = starts.find((t) => t > it.time + LYRIC_MIN_SEC);
+    const end = Math.max(it.time + LYRIC_MIN_SEC, Math.min(it.time + LYRIC_DEFAULT_SEC, next ?? Infinity));
+    return { ...it, end };
+  });
 }
 
 export function newSpanItem(start: number, end: number, label = '', description = ''): SpanItem {
   return { id: newId(), start, end, label, description };
+}
+
+export function newLoopItem(start: number, end: number): LoopItem {
+  return { id: newId(), start, end, label: '', description: '', snapZeroCross: true };
 }
 
 // ─── Riff-pattern factories ──────────────────────────────────────────────────
@@ -2639,32 +2768,17 @@ export function newRiffPatternLayer(name: string, color: string): AnnotationLaye
   };
 }
 
-export function newRiffNode(name: string, color: string): RiffNode {
+/** A node `lengthBeats` long on the default pulse (sixteenths), holding one
+ *  rest — the user (or a detector) writes notes into it. */
+export function newRiffNode(name: string, color: string, lengthBeats = 4): RiffNode {
+  const stepsPerCycle = Math.max(1, Math.round(lengthBeats * PATTERN_SUBBEATS_PER_BEAT));
   return {
     id: newId(),
     name,
     color,
-    highlightedBeats: [],
-    spans: [],
-    stepsPerCycle: 16,
+    stepsPerCycle,
     subbeatsPerBeat: PATTERN_SUBBEATS_PER_BEAT,
-  };
-}
-
-/** A boundary node: same identity/length fields as `newRiffNode`, but its
- *  content is the segment list rather than the chip grid. Starts as one
- *  full-length `empty` block — the user (or `boundarySegmentsFromOnsets`)
- *  carves ticks out of it. `subbeatsPerBeat` is kept only so length
- *  arithmetic is shared with grid nodes; nothing about the content is
- *  quantised to it. */
-export function newRiffBoundaryNode(name: string, color: string, lengthBeats = 4): RiffNode {
-  const base = newRiffNode(name, color);
-  const resized = resizeRiffNodeLength(base, lengthBeats);
-  return {
-    ...base,
-    ...resized,
-    kind: 'boundary',
-    segments: normalizeBoundarySegments([], lengthBeats),
+    segments: normalizeBoundarySegments([], stepsPerCycle / PATTERN_SUBBEATS_PER_BEAT),
   };
 }
 

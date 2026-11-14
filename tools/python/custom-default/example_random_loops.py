@@ -15,9 +15,8 @@ class FirstDownbeatLoopDetector(CustomDetector):
     name = "example_random_loops"
     label = "first 4-bar loop"
     output_kind = "loop"
-    is_algorithm = True
-    is_annotation = True
     description = "Emits one 4-bar loop starting at the first detected downbeat. Experimental."
+    windowable = True
     version = "0.1"
 
     BARS = 4
