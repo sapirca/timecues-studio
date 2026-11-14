@@ -14,12 +14,11 @@ import type { AutoGuessManualAnnotation } from '../types/autoGuess';
 import type { AutoGuessSongStatus } from './autoGuessAnnotations';
 import type { SongInfo } from '../types/songInfo';
 
-// Annotation LAYERS (boundaries, cues, spans, …) are deliberately absent:
-// they were never mirrored here, and a demo visitor's layers go to the server
+// Annotation LAYERS (boundaries, cues, spans, …) normally go to the server
 // under the `demo-anonymous` annotator id like any other annotator's would.
-// Only the two kinds that have their own document and no layer equivalent
-// live in localStorage.
-type Kind = 'autoGuess' | 'songInfo';
+// The static Cloudflare mirror has no server, so there — and only there —
+// they live here too (`layers`, see annotationLayers.ts).
+type Kind = 'autoGuess' | 'songInfo' | 'layers';
 
 function key(kind: Kind, slug: string): string {
   return `tc:demo:${kind}:${slug}`;
@@ -80,6 +79,18 @@ export function demoSaveSongInfo(slug: string, info: SongInfo): boolean {
   return safeSet(key('songInfo', slug), info);
 }
 
+// ─── Annotation layers (static mirror only) ──────────────────────────────────
+
+export function demoLoadLayers<T>(slug: string): T | null {
+  return safeGet<T>(key('layers', slug));
+}
+export function demoSaveLayers(slug: string, doc: unknown): boolean {
+  return safeSet(key('layers', slug), doc);
+}
+export function demoDeleteLayers(slug: string): boolean {
+  return safeDel(key('layers', slug));
+}
+
 // ─── Status sweep (for loadAllAutoGuessStatuses parity) ──────────────────────
 
 /** Build the same {slug → AutoGuessSongStatus} map the server's LIST endpoint
@@ -109,12 +120,12 @@ export function demoLoadAllAutoGuessStatuses(): Record<string, AutoGuessSongStat
 
 /** Count distinct song slugs that have any user-authored demo work held in
  *  localStorage. Auto-guess is excluded because it's cached algorithm output,
- *  not something the user typed; annotation layers are excluded because they
- *  live on the server under `demo-anonymous`, not here. Used to decide whether
+ *  not something the user typed. Annotation layers count only on the static
+ *  mirror, the one place they are kept here. Used to decide whether
  *  exiting demo needs a confirmation prompt. */
 export function demoCountSavedWork(): number {
   const slugs = new Set<string>();
-  const userKinds: Kind[] = ['songInfo'];
+  const userKinds: Kind[] = ['songInfo', 'layers'];
   const prefixes = userKinds.map((k) => `tc:demo:${k}:`);
   try {
     for (let i = 0; i < localStorage.length; i++) {

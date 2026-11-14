@@ -22,6 +22,8 @@ import type { AnnotationLayerType } from '../types/annotationLayer';
 import { annotatorHeaders } from '../utils/annotatorHeaders';
 import { resolveVocalRuns, type VocalRunGrid } from '../utils/vocalRuns';
 import { toStoredLayers, withSecondsFromBeats } from '../utils/beatTimebase';
+import { IS_STATIC_DEMO } from '../state/staticDemo';
+import { demoDeleteLayers, demoLoadLayers, demoSaveLayers } from './demoStorage';
 
 /** Every lyric is a span. Layers saved before that held words with no `end`
  *  (added by hand) or a zero-length one (an aligner's open-ended last word, a
@@ -117,11 +119,19 @@ export async function loadAllAnnotatorLayers(): Promise<Record<string, Record<st
  *  saved as one: the next edit writes that emptiness over every layer the
  *  file held. */
 export async function loadLayersForEdit(slug: string): Promise<AnnotationLayersDocument> {
-  const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
-    headers: annotatorHeaders(),
-  });
-  if (!res.ok) throw new Error(`layers load failed: HTTP ${res.status}`);
-  const data = (await res.json()) as AnnotationLayersDocument | null;
+  // The static mirror has no server: every /api route it doesn't stub is a
+  // 404, which read as a failed load and refused every save. Its layers live
+  // in this browser instead, like the rest of a demo visitor's edits.
+  let data: AnnotationLayersDocument | null;
+  if (IS_STATIC_DEMO) {
+    data = demoLoadLayers<AnnotationLayersDocument>(slug);
+  } else {
+    const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
+      headers: annotatorHeaders(),
+    });
+    if (!res.ok) throw new Error(`layers load failed: HTTP ${res.status}`);
+    data = (await res.json()) as AnnotationLayersDocument | null;
+  }
   if (data === null) return emptyDocument(slug);
   if (!Array.isArray(data.layers)) throw new Error('layers load failed: not a layers document');
   // A Grid Lock save stores beats only; everything in the app works in
@@ -172,6 +182,10 @@ export async function saveLayers(
     // keeps its timebase, so re-saving a song from elsewhere (the sidebar's
     // mark-reviewed) cannot quietly turn a beats file back into seconds.
     const stamped: AnnotationLayersDocument = toStoredLayers({ ...doc, annotated_at: new Date().toISOString() });
+    if (IS_STATIC_DEMO) {
+      const rev = baseRev + 1;
+      return demoSaveLayers(slug, { ...stamped, rev }) ? { ok: true, rev } : { ok: false, conflict: false };
+    }
     const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
       method: 'POST',
       headers: annotatorHeaders({ 'Content-Type': 'application/json', 'If-Match': String(baseRev) }),
@@ -254,6 +268,8 @@ export interface SongLayerStatuses {
  *  no layer document on disk (i.e. user has not started any user-created
  *  annotation for that song). */
 export async function loadAllLayerStatuses(): Promise<Record<string, SongLayerStatuses>> {
+  // The static mirror has no list endpoint; its song list shows no status dots.
+  if (IS_STATIC_DEMO) return {};
   try {
     const res = await fetch('/api/annotation-layers', { headers: annotatorHeaders() });
     if (!res.ok) return {};
@@ -272,6 +288,7 @@ export async function loadAllLayerStatuses(): Promise<Record<string, SongLayerSt
 /** Delete the entire layers document for `slug`. Used when the curator wants
  *  to wipe their per-song layer state. */
 export async function deleteLayers(slug: string): Promise<boolean> {
+  if (IS_STATIC_DEMO) return demoDeleteLayers(slug);
   try {
     const res = await fetch(`/api/annotation-layers/${encodeURIComponent(slug)}`, {
       method: 'DELETE',
