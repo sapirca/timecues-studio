@@ -21,7 +21,7 @@ see [LICENSE](LICENSE).
 | wavesurfer.js | BSD-3-Clause |
 | papaparse | MIT |
 | jszip | MIT (dual-licensed; MIT chosen) |
-| realtime-bpm-analyzer | MIT |
+| realtime-bpm-analyzer | Apache-2.0 |
 | web-audio-beat-detector | MIT |
 | @astrojs/starlight, astro | MIT |
 | sharp | Apache-2.0 |
