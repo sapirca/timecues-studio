@@ -214,9 +214,9 @@ project's own citation see [README.md](README.md#citation).
   → https://github.com/radix-ui/primitives — MIT
   Powers accessible dialog / popover primitives.
 
-- **realtime-bpm-analyzer** — Mickael Burguet.
-  → https://github.com/dlepaux/realtime-bpm-analyzer — MIT
-  Streaming-BPM estimation from the live `AudioContext`.
+- **realtime-bpm-analyzer** — David Lepaux.
+  → https://github.com/dlepaux/realtime-bpm-analyzer — Apache-2.0
+  Streaming-BPM estimation from the live `AudioContext`. Docs: https://www.realtime-bpm-analyzer.com
 
 - **web-audio-beat-detector** — Christoph Guttandin.
   → https://github.com/chrisguttandin/web-audio-beat-detector — MIT
