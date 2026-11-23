@@ -1,0 +1,13 @@
+{
+  "id": "example-sections",
+  "name": "Sections",
+  "type": "boundaries",
+  "visible": true,
+  "color": "#a78bfa",
+  "items": [
+    { "id": "s1", "time": 0, "type": "intro", "label": "Intro" },
+    { "id": "s2", "time": 8, "type": "buildup", "label": "Buildup" },
+    { "id": "s3", "time": 20, "type": "drop", "label": "Drop" },
+    { "id": "s4", "time": 30, "type": "unset", "label": "—" }
+  ]
+}

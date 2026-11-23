@@ -7,7 +7,7 @@ any script — TimeCues becomes a source that emits open, standard formats. The
 export also honors a new configurable **time precision** setting.
 
 Everything below is defined purely in terms of TimeCues' own data (`data/` and
-`data-default/`, per `DATA.md`) and public formats. No downstream tool is
+`data-default/`, per `docs/DATA.md`) and public formats. No downstream tool is
 assumed or referenced.
 
 ---

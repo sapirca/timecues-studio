@@ -2,7 +2,7 @@
 #
 # Trigger: pushes to main that touch any source the site is built from —
 # the Astro project (landing/**), the docs synced in by sync-docs.mjs
-# (docs/**), the data-model source (DATA.md), or this workflow file.
+# (docs/**), the data-model source (docs/DATA.md), or this workflow file.
 # Also fires manually via the Actions UI ("Run workflow").
 #
 # Activation steps (one-time, in the repo's Settings → Pages):
@@ -24,7 +24,6 @@ on:
     paths:
       - 'landing/**'
       - 'docs/**'
-      - 'DATA.md'
       - '.github/workflows/deploy-landing.yml'
   workflow_dispatch:
 

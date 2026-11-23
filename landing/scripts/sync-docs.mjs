@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pull source-of-truth markdown from /docs and /DATA.md into the Starlight
+// Pull source-of-truth markdown from /docs into the Starlight
 // content folder, injecting Starlight frontmatter and rewriting cross-doc
 // links. Idempotent — safe to run on every dev/build.
 //
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 // Default: repo is two dirs up from this script
 // (landing/scripts/ → landing/ → repo root).
-// In Docker builds we copy only docs/ + DATA.md into /repo and set
+// In Docker builds we copy only docs/ into /repo and set
 // LANDING_REPO_ROOT=/repo so the script reads from there instead.
 const repoRoot = process.env.LANDING_REPO_ROOT
   ? resolve(process.env.LANDING_REPO_ROOT)
@@ -38,7 +38,7 @@ const docs = [
       'Every feature in a short clip — 73 in all, in tutorial order. Watch the whole tour or jump to any feature.',
   },
   {
-    src: 'DATA.md',
+    src: 'docs/DATA.md',
     out: 'data-model.md',
     title: 'Data model',
     description:
@@ -68,8 +68,8 @@ const linkRewrites = new Map([
   ['EXPERIMENTAL_USER_GUIDE.md', '/timecues/experimental/'],
   ['docs/DEPLOYMENT.md', '/timecues/deployment/'],
   ['DEPLOYMENT.md', '/timecues/deployment/'],
+  ['docs/DATA.md', '/timecues/data-model/'],
   ['DATA.md', '/timecues/data-model/'],
-  ['../DATA.md', '/timecues/data-model/'],
 ]);
 
 function escapeFrontmatter(s) {

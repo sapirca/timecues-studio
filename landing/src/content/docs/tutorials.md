@@ -1084,7 +1084,7 @@ dimensions are **Demucs** (stems + All-In-One) and **Experimental models**
 | Docker — Experimental | `docker compose --profile experimental-models up --build` | ✘ | ✔ | ~7 GB | The new MIR detectors, no stems |
 | Docker — full | `docker compose --profile demucs-cpu --profile experimental-models up --build` | ✔ | ✔ | ~8 GB | Matches the hosted instance |
 | Local dev — lean | `./run.sh` | ✘ | ✘ | tiny (core deps only) | Hot-reload editing; basic annotation + eval |
-| Local dev — full | `./run_all.sh` | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete; ≡ `./run.sh --all` |
+| Local dev — full | `./run.sh --all` | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete |
 
 ### Compose profiles — the "compilation profiles"
 
@@ -1154,7 +1154,7 @@ optional — the shipped defaults boot a working localhost install.
 Only relevant on the no-Docker, hot-reload path. `./run.sh` is **lean** — it
 installs only the core deps (mir_eval / ruptures / librosa / sklearn /
 soundfile), then starts every sidecar before handing off to Vite. Use
-`./run_all.sh` (≡ `./run.sh --all`) to additionally install the heavy model
+`./run.sh --all` to additionally install the heavy model
 families (torch, Demucs, All-In-One, the experimental sidecars, and the
 isolated per-family venvs for basic-pitch / autochord / msaf) — ~3 GB of
 wheels on first run. No containers needed; a full run ends `13 Ready,
@@ -1162,7 +1162,7 @@ wheels on first run. No containers needed; a full run ends `13 Ready,
 
 | Flag | What it does |
 |---|---|
-| `--all` / `TIMECUES_FULL_INSTALL=1` | Switch to the full install profile (every model family). Same as running `./run_all.sh`. |
+| `--all` / `TIMECUES_FULL_INSTALL=1` | Switch to the full install profile (every model family). |
 | `--torch=cpu\|gpu\|none` | Which PyTorch build to install. Default: `none` in lean mode, `cpu` under `--all`. `--cpu` / `--gpu` / `--no-torch` are shorthands. |
 | `SKIP_MODEL_INSTALL=1` | Skip the heavy `pip install` even under `--all` (use your own venv / Conda). Core deps still install; sidecars boot but ones whose deps aren't importable report `available=false` and the UI reads **Deps missing**. |
 | `TIMECUES_PYTHON` | Absolute path to the interpreter Vite's capability probe should inspect. Set this to your venv's `python` if the UI insists Demucs is missing after a manual `pip install`. The launcher sets it for you when it does the install itself. |

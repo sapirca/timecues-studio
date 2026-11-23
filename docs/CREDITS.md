@@ -10,8 +10,8 @@ upstream tools you actually exercise**. The most common ones — `allin1`,
 `MSAF`, `librosa`, `mir_eval` — have their own canonical citations listed
 below.
 
-For license details (vs. credit) see [NOTICE.md](NOTICE.md). For the
-project's own citation see [README.md](README.md#citation).
+For license details (vs. credit) see [NOTICE.md](../NOTICE.md). For the
+project's own citation see [README.md](../README.md#citation).
 
 ---
 
@@ -59,7 +59,7 @@ project's own citation see [README.md](README.md#citation).
   → https://github.com/CPJKU/beat_this — MIT (code **and** weights)
   Powers the `beat-this` sidecar (port 8008) — beats + downbeats, and the
   only detector whose payload also carries fitted grid segments
-  ([tools/python/beat_segments.py](tools/python/beat_segments.py)).
+  ([tools/python/beat_segments.py](../tools/python/beat_segments.py)).
 
 - **Beat Transformer** — Jingwei Zhao, Gus Xia, Ye Wang (NYU Shanghai /
   National University of Singapore). *Beat Transformer: Demixed Beat and
@@ -68,7 +68,7 @@ project's own citation see [README.md](README.md#citation).
   Powers the `beat-transformer` sidecar (port 8018) — the only detector that
   reads Demucs stems rather than the mix, because its premise is that the
   drum track should drive the downbeat decision. Model code is vendored; see
-  [NOTICE.md](NOTICE.md#vendored-third-party-source).
+  [NOTICE.md](../NOTICE.md#vendored-third-party-source).
 
 - **librosa beat tracker** — Brian McFee et al. (see librosa entry below).
 

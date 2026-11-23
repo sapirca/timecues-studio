@@ -57,8 +57,8 @@ autochord) are **NOT** installed in the lean default. Each server's imports
 are guarded by try/except, so the process starts but `available=false` flows
 through to the Initialize-models panel as `Deps missing`.
 
-**Local dev — full (`./run_all.sh`):** the same launcher with every model
-family installed (≡ `./run.sh --all`) — it pip-installs torch + the
+**Local dev — full (`./run.sh --all`):** the same launcher with every model
+family installed — it pip-installs torch + the
 experimental deps (and builds a Python 3.11 venv for basic-pitch
 on Python ≥3.12), so all 9 detectors report `Ready`. ~3 GB of wheels on
 first run. To install just one family by hand instead, run the matching

@@ -16,7 +16,7 @@ on first use into .cache/beat-transformer/, the same pattern run.sh uses for
 the JDCNet weights.
 
 See tools/python/beat_transformer_server.py for how it is driven, and
-NOTICE.md / CREDITS.md for the license record.
+NOTICE.md / docs/CREDITS.md for the license record.
 """
 
 from .DilatedTransformer import Demixed_DilatedTransformerModel  # noqa: F401

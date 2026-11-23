@@ -7,7 +7,7 @@ detection), and run `mir_eval` metrics in-browser.
 
 Documentation & live demo: [TimeCues Studio site](https://sapirca.github.io/timecues-studio/)
 
-License: [MIT](LICENSE) · Third-party notices: [NOTICE.md](NOTICE.md) · Credits & acknowledgements: [CREDITS.md](CREDITS.md)
+License: [MIT](LICENSE) · Third-party notices: [NOTICE.md](NOTICE.md) · Credits & acknowledgements: [CREDITS.md](docs/CREDITS.md)
 
 ## Screenshots
 
@@ -52,9 +52,9 @@ experimental detector sidecars, troubleshooting — see [INSTALL.md](INSTALL.md)
 | Install or self-host the app | [INSTALL.md](INSTALL.md) |
 | Learn the app's features and UI | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | Use experimental detectors | [docs/EXPERIMENTAL_USER_GUIDE.md](docs/EXPERIMENTAL_USER_GUIDE.md) |
-| Understand the on-disk data layout | [DATA.md](DATA.md) |
+| Understand the on-disk data layout | [DATA.md](docs/DATA.md) |
 | Verify third-party licenses | [NOTICE.md](NOTICE.md) |
-| Credit the upstream projects we build on | [CREDITS.md](CREDITS.md) |
+| Credit the upstream projects we build on | [CREDITS.md](docs/CREDITS.md) |
 
 ## Repository layout
 
@@ -62,7 +62,7 @@ experimental detector sidecars, troubleshooting — see [INSTALL.md](INSTALL.md)
 data/                 Runtime user data — annotations, algorithm caches, and
 │                      uploaded audio. Empty on a fresh clone; reads fall back
 │                      to data-default/ when a slug is absent.
-├── annotations/      Human labels — see DATA.md for the layered scheme.
+├── annotations/      Human labels — see docs/DATA.md for the layered scheme.
 │   ├── layers/       Per-annotator documents (boundaries, cues, spans, …).
 │   ├── shared/       Collaboratively edited songs: one document per song
 │   │                  plus a git repo holding every hand-off as a version.
@@ -126,7 +126,7 @@ TimeCues Studio builds on the open-source MIR ecosystem — `librosa`,
 `CodeMirror`, and the broader scientific-Python and web stacks.
 
 Full citation list with paper references and license details:
-[CREDITS.md](CREDITS.md).
+[CREDITS.md](docs/CREDITS.md).
 
 ## Contributing
 

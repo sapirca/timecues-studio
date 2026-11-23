@@ -135,9 +135,9 @@ docker compose up --build       # open http://localhost:5173
 Every install path is one of the rows below. The two opt-in dimensions are
 **Demucs** (stems + All-In-One) and **Experimental models** (the Phase-1+
 MIR detectors). Both are off by default for local docker **and for the lean
-`./run.sh`**, and both are on for `./run_all.sh` and the hosted instance —
+`./run.sh`**, and both are on for `./run.sh --all` and the hosted instance —
 that keeps first-time `docker compose up` and basic local dev lean, while
-`run_all.sh` and prod stay capability-complete.
+`./run.sh --all` and prod stay capability-complete.
 
 | Mode | Command | Core | Demucs | Experimental | Disk | Best for |
 |---|---|:---:|:---:|:---:|---|---|
@@ -148,7 +148,7 @@ that keeps first-time `docker compose up` and basic local dev lean, while
 | **Docker — Experimental** | `docker compose --profile experimental-models up --build` | ✔ | ✘ | ✔ | ~7 GB | Try the new MIR detectors without stems |
 | **Docker — full** | `docker compose --profile demucs-cpu --profile experimental-models up --build` | ✔ | ✔ | ✔ | ~8 GB | Matches the hosted instance locally |
 | **Local dev — lean (`./run.sh`)** | `./run.sh` | ✔ | ✘ | ✘ | tiny | Basic annotation + eval; heavy sidecars start but read "Deps missing" |
-| **Local dev — full (`./run_all.sh`)** | `./run_all.sh` | ✔ | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete local dev; same as `./run.sh --all` |
+| **Local dev — full (`./run.sh --all`)** | `./run.sh --all` | ✔ | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete local dev; same as `./run.sh --all` |
 | **Self-hosted (prod)** | see [INSTALL.md → Self-hosting](../INSTALL.md#self-hosting-beyond-localhost) | ✔ | ✔ | ✔ | ~8 GB | Public-facing deployment; matches the hosted instance |
 
 **Two things worth knowing:**
@@ -183,23 +183,23 @@ Switching modes later is just `docker compose down` + a new `up` line —
 your audio / annotations / caches under `data/` persist across all profile
 combinations.
 
-### Local dev — what `./run.sh` and `./run_all.sh` do on first launch
+### Local dev — what `./run.sh` and `./run.sh --all` do on first launch
 
 `./run.sh` is the one-shot local launcher, and it's **lean by default**.
-`./run_all.sh` is the full-fat profile (exactly `./run.sh --all`). On first
+`./run.sh --all` is the full-fat profile. On first
 run the launcher:
 
 1. Picks your Python (`$PYTHON`, defaulting to `python` then `python3`)
    and pins it for the rest of the script + the vite probe.
 2. **Always installs the core deps** (`mir_eval` / `ruptures` / `librosa` /
    `sklearn` / `soundfile`) — a small, fast install that covers basic
-   boundary annotation + evaluation. **Only under `--all` / `./run_all.sh`**
+   boundary annotation + evaluation. **Only under `--all`**
    it additionally installs torch CPU wheels,
    `tools/requirements-allin1.txt` and `tools/requirements-experimental.txt`
    — roughly 3 GB of wheels on a
    clean machine. Subsequent runs detect the imports and skip the install.
    Note: `basic-pitch` is skipped on Python ≥3.12 — its `tensorflow<2.15.1`
-   pin has no wheels for that interpreter; `run_all.sh` builds a Python 3.11
+   pin has no wheels for that interpreter; `--all` builds a Python 3.11
    venv for it automatically.
 3. (Full profile only) Prewarms `torch`, `demucs`, `allin1` so the UI's
    capabilities probe doesn't pay the cold-import cost.
@@ -208,12 +208,12 @@ run the launcher:
 5. Hands off to `npm run dev`.
 
 Result: `./run.sh` gets you a fast, small install for basic annotation +
-eval; `./run_all.sh` gets you every feature out of the box — ▶ Stem this
+eval; `./run.sh --all` gets you every feature out of the box — ▶ Stem this
 song, All-In-One, and all 8 experimental detectors — without typing a
 single `pip install`. Subsequent launches skip the install steps via fast
 `python -c "import …"` probes, so day-to-day startup is unchanged.
 
-> **Opt out:** set `SKIP_MODEL_INSTALL=1` (with `./run_all.sh`) if you
+> **Opt out:** set `SKIP_MODEL_INSTALL=1` (with `./run.sh --all`) if you
 > manage your own Python env. Sidecars still start; missing deps surface as
 > **Deps missing** in the Initialize-models panel instead of being auto-fixed.
 
@@ -5839,6 +5839,8 @@ copies stay side-by-side without clobbering filenames.
 | **REAPER regions** | `.csv` | REAPER's own Region/Marker Manager round-trip format (`#,Name,Start,End,Length,Color`) |
 
 **What only JSON keeps.** The flat formats hold a time, an optional length and a label per row, so everything else you record about an item travels in **TimeCues JSON** only: descriptions, importance, colours, beat positions, candidates, prominence envelopes, pulse, ⚡ energy envelopes, a cue's level, a lyric's syllable onsets (MIDI excepted, above), and a riff's nodes and occurrences. Export JSON alongside whichever other format you need when that detail matters.
+
+**Playing it on LEDs.** A **TimeCues JSON** export can drive LED lights in time with the song. Sections set the base color, spans run a chase at their **Pulse**, and cues flash. `tools/led/wled-play.mjs` plays it on a WLED controller over the network, and `tools/led/fastled/` is an Arduino sketch for FastLED strips. See `tools/led/README.md`.
 
 **Grid labels sidecar.** Alongside the annotation layers, the export expands the
 song's grid (Steady / Mapped / Hand-placed) into an individual labels file at

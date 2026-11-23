@@ -185,7 +185,7 @@ annotations, annotator profiles, and the corpus config — because the rest of
 the app is stateless code you can rebuild from the repo at any time. The
 regenerable algorithm caches inside it can be safely dropped to save space;
 which files are precious versus rebuildable is spelled out in the
-[Data model](../DATA.md#source-of-truth-vs-regenerable).
+[Data model](DATA.md#source-of-truth-vs-regenerable).
 
 ## Troubleshooting
 

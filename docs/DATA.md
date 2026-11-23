@@ -20,7 +20,7 @@ data-default/  — read-only seed dataset shipped inside the docker image.
 **Strict separation:** demo / public-tier requests resolve **only** under
 `data-default/`; team / researcher / admin requests resolve **only** under
 `data/`. The two corpora are never merged and there is no cross-corpus
-fallback in either direction (see `corpusForReq()` in [web-app/vite.config.ts](web-app/vite.config.ts)).
+fallback in either direction (see `corpusForReq()` in [web-app/vite.config.ts](../web-app/vite.config.ts)).
 
 Per-annotator scoping is via the `X-Annotator-Id` HTTP header sent by the
 browser (currently the user's email, e.g. `you@example.com`).
@@ -82,7 +82,7 @@ tier (see strict-separation note above).
 
 Algorithm servers (BPM, MIR, mir_eval, ruptures, Demucs stems) run as
 separate Python processes and are reverse-proxied by Vite — see
-[tools/python/*.py](tools/python/). Analysis caches land in
+[tools/python/*.py](../tools/python/). Analysis caches land in
 `data/algorithm-outputs/analysis/<slug>/`; Demucs stem outputs land in
 `web-app/public/stems/<slug>/` (runtime cache, regenerated on demand).
 
@@ -90,13 +90,13 @@ separate Python processes and are reverse-proxied by Vite — see
 
 If you move a data folder on disk, update **only** these files:
 
-- **TypeScript / Node:** [web-app/dataPaths.ts](web-app/dataPaths.ts) exports `DATA_DIRS`, `DATA_FILES`, `DEFAULT_DATA_DIRS`, `API_PATHS`. Imported by `vite.config.ts`.
-- **Python:** [tools/python/paths.py](tools/python/paths.py) exports `DATA_DIR`, `DEFAULT_DATA_DIR`, `MANUAL_ANNOTATIONS_DIR`, `BPM_DETECTIONS_DIR`, etc. Imported by all Python tools.
-- **Plain JS (`.mjs`):** [tools/cache-algo-clusters.mjs](tools/cache-algo-clusters.mjs) inlines its paths with a comment pointing to `dataPaths.ts` as the canonical source.
+- **TypeScript / Node:** [web-app/dataPaths.ts](../web-app/dataPaths.ts) exports `DATA_DIRS`, `DATA_FILES`, `DEFAULT_DATA_DIRS`, `API_PATHS`. Imported by `vite.config.ts`.
+- **Python:** [tools/python/paths.py](../tools/python/paths.py) exports `DATA_DIR`, `DEFAULT_DATA_DIR`, `MANUAL_ANNOTATIONS_DIR`, `BPM_DETECTIONS_DIR`, etc. Imported by all Python tools.
+- **Plain JS (`.mjs`):** [tools/cache-algo-clusters.mjs](../tools/cache-algo-clusters.mjs) inlines its paths with a comment pointing to `dataPaths.ts` as the canonical source.
 
 ## What's in git, what's not
 
-- `data/` is **fully gitignored** (`data/*` in [.gitignore](.gitignore)). Nothing under it ships with the repo. Your local annotations, song-info, annotator profiles, and `dataset-config.json` live on your disk only. A fresh clone has an empty (or nonexistent) `data/`, and the app boots into the `data-default/` seed corpus with no admin and no annotations.
+- `data/` is **fully gitignored** (`data/*` in [.gitignore](../.gitignore)). Nothing under it ships with the repo. Your local annotations, song-info, annotator profiles, and `dataset-config.json` live on your disk only. A fresh clone has an empty (or nonexistent) `data/`, and the app boots into the `data-default/` seed corpus with no admin and no annotations.
 - `data-default/` is **fully tracked**. Audio (CC0 only), `song-info/`, pre-computed `stems/`, and empty-but-tracked annotation subdirs (via `.gitkeep`). Anything you add here ships in the docker image.
 
 ## Source of truth vs regenerable

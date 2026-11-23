@@ -6,7 +6,7 @@
  * rigs, scripts) can consume the output — TimeCues owns the export so no
  * consumer has to re-implement it.
  *
- * All sources are TimeCues' own data (see DATA.md). Times are rounded (never
+ * All sources are TimeCues' own data (see docs/DATA.md). Times are rounded (never
  * truncated) to the configured precision — 3 decimals (millisecond) by
  * default, matching roundTime() in web-app/src/utils/beatGrid.ts.
  *

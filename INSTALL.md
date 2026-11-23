@@ -24,9 +24,9 @@ once the stack is up. This file is about getting the stack up.
 Every install path is one of these. The two opt-in dimensions are
 **Demucs** (stems + All-In-One) and **Experimental models** (the Phase-1+
 MIR detectors). Both are off by default for local docker **and for the lean
-`./run.sh`**, and both are on for `./run_all.sh` and the hosted instance —
+`./run.sh`**, and both are on for `./run.sh --all` and the hosted instance —
 that keeps first-time `docker compose up` and basic local dev lean, while
-`run_all.sh` and prod stay capability-complete.
+`./run.sh --all` and prod stay capability-complete.
 
 | Mode | Command | Core | Demucs | Experimental | Disk (first build) | Best for |
 |---|---|:---:|:---:|:---:|---|---|
@@ -37,7 +37,7 @@ that keeps first-time `docker compose up` and basic local dev lean, while
 | Docker — Experimental | `docker compose --profile experimental-models up --build` | ✔ | ✘ | ✔ | ~7 GB | Try the new MIR detectors without stems |
 | Docker — full | `docker compose --profile demucs-cpu --profile experimental-models up --build` | ✔ | ✔ | ✔ | ~8 GB | Matches the hosted instance locally |
 | Local dev — lean (`./run.sh`) | `./run.sh` | ✔ | ✘ | ✘ | tiny (core deps only) | Hot-reload editing for basic annotation + eval; heavy sidecars start but read "Deps missing" |
-| Local dev — full (`./run_all.sh`) | `./run_all.sh` | ✔ | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete local dev; same as `./run.sh --all` |
+| Local dev — full (`./run.sh --all`) | `./run.sh --all` | ✔ | ✔ (CPU) | ✔ | ~3 GB pip | Capability-complete local dev; same as `./run.sh --all` |
 | Self-hosted (prod) | see [Self-hosting](#self-hosting-beyond-localhost) | ✔ | ✔ | ✔ | ~8 GB | Public-facing deployment with Caddy + TLS; matches the hosted instance |
 
 **Notes:**
@@ -200,8 +200,8 @@ sudo apt install ffmpeg libsndfile1 nodejs npm   # Ubuntu
 ./run.sh
 
 # 2b. Full — every model family (stems, All-In-One, experimental sidecars).
-#     ~3 GB of pip wheels on first run. Same as `./run.sh --all`.
-./run_all.sh
+#     ~3 GB of pip wheels on first run.
+./run.sh --all
 
 # 2c. Reload — restart the servers after editing tools/python/*.py.
 #     No installs, no prompts. See below for why you need it.
@@ -227,7 +227,7 @@ so basic boundary annotation + evaluation works with a small, fast install.
 All 15 sidecars (ports 8001–8007 and 8009–8016) still start, but the heavy
 ones report "Deps missing" until you install their families.
 
-**`./run_all.sh`** (≡ `./run.sh --all`) is the full profile: it additionally
+**`./run.sh --all`** is the full profile: it additionally
 installs torch (CPU) + `requirements-allin1.txt` + `requirements-experimental.txt`
 + the isolated per-family venvs described below, so every feature works out
 of the box — **no containers required**. A successful full run ends with
@@ -268,10 +268,10 @@ Logs land in `/tmp/uv_install_<family>.log` and `/tmp/uv_venv_<family>.log`.
 The lean `./run.sh` already installs only the core deps. If you also manage
 those yourself (a strict venv, a corporate base image, a Conda recipe), set
 `SKIP_MODEL_INSTALL=1` to short-circuit the heavy families even under
-`--all` / `./run_all.sh`:
+`--all`:
 
 ```bash
-SKIP_MODEL_INSTALL=1 ./run_all.sh   # full server set, but skip the heavy pip installs
+SKIP_MODEL_INSTALL=1 ./run.sh --all  # full server set, but skip the heavy pip installs
 ```
 
 Sidecars still start; the ones whose deps aren't importable just report
@@ -368,8 +368,8 @@ python tools/python/lyrics_server.py              # :8016  Whisper (LYRICS)
 1. Picks one Python interpreter (`$PYTHON`, defaulting to `python`, then
    `python3`) and exports its absolute path as `TIMECUES_PYTHON` so vite's
    capabilities probe inspects the same site-packages.
-2. Always installs the core requirements. Then, **only under `--all` /
-   `./run_all.sh`** (and unless `SKIP_MODEL_INSTALL=1`), runs `python -c
+2. Always installs the core requirements. Then, **only under
+   `--all`** (and unless `SKIP_MODEL_INSTALL=1`), runs `python -c
    "import …"` probes and pip-installs whatever's missing: torch CPU wheels,
    the allin1 + madmom fork, and the experimental MIR deps. The lean default
    stops after the core requirements.
@@ -624,5 +624,5 @@ The canonical project page, source archive, and license are at:
   file format, and REST endpoint.
 - [docs/EXPERIMENTAL_USER_GUIDE.md](docs/EXPERIMENTAL_USER_GUIDE.md) —
   opt-in feature flags and the experimental detector families.
-- [DATA.md](DATA.md) — on-disk layout for annotations and algorithm caches.
+- [docs/DATA.md](docs/DATA.md) — on-disk layout for annotations and algorithm caches.
 - [NOTICE.md](NOTICE.md) — third-party licenses and model-weight provenance.

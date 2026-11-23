@@ -39,7 +39,7 @@ cd "$(dirname "$0")"
 #             no multi-GB ML wheels. The heavy families (torch, Demucs,
 #             All-In-One, the experimental MIR sidecars, the Python-3.11 venv
 #             for basic-pitch + autochord) are installed ONLY when --all is
-#             passed. The sibling `./run_all.sh` is just `./run.sh --all`.
+#             passed.
 #             Servers for the heavy families still start in lean mode; they
 #             report "Deps missing" in the UI until you re-run with --all.
 #
@@ -91,7 +91,7 @@ Usage: ./run.sh [options]
   --all            FULL install: every model family (torch, Demucs, All-In-One,
                    the experimental MIR sidecars, and the isolated per-family
                    venvs for basic-pitch / autochord / msaf). ~3 GB of wheels
-                   on first run. Same as running ./run_all.sh.
+                   on first run.
 
   --torch=cpu      Install CPU-only PyTorch (~200 MB, no CUDA libs).
   --torch=gpu      Install CUDA PyTorch (pulls ~2.7 GB of nvidia/* wheels).
@@ -217,7 +217,7 @@ if [ "$RELOAD" = "1" ]; then
 elif [ "$FULL_INSTALL" = "1" ]; then
   echo "Install profile: FULL (--all) — every model family will be installed."
 else
-  echo "Install profile: LEAN — core deps only. Re-run with --all (or ./run_all.sh) for the heavy model families."
+  echo "Install profile: LEAN — core deps only. Re-run with --all for the heavy model families."
 fi
 export VITE_WITH_LOL="$WITH_LOL"
 if [ "$WITH_LOL" = "1" ]; then
@@ -455,7 +455,7 @@ fi
 if [ "$INSTALL_MODELS" = "0" ]; then
   if [ "$FULL_INSTALL" != "1" ]; then
     echo "Lean profile — skipping allin1 / experimental / torch installs."
-    echo "  Run ./run_all.sh (or ./run.sh --all) to install every model family."
+    echo "  Run ./run.sh --all to install every model family."
   else
     echo "SKIP_MODEL_INSTALL=1 — skipping allin1 / experimental installs."
   fi

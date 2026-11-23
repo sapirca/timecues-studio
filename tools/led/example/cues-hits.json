@@ -1,0 +1,13 @@
+{
+  "id": "example-cues",
+  "name": "Hits",
+  "type": "cues",
+  "visible": true,
+  "color": "#e879f9",
+  "items": [
+    { "id": "c1", "time": 20, "label": "Whole strip: white flash on the drop", "color": "#ffffff" },
+    { "id": "c2", "time": 24, "label": "Flash" },
+    { "id": "c3", "time": 26, "label": "Flash" },
+    { "id": "c4", "time": 28, "label": "Flash" }
+  ]
+}
